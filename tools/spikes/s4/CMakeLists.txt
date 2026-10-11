@@ -1,0 +1,11 @@
+# THROWAWAY spike S4. Configure with -DS4_GEN_DIR=<dir produced by s4_gen.py> [-DS4_SHARED=ON to link a DLL]
+cmake_minimum_required(VERSION 3.25)
+project(s4 CXX)
+file(GLOB SRC "${S4_GEN_DIR}/*.cpp")
+if(S4_SHARED)
+  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  add_library(s4gen SHARED ${SRC})
+else()
+  add_library(s4gen STATIC ${SRC})
+endif()
+target_compile_options(s4gen PRIVATE /O2 /clang:-march=x86-64-v3)

@@ -1,0 +1,83 @@
+# S1 — What `main.dol` gives us
+
+Date: 2026-10-12. Tool: `tools/s1_scan` (report: `build\s1_report.txt`). Game: RBUE08 (NTSC-U).
+
+## Raw numbers
+
+| Item | Value |
+|---|---|
+| Entry | `0x8000403C` |
+| Text 0 (`.init`) | `0x80004000`, size `0x2480` |
+| Text 1 | `0x80028B80`, size `0x3AF8E0` (≈3.8 MB) |
+| Data sections | 8, from `0x80006480` to `0x806C4700` |
+| BSS | `0x8043A680`, size `0x002910FC` |
+| Unique `bl` targets inside text | **9029** (function-count estimate) |
+| `stwu r1` prologues / `blr` | 9486 / 14963 |
+| Zero runs ≥ 256 words | 1 (307 words at `0x80005BA4..0x80006070`) |
+| `.rel` modules | none |
+
+## The suspicious zero run and why it is not runtime-generated code
+
+The plan's rule (Task 5) says "FAIL if `suspicious zero runs` > 0", and the report shows 1. That is a deviation from the plan's
+literal rule, recorded as a ruling in the ledger; the investigation below is why it was reclassified.
+
+`tools/spikes/s1_zero_runs.py <main.dol>` (kept, throwaway) lists all zero runs ≥ 32 words: 23 runs, all inside text 0
+(`0x800044A0..0x80006370`), on a regular `0x100` stride with ~51-word (`0xCC`-byte) zero tails. That shape is an
+interrupt/exception vector area: a short stub per 0x100 slot, the rest zero. The DOL also contains the debugger kernel
+(`MetroTRK for Revolution v0.1`), so the stubs may belong to MetroTRK or to the OS; which one is not determined.
+Text 1 (the game itself) has no zero run ≥ 32 words. This supports "no code is generated at runtime" but does not prove it
+(a runtime patch of the vector area or a jump into a zeroed region would show up only when running). The stubs are replaced
+by the HLE layer, not translated.
+
+## Linked Nintendo SDK libraries (RVL_SDK build `0x4199_60831`, Apr 2007)
+
+| Lib | Build date | Banner address |
+|---|---|---|
+| OS | Apr 24 2007 | `0x804121E8` |
+| DVD | Apr 24 2007 | `0x8041FC98` |
+| VI | Nov 30 2006 | `0x80421000` |
+| PAD | Nov 30 2006 | `0x80421A10` |
+| AI | Nov 30 2006 | `0x80421A68` |
+| AX | Dec 18 2006 | `0x80421AB0` |
+| DSP | Nov 30 2006 | `0x80427000` |
+| GX | Nov 30 2006 | `0x804271C0` |
+| EXI | Nov 30 2006 | `0x80428E70` |
+| SI | Nov 30 2006 | `0x80428EB8` |
+| NAND | Nov 30 2006 | `0x80429160` |
+| SC | Nov 30 2006 | `0x80429330` |
+| WPAD | May 17 2007 | `0x80430078` |
+| KPAD | May 17 2007 | `0x80432BD0` |
+| HBM (Home Button Menu) | Jul 9 2007 | `0x80437FEF` |
+
+All core libs required by the spec (OS, GX, DVD, VI, KPAD/WPAD, AX) are present and can be located.
+
+## Middleware found (not in the spec)
+
+- **CRI ADX** (`ADXWIISDK Ver.30Nov2006`, `ADXF/WII 7.63`): audio middleware on top of AX. Runs as recompiled code; AX stays the HLE boundary.
+- **CRI Sofdec** (`CRI SFD/WII 2.006`, `MPV`, `MPS`, `DCT`, `CFT`): movies are `.sfd` (59 files), **not THP/Bink**. The spec's "THP/movie decoder" is wrong for this game. Sofdec decodes on the CPU, so it should work as translated code plus GX texture uploads of the decoded frames. To be confirmed in the runtime plan.
+- Streamed audio is `.brstm` (1334 files): AX voices must decode DSP-ADPCM in the HLE mixer.
+
+## Data inventory (`DATA\files`)
+
+3299 files: `.brstm` 1334, `.emt` 975, `.arc` 614, `.rarc` 174, `.evt` 86, `.sfd` 59, `.brfnt` 20, others few.
+
+## Verdict: PASS for "libraries present, no evidence of generated code"; function-level identification NOT yet tested
+
+The spec asks "how many SDK functions are identifiable by signature". That was **not measured**: no signature matching was run.
+Banner strings prove a library is linked, not that its individual functions can be named. Treat identification as the open risk.
+
+- Core libs present (by banner), no sign of runtime-generated code (see above), no REL modules, ~9k functions (9029 `bl` targets, 9486 `stwu` prologues; the real count is somewhat higher because pointer-only functions are not `bl` targets).
+- **Caveat 1:** the SDK build is Apr 2007. Signature databases built for other SDK builds (for example Dolphin's) may not match byte-for-byte. The analyzer plan must not depend on a ready-made DB alone.
+  Planned approach: (a) libraries are linked contiguously, so each lib's code range can be bounded using its banner/data addresses and call-graph clusters; (b) mask-hashed signatures where a DB matches; (c) name remaining entry points by behaviour (known register/MMIO addresses, e.g. GX FIFO `0xCC008000`, VI/PI registers).
+- **Caveat 2:** the middleware list above adds HLE/verification work (ADX, Sofdec) that the spec did not budget. It is recorded for the runtime plan.
+
+## Ghidra decision
+
+Proposed: skip Ghidra for now and revisit if step (c) cannot name the GX or KPAD entry points. The plan says this decision is
+the user's when the verdict is not a clean PASS, so it is put to the user in the hand-off message. If chosen, install Ghidra + JDK +
+a Gekko loader plugin and cross-check function boundaries with decomp-toolkit.
+
+## Reproducing
+
+- `build\s1_report.txt` is regenerated by every `build.bat` run (git-ignored, SDK strings only).
+- `python -I tools\spikes\s1_zero_runs.py <main.dol>` prints the zero runs and the middleware/TRK strings quoted above.
