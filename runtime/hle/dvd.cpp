@@ -1,0 +1,144 @@
+#include "dvdfs.h"
+#include "fatal.h"
+#include "guest_call.h"
+#include "hle/os.h"
+#include "hle/os_layout.h"
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <thread>
+#include <vector>
+
+using namespace uc;
+
+namespace {
+DvdFs* g_fs;
+DvdStats g_stats;
+bool g_log = false;
+std::mutex g_m;
+std::condition_variable g_cv;
+std::deque<std::function<void()>> g_jobs;
+bool g_worker = false;
+std::set<uint32_t> g_cancelled;   // command blocks whose in-flight read was cancelled (baton holder only)
+
+void enqueue(std::function<void()> job) {   // one worker keeps requests in order, like the drive
+    std::lock_guard<std::mutex> lk(g_m);
+    g_jobs.push_back(std::move(job));
+    if (!g_worker) {
+        g_worker = true;
+        std::thread([] {
+            for (;;) {
+                std::function<void()> j;
+                {
+                    std::unique_lock<std::mutex> lk(g_m);
+                    g_cv.wait_for(lk, std::chrono::seconds(1), [] { return !g_jobs.empty(); });
+                    if (g_jobs.empty()) { g_worker = false; return; }
+                    j = std::move(g_jobs.front());
+                    g_jobs.pop_front();
+                }
+                j();
+            }
+        }).detach();
+    }
+    g_cv.notify_one();
+}
+
+std::string cstr(ppc::Ctx& c, uint32_t a) {
+    std::string s;
+    while (s.size() < 1024) { char ch = char(ppc::rd8(c, a++)); if (!ch) break; s.push_back(ch); }
+    return s;
+}
+
+bool guest_range_ok(uint32_t a, uint32_t len) {   // MEM1 or MEM2 only
+    uint64_t end = uint64_t(a) + len;
+    return (a >= 0x80000000u && end <= 0x81800000ull) || (a >= 0x90000000u && end <= 0x94000000ull);
+}
+
+// Reads len bytes at offset into dst; the tail past the end of the file (at most 31 bytes) is zero.
+// The bounds are the SDK's own (DVDReadAsyncPrio): offset <= length and offset + len < length + 32.
+int64_t read_padded(int entry, std::vector<uint8_t>& dst, uint32_t len, uint32_t offset) {
+    uint32_t length = g_fs->length(entry);
+    if (g_fs->is_dir(entry) || offset > length || uint64_t(offset) + len >= uint64_t(length) + 32) return -1;
+    dst.assign(len, 0);
+    int64_t n = g_fs->read(entry, dst.data(), len, offset);
+    return n < 0 ? -1 : int64_t(len);
+}
+}  // namespace
+
+namespace uc {
+void dvd_hle_init(DvdFs& fs) { g_fs = &fs; }
+DvdStats dvd_stats() { return g_stats; }
+void dvd_log(bool on) { g_log = on; }
+}  // namespace uc
+
+void hle_DVDInit(ppc::Ctx&) {}
+void hle_DVDConvertPathToEntrynum(ppc::Ctx& c) { c.r[3] = uint32_t(g_fs->entry_of(cstr(c, c.r[3]))); }
+static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
+    if (e < 0 || e >= int(g_fs->entry_count()) || g_fs->is_dir(e)) { c.r[3] = 0; return; }
+    ppc::wr32(c, fi + layout::kFiStart, uint32_t(e));       // the disc offset is replaced by the entry number
+    ppc::wr32(c, fi + layout::kFiLength, g_fs->length(e));
+    ppc::wr32(c, fi + layout::kFiCallback, 0);
+    ppc::wr32(c, fi + layout::kCbState, 0);                 // DVD_STATE_END
+    ++g_stats.opens;
+    if (g_log) std::fprintf(stderr, "[dvd] open %s\n", g_fs->path_of(e).c_str());
+    c.r[3] = 1;
+}
+void hle_DVDFastOpen(ppc::Ctx& c) { open_entry(c, int(c.r[3]), c.r[4]); }
+void hle_DVDOpen(ppc::Ctx& c) { open_entry(c, g_fs->entry_of(cstr(c, c.r[3])), c.r[4]); }
+void hle_DVDClose(ppc::Ctx& c) { c.r[3] = 1; }
+
+// DVDReadPrio(fileInfo, buf, len, offset, prio) -> bytes read or -1
+void hle_DVDReadPrio(ppc::Ctx& c) {
+    uint32_t fi = c.r[3], buf = c.r[4], len = c.r[5], off = c.r[6];
+    int e = int(ppc::rd32(c, fi + layout::kFiStart));
+    if (!guest_range_ok(buf, len)) fatal("DVDReadPrio into an invalid guest buffer %08X+%u", buf, len);
+    std::vector<uint8_t> data;
+    int64_t n = read_padded(e, data, len, off);
+    if (n < 0) { c.r[3] = uint32_t(-1); return; }
+    std::memcpy(ppc::hp(c, buf), data.data(), len);
+    ++g_stats.reads;
+    g_stats.bytes += len;
+    c.r[3] = len;
+}
+
+// DVDReadAsyncPrio(fileInfo, buf, len, offset, callback, prio) -> 1; callback(result, fileInfo) runs in interrupt context
+void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
+    uint32_t fi = c.r[3], buf = c.r[4], len = c.r[5], off = c.r[6], cb = c.r[7];
+    int e = int(ppc::rd32(c, fi + layout::kFiStart));
+    if (!guest_range_ok(buf, len)) fatal("DVDReadAsyncPrio into an invalid guest buffer %08X+%u", buf, len);
+    ppc::wr32(c, fi + layout::kCbState, 1);                 // DVD_STATE_BUSY
+    Sched& s = os_sched();
+    uint8_t* mem = c.mem;
+    enqueue([=, &s] {
+        auto data = std::make_shared<std::vector<uint8_t>>();
+        int64_t n = read_padded(e, *data, len, off);
+        s.post_external([=, &s] {                           // runs on the baton holder, with interrupts enabled
+            ppc::Ctx& ic = s.irq_ctx();
+            if (g_cancelled.erase(fi)) return;               // DVDCancel already answered for this command block
+            if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); ++g_stats.reads; g_stats.bytes += len; }
+            ppc::wr32(ic, fi + layout::kCbState, n < 0 ? uint32_t(-1) : 0u);   // DVD_STATE_END or FATAL_ERROR
+            if (cb) call_guest(ic, cb, {uint32_t(n < 0 ? -1 : int64_t(len)), fi});
+        });
+    });
+    c.r[3] = 1;
+}
+
+// DVDCancel(block) -> 0 / DVDCancelAsync(block, callback) -> 1. A read in flight (state 1) is dropped and the block becomes
+// DVD_STATE_CANCELED (10); the cancel callback runs in interrupt context.
+static void cancel_block(ppc::Ctx& c, uint32_t block) {
+    if (ppc::rd32(c, block + layout::kCbState) == 1) { g_cancelled.insert(block); ppc::wr32(c, block + layout::kCbState, 10); }
+}
+void hle_DVDCancel(ppc::Ctx& c) { cancel_block(c, c.r[3]); c.r[3] = 0; }
+void hle_DVDCancelAsync(ppc::Ctx& c) {
+    uint32_t block = c.r[3], cb = c.r[4];
+    cancel_block(c, block);
+    Sched& s = os_sched();
+    if (cb) s.post_external([=, &s] { call_guest(s.irq_ctx(), cb, {0u, block}); });
+    c.r[3] = 1;
+}

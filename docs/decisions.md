@@ -2,6 +2,12 @@
 
 Open items the project agreed to revisit. Newest first.
 
+## GX at call level, not at the FIFO (decided 2026-10-12)
+
+- The SDK's GX functions are identified (145 `gx.a` names) and `GXInit` already runs translated. The renderer plan replaces GX calls with a state tracker feeding Vulkan;
+  the write-gather FIFO stays a discarded sink until then (TD-014). A FIFO-to-Vulkan parser is the fallback if call-level coverage proves incomplete.
+- Ghidra: still not needed after bring-up M1. The six identifications the signatures missed (`OSInit`, `OSPanic`, `OSReport`, `KPADInit`, `KPADRead`, `WPADInit`) were found by call-graph work, and the retrace/scheduler/DSP functions needed later were found the same way.
+
 ## Ghidra (decided 2026-10-12: not installed yet)
 
 - **Status:** not installed. The user chose to postpone it.

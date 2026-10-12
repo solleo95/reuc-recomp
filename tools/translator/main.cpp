@@ -5,21 +5,24 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string>
+#include <vector>
 
 int main(int argc, char** argv) {
-    std::string dol_path, out_dir, cfg_path;
+    std::string dol_path, out_dir;
+    std::vector<std::string> cfg_paths;   // --cfg may be given several times; the files are merged in order
     size_t shard = 150;
     bool verbose = false;
     for (int i = 1; i < argc; ++i) {
         auto arg = [&](const char* name) { return !std::strcmp(argv[i], name) && i + 1 < argc; };
         if (arg("--dol")) dol_path = argv[++i];
         else if (arg("--out")) out_dir = argv[++i];
-        else if (arg("--cfg")) cfg_path = argv[++i];
+        else if (arg("--cfg")) cfg_paths.push_back(argv[++i]);
         else if (arg("--shard")) shard = std::strtoull(argv[++i], nullptr, 10);
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
-        else { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>] [--shard N]\n"); return 2; }
+        else { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>]... [--shard N]\n"); return 2; }
     }
-    if (dol_path.empty() || out_dir.empty() || shard == 0) { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>] [--shard N]\n"); return 2; }
+    if (dol_path.empty() || out_dir.empty() || shard == 0) { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>]... [--shard N]\n"); return 2; }
 
     std::ifstream in(dol_path, std::ios::binary);
     if (!in) { std::fprintf(stderr, "cannot open %s\n", dol_path.c_str()); return 1; }
@@ -29,7 +32,8 @@ int main(int argc, char** argv) {
 
     uc::Program p;
     std::string err;
-    if (!cfg_path.empty() && !uc::load_config(cfg_path, p.cfg, err)) { std::fprintf(stderr, "config error: %s\n", err.c_str()); return 1; }
+    for (const auto& cp : cfg_paths)
+        if (!uc::load_config(cp, p.cfg, err)) { std::fprintf(stderr, "config error in %s: %s\n", cp.c_str(), err.c_str()); return 1; }
     p.img = uc::Image{file, &dol.image};
     p.an = uc::analyze(p.img, p.cfg);
 

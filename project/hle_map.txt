@@ -1,0 +1,119 @@
+# SDK function replaced by hle_<HleName>. Format: "<SdkName> [HleName]" (HleName defaults to SdkName) or "@<hex address> <HleName>".
+# Only implemented HLE functions belong here (a missing one is a link error).
+# Names come from identified_sdk.txt (Dolphin database, unverified: tech-debt TD-007) and symbols.txt (manual, with evidence).
+
+# --- OS threads, synchronisation, interrupts, time, alarms (runtime/hle/os_*.cpp)
+OSCreateThread
+OSResumeThread
+OSSuspendThread
+OSSleepThread
+OSWakeupThread
+OSYieldThread
+OSExitThread
+OSJoinThread
+OSSetThreadPriority
+OSCancelThread
+@802613A4 OSDisableScheduler
+@802613E0 OSEnableScheduler
+OSInitMutex
+OSLockMutex
+OSUnlockMutex
+OSInitMessageQueue
+OSSendMessage
+OSReceiveMessage
+OSJamMessage
+OSDisableInterrupts
+OSEnableInterrupts
+OSRestoreInterrupts
+OSGetTime
+__OSGetSystemTime OSGetTime
+OSGetTick
+OSSetAlarm
+OSSetPeriodicAlarm
+OSCancelAlarm
+OSReport
+OSPanic
+
+# --- DVD (runtime/hle/dvd.cpp)
+DVDInit
+DVDConvertPathToEntrynum
+DVDFastOpen
+DVDOpen
+DVDReadPrio
+DVDReadAsyncPrio
+DVDClose
+DVDCancel
+DVDCancelAsync
+
+# --- Video interface (runtime/hle/vi.cpp)
+__VIInit VIInit
+VIConfigure
+VIFlush
+VISetNextFrameBuffer
+VISetBlack
+VIGetTvFormat
+VIWaitForRetrace
+
+# --- CPU cache maintenance (runtime/hle/nop.cpp): a native build has no cache to flush/invalidate/enable, so these have no observable effect.
+# DCZeroRange and the LC store/queue functions are NOT here: they change memory and run translated.
+DCEnable Nop
+DCInvalidateRange Nop
+DCFlushRange Nop
+DCStoreRange Nop
+DCFlushRangeNoSync Nop
+DCStoreRangeNoSync Nop
+ICInvalidateRange Nop
+ICFlashInvalidate Nop
+ICEnable Nop
+LCEnable Nop
+LCDisable Nop
+
+# --- EXI bus, no devices attached (runtime/hle/exi.cpp, tech-debt TD-010)
+EXIImm
+EXIDma
+EXIImmEx
+EXISync
+EXISelect
+EXIDeselect
+EXILock
+EXIUnlock
+EXIGetID
+EXIAttach
+EXIDetach
+__EXIProbe EXIProbe
+
+# --- DSP boot (tech-debt TD-011): __OSInitAudioSystem resets the DSP and polls its mailbox for the boot handshake; AI clock setup inside is irrelevant natively.
+__OSInitAudioSystem Nop
+DSPAddTask          # runtime/hle/dsp.cpp: accepts the task and reports its boot; never runs it
+DSPInit Nop         # starts the DSP and its task manager; waits for the DSP mailbox handshake
+__AI_SRC_INIT Nop   # AI sample-rate calibration: spins on the AI sample counter against the timebase
+
+# --- MMU / memory protection setup (BAT registers, MI protection windows): the native build has one flat address space, so nothing to configure.
+__OSInitMemoryProtection Nop
+
+# --- IOS call interface (runtime/hle/ios.cpp, tech-debt TD-012)
+IOS_Open
+IOS_OpenAsync
+IOS_Close
+IOS_CloseAsync
+IOS_Read
+IOS_ReadAsync
+IOS_Write
+IOS_WriteAsync
+IOS_Seek
+IOS_SeekAsync
+IOS_Ioctl
+IOS_IoctlAsync
+IOS_Ioctlv
+IOS_IoctlvAsync
+
+# --- CPU synchronisation call (`sc; blr`): nothing to order on a native build.
+PPCSync Nop
+
+# --- GX (graphics) completion wait: GXDrawDone pads the FIFO and sleeps until the GPU's finish interrupt. The native renderer will fence here; until then nothing is in flight.
+GXDrawDone Nop
+
+# --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
+KPADInit Nop
+KPADRead Return0
+KPADEnableMotor Nop

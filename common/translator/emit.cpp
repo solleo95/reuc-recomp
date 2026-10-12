@@ -85,7 +85,7 @@ static std::string cond_expr(uint32_t bo, uint32_t bi, std::string& pre) {
 
 static std::string branch_action(const Program& p, const Function& f, uint32_t pc, uint32_t target, bool lk, EmitStats& st) {
     Target tk = classify(p, f, target);
-    if (tk.kind == Target::Internal && !lk) return "goto L_" + hex8(target) + ";";
+    if (tk.kind == Target::Internal && !lk) return std::string(target <= pc ? "ppc::poll(c); " : "") + "goto L_" + hex8(target) + ";";   // a loop is a safe point
     if (tk.kind == Target::Outside || (tk.kind == Target::Internal && lk && target != f.entry)) {
         ++st.traps_midfunc;
         return trap_str(pc, "branch target " + hex8(target) + " is not inside any translated function");
@@ -181,11 +181,11 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st) {
 
     std::ostringstream o;
     if (has_sec) {
-        o << "static void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  switch (at) { ";
+        o << "static void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  switch (at) { ";
         for (uint32_t t : sit->second) o << "case 0x" << hex8(t) << "u: goto L_" << hex8(t) << "; ";
         o << "default: break; }\n";
     } else {
-        o << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n";
+        o << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n";
     }
     for (uint32_t pc = f.entry; pc < f.end; pc += 4) {
         uint32_t w = 0;

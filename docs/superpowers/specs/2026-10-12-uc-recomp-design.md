@@ -108,6 +108,13 @@ ranges in spike S1; the game has no REL modules).
 - **Video**: THP/movie decode with a native decoder into a texture.
 - **Save**: NAND API mapped to a folder.
 
+**Nativity rule (owner's priority: maximum nativity and performance).** The runtime is native code at every level: translated game code, native HLE
+functions for SDK calls, and a memory-mapped I/O bus. HLE is bottom-up: only what cannot run natively is replaced (scheduler, interrupts, time, DVD,
+VI, privileged CPU setup); the rest of the SDK stays translated. Hardware behaviour is never imitated beyond a plain read-back register file:
+when translated SDK code would need a non-trivial device model (changing status bits, mailboxes, DMA, interrupts), the SDK function that drives the
+device is replaced by an HLE at call level instead. Every emulation-like stopgap that still gets in (a device answer, a `Nop` that drops observable
+behaviour) is recorded in `docs/tech-debt.md` in the same step, with its native replacement and the trigger to fix it.
+
 ## 7. Vulkan GX renderer (sub-project 3)
 
 - HLE at GX call level (`GXBegin`, `GXSetTevOrder`, `GXLoadPosMtxImm`, ...), not FIFO emulation.
@@ -191,6 +198,19 @@ analysis, which extends sub-project 1. If S3 fails, FG goes through FSR-FG or th
   (OS 119, DVD 78, GX 145, VI 30, WPAD 28 named functions). `OSInit`, `OSPanic`, `OSReport`, `WPADInit/Read`, `KPADInit/Read/SetPosParam` and a few tiny
   functions are still to be located by call graph. Ghidra is not needed yet (`docs/decisions.md`).
 - **GX is partly named** (145 `gx.a` functions), so the call-level GX HLE of §7 stays an option next to hardware-level (FIFO) emulation; decide in the runtime/renderer plan.
+
+### Results of the runtime/HLE plan (2026-10-12)
+
+- **M1 — PASS** (`docs/spikes/R1-bringup-log.md`): `uc.exe` boots `main.dol` natively (no interpreter, no CPU model): `OSInit`, static constructors, the SDK
+  library inits (EXI, SI, VI, GX, AI, AX, LYT) and `main` run; the game starts 8 guest threads, opens 13 files from `DATA/files` (2.2 MB read) and takes 1198 vertical
+  retraces in 20 s with no trap. 17 bring-up iterations; `OSInit` itself runs translated.
+- **What is replaced (call level):** scheduler and OS primitives, interrupts, time, alarms, DVD, VI, privileged CPU setup (cache, MMU), `PPCSync`.
+  **What is stubbed and recorded as tech debt** (`docs/tech-debt.md`): EXI (no devices), DSP/AX hardware, IOS (no devices), Wii Remote stack, the GX command stream.
+- **Register blocks** are plain read-back `RegFile`s; no device model exists. Every time hardware would have needed a handshake, the driving SDK function was
+  replaced instead (nativity rule above).
+- **Translator/analyzer changes found by running the game:** code pointers built with `lis/addi` and pointer runs in data (constructor lists) create entries;
+  backward branches call `ppc::poll` so spin loops see interrupt-driven state (TD-015).
+- **GX decision for the renderer plan:** call-level HLE of the GX API (state tracking → Vulkan) is the route; the FIFO is a discarded sink until then (TD-014).
 
 ### Spec corrections from the results
 

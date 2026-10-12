@@ -1,0 +1,336 @@
+#include "sched.h"
+#include "clock.h"
+#include "fatal.h"
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+namespace uc {
+
+namespace {
+struct Tramp { Sched* s; Thread* t; };
+DWORD WINAPI tramp(LPVOID p) {
+    std::unique_ptr<Tramp> tp(static_cast<Tramp*>(p));
+    tp->s->thread_main(tp->t);
+    return 0;
+}
+}  // namespace
+
+Sched::Sched(uint8_t* mem, size_t host_stack) : mem_(mem), host_stack_(host_stack) { irq_ctx_.mem = mem; }
+
+Sched::~Sched() {
+    shutdown();
+    for (void* h : handles_) { WaitForSingleObject(static_cast<HANDLE>(h), 2000); CloseHandle(static_cast<HANDLE>(h)); }
+}
+
+Thread* Sched::create(uint32_t guest_addr, int priority, Body body, const ppc::Ctx* inherit) {
+    auto t = std::make_unique<Thread>();
+    t->id = ++next_id_;
+    t->guest_addr = guest_addr;
+    t->priority = priority;
+    t->body = std::move(body);
+    if (inherit) t->ctx = *inherit;
+    t->ctx.mem = mem_;
+    threads_.push_back(std::move(t));
+    return threads_.back().get();
+}
+
+Thread* Sched::find(uint32_t guest_addr) const {   // newest first, finished threads included: joining a finished thread returns its value
+    for (auto it = threads_.rbegin(); it != threads_.rend(); ++it) if ((*it)->guest_addr == guest_addr) return it->get();
+    return nullptr;
+}
+
+void Sched::make_ready(Thread* t, bool front) {
+    t->state = Thread::State::Ready;
+    t->seq = front ? --front_seq_ : ++back_seq_;
+}
+
+Thread* Sched::pick_ready() {
+    Thread* best = nullptr;
+    for (const auto& up : threads_) {
+        Thread* t = up.get();
+        if (t->state != Thread::State::Ready) continue;
+        if (!best || t->priority < best->priority || (t->priority == best->priority && t->seq < best->seq)) best = t;
+    }
+    return best;
+}
+
+void Sched::wake(Thread* t) {
+    t->wait_key = 0;
+    if (t->suspend_count > 0) t->state = Thread::State::Suspended; else make_ready(t);
+}
+
+void Sched::preempt_check() {
+    if (sched_lock_ > 0 || in_irq_ || !running_ || running_->state != Thread::State::Running) return;
+    Thread* best = pick_ready();
+    if (best && best->priority < running_->priority) {
+        Thread* self = running_;
+        make_ready(self, true);   // a preempted thread keeps its place at the front of its priority
+        reschedule(self);
+    }
+}
+
+int Sched::resume(Thread* t) {
+    int prev = t->suspend_count;
+    if (t->suspend_count > 0) --t->suspend_count;
+    if (t->suspend_count == 0 && t->state == Thread::State::Suspended) { make_ready(t); preempt_check(); }
+    return prev;
+}
+
+int Sched::suspend(Thread* t) {
+    int prev = t->suspend_count++;
+    if (t->state == Thread::State::Ready) t->state = Thread::State::Suspended;
+    else if (t == running_ && !in_irq_) { t->state = Thread::State::Suspended; reschedule(t); }
+    return prev;   // a waiting thread stays waiting and becomes suspended when it is woken
+}
+
+void Sched::yield() {
+    if (in_irq_) return;
+    Thread* self = running_;
+    make_ready(self);
+    reschedule(self);
+}
+
+void Sched::block_on(uint32_t key) {
+    if (in_irq_) {
+        char b[16];
+        std::snprintf(b, sizeof b, "%08X", key);
+        fail(std::string("blocking call from interrupt context (wait key ") + b + ")");
+    }
+    Thread* self = running_;
+    self->state = Thread::State::Waiting;
+    self->wait_key = key;
+    waitq_[key].push_back(self);
+    reschedule(self);
+}
+
+Thread* Sched::wake_one(uint32_t key) {
+    auto it = waitq_.find(key);
+    if (it == waitq_.end() || it->second.empty()) return nullptr;
+    auto& q = it->second;
+    size_t best = 0;
+    for (size_t i = 1; i < q.size(); ++i) if (q[i]->priority < q[best]->priority) best = i;
+    Thread* t = q[best];
+    q.erase(q.begin() + long(best));
+    if (q.empty()) waitq_.erase(it);
+    wake(t);
+    preempt_check();
+    return t;
+}
+
+int Sched::wake_all(uint32_t key) {
+    auto it = waitq_.find(key);
+    if (it == waitq_.end()) return 0;
+    std::vector<Thread*> q = std::move(it->second);
+    waitq_.erase(it);
+    for (Thread* t : q) wake(t);
+    preempt_check();
+    return int(q.size());
+}
+
+void Sched::sleep_ticks(uint64_t ticks) {
+    uint32_t key = sleep_key(running_);
+    post_at(now_ticks() + ticks, [this, key] { wake_all(key); });
+    block_on(key);
+}
+
+void Sched::set_priority(Thread* t, int priority) {
+    t->priority = priority;
+    preempt_check();
+}
+
+uint32_t Sched::join(Thread* t) {
+    while (t->state != Thread::State::Dead) block_on(join_key(t));
+    return t->exit_value;
+}
+
+void Sched::finish(Thread* self, uint32_t value) {
+    self->exit_value = value;
+    self->state = Thread::State::Dead;
+    if (self == main_) { { std::lock_guard<std::mutex> lk(done_m_); main_done_ = true; } done_cv_.notify_all(); }
+    wake_all(join_key(self));
+    reschedule(self);
+}
+
+void Sched::unlock_scheduler() {
+    if (sched_lock_ > 0 && --sched_lock_ == 0) preempt_check();
+}
+
+void Sched::cancel(Thread* t) {
+    if (t->state == Thread::State::Dead) return;
+    if (t == running_) exit_current(uint32_t(-1));
+    if (t->wait_key) {
+        auto it = waitq_.find(t->wait_key);
+        if (it != waitq_.end()) {
+            auto& q = it->second;
+            q.erase(std::remove(q.begin(), q.end(), t), q.end());
+            if (q.empty()) waitq_.erase(it);
+        }
+        t->wait_key = 0;
+    }
+    t->exit_value = uint32_t(-1);
+    t->state = Thread::State::Dead;
+    { std::lock_guard<std::mutex> lk(baton_m_); t->cancelled = true; }
+    t->cv.notify_all();                       // a started host thread unwinds; a thread that never ran never starts
+    wake_all(join_key(t));
+}
+
+void Sched::exit_current(uint32_t value) {
+    finish(running_, value);
+    throw ThreadExit{};
+}
+
+void Sched::post_at(uint64_t tick, Event fn) { timed_.emplace(tick, std::move(fn)); }
+
+void Sched::post_external(Event fn) {
+    { std::lock_guard<std::mutex> lk(ext_m_); ext_q_.push_back(std::move(fn)); }
+    ext_cv_.notify_all();
+}
+
+void Sched::deliver_events() {
+    if (in_irq_ || !ee_) return;
+    std::vector<Event> ext;
+    { std::lock_guard<std::mutex> lk(ext_m_); ext.swap(ext_q_); }
+    for (auto& e : ext) timed_.emplace(0, std::move(e));
+    while (!timed_.empty() && timed_.begin()->first <= now_ticks()) {
+        Event e = std::move(timed_.begin()->second);
+        timed_.erase(timed_.begin());
+        if (running_) { irq_ctx_.r[2] = running_->ctx.r[2]; irq_ctx_.r[13] = running_->ctx.r[13]; }   // the handler runs on the interrupted thread's SDA bases
+        bool saved_ee = ee_;
+        ee_ = false;   // an exception enters the handler with EE cleared
+        in_irq_ = true;
+        e();
+        in_irq_ = false;
+        ee_ = saved_ee;
+    }
+}
+
+void Sched::safe_point() {
+    deliver_events();
+    preempt_check();
+}
+
+bool Sched::set_interrupts(bool enabled) {
+    bool prev = ee_;
+    ee_ = enabled;
+    if (enabled && !prev) safe_point();
+    return prev;
+}
+
+std::string Sched::dump_threads() const {
+    std::string s;
+    static const char* names[] = {"suspended", "ready", "running", "waiting", "dead"};
+    for (const auto& t : threads_) {
+        if (t->state == Thread::State::Dead) continue;
+        char b[160];
+        std::snprintf(b, sizeof b, "  thread %d (OSThread %08X) priority %d %s wait key %08X\n", t->id, t->guest_addr, t->priority, names[int(t->state)], t->wait_key);
+        s += b;
+    }
+    return s;
+}
+
+void Sched::fail(const std::string& msg) {
+    if (err_) { err_(msg); throw ThreadExit{}; }
+    fatal("%s", msg.c_str());
+}
+
+void Sched::idle_wait() {
+    std::unique_lock<std::mutex> lk(ext_m_);
+    if (!ext_q_.empty() || shutdown_) return;
+    auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlock_ms_);
+    bool timed = false;
+    if (!timed_.empty()) {   // the idle loop of the real OS runs with interrupts on, whatever state the blocked threads had
+        uint64_t t = timed_.begin()->first, now = now_ticks();
+        until = std::chrono::steady_clock::now() + std::chrono::milliseconds(t > now ? ticks_to_ms(t - now) + 1 : 0);
+        timed = true;
+    }
+    bool woke = ext_cv_.wait_until(lk, until, [&] { return !ext_q_.empty() || shutdown_; });
+    if (!woke && !timed) {
+        lk.unlock();
+        fail("deadlock: all guest threads are blocked and no event is pending\n" + dump_threads());
+    }
+}
+
+void Sched::reschedule(Thread* self) {
+    self->ee = ee_;   // a thread keeps its interrupt state across a switch, like the MSR saved in its OSContext
+    for (;;) {
+        if (shutdown_) {
+            if (self->state == Thread::State::Dead) return;
+            throw ThreadExit{};
+        }
+        deliver_events();
+        if (Thread* n = pick_ready()) { handoff(self, n); return; }
+        if (main_done_) return;
+        ee_ = true;   // idle
+        idle_wait();
+    }
+}
+
+void Sched::handoff(Thread* self, Thread* next) {
+    if (next == self) { self->state = Thread::State::Running; ee_ = self->ee; return; }
+    next->state = Thread::State::Running;
+    ee_ = next->ee;
+    if (switch_hook_) switch_hook_(next);
+    {
+        std::lock_guard<std::mutex> lk(baton_m_);
+        running_ = next;
+        if (!next->started) start_host(next);
+    }
+    next->cv.notify_one();
+    if (self->state == Thread::State::Dead) return;
+    std::unique_lock<std::mutex> lk(baton_m_);
+    self->cv.wait(lk, [&] { return running_ == self || shutdown_ || self->cancelled; });
+    if (running_ != self) throw ThreadExit{};
+}
+
+void Sched::start_host(Thread* t) {
+    t->started = true;
+    HANDLE h = CreateThread(nullptr, host_stack_, tramp, new Tramp{this, t}, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    if (!h) fatal("cannot create a host thread for guest thread %d", t->id);
+    handles_.push_back(h);
+}
+
+void Sched::thread_main(Thread* t) {
+    {
+        std::unique_lock<std::mutex> lk(baton_m_);
+        t->cv.wait(lk, [&] { return running_ == t || shutdown_ || t->cancelled; });
+        if (running_ != t) return;
+    }
+    try {
+        t->body(t->ctx);
+        finish(t, t->ctx.r[3]);   // returning from the entry function is OSExitThread(r3)
+    } catch (const ThreadExit&) {
+    } catch (const std::exception& e) {   // anything else is a runtime bug: report it with the guest trace instead of dying silently
+        fatal("uncaught C++ exception in guest thread %d: %s", t->id, e.what());
+    } catch (...) {
+        fatal("uncaught non-standard exception in guest thread %d", t->id);
+    }
+}
+
+void Sched::run(Thread* m) {
+    main_ = m;
+    m->suspend_count = 0;
+    if (switch_hook_) switch_hook_(m);
+    {
+        std::lock_guard<std::mutex> lk(baton_m_);
+        m->state = Thread::State::Running;
+        running_ = m;
+        start_host(m);
+    }
+    m->cv.notify_one();
+    std::unique_lock<std::mutex> lk(done_m_);
+    done_cv_.wait(lk, [&] { return main_done_ || shutdown_; });
+}
+
+void Sched::shutdown() {
+    { std::lock_guard<std::mutex> lk(baton_m_); shutdown_ = true; }
+    for (auto& t : threads_) t->cv.notify_all();
+    { std::lock_guard<std::mutex> lk(ext_m_); }
+    ext_cv_.notify_all();
+    { std::lock_guard<std::mutex> lk(done_m_); }
+    done_cv_.notify_all();
+}
+
+}  // namespace uc

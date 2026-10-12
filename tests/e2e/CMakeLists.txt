@@ -28,3 +28,7 @@ add_test(NAME translator_deterministic
 add_test(NAME translator_cleans_stale
   COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/stale -P ${CMAKE_CURRENT_SOURCE_DIR}/stale.cmake)
+
+add_test(NAME translator_two_cfgs
+  COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
+          -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cfgs -P ${CMAKE_CURRENT_SOURCE_DIR}/../test_cfg_merge.cmake)

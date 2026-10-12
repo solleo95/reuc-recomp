@@ -144,6 +144,33 @@ int main() {
         CHECK(an.unresolved_bctr.size() == 1 && an.unresolved_bctr[0] == a.addr(bctr_i));
         CHECK(an.indirect_tail.size() == 1 && an.indirect_tail[0] == a.addr(adj_bctr));
     }
+    {   // a table of code pointers (constructor list) names functions that start without a prologue after a plain branch
+        Asm a;
+        a.emit(blr);
+        uint32_t t0 = a.here(); a.emit(li(3, 1)); a.b_to(t0 + 16);       // t0: leaf ending in `b`
+        uint32_t t1 = a.here(); a.emit(li(3, 2)); a.b_to(t0 + 16);
+        uint32_t t2 = a.here(); a.emit(li(3, 3)); a.emit(blr);
+        a.emit(blr);
+        std::vector<uint8_t> data; be32(data, t0); be32(data, t1); be32(data, t2);
+        auto dol = make_dol(a.w, data);
+        auto parsed = uc::parse_dol(dol);
+        uc::Image img{dol, &parsed.image};
+        auto an = uc::analyze(img, uc::Config{});
+        CHECK(an.is_entry(t0) && an.is_entry(t1) && an.is_entry(t2));
+    }
+    {   // a code address built with lis/addi right after a terminator is a function pointer (callbacks, destructors passed to registration calls)
+        Asm a;
+        a.emit(lis(4, 0x8000)); a.emit(addi(4, 4, 0x3110)); a.emit(blr); a.emit(blr);
+        uint32_t fn = a.here(); a.emit(li(3, 5)); a.emit(blr);
+        a.emit(lis(5, 0x8000)); a.emit(addi(5, 5, int(fn + 4 - 0x80000000u)));   // points at the blr inside: not after a terminator
+        a.emit(blr);
+        auto dol = make_dol(a.w);
+        auto parsed = uc::parse_dol(dol);
+        uc::Image img{dol, &parsed.image};
+        auto an = uc::analyze(img, uc::Config{});
+        CHECK(fn == 0x80003110 && an.is_entry(fn));
+        CHECK(!an.is_entry(fn + 4));
+    }
     {   // config text parsing
         uc::Config c; std::string err;
         CHECK(uc::parse_config("# comment\nentry 80001000\nnofunc 0x80002000\nhle 80003000 OSInit  # trailing\njumptable 80004000 80004010 80004020\n", c, err));

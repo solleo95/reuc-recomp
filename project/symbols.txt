@@ -1,0 +1,28 @@
+# Manual symbols found with tools/xref (plan 2026-10-12-runtime-hle.md, Task 1). Format: <addr> <name> manual <evidence>
+# Confidence: HIGH = unique structural evidence; MEDIUM = inferred (see text). Dolphin-database names in identified_sdk.txt are separate and unverified.
+80258AE8 OSInit manual HIGH: only function calling __OSInitAlarm+__OSInterruptInit+__OSContextInit+__OSInitSram+__OSThreadInit+EXIInit+SIInit+IPCCltInit; called once from entry 8000403C at 8000415C
+803444BC OSPanic manual HIGH: variadic (file,line,msg,...) with 3 fixed args; 640 callers pass a file-name string, a line number (r4=109 at 8002A2D0) and a message; calls the va-list core 803443B8
+803443B8 __OSPanicBody manual MEDIUM: va-list core of OSPanic; prints "%s:%d Panic:" via OSReport, then message
+801CCA38 OSReport manual HIGH: variadic stub that spills r3-r10/f1-f8 and returns (retail build discards the text); called with the format in r3 by the panic core; 267 callers
+80262798 OSGetTick manual HIGH: mftb r3,268; blr (immediately before __OSGetSystemTime)
+80261E68 OSJoinThread manual HIGH: between OSCancelThread and OSResumeThread; OSDisableInterrupts, OSSleepThread, OSRestoreInterrupts; callers pass a thread
+80266454 DVDClose manual HIGH: between DVDOpen and entryToPath; calls one helper (80266460) and returns 1; 8004DEDC (game file code) calls it after reads
+802E02B4 WPADInit manual HIGH: calls OSRegisterShutdownFunction and 802E00A4 (which prints "WPADInit()" and sets a Hollywood register); sole caller is the KPAD init
+802E0F2C WPADiChannelStatus manual LOW: WPAD function taking (chan, ptr); name not an SDK API; do not rely on it
+802F2904 KPADInit manual HIGH: sole caller of WPADInit (802E02B4); called from the game pad init 8003C52C
+802F21EC KPADRead manual HIGH: (chan, KPADStatus* buf, count); mulli 1316 per-channel state (806619E0 base), calls WPADProbe, WPADSetExtensionCallback, WPADGetAccGravityUnit, OSDisable/RestoreInterrupts; sole game caller 8003B558
+802F2CF4 KPADiSamplingCallback manual MEDIUM: per-channel update; fills a 16-entry ring of 56-byte samples (mulli 56), calls WPADProbe, WPADSetDataFormat; no direct callers (called through a pointer)
+802F2EEC KPADiChannelReset manual LOW: per-channel state clear that calls a callback pointer (bctrl); no direct callers
+802F2C60 KPADEnableMotor manual LOW: calls WPADControlMotor between OSDisableInterrupts/OSRestoreInterrupts; called by the game pad init right after KPADInit
+802F00E8 KPADInitChannel manual LOW: (chan) setup called per channel by the game pad init before the four parameter setters
+802EFEA4 KPADSetPosParam manual MEDIUM: (chan, float, float); first of four (chan,f1,f2) setters called per channel in the order SetPosParam, SetHoriParam, SetDistParam, SetAccParam by the game pad init 8003C52C (the SDK documents that order)
+802EFEC0 KPADSetHoriParam manual MEDIUM: second setter in that sequence
+802EFEDC KPADSetDistParam manual MEDIUM: third setter in that sequence
+802EFEF8 KPADSetAccParam manual MEDIUM: fourth setter in that sequence
+802A26F4 TRKRestoreContext manual MEDIUM: MetroTRK debugger kernel code (sole caller TRKTargetContinue, callee TRKRestoreExtended1Block); never runs without a debugger
+802A3EB0 TRKWriteReg manual MEDIUM: MetroTRK debugger kernel code (callers TRK_ppc_memcpy, __TRK_write_console); never runs without a debugger
+80257E38 PPCSync manual HIGH: body is `sc; blr` (instruction-sync system call), called from the GX library
+80280E2C DSPAddTask manual MEDIUM: (task) inserts the task (8028170C) with interrupts off, marks it run, boots it (80281580) when it is the current task; returns task; sole caller is the AX init (80275148)
+802613A4 OSDisableScheduler manual HIGH: under OSDisableInterrupts increments the scheduler counter at r13-26464 and returns the old value (identified_sdk.txt calls it OSEnableScheduler)
+802613E0 OSEnableScheduler manual HIGH: same, decrements the counter at r13-26464
+# NOT FOUND yet: none of the Task 1 gate names (OSInit, OSReport, OSPanic, KPADRead) is missing.

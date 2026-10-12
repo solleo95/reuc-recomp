@@ -13,4 +13,5 @@ void mmio_write(uint32_t ea, int size, uint32_t v) { g_mmio_last_addr = ea; g_mm
     std::exit(3);
 }
 uint64_t timebase() { return 0x1122334455667788ull; }
+void poll_slow(Ctx&) {}
 }  // namespace ppc

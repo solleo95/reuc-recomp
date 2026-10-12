@@ -6,6 +6,13 @@
 
 #define PPC_INLINE __attribute__((always_inline)) inline
 
+#ifdef UC_TRACE
+namespace ppc { void trace_enter(uint32_t addr); }
+#define UC_ENTER(a) ppc::trace_enter(a)
+#else
+#define UC_ENTER(a) ((void)0)
+#endif
+
 namespace ppc {
 
 struct Ctx {
@@ -18,6 +25,7 @@ struct Ctx {
     uint32_t gqr[8];
     uint32_t spr[1024];  // SPRs without a dedicated field
     uint32_t reserve_addr;
+    uint32_t poll_count;   // backward branches taken; every 2048th one is a safe point
     uint8_t* mem;
 };
 
@@ -25,6 +33,9 @@ uint32_t mmio_read(uint32_t ea, int size);
 void mmio_write(uint32_t ea, int size, uint32_t v);
 [[noreturn]] void trap(uint32_t addr, const char* what);
 uint64_t timebase();
+void poll_slow(Ctx& c);   // safe point: pending interrupts/timers run here
+// Translated code calls this on every backward branch, so a guest spin loop still sees interrupt-driven state changes.
+inline void poll(Ctx& c) { if ((++c.poll_count & 0x7FFu) == 0) [[unlikely]] poll_slow(c); }
 
 // ---- memory ----
 PPC_INLINE bool is_mmio(uint32_t ea) { return ea - 0xCC000000u < 0x02000000u; }

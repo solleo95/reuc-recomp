@@ -4,3 +4,6 @@ generated/
 *.spv
 .superpowers/
 third_party/signatures/
+project/hle.cfg
+build-trace/
+build-trace.log

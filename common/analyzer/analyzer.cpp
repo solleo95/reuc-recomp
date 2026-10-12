@@ -188,10 +188,29 @@ Analysis analyze(const Image& img, const Config& cfg) {
             if (!img.word(a, v) || (v & 3) || !img.in_text(v) || jt_targets.count(v) || in_suspect_body(v)) continue;
             if (!img.word(v - 4, pw) || !is_terminator(pw)) continue;
             // After a plain `b` the code is more likely a switch case label than a function: require a prologue there.
-            bool after_branch = (pw >> 26) == 18;
+            // A run of code pointers is a function table (constructor lists, vtables), which needs no prologue.
+            auto text_ptr = [&](uint32_t at) { uint32_t x = 0; return img.word(at, x) && !(x & 3) && img.in_text(x); };
+            bool in_run = (text_ptr(a - 4) && text_ptr(a - 8)) || (text_ptr(a - 4) && text_ptr(a + 4)) || (text_ptr(a + 4) && text_ptr(a + 8));
+            bool after_branch = (pw >> 26) == 18 && !in_run;
             uint32_t first = 0; img.word(v, first);
             if (after_branch && (first & 0xFFFF0000u) != 0x94210000u && first != 0x7C0802A6u) continue;
             add(v);
+        }
+    }
+
+    // Phase 3: addresses built in code (`lis rA,hi ; addi rD,rA,lo` close together) that land right after a terminator are function
+    // pointers handed to registration calls. Switch tables are data, so a text address here is not a case label.
+    for (const auto& s : img.dol->sections) {
+        if (!s.is_text) continue;
+        uint32_t hi_reg[32] = {}, hi_at[32] = {};   // pc of the last `lis` per register (0 = none)
+        for (uint32_t pc = s.address; pc + 4 <= s.address + s.size; pc += 4) {
+            uint32_t w = 0; img.word(pc, w);
+            uint32_t prim = w >> 26, rd = (w >> 21) & 31, ra = (w >> 16) & 31;
+            if (prim == 15 && ra == 0) { hi_reg[rd] = w & 0xFFFF; hi_at[rd] = pc; continue; }
+            if (prim != 14 || !hi_at[ra] || pc - hi_at[ra] > 32) continue;
+            uint32_t v = (hi_reg[ra] << 16) + uint32_t(int32_t(int16_t(w & 0xFFFF))), pw = 0;
+            if ((v & 3) || !img.in_text(v) || jt_targets.count(v) || in_suspect_body(v)) continue;
+            if (img.word(v - 4, pw) && is_terminator(pw)) add(v);
         }
     }
 

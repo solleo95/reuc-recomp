@@ -7,8 +7,6 @@ set "DIST=%ROOT%\dist"
 set "GEN=%ROOT%\generated"
 if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
-set "CFG=%ROOT%\project\uc.cfg"
-set "TRANSLATOR=%BUILD%\tools\translator\translator.exe"
 set "NO_INSTALL="
 if /I "%~1"=="--no-install" set "NO_INSTALL=1"
 
@@ -25,23 +23,9 @@ if errorlevel 1 goto :build_failed
 cmake --build "%BUILD%" --target translator > "%BUILD%\translator_build.log" 2>&1
 if errorlevel 1 goto :build_failed
 
-echo [3/6] Translating the game (cached by DOL + translator + uc.cfg hash)
-set "KEY="
-for /f %%h in ('powershell -NoProfile -Command "$h = foreach($p in $env:GAME_DOL,$env:TRANSLATOR,$env:CFG){(Get-FileHash -LiteralPath $p).Hash}; $h -join ''"') do set "KEY=%%h"
-if not defined KEY goto :hash_failed
-set "OLD="
-if exist "%GEN%\.key" set /p OLD=<"%GEN%\.key"
-if /I "%KEY%"=="%OLD%" if exist "%GEN%\game_table.cpp" goto :cached
-if exist "%GEN%" rmdir /s /q "%GEN%"
-"%TRANSLATOR%" --dol "%GAME_DOL%" --cfg "%CFG%" --out "%GEN%" --shard 150 > "%BUILD%\translate.log" 2>&1
-if errorlevel 1 goto :translate_failed
->"%GEN%\.key" echo %KEY%
-type "%BUILD%\translate.log"
-goto :built
-:cached
-echo generated\ is up to date
+echo [3/6] Translating the game (cached by DOL + translator + uc.cfg + hle.cfg hash)
+call "%ROOT%\scripts\translate.bat" || goto :translate_failed
 
-:built
 echo [4/6] Build everything and run tests
 call "%ROOT%\scripts\dev.bat" || goto :build_failed
 
@@ -70,12 +54,8 @@ exit /b 1
 :build_failed
 echo ERROR: build or tests failed (see logs in %BUILD%)
 exit /b 1
-:hash_failed
-echo ERROR: could not hash inputs for the translate cache
-exit /b 1
 :translate_failed
-echo ERROR: translation failed
-type "%BUILD%\translate.log"
+echo ERROR: translation step failed
 exit /b 1
 :stage_failed
 echo ERROR: install to dist failed

@@ -37,6 +37,14 @@ int main() {
     CHECK(a.find("void fn_80003100(ppc::Ctx& c) {") == 0);
     CHECK(a.find("L_80003100:;") != std::string::npos);
     CHECK(a.find("fell off the end") != std::string::npos);
+    {   // a backward branch polls for pending interrupts; a forward branch does not
+        auto lp = make_prog({addi(3, 3, 1), 0x4BFFFFFC /* b -4 */, blr});
+        std::string t = uc::emit_function(lp, lp.an.functions[0], st);
+        CHECK(t.find("ppc::poll(c); goto L_80003100;") != std::string::npos);
+        auto fw = make_prog({0x48000008 /* b +8 */, addi(3, 3, 1), blr});
+        std::string u = uc::emit_function(fw, fw.an.functions[0], st);
+        CHECK(u.find("goto L_80003108;") != std::string::npos && u.find("ppc::poll") == std::string::npos);
+    }
     {   // a branch into a secondary entry calls its stub; the owner gets a body with a switch and one stub per entry
         Asm a;
         size_t br = a.emit(0); a.emit(blr);
@@ -75,6 +83,11 @@ int main() {
         std::string t = uc::emit_insn(q, q.an.functions[0], a.addr(0), a.w[0], s2);
         CHECK(t.find("not inside any translated function") != std::string::npos);
         CHECK(s2.traps_midfunc == 1);
+    }
+    {   // every translated function starts with the trace hook (a no-op macro unless UC_TRACE is defined)
+        std::string t = uc::emit_function(p, f, st);
+        CHECK(t.find("UC_ENTER(0x80003100u);") != std::string::npos);
+        CHECK(t.find("UC_ENTER") < t.find("L_80003100:;"));
     }
     return 0;
 }
