@@ -14,7 +14,13 @@ gx::Packets* packets;
 gx::Memory memory;
 gx::State state;
 gx::Transforms transforms,live_transforms;
-struct TextureSource { uint32_t address; gx::TextureDesc desc; };
+gx::BlendState blend_state,live_blend;
+struct TextureSource { uint32_t address; gx::TextureDesc desc; std::optional<uint32_t> palette; };
+struct PaletteSource { uint32_t address, entries; gx::PaletteFormat format; };
+struct PaletteData { gx::PaletteFormat format; std::vector<std::byte> bytes; };
+using Palettes=std::map<uint32_t,std::shared_ptr<const PaletteData>>;
+// shortcut: SDK region identity; unify aliased regions if observed (TD-038).
+Palettes palettes;
 using TextureBindings=std::array<std::optional<TextureSource>,8>;
 TextureBindings bound_textures;
 std::shared_ptr<const gx::TexturePixels> live_texture;
@@ -40,7 +46,9 @@ struct Resource {
     struct Current { uint32_t row; };
     struct CopyClear { CopyState state; };
     struct TextureBinding { uint32_t map; TextureSource source; };
-    std::vector<std::variant<RecordedDraw,ArrayBinding,Child,Projection,Position,IndexedPosition,Current,CopyClear,TextureBinding>> geometry;
+    struct PaletteLoad { uint32_t region; PaletteSource source; };
+    struct Blend { gx::BlendState state; };
+    std::vector<std::variant<RecordedDraw,ArrayBinding,Child,Projection,Position,IndexedPosition,Current,CopyClear,TextureBinding,PaletteLoad,Blend>> geometry;
 };
 std::map<uint32_t,Resource> resources; // owned SDK recordings; no FIFO command decoding
 struct ListRecording {
@@ -55,6 +63,7 @@ std::unique_ptr<ListRecording> recording;
 std::map<uint64_t, uint32_t> finishes; // serial -> submitting thread's SDA base; guest baton only
 std::atomic<uint64_t> draw_count{0}, vertex_count{0}, submitted{0}, completed{0}, outside_bytes{0};
 std::atomic<uint64_t> copies{0};
+std::atomic<uint64_t> texture_decodes{0};
 uint32_t read32(uint32_t address) {
     auto bytes = memory.read(address, 4);
     uint32_t value = 0;
@@ -110,12 +119,27 @@ const Resource& checked_resource(uint32_t address,uint32_t length) {
         throw gx::Error(gx::ErrorCode::layout,address,length,0); // TD-014: prebuilt/modified lists require native import
     return found->second;
 }
-std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<TextureSource>& source) {
+std::shared_ptr<const PaletteData> load_palette(const PaletteSource& source) {
+    if (!source.entries || source.entries>16384 || uint32_t(source.format)>2)
+        throw gx::TextureError(gx::TextureErrorCode::descriptor,"invalid native palette descriptor");
+    auto bytes=memory.read(source.address,source.entries*2);
+    return std::make_shared<const PaletteData>(PaletteData{source.format,{bytes.begin(),bytes.end()}});
+}
+gx::TextureCache texture_cache;
+std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<TextureSource>& source,const Palettes& loaded) {
     if (!source) return {};
     const auto bytes=memory.read(source->address,gx::encoded_texture_size(source->desc));
-    return std::make_shared<const gx::TexturePixels>(gx::decode_texture(source->desc,bytes));
+    gx::PaletteView palette;
+    if (source->palette) {
+        auto found=loaded.find(*source->palette);
+        if (found==loaded.end()) throw gx::TextureError(gx::TextureErrorCode::descriptor,"GX texture uses an unloaded palette");
+        palette={found->second->format,found->second->bytes};
+    }
+    auto result=texture_cache.snapshot(source->address,source->desc,bytes,palette);
+    texture_decodes=texture_cache.decodes();
+    return result;
 }
-void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,std::vector<gx::DrawPacket>& imported,std::vector<uint32_t>& path) {
+void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,std::vector<gx::DrawPacket>& imported,std::vector<uint32_t>& path) {
     const uint32_t physical=address & 0x3FFFFFFF;
     // shortcut: nesting capped at64; replace traversal if a verified deeper native asset appears (TD-032).
     if (path.size()==64 || std::find(path.begin(),path.end(),physical)!=path.end())
@@ -131,7 +155,8 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             vertices.begin(layout,source->primitive,source->vat,source->count,producer(),source->callsite);
             vertices.write_attribute(producer(),source->payload);
             auto draw=vertices.take_draw(); draw.transforms=transform_state;
-            draw.texture=snapshot_texture(textures[0]);
+            draw.texture=snapshot_texture(textures[0],loaded);
+            draw.blend=blend;
             imported.push_back(std::move(draw));
         } else if (const auto* array=std::get_if<Resource::ArrayBinding>(&item)) bindings.arrays[array->attribute]=array->array;
         else if (const auto* projection=std::get_if<Resource::Projection>(&item)) transform_state.projection=projection->matrix;
@@ -140,9 +165,11 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
         else if (const auto* current=std::get_if<Resource::Current>(&item)) transform_state.current=current->row;
         else if (const auto* clear=std::get_if<Resource::CopyClear>(&item)) copy=clear->state;
         else if (const auto* binding=std::get_if<Resource::TextureBinding>(&item)) textures[binding->map]=binding->source;
+        else if (const auto* palette=std::get_if<Resource::PaletteLoad>(&item)) loaded[palette->region]=load_palette(palette->source);
+        else if (const auto* value=std::get_if<Resource::Blend>(&item)) blend=value->state;
         else {
             const auto& child=std::get<Resource::Child>(item);
-            import_resource(child.address,child.length,bindings,transform_state,copy,textures,imported,path);
+            import_resource(child.address,child.length,bindings,transform_state,copy,textures,loaded,blend,imported,path);
         }
     }
     path.pop_back();
@@ -178,7 +205,9 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue) {
     memory = {{reinterpret_cast<const std::byte*>(base), 24u << 20}, {reinterpret_cast<const std::byte*>(base + 0x10000000), 64u << 20}, {reinterpret_cast<const std::byte*>(base + 0x20000000), 0x4000}};
     state = {}; transforms={}; live_transforms={}; draws.clear(); finishes.clear(); resources.clear(); recording.reset(); capture = std::make_unique<gx::Vertices>(memory);
     copy_state={}; copies=0;
-    bound_textures={}; live_texture.reset();
+    texture_cache.clear(); texture_decodes=0;
+    blend_state={}; live_blend={};
+    bound_textures={}; palettes.clear(); live_texture.reset();
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
 void gx_fifo_write(int size, uint32_t value) {
@@ -202,6 +231,7 @@ void gx_fifo_write(int size, uint32_t value) {
     if (!capture->active()) {
         auto draw = capture->take_draw(); draw.transforms=live_transforms; vertex_count += draw.vertices.size(); ++draw_count;
         draw.texture=live_texture;
+        draw.blend=live_blend;
         draws.push_back(std::move(draw));
     }
 }
@@ -220,7 +250,7 @@ void gx_completed(uint64_t serial) {
         sched->wake_all(base - 25336);
     });
 }
-GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load()}; }
+GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load()}; }
 }
 void hle_GXBegin(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80284FD0, c);
@@ -239,10 +269,11 @@ void hle_GXBegin(ppc::Ctx& c) {
         }
         return;
     }
-    auto texture=snapshot_texture(bound_textures[0]);
+    auto texture=snapshot_texture(bound_textures[0],palettes);
     capture->begin(snapshot(c), uint8_t(c.r[3]), uint8_t(c.r[4]), uint16_t(c.r[5]), producer(), c.lr ? c.lr - 4 : 0x80284FD0);
     live_texture=std::move(texture);
     live_transforms=transforms;
+    live_blend=blend_state;
 }
 void hle_GXSetArray(ppc::Ctx& c) {
     uc::gx_audit_enter(0x802841DC, c);
@@ -337,13 +368,17 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     auto transform_state=transforms;
     auto copy=copy_state;
     auto textures=bound_textures;
+    auto loaded=palettes;
+    auto blend=blend_state;
     std::vector<uint32_t> path;
-    import_resource(address,length,bindings,transform_state,copy,textures,imported,path);
+    import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,imported,path);
     for (auto& draw : imported) { vertex_count+=draw.vertices.size(); ++draw_count; draws.push_back(std::move(draw)); }
     state.arrays=bindings.arrays;
     transforms=transform_state;
     copy_state=copy;
     bound_textures=textures;
+    palettes=std::move(loaded);
+    blend_state=blend;
 }
 
 namespace {
@@ -412,7 +447,6 @@ void hle_GXLoadTexObjPreLoaded(ppc::Ctx& c) {
     if (map>7) throw gx::Error(gx::ErrorCode::layout,0x802869A0,7,map);
     memory.read(object,32); memory.read(region,8); memory.read(sdk,0x600);
     const auto flags=std::to_integer<uint8_t>(memory.read(object+31,1)[0]);
-    if (!(flags&2)) throw gx::TextureError(gx::TextureErrorCode::unsupported,"native TLUT binding is pending (TD-036)");
     const uint32_t image0=read32(object+8),format=read32(object+20);
     TextureSource source{(read32(object+12)&0xFFFFFF)<<5,{(image0&1023)+1,((image0>>10)&1023)+1,gx::TextureFormat(format),uint8_t(flags&1 ? ((read32(object+4)>>8)&255)/16+1 : 1)}};
     if (format>255 || (format&15)!=((image0>>20)&15)) throw gx::TextureError(gx::TextureErrorCode::descriptor,"inconsistent native GXTexObj format");
@@ -424,10 +458,38 @@ void hle_GXLoadTexObjPreLoaded(ppc::Ctx& c) {
     for (auto word : words) { uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word); }
     ppc::wr32(c,object,words[0]); ppc::wr32(c,object+4,words[1]); ppc::wr32(c,object+8,words[2]); ppc::wr32(c,object+12,words[5]);
     ppc::wr32(c,region,words[3]); ppc::wr32(c,region+4,words[4]);
+    if (!(flags&2)) {
+        const auto palette_region=uc::call_guest(c,read32(sdk+0x51C),{read32(object+24)});
+        memory.read(palette_region,16);
+        source.palette=palette_region&0x3FFFFFFF;
+        const auto tag=std::to_integer<uint8_t>(memory.read(c.r[13]-28888+map,1)[0]);
+        const auto word=(read32(palette_region+4)&0xFFFFFF)|(uint32_t(tag)<<24);
+        ppc::wr32(c,palette_region+4,word);
+        uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word);
+    }
     ppc::wr32(c,sdk+0x564+map*4,words[2]); ppc::wr32(c,sdk+0x584+map*4,words[0]);
     ppc::wr32(c,sdk+0x5FC,read32(sdk+0x5FC)|1); ppc::wr16(c,sdk+2,0);
     if (recording) { if (!recording->overflow) recording->native.geometry.push_back(Resource::TextureBinding{map,source}); }
     else bound_textures[map]=source;
+}
+void hle_GXLoadTlut(ppc::Ctx& c) {
+    uc::gx_audit_enter(0x80286B80,c); matrix_boundary(0x80286B80);
+    const uint32_t object=c.r[3],name=c.r[4],sdk=read32(c.r[2]-8968);
+    memory.read(object,12);
+    const uint32_t region=uc::call_guest(c,read32(sdk+0x51C),{name});
+    memory.read(region,16);
+    const uint32_t format=read32(object),image=read32(object+4),count_word=read32(object+8);
+    const PaletteSource source{(image&0xFFFFFF)<<5,count_word>>16,gx::PaletteFormat((format>>10)&3)};
+    auto loaded=load_palette(source);
+    uc::call_guest(c,0x80287720,{});
+    uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,image);
+    uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,read32(region));
+    uc::call_guest(c,0x80287720,{});
+    const uint32_t binding=(format&~1023u)|(read32(region)&1023);
+    ppc::wr32(c,region+4,binding); ppc::wr32(c,region+8,image); ppc::wr32(c,region+12,count_word);
+    ppc::wr32(c,object,binding);
+    if (recording) { if (!recording->overflow) recording->native.geometry.push_back(Resource::PaletteLoad{region&0x3FFFFFFF,source}); }
+    else palettes[region&0x3FFFFFFF]=std::move(loaded);
 }
 void hle_GXSetCopyClear(ppc::Ctx& c) {
     uc::gx_audit_enter(0x802855C8,c); matrix_boundary(0x802855C8);
@@ -455,4 +517,30 @@ void hle_GXCopyDisp(ppc::Ctx& c) {
     ppc::wr32(c,sdk+0x23C,(read32(sdk+0x23C)&~0xFF000800u)|0x52004000u|(clear ? 0x800u : 0));
     memory.read(sdk+2,2); ppc::wr16(c,sdk+2,0);
     submit_batch(true,clear,xfb); ++copies;
+}
+namespace {
+void publish_blend(ppc::Ctx& c,uint32_t sdk,uint32_t word) {
+    uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word);
+    ppc::wr32(c,sdk+0x220,word); ppc::wr16(c,sdk+2,0);
+    gx::BlendState blend{uint8_t(word&0x800 ? 3 : word&2 ? 2 : word&1 ? 1 : 0),uint8_t((word>>8)&7),uint8_t((word>>5)&7),uint8_t((word>>12)&15),bool(word&8),bool(word&16)};
+    if (recording) { if (!recording->overflow) recording->native.geometry.push_back(Resource::Blend{blend}); }
+    else blend_state=blend;
+}
+}
+void hle_GXSetBlendMode(ppc::Ctx& c) {
+    uc::gx_audit_enter(0x80288274,c); matrix_boundary(0x80288274);
+    if (c.r[3]>3 || c.r[4]>7 || c.r[5]>7 || c.r[6]>15) throw gx::Error(gx::ErrorCode::layout,0x80288274,3,c.r[3]);
+    const auto sdk=read32(c.r[2]-8968),mode=c.r[3];
+    const auto word=(read32(sdk+0x220)&~0xF7E3u)|(mode&1)|(mode==2 ? 2u : 0u)|(mode==3 ? 0x800u : 0u)|(c.r[4]<<8)|(c.r[5]<<5)|(c.r[6]<<12);
+    publish_blend(c,sdk,word);
+}
+void hle_GXSetColorUpdate(ppc::Ctx& c) {
+    uc::gx_audit_enter(0x802882C4,c); matrix_boundary(0x802882C4);
+    if (c.r[3]>1) throw gx::Error(gx::ErrorCode::layout,0x802882C4,1,c.r[3]);
+    const auto sdk=read32(c.r[2]-8968); publish_blend(c,sdk,(read32(sdk+0x220)&~8u)|(c.r[3]<<3));
+}
+void hle_GXSetAlphaUpdate(ppc::Ctx& c) {
+    uc::gx_audit_enter(0x802882F0,c); matrix_boundary(0x802882F0);
+    if (c.r[3]>1) throw gx::Error(gx::ErrorCode::layout,0x802882F0,1,c.r[3]);
+    const auto sdk=read32(c.r[2]-8968); publish_blend(c,sdk,(read32(sdk+0x220)&~16u)|(c.r[3]<<4));
 }

@@ -10,6 +10,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--log-dvd") options.log_dvd = true;
         else if (arg == "--log-sleep") options.log_sleep = true;
         else if (arg == "--gx-audit") options.gx_audit = true;
+        else if (arg == "--skip-intro") options.skip_intro = true;
         else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];

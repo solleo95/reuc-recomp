@@ -15,11 +15,15 @@ void hle_GXSetProjection(ppc::Ctx&); void hle_GXSetProjectionv(ppc::Ctx&);
 void hle_GXLoadPosMtxImm(ppc::Ctx&); void hle_GXLoadPosMtxIndx(ppc::Ctx&); void hle_GXSetCurrentMtx(ppc::Ctx&);
 void hle_GXCopyDisp(ppc::Ctx&); void hle_GXSetCopyClear(ppc::Ctx&);
 void hle_GXLoadTexObjPreLoaded(ppc::Ctx&);
+void hle_GXLoadTlut(ppc::Ctx&);
+void hle_GXSetBlendMode(ppc::Ctx&); void hle_GXSetColorUpdate(ppc::Ctx&); void hle_GXSetAlphaUpdate(ppc::Ctx&);
 
 static int calls = 0;
 static void callback(ppc::Ctx& ctx) { CHECK(!uc::os_sched().interrupts_enabled()); CHECK(ppc::rd8(ctx, ctx.r[13] - 25328) == 1); ++calls; }
 static void flush(ppc::Ctx&) { for (int i=0;i<8;++i) uc::gx_fifo_write(4,0); }
 static void flush_primitive(ppc::Ctx& ctx) { ppc::wr16(ctx,0x80001002,1); } // fixture omits the SDK's dummy geometry
+static void tlut_region(ppc::Ctx& ctx) { CHECK(ctx.r[3]==7); ctx.r[3]=0x80006500; }
+static void texture_flush(ppc::Ctx&) { uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,0x0F000000); }
 static void dirty_flush(ppc::Ctx& ctx) {
     ppc::wr32(ctx,0x800015FC,0);
     uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,0x12345678);
@@ -39,13 +43,16 @@ int main() {
     ppc::wr32(c, 0x80001014, (1 << 9) | (1 << 13)); // direct position + color0
     ppc::wr32(c, 0x8000101C, 1 | (4 << 1) | (5 << 14)); // XYZ/F32, RGBA8
     ppc::wr32(c, c.r[13] - 25324, 0x80100000);
-    static const uc::FnEntry table[] = {{0x80100000, callback},{0x80284504,flush},{0x80284D58,dirty_flush},{0x8028511C,flush_primitive}};
-    uc::dispatch_init(table, 4, 0x80100000, 0x80285120);
+    static const uc::FnEntry table[] = {{0x80100000, callback},{0x80100004,tlut_region},{0x80284504,flush},{0x80284D58,dirty_flush},{0x8028511C,flush_primitive},{0x80287720,texture_flush}};
+    uc::dispatch_init(table, 6, 0x80100000, 0x80287724);
     uc::Sched sched(c.mem); uc::os_hle_init(sched, c.mem, 0x817F0000);
     gx::Packets packets;
     sched.set_shutdown_hook([&] { packets.cancel(); });
     uc::gx_hle_init(sched, c.mem, &packets);
     auto* main = sched.create(0, 16, [&](ppc::Ctx& ctx) {
+        ctx.r[3]=1; hle_GXSetColorUpdate(ctx); hle_GXSetAlphaUpdate(ctx);
+        ctx.r[3]=1; ctx.r[4]=4; ctx.r[5]=5; ctx.r[6]=3; hle_GXSetBlendMode(ctx);
+        CHECK((ppc::rd32(ctx,0x80001220)&0xFFFF)==(1|24|(4<<8)|(5<<5)|(3<<12)));
         for (uint32_t i=0;i<16;++i) ppc::wr16(ctx,0x80006200+i*2,0xFF20);
         ppc::wr32(ctx,0x80006300,0x90); ppc::wr32(ctx,0x80006304,0);
         ppc::wr32(ctx,0x80006308,3|(3<<10)|(3<<20));
@@ -131,10 +138,12 @@ int main() {
         CHECK(ctx.r[3]==0 && ppc::rd8(ctx,0x800015F8)==0 && ppc::rd32(ctx,0x80002000)==before);
         const uint32_t data[] = {0,0,0,0xFF0000FF, 0x3F800000,0,0,0x00FF00FF, 0,0x3F800000,0,0x0000FFFF};
         ctx.r[3]=0x80002400; ctx.r[4]=128; hle_GXBeginDisplayList(ctx);
+        ctx.r[3]=1; ctx.r[4]=4; ctx.r[5]=5; ctx.r[6]=3; hle_GXSetBlendMode(ctx);
         ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; ctx.lr=0x80029004; hle_GXBegin(ctx);
         for (auto word : data) uc::gx_fifo_write(4,word);
         hle_GXEndDisplayList(ctx);
         const uint32_t direct_size=ctx.r[3];
+        ctx.r[3]=0; ctx.r[4]=1; ctx.r[5]=0; ctx.r[6]=3; hle_GXSetBlendMode(ctx);
         CHECK(uc::gx_stats().draws==0);
         ctx.r[3]=0; hle_GXSetCurrentMtx(ctx); ppc::wr32(ctx,0x800015FC,0);
         ctx.r[3]=0x80002400; ctx.r[4]=direct_size; hle_GXCallDisplayList(ctx);
@@ -218,6 +227,45 @@ int main() {
         ctx.r[3] = 0x90; ctx.r[4] = 0; ctx.r[5] = 3; ctx.lr = 0x80029D88;
         hle_GXBegin(ctx);
         for (auto word : data) uc::gx_fifo_write(4, word);
+        // Palettes are owned at load, and recorded loads read current data at playback.
+        ppc::wr32(ctx,0x8000151C,0x80100004);
+        ppc::wr32(ctx,0x80006500,0x65000400);
+        ppc::wr32(ctx,0x80006600,0); ppc::wr32(ctx,0x80006604,0x64000338); // source80006700
+        ppc::wr32(ctx,0x80006608,16u<<16);
+        for (uint32_t i=0;i<16;++i) ppc::wr16(ctx,0x80006700+i*2,0xFF44);
+        ppc::wr32(ctx,0x80006604,0x64FFFFFF);
+        ctx.r[3]=0x80006600; ctx.r[4]=7;
+        rejects(gx::ErrorCode::array_bounds,[&]{hle_GXLoadTlut(ctx);});
+        CHECK(ppc::rd32(ctx,0x80006508)==0);
+        ppc::wr32(ctx,0x80006604,0x64000338);
+        for (auto count : {0u,16385u}) {
+            ppc::wr32(ctx,0x80006608,count<<16);
+            ctx.r[3]=0x80006600; ctx.r[4]=7;
+            bool rejected=false;
+            try { hle_GXLoadTlut(ctx); } catch (const gx::TextureError& error) { rejected=error.code==gx::TextureErrorCode::descriptor; }
+            CHECK(rejected && ppc::rd32(ctx,0x80006508)==0);
+        }
+        ppc::wr32(ctx,0x80006608,16u<<16);
+        ctx.r[3]=0x80006600; ctx.r[4]=7; hle_GXLoadTlut(ctx);
+        CHECK(ppc::rd32(ctx,0x80006508)==0x64000338 && ppc::rd32(ctx,0x8000650C)==16u<<16);
+        ppc::wr32(ctx,0x80006308,7|(7<<10)|(8<<20)); ppc::wr32(ctx,0x80006314,8);
+        ppc::wr32(ctx,0x80006318,7); ppc::wr8(ctx,0x8000631F,0); ppc::wr32(ctx,0x8000630C,0x6200>>5);
+        for (uint32_t i=0;i<32;++i) ppc::wr8(ctx,0x80006200+i,0x11);
+        ppc::wr8(ctx,ctx.r[13]-28888,0x98);
+        ctx.r[3]=0x80006300; ctx.r[4]=0x80006400; ctx.r[5]=0; hle_GXLoadTexObjPreLoaded(ctx);
+        CHECK(ppc::rd32(ctx,0x80006504)==0x98000000);
+        ppc::wr16(ctx,0x80006702,0xFF88); // already loaded palette retains44
+        ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; hle_GXBegin(ctx);
+        for (auto word : data) uc::gx_fifo_write(4,word);
+        ctx.r[3]=0x80006800; ctx.r[4]=256; hle_GXBeginDisplayList(ctx);
+        ctx.r[3]=0x80006600; ctx.r[4]=7; hle_GXLoadTlut(ctx);
+        ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; hle_GXBegin(ctx);
+        for (auto word : data) uc::gx_fifo_write(4,word);
+        hle_GXEndDisplayList(ctx); const auto palette_list_size=ctx.r[3];
+        ppc::wr16(ctx,0x80006702,0xFF99);
+        ctx.r[3]=0x80006800; ctx.r[4]=palette_list_size; hle_GXCallDisplayList(ctx);
+        ppc::wr16(ctx,0x80006702,0xFFAA);
+        ctx.r[3]=0x80006800; ctx.r[4]=palette_list_size; hle_GXCallDisplayList(ctx);
         hle_GXSetDrawDone(ctx);
         CHECK(ppc::rd8(ctx, ctx.r[13] - 25328) == 0);
         hle_GXWaitDrawDone(ctx);
@@ -237,7 +285,7 @@ int main() {
         auto until = std::chrono::steady_clock::now() + 2s;
         std::unique_ptr<const gx::FramePacket> packet;
         while (!(packet = packets.try_take())) { CHECK(std::chrono::steady_clock::now() < until); std::this_thread::yield(); }
-        CHECK(packet->draws.size() == 6 && packet->draws[0].vertices.size() == 3);
+        CHECK(packet->draws.size() == 9 && packet->draws[0].vertices.size() == 3);
         CHECK(!packet->present);
         CHECK(packet->draws[0].vertices[1].position[0] == 1 && packet->draws[0].vertices[2].position[1] == 1);
         CHECK(packet->draws[0].callsite==0x80029000 && packet->draws[1].vertices[0].position[0]==2);
@@ -248,8 +296,12 @@ int main() {
         CHECK(packet->draws[5].transforms.current==9 && packet->draws[5].transforms.position_rows[9][3]==10);
         CHECK(packet->draws[5].callsite == 0x80029D84);
         CHECK(packet->draws[0].texture && packet->draws[0].texture->levels[0].rgba[0]==32);
+        CHECK(packet->draws[0].blend.mode==1 && packet->draws[0].blend.source==4 && packet->draws[0].blend.destination==5);
         CHECK(packet->draws[4].texture && packet->draws[4].texture->levels[0].rgba[0]==96);
         CHECK(packet->draws[5].texture && packet->draws[5].texture->levels[0].rgba[0]==128);
+        CHECK(packet->draws[6].texture->levels[0].rgba[0]==0x44);
+        CHECK(packet->draws[7].texture->levels[0].rgba[0]==0x99);
+        CHECK(packet->draws[8].texture->levels[0].rgba[0]==0xAA);
         CHECK(packets.complete(packet->serial));
         uc::gx_completed(packet->serial); uc::gx_completed(packet->serial);
         until=std::chrono::steady_clock::now()+2s;
@@ -264,5 +316,5 @@ int main() {
     });
     sched.run(main); consumer.join();
     auto stats = uc::gx_stats();
-    CHECK(stats.draws == 6 && stats.vertices == 18 && stats.submitted == 2 && stats.completed == 2 && stats.copies==1 && calls == 2);
+    CHECK(stats.draws == 9 && stats.vertices == 27 && stats.submitted == 2 && stats.completed == 2 && stats.copies==1 && calls == 2);
 }

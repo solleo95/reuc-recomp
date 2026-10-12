@@ -90,12 +90,51 @@ int main() {
     rejects(gx::TextureErrorCode::truncated,[&]{gx::decode_texture({1,1,gx::TextureFormat::rgba8},bytes(data).first(63));});
     for (const gx::TextureDesc desc : {gx::TextureDesc{0,1},gx::TextureDesc{1,0},gx::TextureDesc{1025,1},gx::TextureDesc{1,std::numeric_limits<uint32_t>::max()},gx::TextureDesc{1,1,gx::TextureFormat::i8,0},gx::TextureDesc{1,1,gx::TextureFormat::i8,2}})
         rejects(gx::TextureErrorCode::descriptor,[&]{gx::decode_texture(desc,bytes(data));});
-    rejects(gx::TextureErrorCode::unsupported,[&]{gx::decode_texture({1,1,static_cast<gx::TextureFormat>(8)},bytes(data));});
+    rejects(gx::TextureErrorCode::unsupported,[&]{gx::decode_texture({1,1,static_cast<gx::TextureFormat>(7)},bytes(data));});
+    // Palette indices follow texture tiling; palette words are big-endian.
+    std::vector<uint8_t> palette(512,0);
+    palette[2]=0x12; palette[3]=0xC4; palette[30]=0xAB; palette[31]=0x56;
+    data.assign(64,0); data[0]=0x1F; data[32]=0xF0;
+    image=gx::decode_texture({9,1,gx::TextureFormat::c4},bytes(data),{gx::PaletteFormat::ia8,bytes(palette)});
+    CHECK(pixel(image,0,0,0)==Pixel({196,196,196,18}));
+    CHECK(pixel(image,0,1,0)==Pixel({86,86,86,171}));
+    CHECK(pixel(image,0,8,0)==Pixel({86,86,86,171}));
+    palette[510]=0xF8; palette[511]=0;
+    data.assign(32,255);
+    image=gx::decode_texture({1,1,gx::TextureFormat::c8},bytes(data),{gx::PaletteFormat::rgb565,bytes(palette)});
+    CHECK(pixel(image,0,0,0)==Pixel({255,0,0,255}));
+    palette.assign(32768,0); palette[32766]=0x3A; palette[32767]=0xBC;
+    image=gx::decode_texture({1,1,gx::TextureFormat::c14x2},bytes(data),{gx::PaletteFormat::rgb5a3,bytes(palette)});
+    CHECK(pixel(image,0,0,0)==Pixel({170,187,204,109})); // high two index bits ignored
+    rejects(gx::TextureErrorCode::truncated,[&]{gx::decode_texture({1,1,gx::TextureFormat::c8},bytes(data));});
+    rejects(gx::TextureErrorCode::truncated,[&]{gx::decode_texture({1,1,gx::TextureFormat::c14x2},bytes(data),{gx::PaletteFormat::rgb5a3,bytes(palette).first(32767)});});
+    rejects(gx::TextureErrorCode::unsupported,[&]{gx::decode_texture({1,1,gx::TextureFormat::c8},bytes(data),{static_cast<gx::PaletteFormat>(3),bytes(palette)});});
     // Maximum SDK extent and all eleven levels remain bounded before allocating.
     data.assign(5592576,0xA5);
     image = gx::decode_texture({1024,1024,gx::TextureFormat::rgba8,11},bytes(data));
     CHECK(image.levels.size()==11 && image.levels.back().rgba.size()==4);
     CHECK(pixel(image,0,1023,1023)==Pixel({165,165,165,165}));
     CHECK(pixel(image,10,0,0)==Pixel({165,165,165,165}));
+    gx::TextureCache cache(128);
+    data.assign(32,17);
+    auto first=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(cache.snapshot(0x00001000,{1,1,gx::TextureFormat::i8},bytes(data))==first);
+    CHECK(cache.decodes()==1);
+    data[0]=34;
+    auto second=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(second!=first && first->levels[0].rgba[0]==17 && second->levels[0].rgba[0]==34);
+    data.assign(32,0); palette.assign(2,255);
+    auto indexed=cache.snapshot(0x80002000,{1,1,gx::TextureFormat::c8},bytes(data),{gx::PaletteFormat::ia8,bytes(palette)});
+    palette[1]=68;
+    auto changed_palette=cache.snapshot(0x80002000,{1,1,gx::TextureFormat::c8},bytes(data),{gx::PaletteFormat::ia8,bytes(palette)});
+    CHECK(indexed!=changed_palette && indexed->levels[0].rgba[0]==255 && changed_palette->levels[0].rgba[0]==68);
+    auto other_format=cache.snapshot(0x80002000,{1,1,gx::TextureFormat::c8},bytes(data),{gx::PaletteFormat::rgb565,bytes(palette)});
+    CHECK(other_format!=changed_palette);
+    for (uint32_t i=0;i<30;++i) cache.snapshot(0x80003000+i*32,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(cache.resident_bytes()<=128 && first->levels[0].rgba[0]==17);
+    auto previous_decodes=cache.decodes();
+    cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(cache.decodes()==previous_decodes+1);
+    rejects(gx::TextureErrorCode::truncated,[&] { cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data).first(31)); });
     return 0;
 }

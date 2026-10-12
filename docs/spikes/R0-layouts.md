@@ -2,6 +2,8 @@
 
 Date: 2026-10-12. Tools: `tools/xref --disasm`. Every offset below is proven by a disassembly line of the translated SDK code in `main.dol` (RVL_SDK build `0x4199_60831`).
 
+G11 application-ID correction: OSGetAppGamename80259320 reads the first4 bytes at0x80003180 (normal disc launch); init_lowmem now copies the actual disc header's first8 ID/maker/version bytes there. The older disc header at0x80000000 remains populated. This makes translated regional asset selection choose mes_us for RBUE08; a RED/GREEN low-memory fixture and Russian-dialog readback verify the change.
+
 ## OSThread (decimal offsets as printed by the disassembler, hex in brackets)
 
 Evidence: `OSCreateThread` (`80261940`).

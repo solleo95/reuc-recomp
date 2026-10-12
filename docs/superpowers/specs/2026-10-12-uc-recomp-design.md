@@ -19,6 +19,8 @@ Success criteria (full project):
 
 Design priorities (user): maximum nativity, performance, flexibility.
 
+Future compatibility requirement (owner,2026-10-12): support extracted images of every Umbrella Chronicles region, revision and language, including asset translations with custom font encodings. Detect game ID, DOL revision and asset/locale relationships; verify native translation and HLE mappings per executable profile. Ship/select ahead-of-time native profiles or rebuild the matching profile; unsupported code revisions need verified static translation. Test regional/language/save namespaces and patched fonts together. RBUE08 remains the current bring-up profile; future compatibility is tracked separately and is not claimed by current tests.
+
 ## 2. Decisions already made
 
 | Topic | Decision |
@@ -106,7 +108,7 @@ ranges in spike S1; the game has no REL modules).
   at the display rate (see §7).
 - **Audio**: AX voice mixer on the CPU (SIMD), output via WASAPI. DSP microcode is never emulated: AX is replaced by HLE.
 - **Video**: THP/movie decode with a native decoder into a texture.
-- **Save**: NAND API mapped to a folder.
+- **Save**: verified NANDInit/ISFS API mapped to real Windows files under `saves` next to `uc.exe`, independent of the launch working directory. Existing contents are archived before writable reopening/overwrite; deletes move into `.deleted`. Directory handles pin path ancestors during operations; reparse points, hard links and path escapes are rejected. Native startup reaches the missing-save/create-data dialog (G10); full in-game save/load remains pending native input. Provisional metadata and synchronous disk work behind async completion are tracked as TD-040/039.
 
 **Nativity rule (owner's priority: maximum nativity and performance).** The runtime is native code at every level: translated game code, native HLE
 functions for SDK calls, and a memory-mapped I/O bus. HLE is bottom-up: only what cannot run natively is replaced (scheduler, interrupts, time, DVD,
@@ -146,13 +148,18 @@ behaviour) is recorded in `docs/tech-debt.md` in the same step, with its native 
 ## 9. Input (sub-project 4) and Launcher (sub-project 5)
 
 **Input.** `KPADRead`/`WPADRead` family replaced by HLE. Source: Windows Raw Input (mouse).
-The pointer position is the absolute cursor position mapped to the guest IR coordinate space, with no acceleration
-and no filtering. The smoothing present in the statically linked KPAD library is bypassed by replacing the
+Raw relative mouse counts accumulate into a bounded native pointer, published as absolute SDK coordinates; system acceleration
+and filtering are disabled. The smoothing present in the statically linked KPAD library is bypassed by replacing the
 library functions. Button mapping (Trigger, A/B, reload, etc.) is configurable; gamepad is optional.
+Current G11 implementation: player1 mouse/A via LMB, focus-loss button release, Escape releases mouse capture and the next LMB recaptures it. Binding configuration and gamepad remain later work. All shared input state is mutex-protected; shutdown clears the SDK input service after joining guest threads. Sensor placeholders are explicitly tracked in TD-041.
+
+Regional startup metadata includes the application ID at0x80003180, copied from the actual disc header. OSGetAppGamename and the game's normal locale selection then choose the US resources for RBUE08. The supplied Russian translation stores its dialogue text in mes_us with matching modified font glyphs (G11); game files and system language are preserved.
 
 **Launcher.** `launcher.exe` (ImGui/SDL3). Fields: game path (default `S:\Games\Umbrella Chronicles\game`),
 resolution (incl. 4K), FPS limit (60/120/144/240/unlimited), upscaler (DLSS/FSR/off), DLSS preset, DLSS model,
 frame generation mode, Launch button. Stored in `config.json` next to the exe; `uc.exe` reads it and also accepts CLI overrides.
+Add checkbox **«Пропустить вступительные ролики»** (`skip_intro`, default false; CLI `--skip-intro`).
+It skips the initial Nintendo safety/wrist-strap screens, CAPCOM and CRIWARE logos while preserving startup initialization and the subsequent game flow. Later story movies keep their normal behavior. This option also speeds up bring-up tests before the launcher exists.
 
 ## 10. Build (sub-project 0)
 

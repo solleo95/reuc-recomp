@@ -12,6 +12,8 @@ int main() {
     uc::init_lowmem(c, hdr, info);
     CHECK(rd32(c, 0x80000000) == 0x52425545);       // "RBUE" copied from the disc header
     CHECK(rd16(c, 0x80000004) == 0x3038);           // "08"
+    CHECK(rd32(c, 0x80003180)==0x52425545);         // OSGetAppGamename reads the separate application ID
+    CHECK(rd16(c, 0x80003184)==0x3038);
     CHECK(rd32(c, 0x80000020) == 0x0D15EA5E);
     CHECK(rd32(c, 0x80000028) == 0x01800000);       // MEM1 size
     CHECK(rd32(c, 0x8000002C) == 0x23);             // retail production-board metadata

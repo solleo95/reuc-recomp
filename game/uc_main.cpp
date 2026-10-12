@@ -7,6 +7,8 @@
 #include "guest_mem.h"
 #include "gx_audit.h"
 #include "hle/os.h"
+#include "hle/save.h"
+#include "native_input.h"
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -15,6 +17,7 @@
 #include "trace.h"
 #include "vi.h"
 #include "options.h"
+#include "intro.h"
 #include "vulkan_renderer.h"
 #include <algorithm>
 #include <atomic>
@@ -71,7 +74,7 @@ void print_stats() {
                  (unsigned long long)vi.retraces, (unsigned long long)d.opens, (unsigned long long)d.reads, (unsigned long long)d.bytes,
                  (unsigned long long)g_fifo_snapshot.load(), uc::mmio_bus().unmapped_count());
     for (const auto& entry : uc::gx_audit_snapshot()) {
-        std::fprintf(stderr, "gx audit: %08X calls %llu %s  first r3..r10", entry.address, (unsigned long long)entry.calls, uc::symbol_name(entry.address).c_str());
+        std::fprintf(stderr, "gx audit: %08X calls %llu %s caller %08X  first r3..r10", entry.address, (unsigned long long)entry.calls, uc::symbol_name(entry.address).c_str(),entry.first_caller);
         for (auto arg : entry.first_gpr) std::fprintf(stderr, " %08X", arg);
         std::fprintf(stderr, "  f1..f6");
         for (auto arg : entry.first_fpr) std::fprintf(stderr, " %.6g", arg);
@@ -126,9 +129,10 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro]\n", error->c_str()); return 2; }
     const auto options = std::get<uc::Options>(std::move(parsed));
     const auto& game = options.game;
+    uc::intro_init(options.skip_intro);
     if (options.gx_audit) {
 #ifdef UC_TRACE
         uc::gx_audit_enable();
@@ -163,6 +167,8 @@ static int real_main(int argc, char** argv) {
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
     uc::Sched sched(boot.mem);
+    uc::SaveFs saves(exe_dir()/"saves");
+    uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
@@ -180,19 +186,26 @@ static int real_main(int argc, char** argv) {
     std::optional<VideoSession> video;
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
     uc::VulkanRenderer renderer;
+    uc::NativeInput input;
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
+        SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
+        SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE,"1",SDL_HINT_OVERRIDE);
         video.emplace();
         window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
         if (!window) throw std::runtime_error(SDL_GetError());
+        if (!SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
+        input.focus((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders");
     }
+    uc::input_hle_init(options.headless ? nullptr : &input);
     gx::Packets packets;
     uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets);
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
     uint64_t last_retraces = 0;
+    uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,render_ns=0;
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
     std::unique_ptr<const gx::FramePacket> pending;
@@ -206,12 +219,36 @@ static int real_main(int argc, char** argv) {
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
+                if (event.type==SDL_EVENT_WINDOW_FOCUS_LOST) input.focus(false);
+                if (event.type==SDL_EVENT_WINDOW_FOCUS_GAINED) input.focus(SDL_GetWindowRelativeMouseMode(window.get()));
+                if (event.type==SDL_EVENT_KEY_DOWN && event.key.key==SDLK_ESCAPE) {
+                    if (!SDL_SetWindowRelativeMouseMode(window.get(),false)) throw std::runtime_error(SDL_GetError());
+                    input.focus(false);
+                }
+                if (event.type==SDL_EVENT_MOUSE_MOTION && SDL_GetWindowRelativeMouseMode(window.get())) {
+                    int width=0,height=0;
+                    if (!SDL_GetWindowSizeInPixels(window.get(),&width,&height)) throw std::runtime_error(SDL_GetError());
+                    input.move_raw(event.motion.xrel,event.motion.yrel,uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
+                }
+                if (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) {
+                    const bool down=event.type==SDL_EVENT_MOUSE_BUTTON_DOWN;
+                    if (down && event.button.button==SDL_BUTTON_LEFT && !SDL_GetWindowRelativeMouseMode(window.get())) {
+                        if (!SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
+                        input.focus(true);
+                    } else if (event.button.button==SDL_BUTTON_LEFT) input.button(uc::kButtonA,down);
+                }
             }
             if (!pending) pending = packets.try_take();
-            if (pending && renderer.render(*pending)) {
+            if (pending) {
+                const auto render_start=std::chrono::steady_clock::now();
+                const bool rendered=renderer.render(*pending);
+                render_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
+                if (rendered) {
                 audit_seen_geometry |= !pending->draws.empty();
-                if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || renderer.presentation_count()>=120)) audit_capture_serial=pending->serial;
+                const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
+                if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
                 pending.reset();
+                }
             }
             for (uint64_t serial : renderer.poll_completions()) {
                 if (packets.complete(serial)) uc::gx_completed(serial);
@@ -230,6 +267,11 @@ static int real_main(int argc, char** argv) {
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
         if (now >= next_watch) {
+            if (options.gx_audit && !options.headless) {
+                const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
+                std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes));
+                last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
+            }
             next_watch = now + std::chrono::seconds(1);
             uint64_t retraces = uc::vi_stats().retraces;
             if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
@@ -240,6 +282,8 @@ static int real_main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     runner.stop();
+    uc::input_hle_init(nullptr);
+    uc::save_hle_shutdown();
     uc::dvd_hle_shutdown();
     if (!options.headless) {
         std::fprintf(stderr, "presentation stats: queue presents %llu\n", (unsigned long long)renderer.presentation_count());

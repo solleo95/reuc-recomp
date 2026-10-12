@@ -8,9 +8,9 @@ using Pixel = std::array<uint8_t, 4>;
 struct Tile { uint32_t width, height; size_t bytes; };
 Tile tile_for(TextureFormat format) {
     switch (format) {
-    case TextureFormat::i4: case TextureFormat::cmpr: return {8,8,32};
-    case TextureFormat::i8: case TextureFormat::ia4: return {8,4,32};
-    case TextureFormat::ia8: case TextureFormat::rgb565: case TextureFormat::rgb5a3: return {4,4,32};
+    case TextureFormat::i4: case TextureFormat::c4: case TextureFormat::cmpr: return {8,8,32};
+    case TextureFormat::i8: case TextureFormat::c8: case TextureFormat::ia4: return {8,4,32};
+    case TextureFormat::ia8: case TextureFormat::c14x2: case TextureFormat::rgb565: case TextureFormat::rgb5a3: return {4,4,32};
     case TextureFormat::rgba8: return {4,4,64};
     }
     throw TextureError(TextureErrorCode::unsupported, "unsupported GX texture format");
@@ -27,8 +27,22 @@ Pixel rgb5a3(uint16_t word) {
 }
 uint8_t byte(std::span<const std::byte> data, size_t offset) { return std::to_integer<uint8_t>(data[offset]); }
 uint16_t word(std::span<const std::byte> data, size_t offset) { return uint16_t((unsigned(byte(data,offset)) << 8) | byte(data,offset+1)); }
-Pixel texel(TextureFormat format, std::span<const std::byte> tile, uint32_t x, uint32_t y) {
+Pixel texel(TextureFormat format, std::span<const std::byte> tile, uint32_t x, uint32_t y, PaletteView palette) {
     switch (format) {
+    case TextureFormat::c4: case TextureFormat::c8: case TextureFormat::c14x2: {
+        size_t index;
+        if (format==TextureFormat::c4) index=(byte(tile,(y*8+x)/2)>>((x&1) ? 0 : 4))&15;
+        else if (format==TextureFormat::c8) index=byte(tile,y*8+x);
+        else index=word(tile,(y*4+x)*2)&0x3FFF;
+        if (index>=palette.bytes.size()/2) throw TextureError(TextureErrorCode::truncated,"GX palette index exceeds loaded palette");
+        const auto value=word(palette.bytes,index*2);
+        switch (palette.format) {
+        case PaletteFormat::ia8: { const auto i=uint8_t(value); return {i,i,i,uint8_t(value>>8)}; }
+        case PaletteFormat::rgb565: return rgb565(value);
+        case PaletteFormat::rgb5a3: return rgb5a3(value);
+        }
+        throw TextureError(TextureErrorCode::unsupported,"unsupported GX palette format");
+    }
     case TextureFormat::i4: {
         const size_t index = y * 8 + x;
         const uint8_t v = uint8_t(((byte(tile,index/2) >> ((index & 1) ? 0 : 4)) & 15) * 17);
@@ -95,7 +109,7 @@ size_t encoded_texture_size(const TextureDesc& desc) {
     }
     return required;
 }
-TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte> pixels) {
+TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette) {
     const size_t required=encoded_texture_size(desc);
     if (pixels.size() < required)
         throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
@@ -112,13 +126,41 @@ TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte>
                 offset += tile.bytes;
                 for (uint32_t y = 0; y < std::min(tile.height,height-top); ++y)
                     for (uint32_t x = 0; x < std::min(tile.width,width-left); ++x) {
-                        const Pixel value = texel(desc.format,encoded,x,y);
+                        const Pixel value = texel(desc.format,encoded,x,y,palette);
                         const size_t target = (size_t(top+y)*width+left+x)*4;
                         std::copy(value.begin(),value.end(),output.rgba.begin()+target);
                     }
             }
         result.levels.push_back(std::move(output));
         width = std::max(1u,width/2); height = std::max(1u,height/2);
+    }
+    return result;
+}
+std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette) {
+    const auto required = encoded_texture_size(desc);
+    if (pixels.size() < required) throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
+    pixels = pixels.first(required);
+    address &= 0x3FFFFFFF;
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+        if (it->address == address && it->desc.width == desc.width && it->desc.height == desc.height &&
+            it->desc.format == desc.format && it->desc.levels == desc.levels && it->format == palette.format &&
+            std::equal(it->encoded.begin(), it->encoded.end(), pixels.begin(), pixels.end()) &&
+            std::equal(it->palette.begin(), it->palette.end(), palette.bytes.begin(), palette.bytes.end())) {
+            auto result = it->pixels;
+            entries_.splice(entries_.begin(), entries_, it);
+            return result;
+        }
+    }
+    auto result = std::make_shared<const TexturePixels>(decode_texture(desc, pixels, palette));
+    ++decodes_;
+    size_t bytes = pixels.size() + palette.bytes.size();
+    for (const auto& level : result->levels) bytes += level.rgba.size();
+    if (bytes <= budget_) {
+        while (!entries_.empty() && (resident_ > budget_ - bytes || entries_.size() >= 4096)) {
+            resident_ -= entries_.back().bytes; entries_.pop_back();
+        }
+        entries_.push_front({address, desc, palette.format, {pixels.begin(), pixels.end()}, {palette.bytes.begin(), palette.bytes.end()}, result, bytes});
+        resident_ += bytes;
     }
     return result;
 }

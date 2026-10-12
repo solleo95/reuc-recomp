@@ -2,6 +2,8 @@ add_library(uc_runtime STATIC guest_mem.cpp dispatch.cpp trace.cpp fatal.cpp gue
 target_include_directories(uc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_sources(uc_runtime PRIVATE gx_audit.cpp)
 target_sources(uc_runtime PRIVATE hle/gx.cpp)
+target_sources(uc_runtime PRIVATE savefs.cpp hle/save.cpp)
+target_sources(uc_runtime PRIVATE native_input.cpp)
 target_link_libraries(uc_runtime PUBLIC uc_gx)
 # Real hook implementations for uc.exe (ppc::trap, mmio_*, timebase); tests use tests/mmio_stub.cpp instead.
 add_library(uc_platform STATIC platform.cpp)

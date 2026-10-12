@@ -7,6 +7,7 @@ uint32_t arena_lo_after_bss(uint32_t bss_addr, uint32_t bss_size) { return (bss_
 // Only words with a proven value are written; see docs/spikes/R0-layouts.md. Everything else starts as zero.
 void init_lowmem(ppc::Ctx& c, const uint8_t* hdr, const LowMemInfo& i) {
     for (uint32_t k = 0; k < 32; ++k) ppc::wr8(c, 0x80000000u + k, hdr[k]);   // disc header: game id, maker, version
+    for (uint32_t k=0;k<8;++k) ppc::wr8(c,0x80003180u+k,hdr[k]); // application ID used by OSGetAppGamename and regional resource selection
     ppc::wr32(c, 0x80000020, 0x0D15EA5E);      // boot magic
     ppc::wr32(c, 0x80000024, 1);               // version
     ppc::wr32(c, 0x80000028, i.mem1_size);

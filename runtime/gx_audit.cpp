@@ -1,4 +1,6 @@
 #include "gx_audit.h"
+#include "trace.h"
+#include "gx_vertices.h"
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -26,6 +28,8 @@ bool watched(uint32_t address, uint32_t link) {
     case 0x8003CDE0: case 0x80366D3C: case 0x80366E14: case 0x80366E78: case 0x80366FDC:
     case 0x80367AC4: case 0x80367FDC: return true;
     case 0x802F21EC: return true;
+    case 0x801028D4: case 0x8011637C: case 0x80116674: return true; // verified startup resource/dialog boundaries
+    case 0x802ACAC4: return true; // verified NANDGetHomeDir readiness gate
     case 0x8003D1AC: case 0x8003D250: case 0x8003D2F4: case 0x8003D380:
     case 0x8003A864: case 0x8003A900: return true;
     default: return false;
@@ -43,6 +47,16 @@ void gx_audit_enter(uint32_t address, const ppc::Ctx& ctx) {
         entry.first_caller = ctx.lr >= 4 ? ctx.lr - 4 : 0;
         for (size_t i = 0; i < entry.first_gpr.size(); ++i) entry.first_gpr[i] = ctx.r[i + 3];
         for (size_t i = 0; i < entry.first_fpr.size(); ++i) entry.first_fpr[i] = ctx.f[i + 1];
+        if (address==0x8011637C || address==0x80116674) {
+            std::fprintf(stderr,"[startup resource] entry %08X caller %08X r3 %08X r4 %08X\n",address,entry.first_caller,ctx.r[3],ctx.r[4]);
+            trace_dump(stderr,64);
+        }
+        if (address==0x802ACAC4 && ctx.mem) {
+            const gx::Memory memory{{reinterpret_cast<const std::byte*>(ctx.mem),24u<<20},{reinterpret_cast<const std::byte*>(ctx.mem+0x10000000),64u<<20},{}};
+            uint32_t initialized=0;
+            for (auto byte : memory.read(ctx.r[13]-25056,4)) initialized=(initialized<<8)|std::to_integer<uint8_t>(byte);
+            std::fprintf(stderr,"[save] NANDGetHomeDir caller %08X initialization %u (requires 2)\n",entry.first_caller,initialized);
+        }
     }
     ++entry.calls;
     if (address == 0x80288684 && ctx.r[4]) { ++entry.nonempty_lists; entry.list_bytes += ctx.r[4]; }

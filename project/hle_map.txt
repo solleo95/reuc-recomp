@@ -107,6 +107,34 @@ IOS_IoctlAsync
 IOS_Ioctlv
 IOS_IoctlvAsync
 
+# Native host save files; verified RBUE08 ISFS ABI (runtime/hle/save.cpp).
+@802AC778 NANDInit
+@802A7534 ISFS_OpenLib
+@802A77C4 ISFS_CreateDir
+@802A78B8 ISFS_CreateDirAsync
+@802A83BC ISFS_CreateFile
+@802A84B0 ISFS_CreateFileAsync
+@802A85A4 ISFS_Open
+@802A866C ISFS_OpenAsync
+@802A873C ISFS_GetFileStats
+@802A8758 ISFS_Seek
+@802A875C ISFS_SeekAsync
+@802A87E8 ISFS_Read
+@802A8808 ISFS_ReadAsync
+@802A88AC ISFS_Write
+@802A88CC ISFS_WriteAsync
+@802A8970 ISFS_Close
+@802A8974 ISFS_CloseAsync
+@802A79AC ISFS_ReadDir
+@802A7B00 ISFS_ReadDirAsync
+@802A7C48 ISFS_GetAttr
+@802A7DA0 ISFS_GetAttrAsync
+@802A7ED4 ISFS_Delete
+@802A7FAC ISFS_DeleteAsync
+@802A807C ISFS_Rename
+@802A8180 ISFS_RenameAsync
+@802A8284 ISFS_GetUsage
+
 # --- CPU synchronisation call (`sc; blr`): nothing to order on a native build.
 PPCSync Nop
 
@@ -127,8 +155,16 @@ GXSetCurrentMtx
 GXSetCopyClear
 GXCopyDisp
 GXLoadTexObjPreLoaded
+GXLoadTlut
+
+# RBUE08 startup logo update; original body continues at80245860 (game/intro.cpp).
+@8024585C IntroLogoUpdate
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop
 KPADRead
+@802E159C WPADProbe
+@80288274 GXSetBlendMode
+@802882C4 GXSetColorUpdate
+@802882F0 GXSetAlphaUpdate
 KPADEnableMotor Nop

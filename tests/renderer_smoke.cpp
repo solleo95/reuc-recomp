@@ -146,12 +146,14 @@ int main(int argc, char** argv) {
         auto sampled=renderer.capture(26);
         CHECK(sampled.rgba[center]==32 && sampled.rgba[center+1]==64 && sampled.rgba[center+2]==96);
         // A replacement image must reach both alternating GPU slots.
+        const auto texture_creations=renderer.texture_creations();
         auto changed=std::make_shared<gx::TexturePixels>(*texture);
         changed->levels[0].rgba[12]=224;
         work.draws[0].texture=changed; work.serial=27; submit(work);
         sampled=renderer.capture(27); CHECK(sampled.rgba[center]==224);
         work.draws[0].texture=texture; work.serial=28; submit(work);
         sampled=renderer.capture(28); CHECK(sampled.rgba[center]==32);
+        CHECK(renderer.texture_creations()==texture_creations+1); // unchanged slot26 texture is reused in slot28
         for (auto& vertex : work.draws[0].vertices) vertex.texcoord[0]={0.25f,0.25f};
         work.serial=29; submit(work);
         sampled=renderer.capture(29); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
@@ -164,8 +166,17 @@ int main(int argc, char** argv) {
         work.draws[0].texture=invalid; invalid_texture=false;
         try { renderer.render(work); } catch (const std::invalid_argument&) { invalid_texture=true; }
         CHECK(invalid_texture);
+        work=packet; work.serial=30; work.draws[0].texture.reset();
+        work.draws[0].blend={1,4,5,3,true,true};
+        for (auto& vertex:work.draws[0].vertices) vertex.color[0]={255,0,0,0};
+        submit(work); sampled=renderer.capture(30);
+        CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==64);
+        work.serial=31;
+        for (auto& vertex:work.draws[0].vertices) vertex.color[0]={255,0,0,128};
+        submit(work); sampled=renderer.capture(31);
+        CHECK(sampled.rgba[center]>=134 && sampled.rgba[center]<=137 && sampled.rgba[center+1]>=15 && sampled.rgba[center+1]<=17);
         bool rejected = false;
-        packet.serial = 30; draw.indices[2] = 999;
+        packet.serial = 32; draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -174,7 +185,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({30}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({32}));
         CHECK(renderer.validation_errors() == 0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");

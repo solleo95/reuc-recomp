@@ -29,6 +29,7 @@ public:
     void shutdown();
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
+    uint64_t texture_creations() const { owner(); return texture_creations_; }
     VkDevice device = VK_NULL_HANDLE;
 private:
     struct Buffer { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; void* mapped = nullptr; VkDeviceSize size = 0; };
@@ -38,6 +39,8 @@ private:
         VkImageView view=VK_NULL_HANDLE;
         Buffer upload;
         VkExtent2D extent{};
+        std::shared_ptr<const gx::TexturePixels> source;
+        bool initialized=false;
     };
     struct Slot {
         VkCommandBuffer command = VK_NULL_HANDLE;
@@ -65,10 +68,12 @@ private:
     Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage);
     void destroy_buffer(Buffer& buffer);
     Texture make_texture(const gx::TexturePixels* pixels);
+    void destroy_texture(Texture& texture);
     void retire_textures(Slot& slot);
     void rebuild();
     void retire_images();
-    void make_pipeline(const std::filesystem::path& shaders);
+    VkPipeline pipeline_for(const gx::BlendState& blend);
+    VkPipeline make_pipeline(const gx::BlendState& blend);
     void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent);
     void collect();
     SDL_Window* window_ = nullptr;
@@ -85,7 +90,9 @@ private:
     VkExtent2D extent_{};
     VkExtent2D requested_{};
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    std::map<uint32_t,VkPipeline> pipelines_;
+    std::filesystem::path shaders_;
+    bool logic_ops_=false;
     VkDescriptorSetLayout texture_layout_=VK_NULL_HANDLE;
     VkSampler texture_sampler_=VK_NULL_HANDLE;
     VkImage efb_ = VK_NULL_HANDLE;
@@ -101,5 +108,6 @@ private:
     bool resized_ = true;
     std::atomic<uint32_t> errors_{0};
     std::atomic<uint64_t> presentations_{0};
+    uint64_t texture_creations_=0;
 };
 }

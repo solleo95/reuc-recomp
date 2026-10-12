@@ -6,6 +6,9 @@ template<size_t N> static auto parse(const std::array<std::string_view, N>& args
 int main() {
     auto defaults = uc::parse_options({});
     CHECK(std::get<uc::Options>(defaults).width == 1280 && !std::get<uc::Options>(defaults).headless);
+    CHECK(!std::get<uc::Options>(defaults).skip_intro);
+    auto skip=parse(std::array<std::string_view,1>{"--skip-intro"});
+    CHECK(std::get<uc::Options>(skip).skip_intro);
     auto result = parse(std::array<std::string_view, 9>{"--width", "3840", "--height", "2160", "--seconds", "20", "--headless", "--validation", "--gx-audit"});
     auto& options = std::get<uc::Options>(result);
     CHECK(options.width == 3840 && options.height == 2160 && options.seconds == 20 && options.headless && options.validation && options.gx_audit);

@@ -41,6 +41,10 @@ struct Vertex {
     uint8_t position_matrix = 0;
     std::array<uint8_t, 8> texture_matrix{};
 };
+struct BlendState {
+    uint8_t mode=0,source=1,destination=0,logic=3;
+    bool color_write=true,alpha_write=true;
+};
 struct DrawPacket {
     uint32_t callsite = 0;
     uint8_t primitive = 0, vat = 0;
@@ -49,6 +53,7 @@ struct DrawPacket {
     std::vector<uint32_t> indices;
     Transforms transforms;
     std::shared_ptr<const TexturePixels> texture;
+    BlendState blend;
 };
 
 // Owned by the guest scheduler baton; callers identify its current producer.
