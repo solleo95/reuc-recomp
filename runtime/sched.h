@@ -70,10 +70,12 @@ public:
 
     void run(Thread* main_thread);               // returns when the main thread has exited or shutdown() was called
     void shutdown();
+    void set_shutdown_hook(Event hook) { shutdown_hook_ = std::move(hook); } // configure before run
+    void join_hosts();                            // after shutdown; waits for every guest host stack to unwind
     void set_error_handler(std::function<void(const std::string&)> h) { err_ = std::move(h); }
     void set_deadlock_timeout_ms(int ms) { deadlock_ms_ = ms; }
     const Thread* running() const { return running_; }
-    std::string dump_threads() const;           // diagnostic: one line per live thread (racy when called from another host thread)
+    std::string dump_threads() const;           // baton holder or after join_hosts only
     void set_switch_hook(std::function<void(Thread*)> h) { switch_hook_ = std::move(h); }
 
     void thread_main(Thread* t);                 // host thread entry (internal)
@@ -99,7 +101,7 @@ private:
     std::map<uint32_t, std::vector<Thread*>> waitq_;
     std::multimap<uint64_t, Event> timed_;
     std::vector<Event> ext_q_;
-    std::mutex baton_m_, ext_m_, done_m_;
+    std::mutex baton_m_, ext_m_, done_m_, join_m_;
     std::condition_variable ext_cv_, done_cv_;
     std::vector<void*> handles_;
     Thread* running_ = nullptr;
@@ -112,6 +114,7 @@ private:
     int64_t front_seq_ = 0, back_seq_ = 0;
     std::function<void(const std::string&)> err_;
     std::function<void(Thread*)> switch_hook_;
+    Event shutdown_hook_;
 };
 
 }  // namespace uc

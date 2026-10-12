@@ -14,6 +14,7 @@ int main() {
     CHECK(rd16(c, 0x80000004) == 0x3038);           // "08"
     CHECK(rd32(c, 0x80000020) == 0x0D15EA5E);
     CHECK(rd32(c, 0x80000028) == 0x01800000);       // MEM1 size
+    CHECK(rd32(c, 0x8000002C) == 0x23);             // retail production-board metadata
     CHECK(rd32(c, 0x80000030) == info.arena_lo);
     CHECK(rd32(c, 0x80000034) == 0x81700000);
     CHECK(rd32(c, 0x800000F8) == 243000000);        // bus clock

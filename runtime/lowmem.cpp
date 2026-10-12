@@ -10,6 +10,7 @@ void init_lowmem(ppc::Ctx& c, const uint8_t* hdr, const LowMemInfo& i) {
     ppc::wr32(c, 0x80000020, 0x0D15EA5E);      // boot magic
     ppc::wr32(c, 0x80000024, 1);               // version
     ppc::wr32(c, 0x80000028, i.mem1_size);
+    ppc::wr32(c, 0x8000002C, 0x23);             // production-board metadata consumed by OSGetConsoleType
     ppc::wr32(c, 0x80000030, i.arena_lo);
     ppc::wr32(c, 0x80000034, i.arena_hi);
     ppc::wr32(c, 0x800000CC, i.tv_format);

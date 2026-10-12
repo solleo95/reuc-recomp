@@ -28,5 +28,14 @@ struct DvdStats { uint64_t opens = 0, reads = 0, bytes = 0; };
 DvdStats dvd_stats();
 void dvd_log(bool on);          // print "[dvd] open <path>" lines to stderr
 void dvd_hle_init(DvdFs& fs);   // defined in hle/dvd.cpp
+void dvd_hle_shutdown();       // call after guests stop, while their scheduler and file tree remain alive
+
+class DvdSession {
+public:
+    explicit DvdSession(DvdFs& fs) { dvd_hle_init(fs); }
+    ~DvdSession() { dvd_hle_shutdown(); }
+    DvdSession(const DvdSession&) = delete;
+    DvdSession& operator=(const DvdSession&) = delete;
+};
 
 }  // namespace uc

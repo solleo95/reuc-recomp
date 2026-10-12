@@ -1,4 +1,4 @@
-# Generates project/hle.cfg from project/hle_map.txt + project/identified_sdk.txt + project/symbols.txt.
+# Generates project/hle.cfg from hle_map.txt and signature / verified symbol lists.
 # Usage: python -I tools/hle_cfg.py <project dir>
 import re
 import sys
@@ -6,7 +6,7 @@ from pathlib import Path
 
 proj = Path(sys.argv[1])
 names = {}  # sdk name -> [addresses]
-for fn in ("identified_sdk.txt", "symbols.txt"):
+for fn in ("identified_sdk.txt", "symbols.txt", "gx_symbols.txt"):
     p = proj / fn
     if not p.exists():
         continue
@@ -32,7 +32,7 @@ for raw in (proj / "hle_map.txt").read_text(encoding="utf-8").splitlines():
         continue
     addrs = sorted(set(names.get(parts[0], [])))
     if not addrs:
-        errors.append("SDK name %r not found in identified_sdk.txt / symbols.txt" % parts[0])
+        errors.append("SDK name %r not found in identified_sdk.txt / symbols.txt / gx_symbols.txt" % parts[0])
         continue
     if len(addrs) > 1:
         errors.append("SDK name %r is ambiguous (%s): map the right one as '@<address> <HleName>'" % (parts[0], ", ".join("%08X" % a for a in addrs)))

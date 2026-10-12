@@ -31,6 +31,15 @@ int main() {
     CHECK(bus.unmapped_count() == 2);
     bus.write(0xCC0FFFFC, 4, 1);   // unmapped write is counted, not fatal
     CHECK(bus.unmapped_count() == 3);
+    // A multi-byte access spanning the end must not reach either device.
+    p.last_off = 0xFFFFFFFF;
+    bus.write(0xCC008003, 2, 0xABCD);
+    CHECK(p.last_off == 0xFFFFFFFF);
+    CHECK(bus.unmapped_count() == 4);
+    CHECK(bus.read(0xCC008003, 2) == 0 && p.last_off == 0xFFFFFFFF);
+    bus.write(0xCC008000, -1, 1);
+    CHECK(bus.read(0xCC008000, 8) == 0 && p.last_off == 0xFFFFFFFF);
+    CHECK(bus.unmapped_count() == 7);
     // overlap is rejected
     bool threw = false;
     try { bus.map(0xCC0020F0, 0x20, &p, "overlap"); } catch (const std::exception&) { threw = true; }

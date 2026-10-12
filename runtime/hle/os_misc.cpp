@@ -36,18 +36,18 @@ void hle_OSGetTick(ppc::Ctx& c) {
     os_sched().safe_point();
 }
 
-// OSSetAlarm(alarm, relative_ticks(r4:r5), handler(r6)); OSSetPeriodicAlarm(alarm, absolute_start(r4:r5), period(r6:r7), handler(r8))
+// PPC EABI skips r4 before 64-bit arguments; verified at80259644/802596B4 and OSSleepTicks802626CC.
 void hle_OSSetAlarm(ppc::Ctx& c) {
-    uint64_t rel = uint64_t(c.r[4]) << 32 | c.r[5];
+    uint64_t rel = uint64_t(c.r[5]) << 32 | c.r[6];
     uint64_t gen = ++g_alarms[c.r[3]].gen;
-    arm(c.r[3], now_ticks() + rel, 0, c.r[6], gen);
+    arm(c.r[3], now_ticks() + rel, 0, c.r[7], gen);
 }
 void hle_OSSetPeriodicAlarm(ppc::Ctx& c) {
-    uint64_t start = uint64_t(c.r[4]) << 32 | c.r[5], period = uint64_t(c.r[6]) << 32 | c.r[7];
+    uint64_t start = uint64_t(c.r[5]) << 32 | c.r[6], period = uint64_t(c.r[7]) << 32 | c.r[8];
     if (!period) return;
     uint64_t gen = ++g_alarms[c.r[3]].gen;
     uint64_t now = now_ticks();
-    arm(c.r[3], start > now ? start : next_periodic(start, period, now), period, c.r[8], gen);   // a start in the past joins the next period
+    arm(c.r[3], start > now ? start : next_periodic(start, period, now), period, c.r[9], gen);   // a start in the past joins the next period
 }
 void hle_OSCancelAlarm(ppc::Ctx& c) { ++g_alarms[c.r[3]].gen; }
 

@@ -10,7 +10,7 @@ constexpr uint32_t kViKey = 0xF4000001u;
 constexpr uint32_t kRetraceCount = uint32_t(-25948), kPostCb = uint32_t(-25992), kPreCb = uint32_t(-25996);   // offsets from r13 (retrace handler at 8026D1C0, setters at 8026D8C4 / 8026D908)
 struct Vi {
     std::atomic<uint64_t> retraces{0};
-    uint32_t cur_fb = 0, next_fb = 0, tv = 0;
+    std::atomic<uint32_t> cur_fb{0}, next_fb{0}, tv{0};
     uint64_t period = kViPeriodNtsc;
     std::function<void()> hook;
 } g;
@@ -19,7 +19,7 @@ void arm(uint64_t at) {
     os_sched().post_at(at, [at] {
         Sched& s = os_sched();
         uint64_t n = ++g.retraces;
-        g.cur_fb = g.next_fb;                                   // a frame buffer set during the last frame goes live now
+        g.cur_fb = g.next_fb.load();                            // a frame buffer set during the last frame goes live now
         arm(next_periodic(at, g.period, now_ticks()));          // re-arm first: callbacks may take long
         // The SDK keeps the retrace state in small-data globals; VIGetRetraceCount and VISet*RetraceCallback run translated on them.
         ppc::Ctx& ic = s.irq_ctx();
@@ -39,7 +39,7 @@ void vi_hle_init(Sched&, uint64_t period_ticks, std::function<void()> on_retrace
     g.hook = std::move(on_retrace);
     arm(now_ticks() + period_ticks);
 }
-ViStats vi_stats() { return {g.retraces.load(), g.cur_fb, g.next_fb, g.tv}; }
+ViStats vi_stats() { return {g.retraces.load(), g.cur_fb.load(), g.next_fb.load(), g.tv.load()}; }
 }  // namespace uc
 
 void hle_VIInit(ppc::Ctx&) {}

@@ -30,8 +30,8 @@ echo [4/6] Build everything and run tests
 call "%ROOT%\scripts\dev.bat" || goto :build_failed
 
 echo [5/6] Staging dist
-if exist "%DIST%" rmdir /s /q "%DIST%"
-mkdir "%DIST%" || exit /b 1
+if not exist "%DIST%" mkdir "%DIST%"
+if not exist "%DIST%" exit /b 1
 cmake --install "%BUILD%" --prefix "%DIST%" || goto :stage_failed
 
 if defined NO_INSTALL goto :skip_copy

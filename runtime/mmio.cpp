@@ -23,11 +23,13 @@ void MmioBus::map(uint32_t base, uint32_t size, MmioDevice* dev, std::string nam
     std::sort(ranges_.begin(), ranges_.end(), [](const Range& a, const Range& b) { return a.base < b.base; });
 }
 
-const MmioBus::Range* MmioBus::find(uint32_t ea) const {
+const MmioBus::Range* MmioBus::find(uint32_t ea, int size) const {
+    if (size != 1 && size != 2 && size != 4) return nullptr;
     auto it = std::upper_bound(ranges_.begin(), ranges_.end(), ea, [](uint32_t v, const Range& r) { return v < r.base; });
     if (it == ranges_.begin()) return nullptr;
     --it;
-    return ea - it->base < it->size ? &*it : nullptr;
+    uint32_t off = ea - it->base;
+    return off < it->size && uint32_t(size) <= it->size - off ? &*it : nullptr;
 }
 
 void MmioBus::report(const char* what, uint32_t ea, int size) {
@@ -36,12 +38,12 @@ void MmioBus::report(const char* what, uint32_t ea, int size) {
 }
 
 uint32_t MmioBus::read(uint32_t ea, int size) {
-    if (const Range* r = find(ea)) return r->dev->read(ea - r->base, size);
+    if (const Range* r = find(ea, size)) return r->dev->read(ea - r->base, size);
     report("read", ea, size);
     return 0;
 }
 void MmioBus::write(uint32_t ea, int size, uint32_t v) {
-    if (const Range* r = find(ea)) { r->dev->write(ea - r->base, size, v); return; }
+    if (const Range* r = find(ea, size)) { r->dev->write(ea - r->base, size, v); return; }
     report("write", ea, size);
 }
 

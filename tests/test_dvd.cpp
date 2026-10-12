@@ -11,6 +11,9 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <future>
+#include <thread>
 namespace fs = std::filesystem;
 using namespace ppc;
 
@@ -29,12 +32,13 @@ static void guest_cb(Ctx& c) { g_log.push_back("cb(" + std::to_string(int(c.r[3]
 static void put_cstr(Ctx& c, uint32_t a, const std::string& s) { for (size_t i = 0; i <= s.size(); ++i) wr8(c, a + uint32_t(i), uint32_t(i < s.size() ? s[i] : 0)); }
 
 int main() {
-    fs::path root = fs::temp_directory_path() / "uc_dvd_test";
-    fs::remove_all(root);
+    fs::path root = fs::temp_directory_path() / ("uc_dvd_test_" + std::to_string(uc::now_ticks()));
+    CHECK(fs::create_directory(root));
     write_file(root / "Data" / "a.bin", 100);
     write_file(root / "Data" / "sub" / "b.bin", 64);
     write_file(root / "zero.bin", 0);
     write_file(root / "Data" / fs::path(u8"日本.bin"), 10);   // a name outside the ANSI code page must not break the tree walk
+    { std::ofstream pending(root / "pending.bin", std::ios::binary); pending.seekp((4u << 20) - 1); pending.put(0); CHECK(pending.good()); }
 
     uc::DvdFs d;
     CHECK(d.open_root(root));
@@ -47,7 +51,7 @@ int main() {
     CHECK(d.entry_of("Data/sub/b.bin") > 0 && d.is_dir(d.entry_of("Data/sub")));
     CHECK(d.entry_of("Data/missing.bin") == -1);
     CHECK(d.entry_of("../x") == -1 && d.entry_of("Data/../Data/a.bin") == -1);   // no way out of the root
-    CHECK(d.entry_count() == 7);                         // root, Data, a.bin, sub, b.bin, the Japanese name, zero.bin
+    CHECK(d.entry_count() == 8);                         // includes the large pending-read lifecycle fixture
     CHECK(d.entry_of("Data/\xE6\x97\xA5\xE6\x9C\xAC.bin") > 0);   // looked up by its UTF-8 bytes
     // reads
     uint8_t buf[256];
@@ -117,6 +121,33 @@ int main() {
         CHECK(g_log.size() == 3 && g_log[2] == "cb(0)");
     });
     s.run(m);
-    fs::remove_all(root);
+    uc::dvd_hle_shutdown();
+    // Close while requests/completions remain pending; callbacks and guest writes are canceled.
+    g_log.clear();
+    uc::Sched pending(c.mem);
+    uc::os_hle_init(pending, c.mem, 0x817F0000);
+    uc::dvd_hle_init(d);
+    std::promise<void> queued; auto ready = queued.get_future();
+    std::atomic<bool> observe{true};
+    std::thread observer([&] { while (observe.load()) { auto stats = uc::dvd_stats(); CHECK(stats.reads <= stats.opens); std::this_thread::yield(); } });
+    auto* main_pending = pending.create(0, 16, [&](Ctx& t) {
+        pending.set_interrupts(false);
+        wr8(t, 0x80400000, 0xEE);
+        for (uint32_t i = 0; i < 32; ++i) {
+            uint32_t fi = 0x80371000 + i * 64;
+            t.r[3] = uint32_t(d.entry_of("pending.bin")); t.r[4] = fi; hle_DVDFastOpen(t);
+            t.r[3] = fi; t.r[4] = 0x80400000; t.r[5] = 4u << 20; t.r[6] = 0; t.r[7] = 0x80100000; t.r[8] = 2;
+            hle_DVDReadAsyncPrio(t);
+        }
+        queued.set_value();
+        for (;;) pending.safe_point();
+    });
+    std::thread coordinator([&] { pending.run(main_pending); });
+    CHECK(ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    pending.shutdown(); coordinator.join();
+    uc::dvd_hle_shutdown();
+    observe = false; observer.join();
+    CHECK(g_log.empty() && rd8(c, 0x80400000) == 0xEE);
+    CHECK(uc::dvd_stats().opens == 32 && uc::dvd_stats().reads == 0);
     return 0;
 }

@@ -22,10 +22,26 @@ Sched::Sched(uint8_t* mem, size_t host_stack) : mem_(mem), host_stack_(host_stac
 
 Sched::~Sched() {
     shutdown();
-    for (void* h : handles_) { WaitForSingleObject(static_cast<HANDLE>(h), 2000); CloseHandle(static_cast<HANDLE>(h)); }
+    join_hosts();
+}
+
+void Sched::join_hosts() {
+    if (!shutdown_) throw std::logic_error("join_hosts requires shutdown");
+    std::lock_guard joining(join_m_);
+    std::vector<void*> handles;
+    { std::lock_guard lock(baton_m_); handles.swap(handles_); }
+    for (void* handle : handles) {
+        DWORD result = WaitForSingleObject(static_cast<HANDLE>(handle), 5000);
+        if (result != WAIT_OBJECT_0) fatal("guest host thread failed to stop: wait result %lu", result);
+        if (!CloseHandle(static_cast<HANDLE>(handle))) fatal("cannot close joined guest thread: Windows error %lu", GetLastError());
+    }
+    for (auto& thread : threads_) if (thread->started) thread->state = Thread::State::Dead;
+    running_ = nullptr;
 }
 
 Thread* Sched::create(uint32_t guest_addr, int priority, Body body, const ppc::Ctx* inherit) {
+    std::lock_guard lock(baton_m_);
+    if (shutdown_) throw ThreadExit{};
     auto t = std::make_unique<Thread>();
     t->id = ++next_id_;
     t->guest_addr = guest_addr;
@@ -185,7 +201,7 @@ void Sched::exit_current(uint32_t value) {
 void Sched::post_at(uint64_t tick, Event fn) { timed_.emplace(tick, std::move(fn)); }
 
 void Sched::post_external(Event fn) {
-    { std::lock_guard<std::mutex> lk(ext_m_); ext_q_.push_back(std::move(fn)); }
+    { std::lock_guard<std::mutex> lk(ext_m_); if (shutdown_) return; ext_q_.push_back(std::move(fn)); }
     ext_cv_.notify_all();
 }
 
@@ -195,6 +211,7 @@ void Sched::deliver_events() {
     { std::lock_guard<std::mutex> lk(ext_m_); ext.swap(ext_q_); }
     for (auto& e : ext) timed_.emplace(0, std::move(e));
     while (!timed_.empty() && timed_.begin()->first <= now_ticks()) {
+        if (shutdown_) throw ThreadExit{};
         Event e = std::move(timed_.begin()->second);
         timed_.erase(timed_.begin());
         if (running_) { irq_ctx_.r[2] = running_->ctx.r[2]; irq_ctx_.r[13] = running_->ctx.r[13]; }   // the handler runs on the interrupted thread's SDA bases
@@ -208,6 +225,7 @@ void Sched::deliver_events() {
 }
 
 void Sched::safe_point() {
+    if (shutdown_) throw ThreadExit{};
     deliver_events();
     preempt_check();
 }
@@ -262,7 +280,7 @@ void Sched::reschedule(Thread* self) {
         }
         deliver_events();
         if (Thread* n = pick_ready()) { handoff(self, n); return; }
-        if (main_done_) return;
+        if (main_done_) { if (self->state == Thread::State::Dead) return; throw ThreadExit{}; }
         ee_ = true;   // idle
         idle_wait();
     }
@@ -282,7 +300,7 @@ void Sched::handoff(Thread* self, Thread* next) {
     if (self->state == Thread::State::Dead) return;
     std::unique_lock<std::mutex> lk(baton_m_);
     self->cv.wait(lk, [&] { return running_ == self || shutdown_ || self->cancelled; });
-    if (running_ != self) throw ThreadExit{};
+    if (shutdown_ || self->cancelled || running_ != self) throw ThreadExit{};
 }
 
 void Sched::start_host(Thread* t) {
@@ -296,12 +314,13 @@ void Sched::thread_main(Thread* t) {
     {
         std::unique_lock<std::mutex> lk(baton_m_);
         t->cv.wait(lk, [&] { return running_ == t || shutdown_ || t->cancelled; });
-        if (running_ != t) return;
+        if (shutdown_ || t->cancelled || running_ != t) return;
     }
     try {
         t->body(t->ctx);
-        finish(t, t->ctx.r[3]);   // returning from the entry function is OSExitThread(r3)
+        if (!shutdown_) finish(t, t->ctx.r[3]);   // returning from the entry function is OSExitThread(r3)
     } catch (const ThreadExit&) {
+        return; // Expected cancellation unwinds the host stack; join_hosts publishes final thread states.
     } catch (const std::exception& e) {   // anything else is a runtime bug: report it with the guest trace instead of dying silently
         fatal("uncaught C++ exception in guest thread %d: %s", t->id, e.what());
     } catch (...) {
@@ -310,11 +329,12 @@ void Sched::thread_main(Thread* t) {
 }
 
 void Sched::run(Thread* m) {
-    main_ = m;
-    m->suspend_count = 0;
-    if (switch_hook_) switch_hook_(m);
     {
         std::lock_guard<std::mutex> lk(baton_m_);
+        if (shutdown_) return;
+        main_ = m;
+        m->suspend_count = 0;
+        if (switch_hook_) switch_hook_(m);
         m->state = Thread::State::Running;
         running_ = m;
         start_host(m);
@@ -322,12 +342,16 @@ void Sched::run(Thread* m) {
     m->cv.notify_one();
     std::unique_lock<std::mutex> lk(done_m_);
     done_cv_.wait(lk, [&] { return main_done_ || shutdown_; });
+    lk.unlock();
+    shutdown();
+    join_hosts();
 }
 
 void Sched::shutdown() {
-    { std::lock_guard<std::mutex> lk(baton_m_); shutdown_ = true; }
-    for (auto& t : threads_) t->cv.notify_all();
-    { std::lock_guard<std::mutex> lk(ext_m_); }
+    bool first;
+    { std::lock_guard<std::mutex> lk(baton_m_); first = !shutdown_.exchange(true); for (auto& t : threads_) t->cv.notify_all(); }
+    if (first && shutdown_hook_) shutdown_hook_();
+    { std::lock_guard<std::mutex> lk(ext_m_); ext_q_.clear(); }
     ext_cv_.notify_all();
     { std::lock_guard<std::mutex> lk(done_m_); }
     done_cv_.notify_all();

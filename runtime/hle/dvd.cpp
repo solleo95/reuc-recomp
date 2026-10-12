@@ -24,28 +24,14 @@ bool g_log = false;
 std::mutex g_m;
 std::condition_variable g_cv;
 std::deque<std::function<void()>> g_jobs;
-bool g_worker = false;
+std::thread g_thread;
+bool g_stopping = true;
 std::set<uint32_t> g_cancelled;   // command blocks whose in-flight read was cancelled (baton holder only)
 
 void enqueue(std::function<void()> job) {   // one worker keeps requests in order, like the drive
     std::lock_guard<std::mutex> lk(g_m);
+    if (g_stopping) throw ThreadExit{};
     g_jobs.push_back(std::move(job));
-    if (!g_worker) {
-        g_worker = true;
-        std::thread([] {
-            for (;;) {
-                std::function<void()> j;
-                {
-                    std::unique_lock<std::mutex> lk(g_m);
-                    g_cv.wait_for(lk, std::chrono::seconds(1), [] { return !g_jobs.empty(); });
-                    if (g_jobs.empty()) { g_worker = false; return; }
-                    j = std::move(g_jobs.front());
-                    g_jobs.pop_front();
-                }
-                j();
-            }
-        }).detach();
-    }
     g_cv.notify_one();
 }
 
@@ -72,8 +58,35 @@ int64_t read_padded(int entry, std::vector<uint8_t>& dst, uint32_t len, uint32_t
 }  // namespace
 
 namespace uc {
-void dvd_hle_init(DvdFs& fs) { g_fs = &fs; }
-DvdStats dvd_stats() { return g_stats; }
+void dvd_hle_shutdown() {
+    {
+        std::lock_guard lock(g_m);
+        g_stopping = true;
+        g_jobs.clear();
+    }
+    g_cv.notify_all();
+    if (g_thread.joinable()) g_thread.join();
+    g_fs = nullptr;
+}
+void dvd_hle_init(DvdFs& fs) {
+    dvd_hle_shutdown();
+    g_fs = &fs; g_cancelled.clear();
+    { std::lock_guard lock(g_m); g_stopping = false; g_stats = {}; }
+    g_thread = std::thread([] {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lock(g_m);
+                g_cv.wait(lock, [] { return g_stopping || !g_jobs.empty(); });
+                if (g_stopping) return;
+                job = std::move(g_jobs.front()); g_jobs.pop_front();
+            }
+            try { job(); }
+            catch (const std::exception& error) { fatal("DVD worker failed: %s", error.what()); }
+        }
+    });
+}
+DvdStats dvd_stats() { std::lock_guard lock(g_m); return g_stats; }
 void dvd_log(bool on) { g_log = on; }
 }  // namespace uc
 
@@ -85,7 +98,7 @@ static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
     ppc::wr32(c, fi + layout::kFiLength, g_fs->length(e));
     ppc::wr32(c, fi + layout::kFiCallback, 0);
     ppc::wr32(c, fi + layout::kCbState, 0);                 // DVD_STATE_END
-    ++g_stats.opens;
+    { std::lock_guard lock(g_m); ++g_stats.opens; }
     if (g_log) std::fprintf(stderr, "[dvd] open %s\n", g_fs->path_of(e).c_str());
     c.r[3] = 1;
 }
@@ -102,8 +115,7 @@ void hle_DVDReadPrio(ppc::Ctx& c) {
     int64_t n = read_padded(e, data, len, off);
     if (n < 0) { c.r[3] = uint32_t(-1); return; }
     std::memcpy(ppc::hp(c, buf), data.data(), len);
-    ++g_stats.reads;
-    g_stats.bytes += len;
+    { std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
     c.r[3] = len;
 }
 
@@ -121,7 +133,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
         s.post_external([=, &s] {                           // runs on the baton holder, with interrupts enabled
             ppc::Ctx& ic = s.irq_ctx();
             if (g_cancelled.erase(fi)) return;               // DVDCancel already answered for this command block
-            if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); ++g_stats.reads; g_stats.bytes += len; }
+            if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
             ppc::wr32(ic, fi + layout::kCbState, n < 0 ? uint32_t(-1) : 0u);   // DVD_STATE_END or FATAL_ERROR
             if (cb) call_guest(ic, cb, {uint32_t(n < 0 ? -1 : int64_t(len)), fi});
         });

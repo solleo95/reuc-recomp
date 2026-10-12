@@ -8,15 +8,14 @@ set "TRANSLATOR=%BUILD%\tools\translator\translator.exe"
 python -I "%ROOT%\tools\hle_cfg.py" "%ROOT%\project"
 if errorlevel 1 goto :hle_failed
 set "KEY="
-for /f %%h in ('powershell -NoProfile -Command "$h = foreach($p in $env:GAME_DOL,$env:TRANSLATOR,$env:CFG,$env:HLECFG){(Get-FileHash -LiteralPath $p).Hash}; $h -join ''"') do set "KEY=%%h"
+for /f %%h in ('python -I "%ROOT%\tools\translate_key.py"') do set "KEY=%%h"
 if not defined KEY goto :hash_failed
-set "OLD="
-if exist "%GEN%\.key" set /p OLD=<"%GEN%\.key"
-if /I "%KEY%"=="%OLD%" if exist "%GEN%\game_table.cpp" goto :cached
-if exist "%GEN%" rmdir /s /q "%GEN%"
-"%TRANSLATOR%" --dol "%GAME_DOL%" --cfg "%CFG%" --cfg "%HLECFG%" --out "%GEN%" --shard 150 > "%BUILD%\translate.log" 2>&1
+if not exist "%GEN%\game_sources.cmake" goto :translate
+findstr /x /l /c:"# translation-input: %KEY%" "%GEN%\game_sources.cmake" >nul 2>&1
+if not errorlevel 1 goto :cached
+:translate
+"%TRANSLATOR%" --dol "%GAME_DOL%" --cfg "%CFG%" --cfg "%HLECFG%" --out "%GEN%" --shard 150 --cache-key "%KEY%" > "%BUILD%\translate.log" 2>&1
 if errorlevel 1 goto :translate_failed
->"%GEN%\.key" echo %KEY%
 type "%BUILD%\translate.log"
 exit /b 0
 :cached

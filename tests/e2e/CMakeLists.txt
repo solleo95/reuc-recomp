@@ -8,7 +8,8 @@ foreach(p ${E2E_PROGRAMS})
     OUTPUT ${gen}/game_decl.h ${gen}/game_table.cpp ${gen}/game_000.cpp
     COMMAND gen_e2e_dols ${p} ${gen}/${p}.dol
     COMMAND translator --dol ${gen}/${p}.dol --out ${gen} --shard 100000
-    DEPENDS gen_e2e_dols translator
+    COMMAND ${CMAKE_COMMAND} -DGEN=${gen} -P ${CMAKE_CURRENT_SOURCE_DIR}/current_generation.cmake
+    DEPENDS gen_e2e_dols translator ${CMAKE_CURRENT_SOURCE_DIR}/current_generation.cmake
     COMMENT "translate e2e program ${p}")
   add_executable(e2e_${p} e2e_main.cpp ${gen}/game_table.cpp ${gen}/game_000.cpp)
   target_compile_definitions(e2e_${p} PRIVATE E2E_NAME="${p}")
@@ -25,10 +26,13 @@ add_test(NAME translator_deterministic
   COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/det -P ${CMAKE_CURRENT_SOURCE_DIR}/compare.cmake)
 
-add_test(NAME translator_cleans_stale
+add_test(NAME translator_preserves_stale
   COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/stale -P ${CMAKE_CURRENT_SOURCE_DIR}/stale.cmake)
 
 add_test(NAME translator_two_cfgs
   COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
           -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cfgs -P ${CMAKE_CURRENT_SOURCE_DIR}/../test_cfg_merge.cmake)
+
+add_test(NAME translator_publish_atomic
+  COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/../test_translation_publish.py $<TARGET_FILE:translator> ${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol ${CMAKE_CURRENT_BINARY_DIR}/publish)

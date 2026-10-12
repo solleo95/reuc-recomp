@@ -7,8 +7,10 @@
 #define PPC_INLINE __attribute__((always_inline)) inline
 
 #ifdef UC_TRACE
+namespace ppc { struct Ctx; }
+namespace uc { void gx_audit_enter(uint32_t addr, const ppc::Ctx& ctx); }
 namespace ppc { void trace_enter(uint32_t addr); }
-#define UC_ENTER(a) ppc::trace_enter(a)
+#define UC_ENTER(a) do { ppc::trace_enter(a); uc::gx_audit_enter(a, c); } while (0)
 #else
 #define UC_ENTER(a) ((void)0)
 #endif

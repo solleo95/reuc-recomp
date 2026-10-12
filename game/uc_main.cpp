@@ -5,13 +5,17 @@
 #include "fatal.h"
 #include "game_decl.h"
 #include "guest_mem.h"
+#include "gx_audit.h"
 #include "hle/os.h"
+#include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
 #include "mmio.h"
 #include "sched.h"
 #include "trace.h"
 #include "vi.h"
+#include "options.h"
+#include "vulkan_renderer.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -24,7 +28,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <optional>
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 extern const uc::FnEntry uc_functions[];
@@ -33,10 +41,10 @@ extern const uint32_t uc_text_begin, uc_text_end;
 namespace fs = std::filesystem;
 
 namespace {
-struct FifoSink : uc::MmioDevice {   // GX write-gather pipe: M1 discards the command stream (tech-debt, see docs/tech-debt.md)
+struct FifoSink : uc::MmioDevice {   // native resource/vertex ingestion; unowned state bytes remain TD-014
     uint64_t bytes = 0;
     uint32_t read(uint32_t, int) override { return 0; }
-    void write(uint32_t, int size, uint32_t) override { bytes += uint64_t(size); }
+    void write(uint32_t, int size, uint32_t value) override { bytes += uint64_t(size); uc::gx_audit_fifo_write(size,value); uc::gx_fifo_write(size, value); }
 };
 FifoSink g_fifo;
 std::vector<std::unique_ptr<uc::RegFile>> g_regs;
@@ -54,17 +62,35 @@ void map_hardware() {   // register blocks of the Wii/GameCube as seen at 0xCC00
     uc::mmio_bus().map(0xCC008000, 0x100, &g_fifo, "GX FIFO");
 }
 
-uc::Sched* g_sched;   // for the exit report only
+std::atomic<uint64_t> g_fifo_snapshot{0};
 
 void print_stats() {
-    if (g_sched) {
-        if (const uc::Thread* t = g_sched->running()) std::fprintf(stderr, "running guest thread %d: r1 %08X lr %08X  interrupts %s\n", t->id, t->ctx.r[1], t->ctx.lr, g_sched->interrupts_enabled() ? "on" : "off");
-    }
     auto vi = uc::vi_stats();
     auto d = uc::dvd_stats();
     std::fprintf(stderr, "stats: retraces %llu  dvd opens %llu  dvd reads %llu (%llu bytes)  fifo bytes %llu  unmapped mmio %zu\n",
                  (unsigned long long)vi.retraces, (unsigned long long)d.opens, (unsigned long long)d.reads, (unsigned long long)d.bytes,
-                 (unsigned long long)g_fifo.bytes, uc::mmio_bus().unmapped_count());
+                 (unsigned long long)g_fifo_snapshot.load(), uc::mmio_bus().unmapped_count());
+    for (const auto& entry : uc::gx_audit_snapshot()) {
+        std::fprintf(stderr, "gx audit: %08X calls %llu %s  first r3..r10", entry.address, (unsigned long long)entry.calls, uc::symbol_name(entry.address).c_str());
+        for (auto arg : entry.first_gpr) std::fprintf(stderr, " %08X", arg);
+        std::fprintf(stderr, "  f1..f6");
+        for (auto arg : entry.first_fpr) std::fprintf(stderr, " %.6g", arg);
+        std::fprintf(stderr, "\n");
+        if (entry.address == 0x80288684) std::fprintf(stderr, "gx lists: nonempty %llu bytes %llu\n", (unsigned long long)entry.nonempty_lists, (unsigned long long)entry.list_bytes);
+        if (entry.address == 0x80288528) {
+            std::fprintf(stderr, "gx recordings: bytes %llu first caller %08X prefix", (unsigned long long)entry.recording_bytes,entry.first_caller);
+            for (size_t i = 0; i < entry.first_recording_size; ++i) std::fprintf(stderr," %02X",entry.first_recording_prefix[i]);
+            std::fprintf(stderr,"\n");
+            for (const auto& resource : entry.resources) {
+                std::fprintf(stderr,"gx resource: address %08X size %zu captured %zu hex",resource.address,resource.size,resource.bytes.size());
+                for (auto byte : resource.bytes) std::fprintf(stderr," %02X",std::to_integer<uint8_t>(byte));
+                std::fprintf(stderr,"\n");
+            }
+        }
+    }
+    auto gx = uc::gx_stats();
+    std::fprintf(stderr, "gx stats: draws %llu vertices %llu submitted %llu completed %llu outside-primitive bytes %llu copies %llu\n",
+        (unsigned long long)gx.draws, (unsigned long long)gx.vertices, (unsigned long long)gx.submitted, (unsigned long long)gx.completed, (unsigned long long)gx.outside_bytes, (unsigned long long)gx.copies);
 }
 
 fs::path exe_dir() {
@@ -76,23 +102,44 @@ std::vector<uint8_t> slurp(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
+struct VideoSession {
+    VideoSession() { if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError()); }
+    ~VideoSession() { SDL_Quit(); }
+};
+struct GuestRunner {
+    uc::Sched& sched;
+    gx::Packets& packets;
+    std::atomic<bool> done{false};
+    std::thread coordinator;
+    GuestRunner(uc::Sched& s, uc::Thread* main, gx::Packets& p) : sched(s), packets(p) {
+        coordinator = std::thread([this, main] {
+            try { sched.run(main); done.store(true); }
+            catch (const std::exception& error) { uc::fatal("scheduler coordinator failed: %s", error.what()); }
+        });
+    }
+    void stop() { sched.shutdown(); packets.cancel(); if (coordinator.joinable()) coordinator.join(); }
+    ~GuestRunner() { stop(); }
+};
 }  // namespace
 
 static int real_main(int argc, char** argv) {
-    fs::path game = "S:\\Games\\Umbrella Chronicles\\game";
-    int seconds = 0;
-    bool log_dvd = false;
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
-        if (a == "--game" && i + 1 < argc) game = argv[++i];
-        else if (a == "--seconds" && i + 1 < argc) seconds = std::atoi(argv[++i]);
-        else if (a == "--log-dvd") log_dvd = true;
-        else if (a == "--log-sleep") uc::os_log_sleep(true);
-        else { std::fprintf(stderr, "usage: uc [--game <dir>] [--seconds N] [--log-dvd] [--log-sleep]\n"); return 2; }
+    std::vector<std::string_view> arguments;
+    for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
+    auto parsed = uc::parse_options(arguments);
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit]\n", error->c_str()); return 2; }
+    const auto options = std::get<uc::Options>(std::move(parsed));
+    const auto& game = options.game;
+    if (options.gx_audit) {
+#ifdef UC_TRACE
+        uc::gx_audit_enable();
+#else
+        std::fprintf(stderr, "--gx-audit requires a trace build (scripts\\bringup.bat)\n"); return 2;
+#endif
     }
+    uc::os_log_sleep(options.log_sleep);
     uc::install_crash_handlers();
     uc::set_exit_hook(print_stats);
-    for (const char* n : {"identified_sdk.txt", "symbols.txt"}) {   // installed next to the exe, or the project folder of a build tree
+    for (const char* n : {"identified_sdk.txt", "symbols.txt", "gx_symbols.txt"}) {   // installed next to the exe, or the project folder of a build tree
         for (const fs::path& d : {exe_dir() / "data", exe_dir() / ".." / ".." / "project"}) if (fs::exists(d / n)) { uc::symbols_load((d / n).string()); break; }
     }
 
@@ -115,14 +162,12 @@ static int real_main(int argc, char** argv) {
     uc::dispatch_init(uc_functions, uc_function_count, uc_text_begin, uc_text_end);
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
-    uc::dvd_hle_init(dvd);
-    uc::dvd_log(log_dvd);
-
     uc::Sched sched(boot.mem);
-    g_sched = &sched;
+    uc::DvdSession dvd_session(dvd);
+    uc::dvd_log(options.log_dvd);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
     sched.irq_ctx().r[1] = 0x817EFF00;
-    uc::vi_hle_init(sched, uc::kViPeriodNtsc, nullptr);
+    uc::vi_hle_init(sched, uc::kViPeriodNtsc, [] { g_fifo_snapshot.store(g_fifo.bytes, std::memory_order_relaxed); });
 
     // The start code runs on the SDK's DefaultThread: __OSThreadInit (802611B8) stores this OSThread in the current-thread word and fills it in.
     const uint32_t kMainThread = 0x805F88D8;
@@ -132,29 +177,80 @@ static int real_main(int argc, char** argv) {
         uc::call_indirect(c, entry);
     }, &boot);
 
-    if (seconds > 0) {
-        std::thread([seconds, &sched] { std::this_thread::sleep_for(std::chrono::seconds(seconds)); std::fprintf(stderr, "guest threads at exit:\n%s", sched.dump_threads().c_str()); uc::trace_dump_all(stderr, 24); print_stats(); std::fflush(stderr); ExitProcess(0); }).detach();
+    std::optional<VideoSession> video;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
+    uc::VulkanRenderer renderer;
+    if (!options.headless) {
+        if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
+        video.emplace();
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
+        if (!window) throw std::runtime_error(SDL_GetError());
+        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders");
     }
-    std::thread([] {   // no-progress watchdog: boot may take a while, then retraces must keep coming
-        uint64_t last = 0; int stalled = 0, boot_s = 0;
-        for (;;) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            uint64_t n = uc::vi_stats().retraces;
-            if (n == 0) { if (++boot_s < 15) continue; }
-            else if (n != last) { last = n; stalled = 0; continue; }
-            else if (++stalled < 10) continue;
-            std::fprintf(stderr, "no progress: retrace count %llu has not changed for a long time\n", (unsigned long long)n);
-            uc::trace_dump_all(stderr, 16);
-            print_stats();
-            std::fflush(stderr);
-            ExitProcess(4);
+    gx::Packets packets;
+    uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets);
+    sched.set_shutdown_hook([&packets] { packets.cancel(); });
+    GuestRunner runner(sched, mt, packets);
+    auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
+    uint64_t last_retraces = 0;
+    int stalled = 0, boot_seconds = 0, result = 0;
+    bool close = false;
+    std::unique_ptr<const gx::FramePacket> pending;
+    uint64_t audit_capture_serial=0;
+    bool audit_captured=false;
+    bool audit_late_captured=false;
+    bool audit_seen_geometry=false;
+    while (!close && !runner.done.load()) {
+        if (!options.headless) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
+                if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
+            }
+            if (!pending) pending = packets.try_take();
+            if (pending && renderer.render(*pending)) {
+                audit_seen_geometry |= !pending->draws.empty();
+                if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || renderer.presentation_count()>=120)) audit_capture_serial=pending->serial;
+                pending.reset();
+            }
+            for (uint64_t serial : renderer.poll_completions()) {
+                if (packets.complete(serial)) uc::gx_completed(serial);
+                if (options.gx_audit && serial==audit_capture_serial) {
+                    const auto pixels=renderer.capture(serial);
+                    if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid game-frame readback");
+                    const auto path=exe_dir()/(audit_captured ? "gx-later-frame.png" : "gx-first-geometry.png");
+                    uc::save_png(pixels,path);
+                    std::fprintf(stderr,"gx audit capture: serial %llu %ux%u %s\n",static_cast<unsigned long long>(serial),pixels.width,pixels.height,path.string().c_str());
+                    audit_late_captured=audit_captured;
+                    audit_captured=true;
+                    audit_capture_serial=0;
+                }
+            }
         }
-    }).detach();
-
-    sched.run(mt);
-    std::fprintf(stderr, "main guest thread exited\n");
+        auto now = std::chrono::steady_clock::now();
+        if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
+        if (now >= next_watch) {
+            next_watch = now + std::chrono::seconds(1);
+            uint64_t retraces = uc::vi_stats().retraces;
+            if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
+            else if (retraces != last_retraces) { last_retraces = retraces; stalled = 0; }
+            else if (++stalled >= 10) { result = 4; close = true; }
+            if (result) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    runner.stop();
+    uc::dvd_hle_shutdown();
+    if (!options.headless) {
+        std::fprintf(stderr, "presentation stats: queue presents %llu\n", (unsigned long long)renderer.presentation_count());
+        renderer.shutdown();
+    }
+    if (options.validation && renderer.validation_errors()) result = 4;
+    g_fifo_snapshot.store(g_fifo.bytes);
+    std::fprintf(stderr, "runtime stopped; all guest and file workers joined\n");
+    uc::trace_dump_all(stderr, 24);
     print_stats();
-    return 0;
+    return result;
 }
 
 int main(int argc, char** argv) {

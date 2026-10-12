@@ -20,6 +20,13 @@ static void die(int code) {
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS* ep) {
     const EXCEPTION_RECORD* r = ep->ExceptionRecord;
     std::fprintf(stderr, "host exception %08lX at %p", r->ExceptionCode, r->ExceptionAddress);
+    HMODULE module = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCWSTR>(r->ExceptionAddress), &module)) {
+        wchar_t path[MAX_PATH]{};
+        if (GetModuleFileNameW(module,path,MAX_PATH))
+            std::fprintf(stderr," [%ls+0x%llX]",path,static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(r->ExceptionAddress)-reinterpret_cast<uintptr_t>(module)));
+    }
     if ((r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) && r->NumberParameters > 1)
         std::fprintf(stderr, " (%s address %p)", r->ExceptionInformation[0] ? "write to" : "read of", reinterpret_cast<void*>(r->ExceptionInformation[1]));
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters > 1 && guest_mem_base()) {

@@ -110,10 +110,25 @@ IOS_IoctlvAsync
 # --- CPU synchronisation call (`sc; blr`): nothing to order on a native build.
 PPCSync Nop
 
-# --- GX (graphics) completion wait: GXDrawDone pads the FIFO and sleeps until the GPU's finish interrupt. The native renderer will fence here; until then nothing is in flight.
-GXDrawDone Nop
+# --- Verified GX boundaries (docs/spikes/G0-gx-audit.md): native vertices and real GPU completion.
+GXBegin
+GXSetArray
+GXSetDrawDone
+GXWaitDrawDone
+GXDrawDone
+GXBeginDisplayList
+GXEndDisplayList
+GXCallDisplayList
+GXSetProjection
+GXSetProjectionv
+GXLoadPosMtxImm
+GXLoadPosMtxIndx
+GXSetCurrentMtx
+GXSetCopyClear
+GXCopyDisp
+GXLoadTexObjPreLoaded
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop
-KPADRead Return0
+KPADRead
 KPADEnableMotor Nop

@@ -9,7 +9,7 @@
 
 namespace {
 std::map<uint32_t, std::string> g_syms;
-struct Ring { uint32_t a[256]; uint32_t pos = 0; int tid = 0; };
+struct Ring { uint32_t a[256]; uint32_t pos = 0; int tid = 0; mutable std::mutex mutex; };
 std::mutex g_rings_m;
 std::vector<Ring*> g_rings;
 Ring& ring() {
@@ -17,6 +17,8 @@ Ring& ring() {
     return *r;
 }
 void dump_ring(std::FILE* out, const Ring& r, int count) {
+    std::unique_lock lock(r.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) { std::fprintf(out, "  (trace busy)\n"); return; }
     uint32_t n = std::min<uint32_t>(uint32_t(count), std::min<uint32_t>(r.pos, 256));
     for (uint32_t i = 0; i < n; ++i) {
         uint32_t a = r.a[(r.pos - n + i) & 255];
@@ -26,7 +28,7 @@ void dump_ring(std::FILE* out, const Ring& r, int count) {
 }
 }  // namespace
 
-namespace ppc { void trace_enter(uint32_t a) { Ring& r = ring(); r.a[r.pos++ & 255] = a; } }
+namespace ppc { void trace_enter(uint32_t a) { Ring& r = ring(); std::lock_guard lock(r.mutex); r.a[r.pos++ & 255] = a; } }
 
 namespace uc {
 void symbols_load(const std::string& path) {

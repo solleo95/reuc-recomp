@@ -110,15 +110,16 @@ int main() {
         // alarm: handler runs in interrupt context with r3 = the alarm; cancel stops a pending one
         g_log.clear();
         uint64_t rel = uc::ms_to_ticks(10);
-        call(c, hle_OSSetAlarm, {0x80340000, uint32_t(rel >> 32), uint32_t(rel), 0x80100004});
-        call(c, hle_OSSetAlarm, {0x80341000, uint32_t(rel >> 32), uint32_t(rel), 0x80100004});
+        // PPC EABI aligns 64-bit arguments to an odd GPR pair; r4 is padding, deliberately poisoned.
+        call(c, hle_OSSetAlarm, {0x80340000, 0xDEADBEEF, uint32_t(rel >> 32), uint32_t(rel), 0x80100004});
+        call(c, hle_OSSetAlarm, {0x80341000, 0xDEADBEEF, uint32_t(rel >> 32), uint32_t(rel), 0x80100004});
         call(c, hle_OSCancelAlarm, {0x80341000});
         s.sleep_ticks(uc::ms_to_ticks(30));
         CHECK(joined() == "alarm(" + std::to_string(0x80340000) + ")");
         // periodic alarm fires repeatedly until cancelled
         g_log.clear();
         uint64_t start = uc::now_ticks() + uc::ms_to_ticks(5), period = uc::ms_to_ticks(10);
-        call(c, hle_OSSetPeriodicAlarm, {0x80342000, uint32_t(start >> 32), uint32_t(start), uint32_t(period >> 32), uint32_t(period), 0x80100004});
+        call(c, hle_OSSetPeriodicAlarm, {0x80342000, 0xDEADBEEF, uint32_t(start >> 32), uint32_t(start), uint32_t(period >> 32), uint32_t(period), 0x80100004});
         s.sleep_ticks(uc::ms_to_ticks(45));
         call(c, hle_OSCancelAlarm, {0x80342000});
         size_t n = g_log.size();
@@ -128,7 +129,7 @@ int main() {
         // a start time in the past joins the next period instead of firing at once
         g_log.clear();
         uint64_t past = uc::now_ticks() - uc::ms_to_ticks(100), p2 = uc::ms_to_ticks(40);
-        call(c, hle_OSSetPeriodicAlarm, {0x80342100, uint32_t(past >> 32), uint32_t(past), uint32_t(p2 >> 32), uint32_t(p2), 0x80100004});
+        call(c, hle_OSSetPeriodicAlarm, {0x80342100, 0xDEADBEEF, uint32_t(past >> 32), uint32_t(past), uint32_t(p2 >> 32), uint32_t(p2), 0x80100004});
         s.sleep_ticks(uc::ms_to_ticks(3));
         CHECK(g_log.empty());
         call(c, hle_OSCancelAlarm, {0x80342100});

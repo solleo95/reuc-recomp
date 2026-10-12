@@ -1,0 +1,27 @@
+# Confirmed from RBUE08 main.dol, 2026-10-12. Evidence: docs/spikes/G0-gx-audit.md.
+# Names here are verified entries, not automatically applied HLE mappings.
+80283564 GXSetVtxDesc
+80283B58 GXClearVtxDesc
+80283B8C GXSetVtxAttrFmt
+802841DC GXSetArray
+802848AC GXSetDrawDone
+80284944 GXWaitDrawDone
+80284990 GXDrawDone
+80284C30 GXSetDrawDoneCallback
+80284C74 GXFinishInterruptHandler
+80284FD0 GXBegin
+8028511C __GXSendFlushPrim
+80285838 GXCopyDisp
+802855C8 GXSetCopyClear
+80285974 GXCopyTex
+802869A0 GXLoadTexObjPreLoaded
+80287908 GXSetTevColor
+80287968 GXSetTevColorS10
+80288528 GXBeginDisplayList
+802885D8 GXEndDisplayList
+80288684 GXCallDisplayList
+8028873C GXSetProjection
+802887A0 GXSetProjectionv
+8028882C GXLoadPosMtxImm
+8028887C GXLoadPosMtxIndx
+80288934 GXSetCurrentMtx
