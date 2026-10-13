@@ -17,7 +17,11 @@
 #include "trace.h"
 #include "vi.h"
 #include "options.h"
+#include "test_control.h"
 #include "intro.h"
+#include "frame_limit.h"
+#include "audio_output.h"
+#include "ax_audio.h"
 #include "vulkan_renderer.h"
 #include <algorithm>
 #include <atomic>
@@ -84,12 +88,12 @@ void print_stats() {
             std::fprintf(stderr, "gx recordings: bytes %llu first caller %08X prefix", (unsigned long long)entry.recording_bytes,entry.first_caller);
             for (size_t i = 0; i < entry.first_recording_size; ++i) std::fprintf(stderr," %02X",entry.first_recording_prefix[i]);
             std::fprintf(stderr,"\n");
+        }
             for (const auto& resource : entry.resources) {
                 std::fprintf(stderr,"gx resource: address %08X size %zu captured %zu hex",resource.address,resource.size,resource.bytes.size());
                 for (auto byte : resource.bytes) std::fprintf(stderr," %02X",std::to_integer<uint8_t>(byte));
                 std::fprintf(stderr,"\n");
             }
-        }
     }
     auto gx = uc::gx_stats();
     std::fprintf(stderr, "gx stats: draws %llu vertices %llu submitted %llu completed %llu outside-primitive bytes %llu copies %llu\n",
@@ -129,8 +133,10 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile]\n", error->c_str()); return 2; }
     const auto options = std::get<uc::Options>(std::move(parsed));
+    const bool controlled=!options.test_control.empty();
+    if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control requires Vulkan and an isolated --save-root");
     const auto& game = options.game;
     uc::intro_init(options.skip_intro);
     if (options.gx_audit) {
@@ -167,7 +173,7 @@ static int real_main(int argc, char** argv) {
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
     uc::Sched sched(boot.mem);
-    uc::SaveFs saves(exe_dir()/"saves");
+    uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
@@ -192,39 +198,63 @@ static int real_main(int argc, char** argv) {
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE,"1",SDL_HINT_OVERRIDE);
         video.emplace();
-        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0)));
         if (!window) throw std::runtime_error(SDL_GetError());
-        if (!SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
-        input.focus((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+        if(controlled) {
+            const auto properties=SDL_GetWindowProperties(window.get());
+            const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(properties,SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
+            if(!hwnd) throw std::runtime_error("diagnostic window handle unavailable");
+            ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+        }
+        if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
+        input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders");
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
+    std::optional<uc::AudioOutput> audio;
+    if (!options.headless && !controlled) audio.emplace();
+    uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); });
     gx::Packets packets;
-    uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets);
+    uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets, options.profile);
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
     uint64_t last_retraces = 0;
     uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,render_ns=0;
+    uint64_t profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
     std::unique_ptr<const gx::FramePacket> pending;
+    uc::FrameLimit frame_limit;
     uint64_t audit_capture_serial=0;
+    uint64_t debug_capture_serial=0;
+    uint64_t scene_capture_serial=0;
+    uint32_t scene_capture_pass=0;
+    bool scene_capture_started=false;
+    bool debug_capture_requested=false;
     bool audit_captured=false;
     bool audit_late_captured=false;
     bool audit_seen_geometry=false;
+    uint64_t control_sequence=0;
+    uint64_t control_consumed=0;
+    auto next_control=start;
     while (!close && !runner.done.load()) {
+        ++profile_loops;
         if (!options.headless) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
+                if(controlled) continue;
                 if (event.type==SDL_EVENT_WINDOW_FOCUS_LOST) input.focus(false);
                 if (event.type==SDL_EVENT_WINDOW_FOCUS_GAINED) input.focus(SDL_GetWindowRelativeMouseMode(window.get()));
-                if (event.type==SDL_EVENT_KEY_DOWN && event.key.key==SDLK_ESCAPE) {
+                if (event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+                    (event.key.key==SDLK_ESCAPE || event.key.key==SDLK_LALT || event.key.key==SDLK_RALT)) {
                     if (!SDL_SetWindowRelativeMouseMode(window.get(),false)) throw std::runtime_error(SDL_GetError());
                     input.focus(false);
                 }
+                if (event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key==SDLK_E &&
+                    (event.key.mod & SDL_KMOD_CTRL)) debug_capture_requested=true;
                 if (event.type==SDL_EVENT_MOUSE_MOTION && SDL_GetWindowRelativeMouseMode(window.get())) {
                     int width=0,height=0;
                     if (!SDL_GetWindowSizeInPixels(window.get(),&width,&height)) throw std::runtime_error(SDL_GetError());
@@ -238,12 +268,56 @@ static int real_main(int argc, char** argv) {
                     } else if (event.button.button==SDL_BUTTON_LEFT) input.button(uc::kButtonA,down);
                 }
             }
+            if(controlled && std::chrono::steady_clock::now()>=next_control) {
+                next_control=std::chrono::steady_clock::now()+std::chrono::milliseconds(50);
+                std::ifstream file(options.test_control);
+                std::string line;
+                if(std::getline(file,line)) if(auto command=uc::parse_test_command(line);command && command->sequence>control_sequence) {
+                    if(!input.apply_test_command(command->sequence,command->x,command->y,command->held)) throw std::runtime_error("internal input command rejected");
+                    control_sequence=command->sequence;
+                    debug_capture_requested|=command->capture;
+                    std::fprintf(stderr,"[test-control] applied %llu aim %.3f %.3f held %u capture %u\n",(unsigned long long)control_sequence,command->x,command->y,command->held,command->capture);
+                }
+                const auto consumed=input.last_consumed_sequence();
+                if(consumed>control_consumed) {
+                    control_consumed=consumed;
+                    std::fprintf(stderr,"[test-control] consumed %llu\n",(unsigned long long)consumed);
+                }
+            }
             if (!pending) pending = packets.try_take();
-            if (pending) {
+            // Keep the captured slot alive until its fence completes and readback finishes.
+            if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
                 const auto render_start=std::chrono::steady_clock::now();
                 const bool rendered=renderer.render(*pending);
+                profile_retries+=!rendered;
                 render_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
                 if (rendered) {
+                if(options.profile && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
+                if(options.profile && scene_capture_started && scene_capture_pass<24) {
+                    scene_capture_serial=pending->serial; ++scene_capture_pass;
+                    std::fprintf(stderr,"[scene-pass] %u serial %llu draws %zu present %u clear %u\n",scene_capture_pass,(unsigned long long)pending->serial,pending->draws.size(),pending->present,pending->clear_after_copy);
+                    if(pending->texture_copy) {
+                        const auto& copy=*pending->texture_copy;
+                        std::fprintf(stderr,"[scene-pass-copy] source %u:%u:%u:%u target %u:%u\n",copy.source[0],copy.source[1],copy.source[2],copy.source[3],copy.target->levels[0].width,copy.target->levels[0].height);
+                    }
+                    if(!pending->draws.empty()) {
+                        const auto& draw=pending->draws.back();
+                        std::fprintf(stderr,"[scene-pass-last] callsite %08X vertices %zu stages %u blend %u:%u:%u depth %u\n",draw.callsite,draw.vertices.size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination,draw.uniforms.pixel[1]);
+                        for(uint32_t i=0;i<draw.material.stages;++i) {
+                            const auto& stage=draw.material.stage[i];
+                            std::fprintf(stderr,"[scene-pass-stage] %u color %06X alpha %06X order %03X konst %03X\n",i,stage.color,stage.alpha,stage.order,stage.konst);
+                        }
+                        for(uint32_t i=0;i<4;++i) {
+                            const auto& r=draw.uniforms.registers[i]; const auto& k=draw.uniforms.konst[i];
+                            std::fprintf(stderr,"[scene-pass-color] %u reg %.6g:%.6g:%.6g:%.6g konst %.6g:%.6g:%.6g:%.6g\n",i,r[0],r[1],r[2],r[3],k[0],k[1],k[2],k[3]);
+                        }
+                    }
+                }
+                if (pending->present) frame_limit.presented(std::chrono::steady_clock::now());
+                if (pending->present && debug_capture_requested) {
+                    debug_capture_serial=pending->serial;
+                    debug_capture_requested=false;
+                }
                 audit_seen_geometry |= !pending->draws.empty();
                 const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
                 if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
@@ -252,6 +326,31 @@ static int real_main(int argc, char** argv) {
             }
             for (uint64_t serial : renderer.poll_completions()) {
                 if (packets.complete(serial)) uc::gx_completed(serial);
+                if(serial==scene_capture_serial) {
+                    const auto pixels=renderer.capture(serial,true);
+                    const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
+                    const auto path=directory/("pass-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(scene_capture_pass)+"-"+std::to_string(serial)+".png");
+                    try {
+                        fs::create_directories(directory); uc::save_png(pixels,path);
+                        std::fprintf(stderr,"[scene-pass-capture] %s\n",path.string().c_str());
+                    } catch(const std::exception& error) { std::fprintf(stderr,"scene pass capture failed: %s\n",error.what()); }
+                    scene_capture_serial=0;
+                }
+                if (serial==debug_capture_serial) {
+                    const auto pixels=renderer.capture(serial);
+                    if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid debug-frame readback");
+                    const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
+                    const auto stamp=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    const auto path=directory/("frame-"+std::to_string(stamp)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(serial)+".png");
+                    try {
+                        fs::create_directories(directory);
+                        uc::save_png(pixels,path);
+                        std::fprintf(stderr,"debug screenshot: %s\n",path.string().c_str());
+                    } catch(const std::exception& error) {
+                        std::fprintf(stderr,"debug screenshot failed: %s\n",error.what());
+                    }
+                    debug_capture_serial=0;
+                }
                 if (options.gx_audit && serial==audit_capture_serial) {
                     const auto pixels=renderer.capture(serial);
                     if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid game-frame readback");
@@ -267,10 +366,14 @@ static int real_main(int argc, char** argv) {
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
         if (now >= next_watch) {
-            if (options.gx_audit && !options.headless) {
+            if ((options.gx_audit || options.profile) && !options.headless) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes));
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
+                const auto gfx=uc::gx_stats(); const auto sound=uc::audio_stats();
+                std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
+                std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
+                profile_loops=profile_retries=0; last_profile_draws=gfx.draws; last_profile_copies=gfx.copies; last_audio_frames=sound.frames;
             }
             next_watch = now + std::chrono::seconds(1);
             uint64_t retraces = uc::vi_stats().retraces;
@@ -279,9 +382,16 @@ static int real_main(int argc, char** argv) {
             else if (++stalled >= 10) { result = 4; close = true; }
             if (result) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if(options.headless) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        else if(!renderer.wait_for_pending(1000000)) {
+            if(!pending) packets.wait_ready(std::chrono::milliseconds(1));
+            else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     runner.stop();
+    const auto sound_stats=uc::audio_stats();
+    std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
+    uc::audio_hle_shutdown();
     uc::input_hle_init(nullptr);
     uc::save_hle_shutdown();
     uc::dvd_hle_shutdown();

@@ -20,7 +20,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(uc_smoke smoke.cpp)
   target_link_libraries(uc_smoke PRIVATE uc_game uc_common test_support)
   install(TARGETS uc_smoke RUNTIME DESTINATION tools)
-  add_executable(uc uc_main.cpp)
+  add_executable(uc uc_main.cpp audio_output.cpp)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_platform uc_options uc_intro uc_vulkan)
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders

@@ -32,14 +32,30 @@ void NativeInput::button(uint32_t mask,bool down) {
     if (down && state_.valid) { state_.pressed|=mask&~state_.held; state_.held|=mask; }
     else if (!down) { state_.released|=mask&state_.held; state_.held&=~mask; }
 }
+bool NativeInput::aim(float x,float y) {
+    if(!std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1) return false;
+    std::lock_guard lock(mutex_);
+    if(!state_.valid) return false;
+    state_.x=x; state_.y=y; return true;
+}
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
     auto result=state_;
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
     state_.pressed=state_.released=0;
+    consumed_sequence_=sequence_;
     return result;
 }
+bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t held) {
+    if(!sequence || !std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1 || (held&~0x1C10u)) return false;
+    std::lock_guard lock(mutex_);
+    if(!state_.valid || sequence<=sequence_) return false;
+    state_.x=x; state_.y=y;
+    state_.pressed|=held&~state_.held; state_.released|=state_.held&~held;
+    state_.held=held; sequence_=sequence; return true;
+}
+uint64_t NativeInput::last_consumed_sequence() { std::lock_guard lock(mutex_); return consumed_sequence_; }
 void input_hle_init(NativeInput* source) { input=source; }
 }
 void hle_KPADRead(ppc::Ctx& c) {

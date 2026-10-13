@@ -34,3 +34,28 @@ void hle_IntroLogoUpdate(ppc::Ctx& c) {
     c.r[1]=stack-48;
     uc::call_indirect(c,0x80245860);
 }
+
+void hle_MovieUpdate(ppc::Ctx& c) {
+    const auto object=c.r[3];
+    gx::Memory memory{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}};
+    memory.read(object,0x50);
+    if(ppc::rd16(c,object+6)==1) {
+        memory.read(c.r[2]-25960,4);
+        const auto minimum=ppc::rdf32(c,c.r[2]-25960);
+        if(!std::isfinite(minimum) || minimum<0) throw std::runtime_error("invalid movie skip threshold");
+        ppc::wrf32(c,object+8,minimum);
+    }
+    const auto update=[&] {
+        // Static lowering of801426D4; the remaining update and cleanup stay AOT compiled.
+        const auto stack=c.r[1];
+        ppc::wr32(c,stack-32,stack); c.r[1]=stack-32;
+        c.r[3]=object; uc::call_indirect(c,0x801426D8);
+    };
+    const auto finish_fade=[&] {
+        ppc::wr32(c,object,uint32_t(-950));
+        ppc::wr16(c,object+4,247); // Next +8 reaches255 and runs the original decoder cleanup.
+    };
+    if(ppc::rd16(c,object+6)==2) finish_fade();
+    update();
+    if(ppc::rd16(c,object+6)==2) { finish_fade(); update(); }
+}

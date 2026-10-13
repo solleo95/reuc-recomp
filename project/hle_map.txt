@@ -55,7 +55,9 @@ VIGetTvFormat
 VIWaitForRetrace
 
 # --- CPU cache maintenance (runtime/hle/nop.cpp): a native build has no cache to flush/invalidate/enable, so these have no observable effect.
-# DCZeroRange and the LC store/queue functions are NOT here: they change memory and run translated.
+# DCZeroRange and LC data/queue wrappers run translated; block transfers copy real memory natively.
+@8025A668 LCLoadBlocks
+@8025A68C LCStoreBlocks
 DCEnable Nop
 DCInvalidateRange Nop
 DCFlushRange Nop
@@ -86,6 +88,8 @@ __EXIProbe EXIProbe
 __OSInitAudioSystem Nop
 DSPAddTask          # runtime/hle/dsp.cpp: accepts the task and reports its boot; never runs it
 DSPInit Nop         # starts the DSP and its task manager; waits for the DSP mailbox handshake
+@8027319C AIStartDMA
+@80274DD0 AXFrame
 __AI_SRC_INIT Nop   # AI sample-rate calibration: spins on the AI sample counter against the timebase
 
 # --- MMU / memory protection setup (BAT registers, MI protection windows): the native build has one flat address space, so nothing to configure.
@@ -154,11 +158,32 @@ GXLoadPosMtxIndx
 GXSetCurrentMtx
 GXSetCopyClear
 GXCopyDisp
+@80285334 GXSetTexCopySrc
+@80285398 GXSetTexCopyDst
+@80285974 GXCopyTex
 GXLoadTexObjPreLoaded
 GXLoadTlut
+@80366E78 ResTevApply
+@80366FF4 ResPixelApply
+@80367024 ResColorApply
+@80366D3C ResMeshSetup
+@80366E14 ResMeshDraw
+@80376148 ResChannelApply
+@80373D00 ResGenerationMode
+GXLoadLightObjImm
+GXLoadNrmMtxImm
+@80286190 GXSetNumChans
+@802861B4 GXSetChanCtrl
+@80287B80 GXSetAlphaCompare
+@80287908 GXSetTevColor
+@80287968 GXSetTevColorS10
+@802879CC GXSetTevKColor
+@80288954 GXLoadTexMtxImm
+@80287650 GXSetTevDirect
 
 # RBUE08 startup logo update; original body continues at80245860 (game/intro.cpp).
 @8024585C IntroLogoUpdate
+@801426D4 MovieUpdate
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop

@@ -25,7 +25,8 @@ public:
     bool render(const gx::FramePacket& packet);
     void resize(uint32_t width, uint32_t height);
     std::vector<uint64_t> poll_completions();
-    RenderPixels capture(uint64_t serial);
+    bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
+    RenderPixels capture(uint64_t serial, bool efb = false);
     void shutdown();
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
@@ -39,6 +40,7 @@ private:
         VkImageView view=VK_NULL_HANDLE;
         Buffer upload;
         VkExtent2D extent{};
+        uint32_t mip_levels=1;
         std::shared_ptr<const gx::TexturePixels> source;
         bool initialized=false;
     };
@@ -49,8 +51,9 @@ private:
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
-        Buffer vertices, indices, pixels;
+        Buffer vertices, indices, pixels, uniforms;
         std::vector<Texture> textures;
+        std::vector<std::shared_ptr<const gx::TexturePixels>> copy_sources;
         std::vector<VkDescriptorSet> texture_sets;
         VkDescriptorPool texture_pool=VK_NULL_HANDLE;
         uint64_t serial = 0;
@@ -72,9 +75,10 @@ private:
     void retire_textures(Slot& slot);
     void rebuild();
     void retire_images();
-    VkPipeline pipeline_for(const gx::BlendState& blend);
-    VkPipeline make_pipeline(const gx::BlendState& blend);
-    void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent);
+    using PipelineKey=std::array<uint32_t,69>;
+    VkPipeline pipeline_for(const gx::DrawPacket& draw,bool alpha_pass=false);
+    VkPipeline make_pipeline(const gx::BlendState& blend,const PipelineKey& key);
+    void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent,bool depth=false);
     void collect();
     SDL_Window* window_ = nullptr;
     std::thread::id owner_;
@@ -90,16 +94,21 @@ private:
     VkExtent2D extent_{};
     VkExtent2D requested_{};
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    std::map<uint32_t,VkPipeline> pipelines_;
+    std::map<PipelineKey,VkPipeline> pipelines_;
+    std::map<const gx::TexturePixels*,Texture> copy_textures_;
+    size_t uniform_stride_=sizeof(gx::DrawUniform);
     std::filesystem::path shaders_;
     bool logic_ops_=false;
     VkDescriptorSetLayout texture_layout_=VK_NULL_HANDLE;
-    VkSampler texture_sampler_=VK_NULL_HANDLE;
+    std::array<VkSampler,256> texture_samplers_{};
     VkImage efb_ = VK_NULL_HANDLE;
     VkExtent2D efb_extent_{};
     VkDeviceMemory efb_memory_ = VK_NULL_HANDLE;
     VkImageView efb_view_ = VK_NULL_HANDLE;
     bool efb_initialized_ = false;
+    VkImage depth_=VK_NULL_HANDLE;
+    VkDeviceMemory depth_memory_=VK_NULL_HANDLE;
+    VkImageView depth_view_=VK_NULL_HANDLE;
     std::array<Slot, 2> slots_{};
     std::vector<PresentImage> images_;
     std::vector<uint64_t> completed_;

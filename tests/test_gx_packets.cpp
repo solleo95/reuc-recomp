@@ -6,6 +6,15 @@
 using namespace std::chrono_literals;
 
 int main() {
+    gx::Packets waking;
+    auto waiting=std::async(std::launch::async,[&]{return waking.wait_ready(1s);});
+    CHECK(waiting.wait_for(20ms)==std::future_status::timeout);
+    waking.seal_batch({});
+    CHECK(waiting.wait_for(1s)==std::future_status::ready && waiting.get());
+    CHECK(waking.try_take());
+    auto cancel_wait=std::async(std::launch::async,[&]{return waking.wait_ready(1s);});
+    waking.cancel();
+    CHECK(cancel_wait.wait_for(1s)==std::future_status::ready && !cancel_wait.get());
     gx::Packets packets;
     gx::FramePacket original;
     original.draws.emplace_back();

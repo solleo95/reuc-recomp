@@ -1,5 +1,6 @@
 #include "check.h"
 #include "gx_audit.h"
+#include "ppc_fixture.h"
 #include <algorithm>
 #include <thread>
 
@@ -78,5 +79,16 @@ int main() {
     callbacks=uc::gx_audit_snapshot();
     callback=std::find_if(callbacks.begin(),callbacks.end(),[](const auto& entry){return entry.address==0x80123456;});
     CHECK(callback!=callbacks.end() && callback->calls==18);
+    Fix mesh; auto& m=mesh.c; m.r[3]=0x80008000; m.r[5]=1;
+    ppc::wr32(m,0x80008000,0x80009000);
+    ppc::wr32(m,0x8000901C,5000); ppc::wr32(m,0x80009020,256);
+    for(uint32_t i=0;i<5000;++i) ppc::wr8(m,0x80009118+i,uint8_t(i));
+    uc::gx_audit_enter(0x80366D3C,m);
+    ppc::wr8(m,0x80009138,0xFF);
+    auto mesh_entries=uc::gx_audit_snapshot();
+    auto shape=std::find_if(mesh_entries.begin(),mesh_entries.end(),[](const auto& entry){return entry.address==0x80366D3C;});
+    CHECK(shape!=mesh_entries.end() && shape->resources.size()==1);
+    CHECK(shape->resources[0].address==0x80009138 && shape->resources[0].size==4968 && shape->resources[0].bytes.size()==4096);
+    CHECK(shape->resources[0].bytes[0]==std::byte(32));
     return 0;
 }

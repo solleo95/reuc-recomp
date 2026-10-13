@@ -17,6 +17,14 @@ int main() {
     input.button(uc::kButtonA,true); input.consume(); input.focus(false);
     auto lost=input.consume(); CHECK(!lost.valid && lost.held==0 && lost.pressed==0 && lost.released==uc::kButtonA);
     CHECK(!input.move_raw(50,0,1000,500)); input.focus(true);
+    CHECK(input.apply_test_command(1,0.2f,0.2f,uc::kButtonA));
+    CHECK(input.last_consumed_sequence()==0);
+    CHECK(input.consume().pressed==uc::kButtonA && input.last_consumed_sequence()==1);
+    CHECK(!input.apply_test_command(1,0,0,0));
+    CHECK(!input.apply_test_command(2,2,0,0));
+    CHECK(input.consume().held==uc::kButtonA);
+    CHECK(input.apply_test_command(2,0.2f,0.2f,0)); input.consume();
+    CHECK(!input.aim(2,0)); CHECK(input.aim(0.2f,0.2f));
     Fix fixture; auto& c=fixture.c; uc::input_hle_init(&input);
     c.r[3]=0; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(c.r[3]==0 && ppc::rd32(c,0x80001000)==0);
     input.button(uc::kButtonA,true);

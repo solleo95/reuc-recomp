@@ -1,4 +1,4 @@
-add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp)
+add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp)
 target_include_directories(uc_gx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 enable_language(C)
@@ -18,6 +18,9 @@ FetchContent_Declare(SDL3 URL "${sdl_archive}"
   URL_HASH SHA256=bf308f92c5688b1479faf5cfe24af72f3cd4ce08d0c0670d6ce55bc2ec1e9a5e
   DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(SDL3)
+if(WIN32)
+  include(patch_sdl.cmake)
+endif()
 set(shader_dir ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 foreach(stage vert frag)
   if(stage STREQUAL "vert")
@@ -30,12 +33,14 @@ foreach(stage vert frag)
   add_custom_command(OUTPUT ${shader_dir}/smoke.${stage}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -target spirv -profile spirv_1_5 -entry ${entry} -stage ${shader_stage} -fvk-use-entrypoint-name -o ${shader_dir}/smoke.${stage}.spv
-    DEPENDS shaders/smoke.slang VERBATIM)
+    DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
 endforeach()
 add_custom_target(uc_smoke_shaders DEPENDS ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv)
 add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp)
 target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs)
 add_dependencies(uc_vulkan uc_smoke_shaders)
+set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS
+  ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv)
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
 target_include_directories(renderer_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_smoke PRIVATE uc_vulkan windowscodecs)

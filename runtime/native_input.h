@@ -13,12 +13,16 @@ class NativeInput {
 public:
     void focus(bool focused);
     bool move_raw(float dx,float dy,uint32_t width,uint32_t height);
+    bool aim(float x,float y);
+    bool apply_test_command(uint64_t sequence,float x,float y,uint32_t held);
+    uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
 private:
     std::mutex mutex_;
     InputSample state_;
     float previous_x_=0,previous_y_=0;
+    uint64_t sequence_=0,consumed_sequence_=0;
 };
 void input_hle_init(NativeInput* input);
 }

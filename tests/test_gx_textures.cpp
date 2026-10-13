@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <chrono>
+#include <cstdio>
 
 using Pixel = std::array<uint8_t, 4>;
 static std::span<const std::byte> bytes(const std::vector<uint8_t>& v) {
@@ -136,5 +138,20 @@ int main() {
     cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
     CHECK(cache.decodes()==previous_decodes+1);
     rejects(gx::TextureErrorCode::truncated,[&] { cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data).first(31)); });
+    cache.clear(); CHECK(cache.decodes()==0 && cache.resident_bytes()==0);
+    auto cleared=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(cleared!=first && cache.decodes()==1);
+    auto resized=cache.snapshot(0x80001000,{2,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(resized!=cleared && resized->levels[0].width==2);
+    gx::TextureCache many;
+    std::vector<std::shared_ptr<const gx::TexturePixels>> expected;
+    for(uint32_t i=0;i<512;++i) expected.push_back(many.snapshot(0x80010000+i*32,{1,1,gx::TextureFormat::i8},bytes(data)));
+    const auto began=std::chrono::steady_clock::now();
+    for(uint32_t i=0;i<50000;++i) {
+        const auto key=i%512;
+        CHECK(many.snapshot(0x10000+key*32,{1,1,gx::TextureFormat::i8},bytes(data))==expected[key]);
+    }
+    CHECK(many.decodes()==512);
+    std::printf("texture lookup benchmark: %lld us, 50000 hits/512 resident addresses\n",(long long)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-began).count());
     return 0;
 }

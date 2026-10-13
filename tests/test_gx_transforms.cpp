@@ -19,14 +19,24 @@ template<class Fn> static void rejects(Fn fn) {
     CHECK(caught);
 }
 int main() {
-    static_assert(sizeof(gx::GpuVertex)==72);
+    static_assert(sizeof(gx::GpuVertex)==144);
     gx::Transforms transforms;
     gx::Vertex vertex; vertex.position={1,2,3}; vertex.color[0]={1,2,3,4};
     vertex.texcoord[0]={0.25f,0.75f};
+    vertex.texcoord[7]={0.125f,0.875f};
     auto uploaded=gx::gpu_vertex(vertex,transforms,false,0x80000000);
     CHECK((clip(uploaded,transforms.projection)==std::array<float,4>{1,2,3,1}));
     CHECK(uploaded.color==vertex.color[0]);
     CHECK(uploaded.texcoord==vertex.texcoord[0]);
+    CHECK(uploaded.extra_texcoords[6]==vertex.texcoord[7]);
+    vertex.normal[0]=1; vertex.normal[1]=2; vertex.normal[2]=3;
+    gx::set_normal_matrix(transforms,0,{{{0,1,0},{-1,0,0},{0,0,2}}});
+    uploaded=gx::gpu_vertex(vertex,transforms,false,0);
+    CHECK((uploaded.normal==std::array<float,3>{2,-1,6}));
+    CHECK(uploaded.color1==vertex.color[1]);
+    rejects([&]{gx::set_normal_matrix(transforms,62,{});});
+    auto invalid_normal=gx::NormalMatrix{}; invalid_normal[0][0]=std::numeric_limits<float>::quiet_NaN();
+    rejects([&]{gx::set_normal_matrix(transforms,0,invalid_normal);});
     const gx::PositionMatrix translated{{{1,0,0,4},{0,2,0,5},{0,0,3,6}}};
     gx::set_position_matrix(transforms,3,translated);
     transforms.current=3;
@@ -40,6 +50,16 @@ int main() {
     gx::set_position_matrix(transforms,61,translated);
     vertex.position_matrix=61;
     CHECK(gx::gpu_vertex(vertex,transforms,true,0).position_rows==translated);
+    // Position rows32..63 select the lower normal palette via the low five bits.
+    gx::set_position_matrix(transforms,33,translated);
+    gx::set_normal_matrix(transforms,1,{{{0,1,0},{-1,0,0},{0,0,2}}});
+    gx::set_normal_matrix(transforms,33,{{{1,0,0},{0,1,0},{0,0,1}}});
+    vertex.position_matrix=33;
+    uploaded=gx::gpu_vertex(vertex,transforms,true,0);
+    CHECK(uploaded.position_rows==translated);
+    CHECK((uploaded.normal==std::array<float,3>{2,-1,6}));
+    transforms.current=33;
+    CHECK((gx::gpu_vertex(vertex,transforms,false,0).normal==std::array<float,3>{2,-1,6}));
     auto invalid=translated; invalid[0][0]=std::numeric_limits<float>::infinity();
     rejects([&]{gx::set_position_matrix(transforms,0,invalid);});
     CHECK(transforms.position_rows[0][0]==1);

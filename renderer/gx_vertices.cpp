@@ -66,6 +66,10 @@ std::array<uint8_t, 4> color(std::span<const std::byte> data, Color fmt) {
 }
 void indices(DrawPacket& draw) {
     uint32_t n = uint32_t(draw.vertices.size());
+    const size_t count=draw.primitive==0x80 ? size_t(n)/4*6 :
+        (draw.primitive==0x98 || draw.primitive==0xA0) ? size_t(n>2 ? n-2 : 0)*3 :
+        draw.primitive==0xB0 ? size_t(n ? n-1 : 0)*2 : n;
+    draw.indices.reserve(count);
     auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { draw.indices.insert(draw.indices.end(), {a, b, c}); };
     switch (draw.primitive) {
     case 0x80:
@@ -151,10 +155,11 @@ void Vertices::begin(const State& state, uint8_t primitive, uint8_t vat, uint16_
     draw_.vertices.reserve(count);
     vertex_size_ = vertex_size; count_ = count; producer_ = producer;
     vertex_bytes_.clear(); vertex_bytes_.reserve(vertex_size);
+    sources_={};
     active_ = true;
 }
 
-Vertex Vertices::decode(std::span<const std::byte> data) const {
+Vertex Vertices::decode(std::span<const std::byte> data) {
     Vertex vertex;
     size_t cursor = 0;
     for (size_t a = 0; a < draw_.state.descriptors.size(); ++a) {
@@ -174,6 +179,12 @@ Vertex Vertices::decode(std::span<const std::byte> data) const {
                 if (!array.address || !array.stride || address > std::numeric_limits<uint32_t>::max())
                     throw Error(ErrorCode::array_bounds, array.address, size, array.stride);
                 attr = memory_.read(uint32_t(address), size);
+                if(collect_sources_) {
+                    auto& range=sources_[a-9];
+                    const auto begin=range ? std::min(uint64_t(range->address),address) : address;
+                    const auto end=range ? std::max(uint64_t(range->address)+range->size,address+size) : address+size;
+                    range=SourceRange{uint32_t(begin),size_t(end-begin)};
+                }
             }
             if (a == 0) vertex.position_matrix = uint8_t(be(attr));
             else if (a < 9) vertex.texture_matrix[a - 1] = uint8_t(be(attr));
@@ -218,4 +229,5 @@ DrawPacket Vertices::take_draw() {
 void Vertices::finish() const {
     if (active_) throw Error(ErrorCode::truncated, draw_.callsite, count_ * vertex_size_, draw_.vertices.size() * vertex_size_ + vertex_bytes_.size());
 }
+
 } // namespace gx

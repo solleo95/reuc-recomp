@@ -30,7 +30,8 @@ void save_png(const RenderPixels& pixels,const std::filesystem::path& path) {
     require(frame->SetPixelFormat(&format));
     if (format!=GUID_WICPixelFormat32bppBGRA) throw std::runtime_error("PNG encoder changed required pixel format");
     auto bgra=pixels.rgba;
-    for (size_t i=0;i<bgra.size();i+=4) std::swap(bgra[i],bgra[i+2]);
+    // Presentation is opaque; EFB alpha carries game data rather than window transparency.
+    for (size_t i=0;i<bgra.size();i+=4) { std::swap(bgra[i],bgra[i+2]); bgra[i+3]=255; }
     require(frame->WritePixels(pixels.height,pixels.width*4,UINT(bgra.size()),bgra.data()));
     require(frame->Commit()); require(encoder->Commit());
 }

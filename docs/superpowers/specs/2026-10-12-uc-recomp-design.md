@@ -106,8 +106,8 @@ ranges in spike S1; the game has no REL modules).
 - **DVD**: `DVDOpen/Read/...` served from `DATA\files`. Async reads complete on a worker thread.
 - **VI / frame pacing**: `VIWaitForRetrace` is the logic tick. Game logic runs at its native rate; presentation runs
   at the display rate (see §7).
-- **Audio**: AX voice mixer on the CPU (SIMD), output via WASAPI. DSP microcode is never emulated: AX is replaced by HLE.
-- **Video**: THP/movie decode with a native decoder into a texture.
+- **Audio**: native CPU AX voice mixer and SDL3 PCM output (Windows device backend). Verified PCM8/BEPCM16/DSP-ADPCM and real game callback/cursor/loop/volume updates now produce audible stream sound (G13). SIMD, exact4-tap SRC/effects, complete SFX coverage and device-clock pacing remain work; TD-042 records fidelity limits. DSP microcode is never executed.
+- **Video**: actual SFD decoding remains ahead-of-time compiled game code producing RGBA textures. Native AX timing restored opening/mission video, confirmed by the owner (G13); title background/material parity remains under investigation.
 - **Save**: verified NANDInit/ISFS API mapped to real Windows files under `saves` next to `uc.exe`, independent of the launch working directory. Existing contents are archived before writable reopening/overwrite; deletes move into `.deleted`. Directory handles pin path ancestors during operations; reparse points, hard links and path escapes are rejected. Native startup reaches the missing-save/create-data dialog (G10); full in-game save/load remains pending native input. Provisional metadata and synchronous disk work behind async completion are tracked as TD-040/039.
 
 **Nativity rule (owner's priority: maximum nativity and performance).** The runtime is native code at every level: translated game code, native HLE

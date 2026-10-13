@@ -42,6 +42,23 @@ void gx_audit_enter(uint32_t address, const ppc::Ctx& ctx) {
     if (!enabled.load(std::memory_order_relaxed) || !watched(address,ctx.lr)) return;
     std::lock_guard lock(mutex);
     auto& entry = entries[address];
+    if(ctx.mem && (address==0x80366D3C || address==0x80366E14) && entry.resources.size()<4) {
+        const gx::Memory memory{{reinterpret_cast<const std::byte*>(ctx.mem),24u<<20},{reinterpret_cast<const std::byte*>(ctx.mem+0x10000000),64u<<20},{}};
+        auto word=[&](uint32_t pointer) { uint32_t result=0; for(auto byte:memory.read(pointer,4)) result=result<<8|std::to_integer<uint8_t>(byte); return result; };
+        const auto object=word(ctx.r[3]),meta=object+(address==0x80366D3C ? 24u : 36u);
+        memory.read(object,48);
+        const auto offset=word(meta+8),size=word(meta+4),skip=address==0x80366D3C && ctx.r[5] ? 32u : 0u;
+        if(entry.calls<4) std::fprintf(stderr,"[mesh-meta] entry %08X object %08X descriptor %08X offset %08X size %u skip %u\n",address,object,meta,offset,size,skip);
+        if(offset && size>skip) {
+            const int64_t start=int64_t(meta)+int32_t(offset)+skip;
+            if(start<0 || start>UINT32_MAX) throw std::invalid_argument("native mesh audit offset overflows");
+            const auto pointer=uint32_t(start);
+            if(std::none_of(entry.resources.begin(),entry.resources.end(),[pointer](const auto& resource){return resource.address==pointer;})) {
+                const auto bytes=memory.read(pointer,size-skip),prefix=bytes.first(std::min<size_t>(bytes.size(),4096));
+                entry.resources.push_back({pointer,bytes.size(),{prefix.begin(),prefix.end()}});
+            }
+        }
+    }
     if (entry.calls == 0) {
         entry.address = address;
         entry.first_caller = ctx.lr >= 4 ? ctx.lr - 4 : 0;

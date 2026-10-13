@@ -14,6 +14,7 @@ uint64_t Packets::seal_batch(FramePacket packet) {
     try { queued_.push_back(std::move(owned)); }
     catch (...) { outstanding_.erase(serial); throw; }
     ++next_serial_;
+    ready_.notify_one();
     return serial;
 }
 std::unique_ptr<const FramePacket> Packets::try_take() {
@@ -32,11 +33,17 @@ bool Packets::complete(uint64_t serial) {
     space_.notify_all();
     return true;
 }
+bool Packets::wait_ready(std::chrono::nanoseconds timeout) {
+    std::unique_lock lock(mutex_);
+    ready_.wait_for(lock,timeout,[&]{return canceled_ || !queued_.empty();});
+    return !canceled_ && !queued_.empty();
+}
 void Packets::cancel() {
     std::lock_guard lock(mutex_);
     canceled_ = true;
     queued_.clear();
     outstanding_.clear();
     space_.notify_all();
+    ready_.notify_all();
 }
 } // namespace gx

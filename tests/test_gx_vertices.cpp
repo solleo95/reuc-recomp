@@ -93,5 +93,17 @@ int main() {
     gx::Vertices mmio_array({ram, {}, {}});
     mmio_array.begin(state, 0xB8, 0, 1, 7, 0x80040004);
     rejects(gx::ErrorCode::array_bounds, [&] { mmio_array.write_attribute(7, bytes(index)); });
+    // Indexed source collection spans every referenced array element.
+    state={}; state.descriptors[9]=gx::Mode::index8;
+    state.formats[0][9]={gx::Type::u8,2,0}; state.arrays[0]={0x80000020,4};
+    gx::Vertices collected({ram,{},{}},true);
+    collected.begin(state,0x90,0,3,7,0);
+    const std::vector<uint8_t> source_indices{2,0,1};
+    collected.write_attribute(7,bytes(source_indices)); collected.take_draw();
+    CHECK(collected.sources()[0] && collected.sources()[0]->address==0x80000020 && collected.sources()[0]->size==10);
+    CHECK(!collected.sources()[1]);
+    collected.begin(state,0xB8,0,1,7,0);
+    collected.write_attribute(7,bytes(source_indices).first(1)); collected.take_draw();
+    CHECK(collected.sources()[0]->address==0x80000028 && collected.sources()[0]->size==2);
     return 0;
 }

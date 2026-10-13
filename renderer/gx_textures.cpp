@@ -141,7 +141,9 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
     if (pixels.size() < required) throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
     pixels = pixels.first(required);
     address &= 0x3FFFFFFF;
-    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+    const auto candidates = by_address_.equal_range(address);
+    for (auto candidate = candidates.first; candidate != candidates.second; ++candidate) {
+        const auto it = candidate->second;
         if (it->address == address && it->desc.width == desc.width && it->desc.height == desc.height &&
             it->desc.format == desc.format && it->desc.levels == desc.levels && it->format == palette.format &&
             std::equal(it->encoded.begin(), it->encoded.end(), pixels.begin(), pixels.end()) &&
@@ -157,9 +159,20 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
     for (const auto& level : result->levels) bytes += level.rgba.size();
     if (bytes <= budget_) {
         while (!entries_.empty() && (resident_ > budget_ - bytes || entries_.size() >= 4096)) {
+            auto last = entries_.end(); --last;
+            const auto indexed = by_address_.equal_range(last->address);
+            for (auto it = indexed.first; it != indexed.second; ++it) {
+                if (it->second == last) { by_address_.erase(it); break; }
+            }
             resident_ -= entries_.back().bytes; entries_.pop_back();
         }
         entries_.push_front({address, desc, palette.format, {pixels.begin(), pixels.end()}, {palette.bytes.begin(), palette.bytes.end()}, result, bytes});
+        try {
+            by_address_.emplace(address, entries_.begin());
+        } catch (...) {
+            entries_.pop_front();
+            throw;
+        }
         resident_ += bytes;
     }
     return result;

@@ -36,7 +36,7 @@ cmake --install "%BUILD%" --prefix "%DIST%" || goto :stage_failed
 
 if defined NO_INSTALL goto :skip_copy
 echo [6/6] Copying dist to %UC_INSTALL_DIR%
-robocopy "%DIST%" "%UC_INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /NP
+robocopy "%DIST%" "%UC_INSTALL_DIR%" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if errorlevel 8 goto :copy_failed
 echo Done.
 exit /b 0

@@ -11,10 +11,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--log-sleep") options.log_sleep = true;
         else if (arg == "--gx-audit") options.gx_audit = true;
         else if (arg == "--skip-intro") options.skip_intro = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds") {
+        else if (arg == "--profile") options.profile = true;
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if (arg == "--game") { options.game = std::filesystem::path(std::string(value)); continue; }
+            if(arg=="--test-control") { options.test_control=std::filesystem::path(std::string(value)); continue; }
+            if(arg=="--save-root") { options.save_root=std::filesystem::path(std::string(value)); continue; }
             uint32_t number = 0;
             auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && number == 0)) return "invalid value for " + std::string(arg);
