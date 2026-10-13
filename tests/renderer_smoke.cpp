@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
         draw.transforms.projection=gx::make_projection({0.5f,0,-0.5f,0,1,0},1);
         // Both GPU slots stay active; consumer completion order follows native submission serials.
         uint64_t expected = 4;
+        const auto descriptor_creations=renderer.descriptor_pool_creations();
         for (uint64_t serial = 4; serial < 20; serial += 2) {
             for (uint64_t next : {serial, serial + 1}) {
                 packet.serial = next;
@@ -135,13 +136,15 @@ int main(int argc, char** argv) {
             }
         }
         CHECK(renderer.presentation_count()==19);
-        auto submit=[&](gx::FramePacket& work) {
+        CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+2);
+        auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr) {
+            auto& target=selected ? *selected : renderer;
             auto until=std::chrono::steady_clock::now()+3s;
             bool sent=false,done=false;
             while (!done) {
                 CHECK(std::chrono::steady_clock::now()<until);
-                if (!sent) sent=renderer.render(work);
-                for (auto serial : renderer.poll_completions()) { CHECK(serial==work.serial && !done); done=true; }
+                if (!sent) sent=target.render(work);
+                for (auto serial : target.poll_completions()) { CHECK(serial==work.serial && !done); done=true; }
                 SDL_PumpEvents(); std::this_thread::sleep_for(1ms);
             }
         };
@@ -364,7 +367,79 @@ int main(int argc, char** argv) {
         work.draws[0].vertices[2].texcoord[0]={512,512}; work.draws[0].vertices[3].texcoord[0]={0,512};
         submit(work); sampled=renderer.capture(66);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0); // Mips exist but this sampler disables them.
-        packet.serial = 67; draw.indices[2] = 999;
+        const auto pools_before_growth=renderer.descriptor_pool_creations();
+        work=packet; work.draws.assign(8,quad);
+        work.serial=67; submit(work); work.serial=68; submit(work);
+        CHECK(renderer.descriptor_pool_creations()==pools_before_growth+2);
+        const auto pools_after_growth=renderer.descriptor_pool_creations();
+        work.draws.resize(1); work.serial=69; submit(work);
+        work.draws.clear(); work.serial=70; submit(work);
+        work.draws.assign(8,quad); work.serial=71; submit(work);
+        CHECK(renderer.descriptor_pool_creations()==pools_after_growth);
+        sampled=renderer.capture(71); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
+        uint64_t warmed_copy_allocations=0;
+        for(uint64_t serial=72;serial<84;++serial) {
+            auto version=std::make_shared<gx::TexturePixels>(); version->gpu_only=true;
+            version->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+            work=packet; work.serial=serial; work.present=false; work.clear_after_copy=false; work.draws[0]=quad;
+            for(auto& vertex:work.draws[0].vertices) vertex.color[0]=serial&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
+            work.texture_copy=gx::TextureCopy{{0,0,640,480},version}; submit(work);
+            work.texture_copy.reset(); version.reset();
+            if(serial==75) warmed_copy_allocations=renderer.texture_creations();
+            if(serial>75) CHECK(renderer.texture_creations()==warmed_copy_allocations);
+        }
+        work=packet; work.serial=84; work.draws[0]=quad; work.draws[0].texture=old_copy;
+        for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
+        submit(work); sampled=renderer.capture(84);
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0); // Retained version survived allocation recycling.
+        auto broken_copy=std::make_shared<gx::TexturePixels>(); broken_copy->gpu_only=true; broken_copy->levels={{4,4,{}},{3,2,{}},{1,1,{}}};
+        work=packet; work.serial=85; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},broken_copy};
+        bool malformed_copy_rejected=false;
+        try { renderer.render(work); } catch(const std::invalid_argument&) { malformed_copy_rejected=true; }
+        CHECK(malformed_copy_rejected);
+        renderer.set_render_scale(1);
+        work=packet; work.serial=85; work.clear_after_copy=false; work.draws.assign(8,quad);
+        for(size_t i=0;i<work.draws.size();++i) {
+            work.draws[i].state.scissor=std::array<int32_t,4>{int32_t(i*80),0,80,480};
+            for(auto& vertex:work.draws[i].vertices) vertex.color[0]=i&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
+        }
+        submit(work);
+        auto high_resolution=renderer.capture(85,true);
+        CHECK(high_resolution.width==1280 && high_resolution.height==960);
+        auto scaled_copy=std::make_shared<gx::TexturePixels>(); scaled_copy->gpu_only=true; scaled_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+        work.serial=86; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},scaled_copy}; submit(work);
+        renderer.set_render_scale(3);
+        work=packet; work.serial=87; work.clear_after_copy=false; work.draws[0]=quad; work.draws[0].texture=scaled_copy;
+        for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
+        work.draws[0].vertices[0].texcoord[0][0]=work.draws[0].vertices[3].texcoord[0][0]=0;
+        work.draws[0].vertices[1].texcoord[0][0]=work.draws[0].vertices[2].texcoord[0][0]=1;
+        submit(work); high_resolution=renderer.capture(87,true);
+        CHECK(high_resolution.width==3840 && high_resolution.height==2880);
+        for(size_t i=0;i<8;++i) {
+            const size_t texel=(size_t(high_resolution.height/2)*high_resolution.width+(2*i+1)*high_resolution.width/16)*4;
+            CHECK(high_resolution.rgba[texel]==(i&1 ? 0 : 255) && high_resolution.rgba[texel+1]==(i&1 ? 255 : 0));
+        } // Eight physical texels survive a logical four-texel copy and scale change.
+        renderer.set_render_scale(1.5);
+        work=packet; work.serial=88; work.clear_after_copy=false; work.draws[0]=quad; submit(work);
+        high_resolution=renderer.capture(88,true);
+        CHECK(high_resolution.width==1920 && high_resolution.height==1440);
+        renderer.set_render_scale(6);
+        work.serial=89; submit(work); high_resolution=renderer.capture(89,true);
+        CHECK(high_resolution.width==7680 && high_resolution.height==5760);
+        CHECK(SDL_SetWindowSize(window,1280,720)); renderer.resize(1280,720);
+        work.serial=90; submit(work); high_resolution=renderer.capture(90,true);
+        CHECK(high_resolution.width==7680 && high_resolution.height==5760); // Manual internal resolution survives output resize.
+        renderer.set_render_scale(1.25);
+        work.serial=91; work.draws[0].state.viewport=std::array<float,6>{0,0,640,360,0,1}; work.display_source={0,0,640,360};
+        submit(work); sampled=renderer.capture(91);
+        CHECK(sampled.width==1280 && sampled.height==720);
+        CHECK(sampled.rgba[(size_t(sampled.height-1)*sampled.width+sampled.width/2)*4]==255);
+        high_resolution=renderer.capture(91,true);
+        CHECK(high_resolution.width==1600 && high_resolution.height==1200);
+        bool invalid_scale=false; try { renderer.set_render_scale(7); } catch(const std::invalid_argument&) { invalid_scale=true; }
+        CHECK(invalid_scale);
+        renderer.set_render_scale(0.5);
+        packet.serial = 92; draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -373,8 +448,20 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({67}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({92}));
         CHECK(renderer.validation_errors() == 0);
+        uc::VulkanRenderer portrait;
+        portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25);
+        auto thin_copy=std::make_shared<gx::TexturePixels>(); thin_copy->gpu_only=true;
+        for(uint32_t width=1024;;width/=2) { thin_copy->levels.push_back({width,1,{}}); if(width==1) break; }
+        work=packet; work.serial=1; work.present=false; work.clear_after_copy=false; work.draws[0]=quad;
+        work.texture_copy=gx::TextureCopy{{0,0,640,480},thin_copy}; submit(work,&portrait);
+        work.serial=2; work.present=true; work.texture_copy.reset(); work.draws[0].texture=thin_copy;
+        for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
+        submit(work,&portrait); sampled=portrait.capture(2);
+        center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
+        portrait.shutdown(); CHECK(portrait.validation_errors()==0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");
         return 0;

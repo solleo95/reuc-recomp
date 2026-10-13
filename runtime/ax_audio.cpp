@@ -11,6 +11,10 @@ namespace {
 uc::Sched* scheduler;
 uc::AudioSink output;
 bool started=false;
+bool profile_audio=false;
+struct VoiceProbe { bool running=false,tracked=false; int32_t peak=0; };
+std::array<VoiceProbe,128> voice_probes{};
+uint32_t voice_probe_starts=0;
 std::atomic<uint64_t> frames{0},nonzero{0};
 gx::Memory ram(const ppc::Ctx& c) { return {{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}}; }
 int16_t next_sample(ppc::Ctx& c,uint32_t pb) {
@@ -91,7 +95,10 @@ void mix_ax_voice(ppc::Ctx& c,uint32_t pb,std::span<int32_t,192> mix) {
     ppc::wr16(c,pb+0xAA,uint16_t(phase)); ppc::wr16(c,pb+0xB2,uint16_t(sample));
     ppc::wr16(c,pb+0x6A,uint16_t(envelope)); ppc::wr16(c,pb+0x14,uint16_t(left)); ppc::wr16(c,pb+0x18,uint16_t(right));
 }
-void audio_hle_init(Sched& s,AudioSink sink) { scheduler=&s; output=std::move(sink); started=false; frames=nonzero=0; }
+void audio_hle_init(Sched& s,AudioSink sink,bool profile) {
+    scheduler=&s; output=std::move(sink); started=false; frames=nonzero=0;
+    profile_audio=profile; voice_probes={}; voice_probe_starts=0;
+}
 void audio_hle_shutdown() { started=false; output={}; scheduler=nullptr; }
 AudioStats audio_stats() { return {frames.load(),nonzero.load()}; }
 }
@@ -112,28 +119,32 @@ void hle_AXFrame(ppc::Ctx& c) {
     if (callback) uc::call_guest(c,callback,{});
     std::array<int32_t,192> mix{};
     for (uint32_t i=0;i<count;++i) {
-#ifdef UC_TRACE
-        static std::array<bool,128> was_running{};
-        static std::array<int32_t,128> sfx_peak{};
         const uint32_t pb=base+i*320;
-        const bool running=ppc::rd16(c,pb+0x10)==1;
-        const bool sfx=running && ppc::rd16(c,pb+0x12)==0 && ppc::rd16(c,pb+0x70)==0;
-        const bool probe=sfx && !was_running[i];
-        if(!running && was_running[i] && sfx_peak[i]) std::fprintf(stderr,"[ax-sfx-end] index %u whole-voice peak %d\n",i,sfx_peak[i]);
-        if(!running || !was_running[i]) sfx_peak[i]=0;
-        const auto before=mix;
-        if (running && !was_running[i]) std::fprintf(stderr,"[ax-voice] index %u format %u stream %u control %08X envelope %u LR %u %u pos %08X end %08X\n",i,ppc::rd16(c,pb+0x70),ppc::rd16(c,pb+0x12),ppc::rd32(c,pb+0x0C),ppc::rd16(c,pb+0x6A),ppc::rd16(c,pb+0x14),ppc::rd16(c,pb+0x18),ppc::rd32(c,pb+0x7A),ppc::rd32(c,pb+0x76));
-        was_running[i]=running;
-#endif
-        uc::mix_ax_voice(c,base+i*320,mix);
-#ifdef UC_TRACE
-        if(sfx) {
-            int32_t peak=0;
-            for(size_t sample=0;sample<mix.size();++sample) peak=std::max(peak,int32_t(std::abs(mix[sample]-before[sample])));
-            sfx_peak[i]=std::max(sfx_peak[i],peak);
-            if(probe) std::fprintf(stderr,"[ax-sfx] index %u peak %d ratio %08X envelope %u delta %d predictor %u coefs %d %d\n",i,peak,ppc::rd32(c,pb+0xA6),ppc::rd16(c,pb+0x6A),int16_t(ppc::rd16(c,pb+0x6C)),ppc::rd16(c,pb+0xA0),int16_t(ppc::rd16(c,pb+0x7E)),int16_t(ppc::rd16(c,pb+0x80)));
+        std::array<int32_t,192> before;
+        auto& probe=voice_probes[i];
+        if(profile_audio) {
+            const bool running=ppc::rd16(c,pb+0x10)==1;
+            if(!running && probe.running && probe.tracked) std::fprintf(stderr,"[ax-sfx-end] frame %llu index %u pb %08X whole-voice peak %d\n",(unsigned long long)frames.load(),i,pb,probe.peak);
+            if(!running) probe={};
+            if(running && !probe.running) {
+                probe.tracked=voice_probe_starts<64 && ppc::rd16(c,pb+0x12)==0;
+                probe.peak=0;
+                if(probe.tracked) {
+                    ++voice_probe_starts;
+                    std::fprintf(stderr,"[ax-voice] frame %llu index %u pb %08X format %u stream %u control %08X envelope %u LR %u:%u pos %08X end %08X\n",(unsigned long long)frames.load(),i,pb,ppc::rd16(c,pb+0x70),ppc::rd16(c,pb+0x12),ppc::rd32(c,pb+0x0C),ppc::rd16(c,pb+0x6A),ppc::rd16(c,pb+0x14),ppc::rd16(c,pb+0x18),ppc::rd32(c,pb+0x7A),ppc::rd32(c,pb+0x76));
+                }
+            }
+            probe.running=running;
+            if(probe.tracked) before=mix;
         }
-#endif
+        uc::mix_ax_voice(c,pb,mix);
+        if(profile_audio && probe.tracked) {
+            for(size_t sample=0;sample<mix.size();++sample) probe.peak=std::max(probe.peak,int32_t(std::abs(mix[sample]-before[sample])));
+            if(ppc::rd16(c,pb+0x10)!=1) {
+                std::fprintf(stderr,"[ax-sfx-end] frame %llu index %u pb %08X whole-voice peak %d\n",(unsigned long long)frames.load(),i,pb,probe.peak);
+                probe={};
+            }
+        }
     }
     std::array<int16_t,192> pcm{};
     uint64_t active=0;

@@ -21,9 +21,10 @@ public:
     ~VulkanRenderer();
     VulkanRenderer(const VulkanRenderer&) = delete;
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
-    void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders);
+    void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9);
     bool render(const gx::FramePacket& packet);
     void resize(uint32_t width, uint32_t height);
+    void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
     RenderPixels capture(uint64_t serial, bool efb = false);
@@ -31,6 +32,7 @@ public:
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
     uint64_t texture_creations() const { owner(); return texture_creations_; }
+    uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
     VkDevice device = VK_NULL_HANDLE;
 private:
     struct Buffer { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; void* mapped = nullptr; VkDeviceSize size = 0; };
@@ -41,6 +43,7 @@ private:
         Buffer upload;
         VkExtent2D extent{};
         uint32_t mip_levels=1;
+        VkDeviceSize allocation_size=0;
         std::shared_ptr<const gx::TexturePixels> source;
         bool initialized=false;
     };
@@ -56,6 +59,7 @@ private:
         std::vector<std::shared_ptr<const gx::TexturePixels>> copy_sources;
         std::vector<VkDescriptorSet> texture_sets;
         VkDescriptorPool texture_pool=VK_NULL_HANDLE;
+        uint32_t descriptor_capacity=0;
         uint64_t serial = 0;
         bool submitted = false, reported = false, initialized = false, copied = false;
     };
@@ -70,7 +74,9 @@ private:
     uint32_t memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const;
     Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage);
     void destroy_buffer(Buffer& buffer);
-    Texture make_texture(const gx::TexturePixels* pixels);
+    Texture make_texture(const gx::TexturePixels* pixels, VkExtent2D physical_extent = {});
+    Texture make_copy_texture(const std::shared_ptr<const gx::TexturePixels>& source);
+    void recycle_copy_texture(Texture& texture);
     void destroy_texture(Texture& texture);
     void retire_textures(Slot& slot);
     void rebuild();
@@ -93,9 +99,13 @@ private:
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkExtent2D extent_{};
     VkExtent2D requested_{};
+    double configured_scale_=0.5, render_aspect_=16.0/9;
+    uint32_t max_image_dimension_=0;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     std::map<PipelineKey,VkPipeline> pipelines_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
+    std::vector<Texture> recycled_copies_;
+    VkDeviceSize recycled_copy_bytes_=0;
     size_t uniform_stride_=sizeof(gx::DrawUniform);
     std::filesystem::path shaders_;
     bool logic_ops_=false;
@@ -118,5 +128,6 @@ private:
     std::atomic<uint32_t> errors_{0};
     std::atomic<uint64_t> presentations_{0};
     uint64_t texture_creations_=0;
+    uint64_t descriptor_pool_creations_=0;
 };
 }

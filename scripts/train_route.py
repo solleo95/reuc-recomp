@@ -22,7 +22,15 @@ def publish_command(temporary, control):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", type=pathlib.Path)
+    parser.add_argument("--render-scale", type=float, default=1)
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--unlock-60fps", action="store_true")
     args = parser.parse_args()
+    if not 0.5 <= args.render_scale <= 6:
+        parser.error("720p render multiplier must be0.5..6")
+    if not 1 <= args.width <= 3840 or not 1 <= args.height <= 2160:
+        parser.error("output dimensions must be positive and at most 3840x2160")
     root = pathlib.Path(__file__).resolve().parent.parent
     exe = (args.exe or root / "dist" / "uc.exe").resolve()
     folder = root / "build" / "autotest" / str(time.time_ns())
@@ -33,7 +41,9 @@ def main():
     sequence = 0
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen([str(exe), "--skip-intro", "--profile", "--seconds", "150",
-                                    "--test-control", str(control), "--save-root", str(folder / "saves")],
+                                    "--render-scale", str(args.render_scale), "--width", str(args.width), "--height", str(args.height),
+                                    "--test-control", str(control), "--save-root", str(folder / "saves")]
+                                   + (["--unlock-60fps"] if args.unlock_60fps else []),
                                    cwd=root, stdout=log, stderr=log)
         print(f"PID {process.pid}; log {log_path}", flush=True)
 
@@ -52,14 +62,15 @@ def main():
                     raise RuntimeError(f"No input acknowledgement; inspect {log_path}")
                 time.sleep(0.05)
 
-        def tap(x=0, y=0, wait=1.7):
+        def tap(x=0, y=0, wait=1.7, capture=False):
             command(x, y)
             time.sleep(0.35)  # Menu hover trails a newly positioned aim; settle before confirming.
             command(x, y, 2048)
             time.sleep(0.15)
             command(x, y)
             time.sleep(wait)
-            command(x, y, capture=True)
+            if capture:
+                command(x, y, capture=True)
 
         # shortcut: fixed RBUE08 menu coordinates/timings; update after menu/save layout changes.
         time.sleep(3)
@@ -72,8 +83,8 @@ def main():
         tap(0.625, 0.4)  # Confirm currently equipped SMG.
         tap(-0.35, 0.2, wait=2.5)  # Start confirmation.
         tap(wait=3)  # Mission movie.
-        for _ in range(16):
-            tap(wait=3)  # Tutorial text still has a typewriter/confirmation gate.
+        for index in range(16):
+            tap(wait=3, capture=index in (0, 4, 8))  # Capture milestones; PNG readback distorts frame/audio timing.
         measurement_begin = len(read_log())
         time.sleep(15)
         command(0, 0, capture=True)

@@ -28,7 +28,10 @@ uint32_t mesh_profile_count;
 uint32_t copy_profile_count;
 uint32_t channel_profile_count;
 uint32_t texgen_profile_count;
-std::map<uint32_t,std::array<std::array<float,4>,2>> texture_matrices;
+using TextureMatrix=std::array<std::array<float,4>,2>;
+using TextureMatrices=std::array<std::optional<TextureMatrix>,126>;
+using TextureSelectors=std::array<uint32_t,8>;
+TextureMatrices texture_matrices;
 std::array<uint32_t,16> indirect_stages{};
 struct TextureSource { uint32_t address; gx::TextureDesc desc; std::optional<uint32_t> palette; uint8_t wrap=0; };
 struct PaletteSource { uint32_t address, entries; gx::PaletteFormat format; };
@@ -82,6 +85,7 @@ struct RecordedDraw {
     std::vector<std::byte> payload;
     gx::TevMaterial material;
     gx::DrawUniform uniforms;
+    TextureSelectors texture_selectors;
 };
 struct Resource {
     std::vector<std::byte> bytes;
@@ -101,7 +105,8 @@ struct Resource {
     struct Normal { uint32_t row; gx::NormalMatrix value; };
     struct NumChannels { uint32_t count; };
     struct ChannelControl { uint32_t index,control; };
-    std::vector<std::variant<RecordedDraw,ArrayBinding,Child,Projection,Position,IndexedPosition,Current,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl>> geometry;
+    struct TextureTransform { uint32_t id; TextureMatrix matrix; };
+    std::vector<std::variant<RecordedDraw,ArrayBinding,Child,Projection,Position,IndexedPosition,Current,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl,TextureTransform>> geometry;
 };
 std::map<uint32_t,Resource> resources; // owned SDK recordings; no FIFO command decoding
 struct ListRecording {
@@ -111,7 +116,7 @@ struct ListRecording {
     gx::DrawUniform color_shadow;
     std::array<uint32_t,4> texture_copy_source_shadow;
     uint32_t texture_copy_width_shadow=0,texture_copy_height_shadow=0;
-    std::map<uint32_t,std::array<std::array<float,4>,2>> texture_shadow;
+    TextureMatrices texture_shadow;
     std::vector<std::byte> bytes;
     Resource native;
     gx::State input_state;
@@ -127,9 +132,24 @@ uint32_t read32(uint32_t address) {
     for (auto byte : bytes) value = value << 8 | std::to_integer<uint8_t>(byte);
     return value;
 }
+TextureSelectors texture_selectors(uint32_t sdk) {
+    TextureSelectors result{};
+    const auto low=read32(sdk+0x80),high=read32(sdk+0x84);
+    for(uint32_t i=0;i<8;++i) result[i]=((i<4 ? low : high)>>(i<4 ? 6+i*6 : (i-4)*6))&63;
+    return result;
+}
+void resolve_texture_matrices(gx::DrawUniform& uniforms,const TextureSelectors& selectors,const TextureMatrices& matrices) {
+    for(size_t i=0;i<8;++i) {
+        uniforms.tex_rows[i*2]={1,0,0,0}; uniforms.tex_rows[i*2+1]={0,1,0,0};
+        if(selectors[i]!=60 && matrices[selectors[i]]) {
+            uniforms.tex_rows[i*2]=(*matrices[selectors[i]])[0]; uniforms.tex_rows[i*2+1]=(*matrices[selectors[i]])[1];
+        }
+    }
+}
 std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
     const auto sdk=read32(c.r[2]-8968);
     memory.read(sdk,0x600);
+    const auto selectors=texture_selectors(sdk);
     gx::TevMaterial material; material.stages=((read32(sdk+0x254)>>10)&15)+1;
     auto uniforms=color_uniforms;
     uniforms.pixel[1]=read32(sdk+0x228)&31;
@@ -152,16 +172,13 @@ std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
         const auto generator=read32(sdk+0xC8+i*4),source=(generator>>7)&31;
         // shortcut: UV generators only; position/normal/post-projection generators remain TD-036.
         uniforms.tex_sources[i]=(source>=5 && source<=12) ? source-5 : 0;
-        const auto packed=read32(sdk+(i<4 ? 0x80 : 0x84));
-        const auto id=(packed>>(i<4 ? 6+i*6 : (i-4)*6))&63;
+        const auto id=selectors[i];
         if(profile_mesh && texgen_profile_count<16 && (source<5 || (generator&2))) {
             const bool used=std::any_of(material.stage.begin(),material.stage.begin()+material.stages,[&](const auto& stage){return (stage.order&64) && ((stage.order>>3)&7)==i;});
             if(used) { ++texgen_profile_count; std::fprintf(stderr,"[native-texgen] callsite %08X slot %u generator %08X matrix %u post %08X\n",c.lr,i,generator,id,read32(sdk+0xE8+i*4)); }
         }
-        if(id!=60) if(auto found=texture_matrices.find(id);found!=texture_matrices.end()) {
-            uniforms.tex_rows[i*2]=found->second[0]; uniforms.tex_rows[i*2+1]=found->second[1];
-        }
     }
+    resolve_texture_matrices(uniforms,selectors,texture_matrices);
     return {material,uniforms};
 }
 uint32_t producer() { return scheduler->in_irq() ? UINT32_MAX : uint32_t(scheduler->current()->id); }
@@ -268,7 +285,7 @@ std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<Te
     texture_decodes=texture_cache.decodes();
     return result;
 }
-void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,gx::DrawUniform& colors,Imported& imported,CopiedTextures& versions,std::vector<uint32_t>& path) {
+void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,gx::DrawUniform& colors,TextureMatrices& matrices,Imported& imported,CopiedTextures& versions,std::vector<uint32_t>& path) {
     const uint32_t physical=address & 0x3FFFFFFF;
     // shortcut: nesting capped at64; replace traversal if a verified deeper native asset appears (TD-032).
     if (path.size()==64 || std::find(path.begin(),path.end(),physical)!=path.end())
@@ -294,6 +311,7 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             draw.uniforms.lights=colors.lights; draw.uniforms.materials=colors.materials;
             draw.uniforms.ambient=colors.ambient; draw.uniforms.channels=colors.channels;
             draw.uniforms.pixel[3]=colors.pixel[3];
+            resolve_texture_matrices(draw.uniforms,source->texture_selectors,matrices);
             draw.texture_wrap=wraps(textures);
             draw.blend=blend;
             imported.push_back(std::move(draw));
@@ -319,9 +337,10 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
         else if (const auto* value=std::get_if<Resource::Normal>(&item)) gx::set_normal_matrix(transform_state,value->row,value->value);
         else if (const auto* value=std::get_if<Resource::NumChannels>(&item)) colors.pixel[3]=value->count;
         else if (const auto* value=std::get_if<Resource::ChannelControl>(&item)) colors.channels[value->index]=value->control;
+        else if (const auto* value=std::get_if<Resource::TextureTransform>(&item)) matrices[value->id]=value->matrix;
         else {
             const auto& child=std::get<Resource::Child>(item);
-            import_resource(child.address,child.length,bindings,transform_state,copy,textures,loaded,blend,colors,imported,versions,path);
+            import_resource(child.address,child.length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,imported,versions,path);
         }
     }
     path.pop_back();
@@ -364,7 +383,7 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     texture_copy_source={}; texture_copy_width=texture_copy_height=0; copied_textures.clear();
     texture_cache.clear(); texture_decodes=0;
     mesh_index.clear(); mesh_cache.clear(); mesh_cache_bytes=0; geometry_hits=0; geometry_misses=0;
-    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms={}; live_material={}; texture_matrices.clear(); indirect_stages={};
+    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms={}; live_material={}; texture_matrices={}; indirect_stages={};
     bound_textures={}; palettes.clear(); live_texture.reset(); live_texture_maps={};
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
@@ -437,7 +456,7 @@ void hle_GXBegin(ppc::Ctx& c) {
             auto layout=snapshot(c);
             const size_t expected=gx::encoded_draw_size(layout,uint8_t(primitive),uint8_t(vat),uint16_t(count),callsite);
             const auto [material,uniforms]=material_snapshot(c);
-            recording->native.geometry.push_back(RecordedDraw{layout,callsite,uint8_t(primitive),uint8_t(vat),uint16_t(count),expected,{},material,uniforms});
+            recording->native.geometry.push_back(RecordedDraw{layout,callsite,uint8_t(primitive),uint8_t(vat),uint16_t(count),expected,{},material,uniforms,texture_selectors(sdk)});
         }
         return;
     }
@@ -557,9 +576,10 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     auto loaded=palettes;
     auto blend=blend_state;
     auto colors=material_snapshot(c).second;
+    auto matrices=texture_matrices;
     auto versions=copied_textures;
     std::vector<uint32_t> path;
-    import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,colors,imported,versions,path);
+    import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,imported,versions,path);
     for (auto& item : imported) {
         if(auto* draw=std::get_if<gx::DrawPacket>(&item)) { vertex_count+=draw->vertices.size(); ++draw_count; draws.push_back(std::move(*draw)); }
         else {
@@ -576,6 +596,7 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     blend_state=blend;
     color_uniforms.registers=colors.registers; color_uniforms.konst=colors.konst;
     color_uniforms.lights=colors.lights;
+    texture_matrices=std::move(matrices);
     ppc::wr32(c,sdk+0x254,(read32(sdk+0x254)&~0x70u)|(colors.pixel[3]<<4));
     for(uint32_t i=0;i<4;++i) ppc::wr32(c,sdk+0xB8+i*4,colors.channels[i]);
 }
@@ -1234,10 +1255,11 @@ void hle_GXLoadTexMtxImm(ppc::Ctx& c) {
     if(type>1 || id>125) throw gx::Error(gx::ErrorCode::layout,pointer,125,id);
     const auto count=type ? 8u : 12u;
     memory.read(pointer,count*4);
-    std::array<std::array<float,4>,2> matrix{};
-    for(size_t i=0;i<8;++i) { const auto value=std::bit_cast<float>(read32(pointer+uint32_t(i*4))); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,pointer,0,i); matrix[i/4][i%4]=value; }
+    TextureMatrix matrix{};
+    for(size_t i=0;i<count;++i) { const auto value=std::bit_cast<float>(read32(pointer+uint32_t(i*4))); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,pointer,0,i); if(i<8) matrix[i/4][i%4]=value; }
     texture_matrices[id]=matrix;
     const auto address=id>=64 ? 0x500+(id-64)*4 : id*4;
     uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,(count-1)<<16|address);
     for(uint32_t i=0;i<count;++i) uc::gx_fifo_write(4,read32(pointer+i*4));
+    if(recording && !recording->overflow) recording->native.geometry.push_back(Resource::TextureTransform{id,matrix});
 }

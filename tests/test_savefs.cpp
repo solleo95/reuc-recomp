@@ -4,9 +4,11 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <chrono>
 
 int main() {
-    auto root=std::filesystem::temp_directory_path()/ ("uc-native-save-test-"+std::to_string(GetCurrentProcessId()));
+    const auto suffix=std::to_string(GetCurrentProcessId())+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    auto root=std::filesystem::temp_directory_path()/ ("uc-native-save-test-"+suffix);
     uc::SaveFs fs(root);
     CHECK(fs.initialize()==0);
     CHECK(fs.create_dir("/title")==0);
@@ -78,7 +80,7 @@ int main() {
     CHECK(fs.open("/title/data/alias.bin",3)==-102);
     CHECK(fs.create_file("/.BACKUPS/escape")==-102);
     CHECK(fs.remove("/title/data")==-115);
-    const auto outside=root.parent_path()/("uc-save-outside-"+std::to_string(GetCurrentProcessId()));
+    const auto outside=root.parent_path()/("uc-save-outside-"+suffix);
     std::filesystem::create_directories(outside);
     if (CreateSymbolicLinkW((root/"link").c_str(),outside.c_str(),SYMBOLIC_LINK_FLAG_DIRECTORY|SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
         CHECK(fs.create_file("/link/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));

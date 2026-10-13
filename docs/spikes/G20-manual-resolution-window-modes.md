@@ -1,0 +1,13 @@
+# Manual720p multiplier and native window modes
+
+Owner selected manual internal resolution, default monitor resolution, fractional multipliers through8K and Windowed/Borderless/Exclusive. Renderer now resolves monitor aspect/manual default once; output/client resizing does not change internal color/depth/copy resolution. UI base is720p:1x720,1.5x1080,2x1440,3x4K,6x8K for16:9. Internal bounds7680x4320; GPU-safe scaling accounts for every1024px logical copy. Actual/requested dimensions/multiplier and output mode are logged. Default Windowed uses a maximized decorated window when dimensions are omitted, preserving a visible title bar/work-area fit while internal resolution matches the monitor.
+
+Native GPU copies use separately rounded X/Y physical extents, retaining logical source metadata and immutable version ownership. Physical mip count caps to the actual image dimensions; portrait fixtureRED caught11mips on144x1, GREEN now allocates8and preserves sampled red pixels. One-pixel physical extents clamp to1. CPU assets remain unscaled. Free allocation pool stays32images and64*max-axis-scale²MiB capped512MiB.
+
+CPU tests cover fractional/range/non-finite parsing, monitor/aspect defaults and device caps. GPU fixtures check1.25x,1.5x,6x, actual7680x5760EFB readback(7680x4320scene crop), fixed8Kinternal extent across output resize, fractional full-height output, old copy detail/ownership and portrait mips. Zero Vulkan validation errors; scoped resolution review found no remaining issues. Full66/66tests and installation pass.
+
+Visible audible1440prun PID12300, log `build/autotest/1791913084167128600/run.log`: monitor2560x1440/240Hz, multiplier2x, internal2560x1920EFB, scene/output2560x1440. Scene approximately48–60presentations/sec with the opt-in native60mode; audio queue zero overruns, max11292bytes. Death-screen60is excluded. Capture `S:/Games/Umbrella Chronicles/debug/frame-1791913149595498-12300-55519.png`.
+
+Window mode uses SDL3.2display APIs at the owner thread. Borderless selects desktop mode; Exclusive selects a supported closest display mode, then checks applied fullscreen flags and explicit mode. Dummy tests verify Windowed/Borderless transitions and unavailable-exclusive failure preserving Windowed. Owner manually confirmed both fullscreen modes, Alt+Tab and desktop recovery. At owner's request, ALT releases cursor only in Windowed; Escape keeps previous behavior, and focus-loss handling is unchanged. Controlled test processes reject fullscreen mode to preserve desktop focus. Explicit Vulkan exclusive acquisition/compositor latency and launcher UI remain unverified/future work.
+
+No hardware/device interpreter, host input injection, new dependency, automatic commit or file deletion.

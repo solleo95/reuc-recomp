@@ -1,6 +1,8 @@
 #include "vulkan_renderer.h"
+#include "render_scale.h"
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <cmath>
 #include <fstream>
@@ -48,9 +50,11 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanRenderer::debug(VkDebugUtilsMessageSeverity
 VulkanRenderer::~VulkanRenderer() {
     try { shutdown(); } catch (const std::exception& error) { std::fprintf(stderr, "Vulkan shutdown failed: %s\n", error.what()); }
 }
-void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders) {
+void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale, double render_aspect) {
     if (instance_) throw std::logic_error("renderer already initialized");
     owner_ = std::this_thread::get_id(); window_ = window;
+    render_aspect_=render_aspect;
+    set_render_scale(render_scale);
     if (!window) throw std::invalid_argument("Vulkan requires an SDL window");
     uint32_t version = 0; vk_check(vkEnumerateInstanceVersion(&version), "vkEnumerateInstanceVersion");
     if (version < VK_API_VERSION_1_3) throw std::runtime_error("Vulkan 1.3 loader required");
@@ -119,6 +123,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     }
     if (!physical_) throw std::runtime_error("GPU requires Vulkan 1.3 graphics/present, dynamic rendering, synchronization2 and swapchain maintenance1");
     VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_, &properties);
+    max_image_dimension_=properties.limits.maxImageDimension2D;
     std::fprintf(stderr, "Vulkan device: %s; presentation retirement: %s\n", properties.deviceName, chosen_maintenance);
     float priority = 1;
     VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; queue_info.queueFamilyIndex = family_; queue_info.queueCount = 1; queue_info.pQueuePriorities = &priority;
@@ -177,30 +182,41 @@ void VulkanRenderer::destroy_buffer(Buffer& buffer) {
     if (buffer.memory) vkFreeMemory(device, buffer.memory, nullptr);
     buffer = {};
 }
-VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pixels) {
+static size_t validate_texture_chain(const gx::TexturePixels* pixels) {
     const gx::TextureLevel white{1,1,{255,255,255,255}};
     const bool gpu_only=pixels && pixels->gpu_only;
     if(pixels && (pixels->levels.empty() || pixels->levels.size()>11)) throw std::invalid_argument("invalid owned mip chain count");
     const auto& level=pixels ? pixels->levels[0] : white;
     if (!level.width || !level.height || level.width>1024 || level.height>1024 || (gpu_only ? !level.rgba.empty() : level.rgba.size()!=size_t(level.width)*level.height*4))
         throw std::invalid_argument("invalid owned RGBA texture");
-    Texture texture; texture.extent={level.width,level.height};
-    texture.mip_levels=pixels ? uint32_t(pixels->levels.size()) : 1;
+    const auto mip_levels=pixels ? uint32_t(pixels->levels.size()) : 1;
     size_t upload_size=0; uint32_t width=level.width,height=level.height;
-    for(uint32_t i=0;i<texture.mip_levels;++i) {
+    for(uint32_t i=0;i<mip_levels;++i) {
         const auto& mip=pixels ? pixels->levels[i] : white;
         if(mip.width!=width || mip.height!=height || (gpu_only ? !mip.rgba.empty() : mip.rgba.size()!=size_t(width)*height*4) || (i && pixels->levels[i-1].width==1 && pixels->levels[i-1].height==1)) throw std::invalid_argument("invalid owned mip chain dimensions");
         upload_size+=mip.rgba.size(); width=std::max(1u,width/2); height=std::max(1u,height/2);
     }
+    return upload_size;
+}
+VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pixels, VkExtent2D physical_extent) {
+    const auto upload_size=validate_texture_chain(pixels);
+    const gx::TextureLevel white{1,1,{255,255,255,255}};
+    const bool gpu_only=pixels && pixels->gpu_only;
+    const auto& level=pixels ? pixels->levels[0] : white;
+    Texture texture; texture.extent=physical_extent.width ? physical_extent : VkExtent2D{level.width,level.height};
+    if(texture.extent.width>max_image_dimension_ || texture.extent.height>max_image_dimension_) throw std::invalid_argument("texture extent exceeds device image limits");
+    texture.mip_levels=pixels ? uint32_t(pixels->levels.size()) : 1;
+    texture.mip_levels=std::min(texture.mip_levels,uint32_t(std::bit_width(std::max(texture.extent.width,texture.extent.height))));
     try {
         if(!gpu_only) texture.upload=make_buffer(upload_size,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         size_t at=0;
         if(!gpu_only) for(uint32_t i=0;i<texture.mip_levels;++i) { const auto& mip=pixels ? pixels->levels[i] : white; std::memcpy(static_cast<std::byte*>(texture.upload.mapped)+at,mip.rgba.data(),mip.rgba.size()); at+=mip.rgba.size(); }
         VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; create.imageType=VK_IMAGE_TYPE_2D; create.format=VK_FORMAT_R8G8B8A8_UNORM;
-        create.extent={level.width,level.height,1}; create.mipLevels=texture.mip_levels; create.arrayLayers=1; create.samples=VK_SAMPLE_COUNT_1_BIT;
+        create.extent={texture.extent.width,texture.extent.height,1}; create.mipLevels=texture.mip_levels; create.arrayLayers=1; create.samples=VK_SAMPLE_COUNT_1_BIT;
         create.tiling=VK_IMAGE_TILING_OPTIMAL; create.usage=VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|(gpu_only ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         vk_check(vkCreateImage(device,&create,nullptr,&texture.image),"texture image");
         VkMemoryRequirements requirements; vkGetImageMemoryRequirements(device,texture.image,&requirements);
+        texture.allocation_size=requirements.size;
         VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size;
         allocate.memoryTypeIndex=memory_type(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         vk_check(vkAllocateMemory(device,&allocate,nullptr,&texture.memory),"texture memory");
@@ -217,6 +233,35 @@ VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pi
     ++texture_creations_;
     return texture;
 }
+VulkanRenderer::Texture VulkanRenderer::make_copy_texture(const std::shared_ptr<const gx::TexturePixels>& source) {
+    if(!source || !source->gpu_only) throw std::invalid_argument("invalid owned GPU copy texture");
+    validate_texture_chain(source.get());
+    const auto& level=source->levels[0];
+    const VkExtent2D physical{std::max(1u,uint32_t((uint64_t(level.width)*efb_extent_.width+320)/640)),std::max(1u,uint32_t((uint64_t(level.height)*efb_extent_.height+240)/480))};
+    const auto mip_levels=std::min(uint32_t(source->levels.size()),uint32_t(std::bit_width(std::max(physical.width,physical.height))));
+    auto found=std::find_if(recycled_copies_.begin(),recycled_copies_.end(),[&](const auto& texture) {
+        return texture.extent.width==physical.width && texture.extent.height==physical.height && texture.mip_levels==mip_levels;
+    });
+    Texture result;
+    if(found==recycled_copies_.end()) result=make_texture(source.get(),physical);
+    else {
+        result=std::move(*found); recycled_copy_bytes_-=result.allocation_size;
+        if(found!=recycled_copies_.end()-1) *found=std::move(recycled_copies_.back());
+        recycled_copies_.pop_back();
+    }
+    result.source=source; result.initialized=false;
+    return result;
+}
+void VulkanRenderer::recycle_copy_texture(Texture& texture) {
+    const double factor=std::max(efb_extent_.width/640.0,efb_extent_.height/480.0);
+    const VkDeviceSize budget=VkDeviceSize(std::min(double(VkDeviceSize(512)<<20),double(VkDeviceSize(64)<<20)*factor*factor));
+    if(recycled_copies_.size()==32 || recycled_copy_bytes_>=budget || texture.allocation_size>budget-recycled_copy_bytes_) { destroy_texture(texture); return; }
+    texture.source.reset(); texture.initialized=false;
+    try { recycled_copies_.push_back(std::move(texture)); }
+    catch(...) { destroy_texture(texture); throw; }
+    recycled_copy_bytes_+=recycled_copies_.back().allocation_size;
+    texture={};
+}
 void VulkanRenderer::destroy_texture(Texture& texture) {
     if (texture.view) vkDestroyImageView(device,texture.view,nullptr);
     if (texture.image) vkDestroyImage(device,texture.image,nullptr);
@@ -226,7 +271,7 @@ void VulkanRenderer::destroy_texture(Texture& texture) {
 }
 void VulkanRenderer::retire_textures(Slot& slot) {
     if (slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
-    slot.texture_pool=VK_NULL_HANDLE; slot.texture_sets.clear();
+    slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0; slot.texture_sets.clear();
     for (auto& texture : slot.textures) {
         destroy_texture(texture);
     }
@@ -401,6 +446,11 @@ bool VulkanRenderer::wait_for_pending(uint64_t timeout_ns) {
 void VulkanRenderer::resize(uint32_t width, uint32_t height) {
     owner(); requested_ = {width, height}; resized_ = true;
 }
+void VulkanRenderer::set_render_scale(double scale) {
+    owner();
+    manual_render_extent(scale,render_aspect_);
+    if(configured_scale_!=scale) { configured_scale_=scale; resized_=true; }
+}
 void VulkanRenderer::retire_images() {
     if (!device) return;
     VkResult status = vkDeviceWaitIdle(device);
@@ -480,7 +530,25 @@ void VulkanRenderer::rebuild() {
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &images_[i].ready), "per-image present semaphore");
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; vk_check(vkCreateFence(device, &fence, nullptr, &images_[i].fence), "per-image present fence");
     }
-    if (!efb_) { efb_extent_=extent_; make_attachment(efb_,efb_memory_,efb_view_,efb_extent_); }
+    const auto scale=device_render_scale(configured_scale_,max_image_dimension_,render_aspect_);
+    const auto visible=manual_render_extent(scale,render_aspect_);
+    const VkExtent2D internal{visible.width,uint32_t(std::llround(960*scale))};
+    if(internal.width>max_image_dimension_ || internal.height>max_image_dimension_) throw std::runtime_error("internal render extent exceeds device image limits");
+    if(efb_extent_.width!=internal.width || efb_extent_.height!=internal.height) {
+        if(depth_view_) vkDestroyImageView(device,depth_view_,nullptr);
+        if(depth_) vkDestroyImage(device,depth_,nullptr);
+        if(depth_memory_) vkFreeMemory(device,depth_memory_,nullptr);
+        depth_view_=VK_NULL_HANDLE; depth_=VK_NULL_HANDLE; depth_memory_=VK_NULL_HANDLE;
+        if(efb_view_) vkDestroyImageView(device,efb_view_,nullptr);
+        if(efb_) vkDestroyImage(device,efb_,nullptr);
+        if(efb_memory_) vkFreeMemory(device,efb_memory_,nullptr);
+        efb_view_=VK_NULL_HANDLE; efb_=VK_NULL_HANDLE; efb_memory_=VK_NULL_HANDLE; efb_initialized_=false;
+        for(auto& texture:recycled_copies_) destroy_texture(texture);
+        recycled_copies_.clear(); recycled_copy_bytes_=0;
+        efb_extent_=internal;
+        std::fprintf(stderr,"Native render: %ux%u EFB,720p multiplier %.4gx (requested %.4gx), scene %ux%u, output %ux%u\n",internal.width,internal.height,scale,configured_scale_,visible.width,visible.height,extent_.width,extent_.height);
+    }
+    if (!efb_) make_attachment(efb_,efb_memory_,efb_view_,efb_extent_);
     if (!depth_) make_attachment(depth_,depth_memory_,depth_view_,efb_extent_,true);
     for (auto& slot : slots_) make_attachment(slot.image,slot.memory,slot.view,extent_);
     resized_ = false;
@@ -502,7 +570,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     vk_check(fence_status, "frame slot fence");
     slot.copy_sources.clear();
     for(auto it=copy_textures_.begin();it!=copy_textures_.end();) {
-        if(it->second.source.use_count()==1) { destroy_texture(it->second); it=copy_textures_.erase(it); }
+        if(it->second.source.use_count()==1) {
+            auto retired=std::move(it->second); it=copy_textures_.erase(it);
+            recycle_copy_texture(retired);
+        }
         else ++it;
     }
     Texture* copy_target=nullptr;
@@ -512,14 +583,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(!width || !height || x>=640 || width>640-x || y>=480 || height>480-y || !request.target || !request.target->gpu_only) throw std::invalid_argument("invalid native EFB texture copy");
         auto found=copy_textures_.find(request.target.get());
         if(found==copy_textures_.end()) {
-            auto texture=make_texture(request.target.get()); texture.source=request.target;
+            auto texture=make_copy_texture(request.target);
             try { found=copy_textures_.emplace(request.target.get(),texture).first; } catch(...) { destroy_texture(texture); throw; }
         }
         if(found->second.initialized) throw std::invalid_argument("native EFB copy version cannot be overwritten");
         copy_target=&found->second; slot.copy_sources.push_back(request.target);
     }
-    if (slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
-    slot.texture_pool=VK_NULL_HANDLE; slot.texture_sets.clear();
+    if (slot.texture_pool) vk_check(vkResetDescriptorPool(device,slot.texture_pool,0),"reset retired texture descriptor pool");
+    slot.texture_sets.clear();
     std::unordered_set<const gx::TexturePixels*> used_textures;
     for(const auto& draw:packet.draws) for(size_t map=0;map<8;++map) used_textures.insert(draw_texture(draw,map).get());
     std::unordered_map<const gx::TexturePixels*,size_t> renderer_references;
@@ -567,9 +638,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(packet.draws.size()>UINT32_MAX/8) throw std::invalid_argument("native texture descriptor count overflows");
         const uint32_t count=uint32_t(packet.draws.size());
         if(slot.uniforms.size<VkDeviceSize(count)*uniform_stride_) { destroy_buffer(slot.uniforms); slot.uniforms=make_buffer(VkDeviceSize(count)*uniform_stride_,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT); }
-        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,count*8},{VK_DESCRIPTOR_TYPE_SAMPLER,count*8},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,count}};
-        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=count; pool.poolSizeCount=3; pool.pPoolSizes=sizes;
-        vk_check(vkCreateDescriptorPool(device,&pool,nullptr,&slot.texture_pool),"texture descriptor pool");
+        if(count>slot.descriptor_capacity) {
+            if(slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
+            slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0;
+            VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,count*8},{VK_DESCRIPTOR_TYPE_SAMPLER,count*8},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,count}};
+            VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=count; pool.poolSizeCount=3; pool.pPoolSizes=sizes;
+            vk_check(vkCreateDescriptorPool(device,&pool,nullptr,&slot.texture_pool),"texture descriptor pool");
+            slot.descriptor_capacity=count; ++descriptor_pool_creations_;
+        }
         std::vector<VkDescriptorSetLayout> layouts(count,texture_layout_);
         slot.texture_sets.resize(count); slot.textures.reserve(count);
         std::unordered_map<const gx::TexturePixels*,size_t> texture_indices;
@@ -774,6 +850,8 @@ void VulkanRenderer::shutdown() {
         retire_images();
         for(auto& [source,texture]:copy_textures_) destroy_texture(texture);
         copy_textures_.clear();
+        for(auto& texture:recycled_copies_) destroy_texture(texture);
+        recycled_copies_.clear(); recycled_copy_bytes_=0;
         if(depth_view_) vkDestroyImageView(device,depth_view_,nullptr);
         if(depth_) vkDestroyImage(device,depth_,nullptr);
         if(depth_memory_) vkFreeMemory(device,depth_memory_,nullptr);

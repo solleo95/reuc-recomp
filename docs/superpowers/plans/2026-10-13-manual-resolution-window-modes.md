@@ -1,0 +1,9 @@
+# Manual720p multiplier and output modes
+
+Owner decision: docs/decisions-display.md. Preserve audible visible process-local diagnostics, current native render ownership and opt-in60FPS work. Implement after baseline/60timing verification so resolution changes do not contaminate that comparison.
+
+1. Define UI/native render multiplier from720p, accept fractional values through6x(8K). CPU tests:0.5/1/1.5/2/3/6, invalid/nan/infinite/overflow, computed extents and device limits. Replace provisional Wii integer CLI units explicitly and update tests/runner/help/docs together.
+2. Resolve monitor output/default internal resolution once at startup. Default Windowed; chosen manual internal size remains fixed when output/client resizes. Show/log actual internal/output dimensions and any device-limit adjustment. Monitor aspect ratio/default pixel-size behavior needs verified display evidence, not guessed SDL values.
+3. Extend native color/depth/copy image sizes through8K; use checked rounded physical extents, immutable versions and bounded allocation pools. GPU tests verify fractional scale/8Kreadback, copy detail/old ownership, resize/present stretching/downsampling and validation. Keep guest640x480logical SDK coordinates for this verified build; region-specific EFB extents remain debt.
+4. Add Windowed/Borderless/Exclusive selection at SDL/Vulkan window boundary and later launcher settings. Verify actual exclusive presentation/device support; a borderless window must not be labelled exclusive. Automated diagnostics remain Windowed and avoid owner focus/input; fullscreen changes need controlled capability evidence and appropriate user test if they affect the desktop.
+5. Full build/tests/install; visible game checkpoints with explicit dimensions and audible output. Record actual quality/performance and unresolved format/filtering/LOD/ultrawide/region parity. No new dependencies, emulation, deletion or automatic commits.

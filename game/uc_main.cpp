@@ -19,6 +19,9 @@
 #include "options.h"
 #include "test_control.h"
 #include "intro.h"
+#include "game_pacing.h"
+#include "render_scale.h"
+#include "window_mode.h"
 #include "frame_limit.h"
 #include "audio_output.h"
 #include "ax_audio.h"
@@ -133,12 +136,14 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile]\n", error->c_str()); return 2; }
-    const auto options = std::get<uc::Options>(std::move(parsed));
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--capture-scene-passes]\n", error->c_str()); return 2; }
+    auto options = std::get<uc::Options>(std::move(parsed));
     const bool controlled=!options.test_control.empty();
     if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control requires Vulkan and an isolated --save-root");
+    if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
     uc::intro_init(options.skip_intro);
+    uc::game_pacing_init(options.unlock_60fps);
     if (options.gx_audit) {
 #ifdef UC_TRACE
         uc::gx_audit_enable();
@@ -198,8 +203,20 @@ static int real_main(int argc, char** argv) {
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE,"1",SDL_HINT_OVERRIDE);
         video.emplace();
-        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0)));
+        const auto display=SDL_GetPrimaryDisplay();
+        const auto* mode=display ? SDL_GetDesktopDisplayMode(display) : nullptr;
+        if(!mode || mode->w<=0 || mode->h<=0) throw std::runtime_error("monitor display mode unavailable: "+std::string(SDL_GetError()));
+        const double aspect=double(mode->w)/mode->h;
+        const bool monitor_window=!options.width && !options.height;
+        if(!options.width) options.width=uint32_t(mode->w);
+        if(!options.height) options.height=uint32_t(mode->h);
+        if(!options.render_scale) options.render_scale=uc::monitor_render_scale(uint32_t(mode->w),uint32_t(mode->h));
+        std::fprintf(stderr,"Monitor: %dx%d %.3g Hz;720p multiplier %.4gx\n",mode->w,mode->h,mode->refresh_rate,options.render_scale);
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0) | (monitor_window && options.window_mode==uc::WindowMode::windowed ? SDL_WINDOW_MAXIMIZED : 0)));
         if (!window) throw std::runtime_error(SDL_GetError());
+        uc::configure_window_mode(window.get(),options.window_mode,int(options.width),int(options.height));
+        const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
+        std::fprintf(stderr,"Window mode: %s\n",mode_name);
         if(controlled) {
             const auto properties=SDL_GetWindowProperties(window.get());
             const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(properties,SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
@@ -208,12 +225,12 @@ static int real_main(int argc, char** argv) {
         }
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
-        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders");
+        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     std::optional<uc::AudioOutput> audio;
-    if (!options.headless && !controlled) audio.emplace();
-    uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); });
+    if (!options.headless) audio.emplace();
+    uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
     gx::Packets packets;
     uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets, options.profile);
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
@@ -249,7 +266,7 @@ static int real_main(int argc, char** argv) {
                 if (event.type==SDL_EVENT_WINDOW_FOCUS_LOST) input.focus(false);
                 if (event.type==SDL_EVENT_WINDOW_FOCUS_GAINED) input.focus(SDL_GetWindowRelativeMouseMode(window.get()));
                 if (event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-                    (event.key.key==SDLK_ESCAPE || event.key.key==SDLK_LALT || event.key.key==SDLK_RALT)) {
+                    uc::cursor_release_key(options.window_mode,event.key.key)) {
                     if (!SDL_SetWindowRelativeMouseMode(window.get(),false)) throw std::runtime_error(SDL_GetError());
                     input.focus(false);
                 }
@@ -292,8 +309,8 @@ static int real_main(int argc, char** argv) {
                 profile_retries+=!rendered;
                 render_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
                 if (rendered) {
-                if(options.profile && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
-                if(options.profile && scene_capture_started && scene_capture_pass<24) {
+                if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
+                if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
                     scene_capture_serial=pending->serial; ++scene_capture_pass;
                     std::fprintf(stderr,"[scene-pass] %u serial %llu draws %zu present %u clear %u\n",scene_capture_pass,(unsigned long long)pending->serial,pending->draws.size(),pending->present,pending->clear_after_copy);
                     if(pending->texture_copy) {
@@ -371,6 +388,10 @@ static int real_main(int argc, char** argv) {
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes));
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
                 const auto gfx=uc::gx_stats(); const auto sound=uc::audio_stats();
+                std::fprintf(stderr,"[descriptor-pools] created %llu\n",(unsigned long long)renderer.descriptor_pool_creations());
+                const auto pacing=uc::game_pacing_stats();
+                std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted);
+                if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
                 profile_loops=profile_retries=0; last_profile_draws=gfx.draws; last_profile_copies=gfx.copies; last_audio_frames=sound.frames;

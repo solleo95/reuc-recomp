@@ -184,6 +184,7 @@ GXLoadNrmMtxImm
 # RBUE08 startup logo update; original body continues at80245860 (game/intro.cpp).
 @8024585C IntroLogoUpdate
 @801426D4 MovieUpdate
+@801581E0 GameFrameWait
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop

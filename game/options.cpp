@@ -1,5 +1,6 @@
 #include "options.h"
 #include <charconv>
+#include <cmath>
 namespace uc {
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments) {
     Options options;
@@ -12,12 +13,27 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--gx-audit") options.gx_audit = true;
         else if (arg == "--skip-intro") options.skip_intro = true;
         else if (arg == "--profile") options.profile = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root") {
+        else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
+        else if (arg == "--unlock-60fps") options.unlock_60fps = true;
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root" || arg=="--render-scale" || arg=="--window-mode") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
+            if(arg=="--window-mode") {
+                if(value=="windowed") options.window_mode=WindowMode::windowed;
+                else if(value=="borderless") options.window_mode=WindowMode::borderless;
+                else if(value=="exclusive") options.window_mode=WindowMode::exclusive;
+                else return "invalid value for " + std::string(arg);
+                continue;
+            }
             if (arg == "--game") { options.game = std::filesystem::path(std::string(value)); continue; }
             if(arg=="--test-control") { options.test_control=std::filesystem::path(std::string(value)); continue; }
             if(arg=="--save-root") { options.save_root=std::filesystem::path(std::string(value)); continue; }
+            if(arg=="--render-scale") {
+                double scale=0;
+                auto parsed=std::from_chars(value.data(),value.data()+value.size(),scale);
+                if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || !std::isfinite(scale) || scale<0.5 || scale>6) return "invalid value for " + std::string(arg);
+                options.render_scale=scale; continue;
+            }
             uint32_t number = 0;
             auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && number == 0)) return "invalid value for " + std::string(arg);
