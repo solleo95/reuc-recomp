@@ -1,4 +1,5 @@
 #include "ax_audio.h"
+#include "audio_gap_audit.h"
 #include "gx_vertices.h"
 #include "guest_call.h"
 #include "clock.h"
@@ -118,6 +119,7 @@ void hle_AXFrame(ppc::Ctx& c) {
     const auto callback=ppc::rd32(c,c.r[13]-25636);
     if (callback) uc::call_guest(c,callback,{});
     std::array<int32_t,192> mix{};
+    const bool audit=uc::audio_gap_audit_enabled();
     for (uint32_t i=0;i<count;++i) {
         const uint32_t pb=base+i*320;
         std::array<int32_t,192> before;
@@ -137,7 +139,10 @@ void hle_AXFrame(ppc::Ctx& c) {
             probe.running=running;
             if(probe.tracked) before=mix;
         }
+        uc::AudioVoiceKey audit_key;
+        if(audit) { audit_key=uc::audio_gap_voice_key(c,pb); before=mix; }
         uc::mix_ax_voice(c,pb,mix);
+        if(audit) uc::audio_gap_audit_voice(audit_key,before,mix);
         if(profile_audio && probe.tracked) {
             for(size_t sample=0;sample<mix.size();++sample) probe.peak=std::max(probe.peak,int32_t(std::abs(mix[sample]-before[sample])));
             if(ppc::rd16(c,pb+0x10)!=1) {

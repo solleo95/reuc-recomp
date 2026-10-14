@@ -15,6 +15,8 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
         else if (arg == "--input-probe") options.input_probe = true;
+        else if (arg == "--gx-gaps") options.gx_gaps = true;
+        else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];

@@ -22,9 +22,12 @@ struct alignas(16) DrawUniform {
     std::array<LightUniform,8> lights;
     std::array<std::array<float,4>,2> materials{{{1,1,1,1},{1,1,1,1}}},ambient{};
     std::array<uint32_t,4> channels{1,1,1,1}; // color0,color1,alpha0,alpha1
+    std::array<uint32_t,8> fog{}; // raw BP 0xEE..0xF2 (A, B magnitude, B shift, C/proj/fsel, color); fsel 0 = off
+    std::array<uint32_t,12> indirect{}; // raw BP 0x06..0x0E (three indirect matrices), 0x27 IREF, 0x25/0x26 RAS1_SS0/1
+    std::array<uint32_t,16> ind_cmd{}; // per TEV stage BP 0x10+n IND_CMD; 0 = direct
     DrawUniform() { for(size_t i=0;i<8;++i) { tex_rows[i*2]={1,0,0,0}; tex_rows[i*2+1]={0,1,0,0}; } }
 };
-static_assert(sizeof(DrawUniform)==1152);
+static_assert(sizeof(DrawUniform)==1296);
 struct PixelMaterial { uint32_t alpha,depth,blend,destination_alpha; };
 PixelMaterial import_pixel_material(std::span<const std::byte> bytes);
 struct ColorMaterial {

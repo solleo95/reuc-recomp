@@ -3,6 +3,9 @@
 #include "dol.h"
 #include "dvdfs.h"
 #include "fatal.h"
+#include "crash_report.h"
+#include "gx_gap_audit.h"
+#include "dispatch.h"
 #include "game_decl.h"
 #include "guest_mem.h"
 #include "gx_audit.h"
@@ -31,6 +34,7 @@
 #include "frame_limit.h"
 #include "audio_output.h"
 #include "ax_audio.h"
+#include "audio_gap_audit.h"
 #include "vulkan_renderer.h"
 #include <algorithm>
 #include <atomic>
@@ -57,10 +61,18 @@ extern const uint32_t uc_text_begin, uc_text_end;
 namespace fs = std::filesystem;
 
 namespace {
+uint32_t guest_writer() { // first translated function on the stack: the guest code storing to the FIFO
+    void* frames[32];
+    const auto count = RtlCaptureStackBackTrace(1, 32, frames, nullptr);
+    for (USHORT i = 0; i < count; ++i) if (const auto guest = uc::guest_function_for_host(frames[i])) return guest;
+    return 0;
+}
 struct FifoSink : uc::MmioDevice {   // native resource/vertex ingestion; unowned state bytes remain TD-014
     uint64_t bytes = 0;
     uint32_t read(uint32_t, int) override { return 0; }
-    void write(uint32_t, int size, uint32_t value) override { bytes += uint64_t(size); uc::gx_audit_fifo_write(size,value); uc::gx_fifo_write(size, value); }
+    void write(uint32_t, int size, uint32_t value) override { bytes += uint64_t(size); uc::gx_audit_fifo_write(size,value);
+        if (uc::gx_gap_audit_enabled()) uc::gx_gap_audit_write(size, value, uc::gx_fifo_in_primitive(), uc::gx_fifo_recording(), guest_writer);
+        uc::gx_fifo_write(size, value); }
 };
 FifoSink g_fifo;
 std::vector<std::unique_ptr<uc::RegFile>> g_regs;
@@ -162,8 +174,18 @@ static int real_main(int argc, char** argv) {
 #endif
     }
     uc::os_log_sleep(options.log_sleep);
+    uc::gx_gap_audit_enable(options.gx_gaps);
     uc::install_crash_handlers();
     uc::set_exit_hook(print_stats);
+    uc::crash_report_init(exe_dir() / "debug", [] {
+        const auto vi = uc::vi_stats(); const auto d = uc::dvd_stats(); const auto gx = uc::gx_stats(); const auto sound = uc::audio_stats();
+        char text[512];
+        std::snprintf(text, sizeof text, "retraces %llu\ndvd opens %llu reads %llu\ngx draws %llu submitted %llu completed %llu copies %llu unowned fifo bytes %llu\naudio frames %llu nonzero samples %llu\n",
+            (unsigned long long)vi.retraces, (unsigned long long)d.opens, (unsigned long long)d.reads, (unsigned long long)gx.draws,
+            (unsigned long long)gx.submitted, (unsigned long long)gx.completed, (unsigned long long)gx.copies, (unsigned long long)gx.outside_bytes,
+            (unsigned long long)sound.frames, (unsigned long long)sound.nonzero_samples);
+        return std::string(text);
+    });
     for (const char* n : {"identified_sdk.txt", "symbols.txt", "gx_symbols.txt"}) {   // installed next to the exe, or the project folder of a build tree
         for (const fs::path& d : {exe_dir() / "data", exe_dir() / ".." / ".." / "project"}) if (fs::exists(d / n)) { uc::symbols_load((d / n).string()); break; }
     }
@@ -248,6 +270,7 @@ static int real_main(int argc, char** argv) {
     uc::input_hle_set_probe(options.input_probe ? uc::input_probe_sample : nullptr);
     std::optional<uc::AudioOutput> audio;
     if (!options.headless) audio.emplace();
+    uc::audio_gap_audit_enable(options.audio_audit);
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
     gx::Packets packets;
     uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets, options.profile);
@@ -447,6 +470,17 @@ static int real_main(int argc, char** argv) {
     std::fprintf(stderr,"picture probe stats: calls %llu records %llu invalid %llu\n",(unsigned long long)picture_stats.calls,(unsigned long long)picture_stats.records,(unsigned long long)picture_stats.invalid);
     std::fprintf(stderr,"player event probe stats: events %llu records %llu invalid %llu\n",(unsigned long long)event_stats.events,(unsigned long long)event_stats.records,(unsigned long long)event_stats.invalid);
     std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
+    if(options.audio_audit) {
+        fs::create_directories(exe_dir()/"debug");
+        const auto path=exe_dir()/"debug"/("audio-gaps-"+std::to_string(GetCurrentProcessId())+".txt");
+        std::FILE* out=_wfopen(path.c_str(),L"w");
+        if(!out) throw std::runtime_error("cannot create audio audit report");
+        uc::audio_gap_audit_report(out);
+        const bool failed=std::ferror(out)!=0;
+        const int closed=std::fclose(out);
+        if(failed || closed!=0) throw std::runtime_error("cannot write audio audit report");
+        std::fprintf(stderr,"audio gap report: %ls\n",path.c_str());
+    }
     uc::audio_hle_shutdown();
     uc::game_input_shutdown();
     uc::input_hle_init(nullptr);
@@ -459,6 +493,11 @@ static int real_main(int argc, char** argv) {
     if (options.validation && renderer.validation_errors()) result = 4;
     g_fifo_snapshot.store(g_fifo.bytes);
     std::fprintf(stderr, "runtime stopped; all guest and file workers joined\n");
+    if (options.gx_gaps) {
+        std::error_code error; fs::create_directories(exe_dir() / "debug", error);
+        const auto path = exe_dir() / "debug" / ("gx-gaps-" + std::to_string(GetCurrentProcessId()) + ".txt");
+        if (std::FILE* out = _wfopen(path.c_str(), L"w")) { uc::gx_gap_audit_report(out); std::fclose(out); std::fprintf(stderr, "gx gap report: %ls\n", path.c_str()); }
+    }
     uc::trace_dump_all(stderr, 24);
     print_stats();
     return result;

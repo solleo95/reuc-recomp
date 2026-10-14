@@ -638,6 +638,38 @@ int main(int argc, char** argv) {
         submit(work,&portrait); sampled=portrait.capture(2);
         center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
+        // GX fog: orthographic linear fog offset by C=-1 saturates to the BP fog colour.
+        work.serial=3; work.texture_copy.reset(); work.draws[0]=quad;
+        for(auto& vertex:work.draws[0].vertices) vertex.color[0]={20,200,20,255};
+        work.draws[0].uniforms.fog={0,0,0,(2u<<21)|(1u<<20)|(1u<<19)|(127u<<11),0xFF0000}; // C=-1: fog 1 at any depth
+        submit(work,&portrait); sampled=portrait.capture(3);
+        center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
+        work.serial=4; work.draws[0].uniforms.fog[3]=0; submit(work,&portrait); sampled=portrait.capture(4);
+        CHECK(sampled.rgba[center]==20 && sampled.rgba[center+1]==200); // fsel 0 leaves the TEV colour
+        // GX indirect texturing: static matrix 0 (ma~1, scale 2^-7) turns an alpha offset of 127 into ~1 texel in S.
+        auto two_texels=std::make_shared<gx::TexturePixels>(); two_texels->levels={{2,1,{255,0,0,255,0,0,255,255}}};
+        auto offsets=std::make_shared<gx::TexturePixels>(); offsets->levels={{1,1,{128,128,128,255}}};
+        work.serial=5; work.draws[0]=quad; work.draws[0].texture=two_texels; work.draws[0].texture_maps[0]=offsets;
+        for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.25f,0.5f}; }
+        work.draws[0].material.stages=1; work.draws[0].material.swaps={0xE4,0xE4,0xE4,0xE4};
+        work.draws[0].material.stage[0]={0x8FFF8,0x8FF80,0x40,0,0x210};
+        work.draws[0].uniforms.indirect={0x8003FF,0x800000,0,0,0,0,0,0,0,1,0,0};
+        work.draws[0].uniforms.ind_cmd[0]=0x210;
+        submit(work,&portrait); sampled=portrait.capture(5);
+        CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        work.serial=6; work.draws[0].material.stage[0].indirect=0; work.draws[0].uniforms.ind_cmd[0]=0;
+        submit(work,&portrait); sampled=portrait.capture(6);
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0); // without the indirect stage the left texel stays
+        work.serial=7;
+        for(auto& vertex:work.draws[0].vertices) {
+            const bool left=vertex.position[0]<0;
+            vertex.texcoord[0]={left?0.8f:0.6f,0.5f};vertex.texture_q[0]=left?1.f:3.f;
+        }
+        submit(work,&portrait);sampled=portrait.capture(7);
+        const auto projected_sample=(size_t(sampled.height/2)*sampled.width+sampled.width*2/5)*4;
+        // Divide interpolated ST by interpolated Q; dividing at vertices would select blue.
+        CHECK(sampled.rgba[projected_sample]==255 && sampled.rgba[projected_sample+2]==0);
         portrait.shutdown(); CHECK(portrait.validation_errors()==0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");

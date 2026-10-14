@@ -6,6 +6,7 @@ Entry format: `TD-nnn` — what it imitates or compromises; why it exists; nativ
 
 ## A. Emulation-like (hardware behaviour imitated instead of native code)
 
+- **TD-047 — Fog range adjustment and exact fog arithmetic.** Native fog follows BP 0xEE..0xF2 (A/B/C, projection, fsel, colour) in the pixel shader using the fragment's 24-bit depth. GXSetFogRangeAdj (BP 0xE8 and the 0xE9..0xED table, written live in the train) is not applied, and the fog term uses float math instead of the hardware's fixed-point steps. Replace: decode the range table and apply the x-dependent adjustment; match hardware rounding with a fixture. Trigger: visible fog banding at screen edges or a Dolphin same-frame mismatch.
 - **TD-044 — Native TEV arithmetic/material parity.** Fixed NW4R TEV assets are imported by verified field offsets; Vulkan pipeline specialization constants select compiled stage operations, textures, swaps and konst values. No generic FIFO/list command execution. Current shader uses normalized floating-point arithmetic rather than exact GX fixed-point rounding; native UV generation covers UV source/matrices, while normal/position/post generators, lighting channel distinctions, depth/cull/fog and indirect texture operations still need verified implementation (TD-036). Replace: exact native integer stage arithmetic and complete typed material inputs, tested against hand-calculated fixtures. Status: initial two-texture/alpha-mask GPU regression passed; real title/scene parity under verification.
 
 - **TD-043 — Locked-cache transfer timing.** LCLoadBlocks/LCStoreBlocks now perform verified32-byte-block native memmove at SDK call level; locked region is plain allocated RAM, with checked source/destination spans. Source count0 means128blocks. No DMA register model. Transfers complete synchronously; translated queue/wait wrappers observe an empty queue. Replace: native jobs/fences only if actual concurrent transfer semantics matter. Status: real memory effects restored; asynchronous timing parity remains unverified.
@@ -120,3 +121,21 @@ Not emulation and not blocking M1; fix when the area is touched next.
 - **TD-026 — Analyzer `lis/addi` rule:** `addi rD,0,imm` (`li`) after `lis r0,hi` is read as `hi:lo`; require `ra != 0`, and clear the remembered `lis` when its register is overwritten (`analyzer.cpp` phase 3).
 - **TD-027 — Missing tests:** `tools/hle_cfg.py` (ambiguity error, `@addr` form), `OSSuspendThread`, `OSJamMessage`, blocking send on a full queue, mutex/queue with a suspended waiter, interrupt state inside alarm handlers, async DVD read errors, analyzer negative cases, main-thread identity after `__OSThreadInit`.
 - **TD-028 — `docs/spikes/R0-layouts.md` low-memory table** still lists `0x3124/0x3128/0x3130/0x3134` as 0 in the older rows (a note at the end of the file gives the current values).
+
+## Offline replay diagnostic limits (2026-10-14)
+
+These apply only to tools/fifo_replay; neither uc_dff nor uc_fifo_stream links into uc.exe.
+
+- DFF-01: first-frame persistent EFB contents are absent from the train capture for0x1305A760. Unseeded replay fails explicitly. Fresh Dolphin texture dump confirms one zero160x120RGBA8 source; explicit diagnostic DFF seed permits oracle comparison (G20,2026-10-15). Original live-game previous-frame contents remain unknown; train loops differ. No silent fallback.
+- DFF-02: delayed initial RAM texture uploads resolve at their first recorded snapshot. Confirm batching and same-address replacement cases against Dolphin; do not treat successful PNG generation as full fidelity.
+- DFF-03: UV texgen/native shader limitations (TD-036), EFB copy filter/gamma/channel-clear masks/strided and cropped copy views, non-RAM preloaded textures and initial dual TEV color banks are not completely represented. Palette uploads and ordinary RAM textures implemented; unsupported copy formats/views fail. Renderer shares existing approximations.
+- DFF-04: reference image loading/diff CLI implemented (--reference, absolute RGB mean/peak/changed-pixel count). Repeat title render matches byte-for-byte. Matching640x480 Dolphin captures now automated: title mean1.447028/255; train with explicit observed seed mean3.662187/255. Peak errors153/255 and255/255 respectively: lamp/glow, filtering and edge parity remain open.
+
+DFF-03 update2026-10-15: regular offline texgen now covers position/normal/UV, STQ/post matrices/normalization with per-fragment Q division. Unsupported emboss/color texgen still fails. Game HLE UV-source coverage remains TD-036; offline bake does not complete native game texgen. GPU vertex upload176bytes (was144) carries Q; assess bandwidth in later profiling. Oracle train mean3.653983/255; lamp/edge differences unresolved.
+
+
+## TD-043 — Audio startup dependency (RBUE08)
+
+Native file worker can reach group loading80049D64 before frame update8004A3CC attaches the archive/player. Group12 then fails and its caller marks the request complete regardless; menu SY01xx stays silent. game/audio_startup.cpp now waits before entering the original loader (before its mutex), using the native scheduler1ms sleep until player pointer exists and manager state is2. Ten-second failure deadline; disabled manager/unrelated object bypass. No device model, audio synthesis or instruction interpretation. This is a game-profile synchronization guard, not proven Wii scheduling parity. Replace polling/address-specific layout with native resource readiness notification when porting the loader; investigate original timing separately. Startup/readiness plus preserved-argument test and audible main-mixer PCM route evidence in G20.
+
+TD-043 review minor: add timeout-expiry and scheduler-cleanup regression test when extending loader readiness; normal wait/partial readiness/argument preservation/bypass paths tested now. Current10s timeout path not exercised by unit tests.

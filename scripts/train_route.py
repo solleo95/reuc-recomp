@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--unlock-60fps", action="store_true")
     parser.add_argument("--input-probe", action="store_true")
+    parser.add_argument("--audio-audit", action="store_true")
     parser.add_argument("--native-controls", action="store_true")
     parser.add_argument("--progression", action="store_true")
     parser.add_argument("--bindings",choices=("default","cleared","rebound"),default="default")
@@ -104,6 +105,7 @@ def main():
         process = subprocess.Popen([str(exe), "--skip-intro", "--profile", "--seconds", lifetime,
                                     "--render-scale", str(args.render_scale), "--width", str(args.width), "--height", str(args.height),
                                     "--test-control", str(control), "--save-root", str(folder / "saves"),"--config",str(config_path)]
+                                   + (["--audio-audit"] if args.audio_audit else [])
                                    + (["--unlock-60fps"] if args.unlock_60fps else [])
                                    + (["--input-probe"] if args.input_probe or args.native_controls else []),
                                    cwd=root, stdout=log, stderr=log)
@@ -192,6 +194,7 @@ def main():
         tap(wait=3)  # Mission movie.
         if args.native_controls:
             ready_for_gameplay()
+            time.sleep(1); command(0,0,capture=True); time.sleep(.5)  # First gameplay frame: stable view for renderer comparisons.
             command(0,0,4096); time.sleep(.15); command(0,0)
             deadline=time.monotonic()+3
             while "pause-state 00000002" not in read_log():

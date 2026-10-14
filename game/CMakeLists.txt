@@ -11,7 +11,7 @@ target_link_libraries(uc_intro PUBLIC uc_runtime)
 add_library(uc_game_pacing STATIC game_pacing.cpp)
 target_include_directories(uc_game_pacing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_pacing PUBLIC uc_runtime)
-add_library(uc_input_probe STATIC input_probe.cpp entry_probe.cpp)
+add_library(uc_input_probe STATIC input_probe.cpp entry_probe.cpp audio_startup.cpp)
 target_include_directories(uc_input_probe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_input_probe PUBLIC uc_runtime)
 add_library(uc_prompt_bridge STATIC prompt_bridge.cpp)
@@ -49,7 +49,10 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.vert.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.frag.spv $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:uc> VERBATIM)
+  # Linker map lets crash reports (exe offsets) be resolved to runtime function names offline.
+  target_link_options(uc PRIVATE "/MAP:$<TARGET_FILE_DIR:uc>/uc.map")
   install(TARGETS uc RUNTIME DESTINATION .)
+  install(FILES $<TARGET_FILE_DIR:uc>/uc.map DESTINATION data)
   install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION .)
   install(FILES ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.vert.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.frag.spv DESTINATION data/shaders)
   install(FILES ${CMAKE_SOURCE_DIR}/project/identified_sdk.txt ${CMAKE_SOURCE_DIR}/project/symbols.txt ${CMAKE_SOURCE_DIR}/project/gx_symbols.txt DESTINATION data)

@@ -172,6 +172,7 @@ GXLoadTlut
 @80373D00 ResGenerationMode
 GXLoadLightObjImm
 GXLoadNrmMtxImm
+@80288900 GXLoadNrmMtxIndx3x3
 @80286190 GXSetNumChans
 @802861B4 GXSetChanCtrl
 @80287B80 GXSetAlphaCompare

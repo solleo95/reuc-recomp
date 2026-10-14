@@ -30,6 +30,9 @@ int main() {
     auto scene_capture=parse(std::array<std::string_view,1>{"--capture-scene-passes"});
     CHECK(std::get<uc::Options>(scene_capture).capture_scene_passes && !std::get<uc::Options>(scene_capture).profile);
     CHECK(!std::get<uc::Options>(defaults).unlock_60fps);
+    auto gaps=parse(std::array<std::string_view,2>{"--gx-gaps","--audio-audit"});
+    CHECK(std::get<uc::Options>(gaps).gx_gaps && std::get<uc::Options>(gaps).audio_audit);
+    CHECK(!std::get<uc::Options>(defaults).gx_gaps && !std::get<uc::Options>(defaults).audio_audit);
     auto input_probe=parse(std::array<std::string_view,1>{"--input-probe"});
     CHECK(std::holds_alternative<uc::Options>(input_probe));
     CHECK(std::get<uc::Options>(input_probe).input_probe && !std::get<uc::Options>(defaults).input_probe);

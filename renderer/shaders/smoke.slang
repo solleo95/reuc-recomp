@@ -7,7 +7,7 @@ struct Input {
     [[vk::location(2)]] float4 row0 : TEXCOORD0;
     [[vk::location(3)]] float4 row1 : TEXCOORD1;
     [[vk::location(4)]] float4 row2 : TEXCOORD2;
-    [[vk::location(5)]] float2 texcoords[8] : TEXCOORD3;
+    [[vk::location(5)]] float3 texcoords[8] : TEXCOORD3;
     [[vk::location(13)]] float3 normal : NORMAL;
     [[vk::location(14)]] float4 color1 : COLOR1;
 };
@@ -16,7 +16,7 @@ struct Projection { float4 rows[4]; };
 struct Output {
     float4 position : SV_Position;
     [[vk::location(0)]] float4 color : COLOR0;
-    [[vk::location(1)]] float2 texcoords[8] : TEXCOORD0;
+    [[vk::location(1)]] float3 texcoords[8] : TEXCOORD0;
     [[vk::location(9)]] float4 color1 : COLOR1;
 };
 float4 lightControl(float4 base, uint channel, uint control, float3 position, float3 normal) {
@@ -70,9 +70,9 @@ Output vertexMain(Input input) {
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
     [unroll] for (uint id = 0; id < 8; ++id) {
         uint source = drawState.texSources[id / 4][id % 4] & 7;
-        float4 uv = float4(input.texcoords[source], 1.0, 1.0);
-        output.texcoords[id] = float2(dot(drawState.texRows[2 * id], uv),
-                                    dot(drawState.texRows[2 * id + 1], uv));
+        float4 uv = float4(input.texcoords[source].xy, 1.0, 1.0);
+        output.texcoords[id] = float3(dot(drawState.texRows[2 * id], uv),
+                                    dot(drawState.texRows[2 * id + 1], uv), input.texcoords[source].z);
     }
     return output;
 }
@@ -88,14 +88,36 @@ bool alphaCompare(uint value, uint reference, uint operation) {
     default: return true;
     }
 }
+// GX BP fog float: 11-bit mantissa, 8-bit exponent, sign at bit 19.
+float fogFloat(uint v) { return asfloat(((v>>19)&1u)<<31 | ((v>>11)&255u)<<23 | (v&2047u)<<12); }
+float3 applyFog(float3 color, float depth) {
+    uint fsel=(drawState.fog[0].w>>21)&7u;
+    if(fsel==0) return color;
+    uint z=uint(saturate(depth)*16777215.0);
+    float a=fogFloat(drawState.fog[0].x), c=fogFloat(drawState.fog[0].w&0xFFFFFu);
+    float ze=((drawState.fog[0].w>>20)&1u)==0 ? a*16777216.0/float(int(drawState.fog[0].y)-int(z>>(drawState.fog[0].z&31u))) : a*float(z)/16777216.0;
+    float fog=saturate(ze-c);
+    if(fsel==4) fog=1.0-exp2(-8.0*fog);
+    else if(fsel==5) fog=1.0-exp2(-8.0*fog*fog);
+    else if(fsel==6) fog=exp2(-8.0*(1.0-fog));
+    else if(fsel==7) fog=exp2(-8.0*(1.0-fog)*(1.0-fog));
+    int ifog=int(round(fog*256.0));
+    uint rgb=drawState.fog[1].x;
+    int3 fogColor=int3((rgb>>16)&255u,(rgb>>8)&255u,rgb&255u);
+    int3 prev=int3(round(saturate(color)*255.0));
+    return float3((prev*(256-ifog)+fogColor*ifog)>>8)/255.0;
+}
 float4 fragmentMain(Output input) : SV_Target0 {
-    float4 result=evaluateTev(input.texcoords,input.color,input.color1);
+    float2 uv[8];
+    [unroll] for(uint i=0;i<8;++i) uv[i]=input.texcoords[i].xy / (input.texcoords[i].z != 0.0 ? input.texcoords[i].z : 1.0);
+    float4 result=evaluateTev(uv,input.color,input.color1);
     uint alpha=uint(round(saturate(result.a)*255.0)), word=drawState.pixel.x;
     bool first=alphaCompare(alpha,word&255,(word>>16)&7);
     bool second=alphaCompare(alpha,(word>>8)&255,(word>>19)&7);
     uint operation=(word>>22)&3;
     bool pass=operation==0 ? first&&second : operation==1 ? first||second : operation==2 ? first!=second : first==second;
     if(!pass) discard;
+    result.rgb=applyFog(result.rgb,input.position.z);
     if(destinationAlphaPass!=0) result.a=float(drawState.pixel.z&255)/255.0;
     return result;
 }

@@ -12,4 +12,6 @@ bool has_function(uint32_t addr);
 // Calls the translated function that starts exactly at `addr`; any other address is a fatal error that names the address.
 void call_indirect(ppc::Ctx& c, uint32_t addr);
 void hle_sc(ppc::Ctx& c, uint32_t pc);
+// Guest entry of the translated (or HLE) function containing host address `pc`; 0 outside generated code.
+uint32_t guest_function_for_host(const void* pc);
 }  // namespace uc

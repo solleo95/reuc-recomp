@@ -1,10 +1,12 @@
 #include "fatal.h"
+#include "crash_report.h"
 #include "guest_mem.h"
 #include "trace.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <string>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -19,6 +21,11 @@ static void die(int code) {
 }
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS* ep) {
     const EXCEPTION_RECORD* r = ep->ExceptionRecord;
+    char reason[256];
+    std::snprintf(reason, sizeof reason, "host exception %08lX at %p%s %p", r->ExceptionCode, r->ExceptionAddress,
+                  r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters > 1 ? (r->ExceptionInformation[0] ? " writing" : " reading") : "",
+                  r->NumberParameters > 1 ? reinterpret_cast<void*>(r->ExceptionInformation[1]) : nullptr);
+    crash_report_write(reason, ep->ContextRecord);
     std::fprintf(stderr, "host exception %08lX at %p", r->ExceptionCode, r->ExceptionAddress);
     HMODULE module = nullptr;
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -44,7 +51,9 @@ static void terminate_handler() {
         std::fprintf(stderr, "terminate called without an exception\n");
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "terminate: uncaught C++ exception: %s\n", ex.what());
+        crash_report_write(std::string("uncaught C++ exception: ") + ex.what(), nullptr);
     } catch (...) {
+        crash_report_write("uncaught non-standard exception", nullptr);
         std::fprintf(stderr, "terminate: uncaught non-standard exception\n");
     }
     trace_dump(stderr);
@@ -57,10 +66,11 @@ void install_crash_handlers() {
 
 void fatal(const char* fmt, ...) {
     std::va_list ap; va_start(ap, fmt);
-    std::fprintf(stderr, "fatal: ");
-    std::vfprintf(stderr, fmt, ap);
-    std::fprintf(stderr, "\n");
+    char message[1024];
+    std::vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
+    std::fprintf(stderr, "fatal: %s\n", message);
+    crash_report_write(std::string("fatal: ") + message, nullptr);
     trace_dump(stderr);
     die(3);
 }
@@ -68,6 +78,9 @@ void fatal_guest(uint32_t addr, const char* what) {
     std::fprintf(stderr, "guest trap at %08X: %s", addr, what);
     std::string s = symbol_name(addr);
     if (!s.empty()) std::fprintf(stderr, "  [%s]", s.c_str());
+    char reason[512];
+    std::snprintf(reason, sizeof reason, "guest trap at %08X: %s%s%s", addr, what, s.empty() ? "" : " ", s.c_str());
+    crash_report_write(reason, nullptr);
     std::fprintf(stderr, "\nlast guest functions on this thread:\n");
     trace_dump(stderr);
     die(3);

@@ -319,7 +319,6 @@ VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pa
     for(size_t i=0;i<4;++i) key[2]|=uint32_t(material.swaps[i])<<(i*8);
     for(size_t i=0;i<material.stages;++i) {
         const auto& stage=material.stage[i];
-        if (stage.indirect) throw std::invalid_argument("native indirect texture material requires implementation (TD-036)");
         key[3+i*4]=stage.color; key[4+i*4]=stage.alpha; key[5+i*4]=stage.order; key[6+i*4]=stage.konst;
     }
     auto found=pipelines_.find(key);
@@ -363,7 +362,7 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
         for(uint32_t i=0;i<spec_entries.size();++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
         VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
         stages[1].pSpecializationInfo=&specialization;
-        static_assert(sizeof(gx::GpuVertex)==144 && sizeof(gx::Projection)==64);
+        static_assert(sizeof(gx::GpuVertex)==176 && sizeof(gx::Projection)==64);
         VkVertexInputBindingDescription binding{0, uint32_t(sizeof(gx::GpuVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
         std::array<VkVertexInputAttributeDescription,15> attributes{{
             {0,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position))},
@@ -371,8 +370,8 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
             {2,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows))},
             {3,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows)+16)},
             {4,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows)+32)},
-            {5,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord))}}};
-        for(uint32_t i=0;i<8;++i) attributes[5+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord)+i*8)};
+            {5,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord))}}};
+        for(uint32_t i=0;i<8;++i) attributes[5+i]={5+i,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord)+i*12)};
         attributes[13]={13,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,normal))};
         attributes[14]={14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuVertex,color1))};
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();

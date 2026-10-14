@@ -7,6 +7,8 @@ void gx_hle_init(Sched& sched, uint8_t* memory, gx::Packets* packets, bool profi
 void gx_fifo_write(int size, uint32_t value); // resource recording writes bytes; live primitives consume descriptor-sized attributes
 void gx_completed(uint64_t serial);          // any host thread; callback runs later on the guest baton
 GxStats gx_stats();
+bool gx_fifo_in_primitive(); // guest bytes are vertex data of an open primitive
+bool gx_fifo_recording();
 struct GxPromptCheckpoint {uint64_t batch;size_t draw;uint32_t producer,list;size_t recorded;};
 GxPromptCheckpoint gx_prompt_checkpoint();
 // Replaces the single SDK quad drawn since the checkpoint (live, or recorded into a display list) with a port prompt.

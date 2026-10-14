@@ -19,6 +19,7 @@ struct Options {
     bool capture_scene_passes = false;
     bool unlock_60fps = false;
     bool input_probe = false;
+    bool gx_gaps = false, audio_audit = false; // diagnostics: reports in <exe>/debug at exit
     std::filesystem::path test_control,save_root,config;
 };
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});

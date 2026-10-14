@@ -19,8 +19,8 @@ struct GpuVertex {
     std::array<float,3> position;
     std::array<uint8_t,4> color;
     PositionMatrix position_rows;
-    std::array<float,2> texcoord;
-    std::array<std::array<float,2>,7> extra_texcoords;
+    std::array<float,3> texcoord;
+    std::array<std::array<float,3>,7> extra_texcoords;
     std::array<float,3> normal;
     std::array<uint8_t,4> color1;
 };
