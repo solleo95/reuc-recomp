@@ -1,5 +1,6 @@
-add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp)
+add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp prompt_draw.cpp)
 target_include_directories(uc_gx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_gx PUBLIC uc_input_prompts)
 
 enable_language(C)
 find_package(Vulkan 1.3 REQUIRED)
@@ -36,8 +37,8 @@ foreach(stage vert frag)
     DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
 endforeach()
 add_custom_target(uc_smoke_shaders DEPENDS ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp)
-target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp)
+target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan)
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS
   ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv)

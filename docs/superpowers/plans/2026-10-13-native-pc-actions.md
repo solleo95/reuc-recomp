@@ -8,6 +8,10 @@
 
 **Tech Stack:** C++20, установленный clang-cl/MSVC SDK, SDL3.2.0, существующий AOT-translator/xref, CMake/Ninja/CTest. Новых зависимостей на этом этапе нет.
 
+Статус2026-10-14: модель/SDL/game wrappers и fixtures реализованы; live R/G/V/gesture/chord/Pause/Tutorial подтверждены. Дополнение владельца: bare-mouse motion-QTE, отдельный очищаемый qte_motion бинд. Пройден первый вагон и достигнут коридор; сохранённые cleared/rebound profiles проверены в игре. Этап2 config/launcher имеет работающий UI,76/76CTest и установленную промежуточную сборку. Остаются live QTE, более широкий live multi-source/focus тест и итоговый review; этап1 не объявлен завершённым. Доказательства: I1/I2 и SDD ledger.
+
+Review ruling Task1: `ActionEvent::pulse` явно помечает одноразовый запрос (колесо/жест/комбинация). `ActionFrame::held` определяет удержания. Импульс колеса сохраняется при удержании W/S и не отпускает клавишу.
+
 **Spec:** `docs/superpowers/specs/2026-10-13-native-pc-controls-design.md` — согласована пользователем2026-10-13. Основная спека: `docs/superpowers/specs/2026-10-12-uc-recomp-design.md`.
 
 ## Global Constraints
@@ -56,7 +60,7 @@
 - `enum class BindingKind:uint8_t { physical,interact_fire,interact_motion }`; `Binding { BindingKind kind; PhysicalInput input; std::vector<PhysicalInput> modifiers; }`. Специальные виды допустимы только для Grenade/Knife соответственно, без physical/modifiers.
 - `using Bindings=std::array<std::vector<Binding>,size_t(Action::count)>`; максимум64 назначений на действие,4 различных key/mouse modifiers. Wheel не является удерживаемым модификатором.
 - `Bindings default_bindings(); std::optional<std::string> validate_bindings(const Bindings&);` Дубли внутри одного действия — ошибка; совпадения между действиями сохраняются.
-- `ActionEvent { Action action; bool down; float direction_x,direction_y; }`; `ActionFrame { uint64_t held,pressed,released; std::array<ActionEvent,256> events; size_t count; }`.
+- `ActionEvent { Action action; bool down; float direction_x,direction_y; bool pulse; }`; `ActionFrame { uint64_t held,pressed,released; std::array<ActionEvent,256> events; size_t count; }`.
 - `class BindingResolver`: `replace(const Bindings&)`, `context(InputContext)`, `focus(bool)`, `button(PhysicalInput,bool)`, `wheel(int)`, `motion(float,float)`, `ActionFrame consume()`. Однопоточный чистый объект; пользовательские события передаются ему под mutex на следующем этапе.
 
 - [ ] RED-тест defaults: все назначения таблицы спеки, свободная E, отдельные специальный гранатный/ножевой бинды.
@@ -77,7 +81,7 @@
 
 **Probe interface:** `using InputProbe=void(*)(const ppc::Ctx&,const InputSample&); void input_hle_set_probe(InputProbe);` — callback existing KPADRead перед возвратом, зарегистрирован до запуска guest и очищен после join. `void input_probe_init(bool); void input_probe_sample(const ppc::Ctx&,const InputSample&);` в game/input_probe; новый CLI `--input-probe` off по умолчанию. Только validated reads, максимум128 записей изменений состояния/назначений; после лимита остаются счётчики. Probe не меняет guest registers/memory или input edges.
 
-- [ ] Разобрать исходный binding getter8003FB98/setter8003FB74 и живые назначения8045A808, а также места Interact/Fire/Weapon/Pause, используя xref и снимок уже инициализированного состояния под baton. Сырые статические данные таблицы не считать живым назначением.
+- [ ] Разобрать исходный binding getter8003FB98/setter8003FB74 и живые назначения8044A808 (signed-addi correction, I1), а также места Interact/Fire/Weapon/Pause, используя xref и снимок уже инициализированного состояния под baton. Сырые статические данные таблицы не считать живым назначением.
 - [ ] RED/GREEN probe fixture: callback видит фактический sample и context без изменения возвращаемого KPAD состояния; неверный buffer не вызывает probe и не теряет edges. Опция off оставляет прежнее поведение. Реализовать readonly snapshot только для доказанных mapped spans; ещё не найденные object addresses не разыменовывать.
 - [ ] Проверить кандидат Reload8006D980 и его caller8006C268: начальное состояние, количество в магазине/резерве, штатная анимация, полный/пустой магазин, запрет повторного запуска во время Reload.
 - [ ] Проверить Grenade и Knife как отдельные потребители. Общий motion detector80171D38 имеет несколько разных callers; глобальная подмена true запрещена. Установить точную границу удержания Knife и код выбора направления/90° дуги.

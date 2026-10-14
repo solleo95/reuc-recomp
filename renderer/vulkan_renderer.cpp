@@ -152,7 +152,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &slots_[i].acquired), "acquire semaphore");
     }
-    shaders_=shaders; pipeline_for({});
+    shaders_=shaders; gx::DrawPacket initial; initial.primitive=0x90; pipeline_for(initial);
     int width, height; if (!SDL_GetWindowSizeInPixels(window, &width, &height)) throw std::runtime_error(SDL_GetError());
     resize(uint32_t(std::max(0, width)), uint32_t(std::max(0, height)));
     if (requested_.width && requested_.height) rebuild();
@@ -185,6 +185,8 @@ void VulkanRenderer::destroy_buffer(Buffer& buffer) {
 static size_t validate_texture_chain(const gx::TexturePixels* pixels) {
     const gx::TextureLevel white{1,1,{255,255,255,255}};
     const bool gpu_only=pixels && pixels->gpu_only;
+    if(pixels && (unsigned(pixels->channels)>unsigned(gx::TextureChannels::rgb565) ||
+        (pixels->channels!=gx::TextureChannels::rgba && !gpu_only)))throw std::invalid_argument("invalid owned texture channels");
     if(pixels && (pixels->levels.empty() || pixels->levels.size()>11)) throw std::invalid_argument("invalid owned mip chain count");
     const auto& level=pixels ? pixels->levels[0] : white;
     if (!level.width || !level.height || level.width>1024 || level.height>1024 || (gpu_only ? !level.rgba.empty() : level.rgba.size()!=size_t(level.width)*level.height*4))
@@ -204,6 +206,14 @@ VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pi
     const bool gpu_only=pixels && pixels->gpu_only;
     const auto& level=pixels ? pixels->levels[0] : white;
     Texture texture; texture.extent=physical_extent.width ? physical_extent : VkExtent2D{level.width,level.height};
+    texture.channels=pixels ? pixels->channels : gx::TextureChannels::rgba;
+    // shortcut: RGB565 uses Vulkan UNORM rounding; verify exact GX copy rounding before pixel-parity acceptance (TD-045).
+    const VkFormat format=texture.channels==gx::TextureChannels::rgb565 ? VK_FORMAT_R5G6B5_UNORM_PACK16 : VK_FORMAT_R8G8B8A8_UNORM;
+    if(texture.channels==gx::TextureChannels::rgb565) {
+        VkFormatProperties properties; vkGetPhysicalDeviceFormatProperties(physical_,format,&properties);
+        const VkFormatFeatureFlags required=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_BLIT_SRC_BIT|VK_FORMAT_FEATURE_BLIT_DST_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if((properties.optimalTilingFeatures&required)!=required)throw std::runtime_error("GPU lacks native RGB565 copy/filter support");
+    }
     if(texture.extent.width>max_image_dimension_ || texture.extent.height>max_image_dimension_) throw std::invalid_argument("texture extent exceeds device image limits");
     texture.mip_levels=pixels ? uint32_t(pixels->levels.size()) : 1;
     texture.mip_levels=std::min(texture.mip_levels,uint32_t(std::bit_width(std::max(texture.extent.width,texture.extent.height))));
@@ -211,7 +221,7 @@ VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pi
         if(!gpu_only) texture.upload=make_buffer(upload_size,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         size_t at=0;
         if(!gpu_only) for(uint32_t i=0;i<texture.mip_levels;++i) { const auto& mip=pixels ? pixels->levels[i] : white; std::memcpy(static_cast<std::byte*>(texture.upload.mapped)+at,mip.rgba.data(),mip.rgba.size()); at+=mip.rgba.size(); }
-        VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; create.imageType=VK_IMAGE_TYPE_2D; create.format=VK_FORMAT_R8G8B8A8_UNORM;
+        VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; create.imageType=VK_IMAGE_TYPE_2D; create.format=format;
         create.extent={texture.extent.width,texture.extent.height,1}; create.mipLevels=texture.mip_levels; create.arrayLayers=1; create.samples=VK_SAMPLE_COUNT_1_BIT;
         create.tiling=VK_IMAGE_TILING_OPTIMAL; create.usage=VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|(gpu_only ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
         vk_check(vkCreateImage(device,&create,nullptr,&texture.image),"texture image");
@@ -222,7 +232,9 @@ VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pi
         vk_check(vkAllocateMemory(device,&allocate,nullptr,&texture.memory),"texture memory");
         vk_check(vkBindImageMemory(device,texture.image,texture.memory,0),"bind texture memory");
         VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image=texture.image; view.viewType=VK_IMAGE_VIEW_TYPE_2D;
-        view.format=VK_FORMAT_R8G8B8A8_UNORM; view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,texture.mip_levels,0,1};
+        view.format=format; view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,texture.mip_levels,0,1};
+        if(texture.channels==gx::TextureChannels::alpha_intensity)
+            view.components={VK_COMPONENT_SWIZZLE_A,VK_COMPONENT_SWIZZLE_A,VK_COMPONENT_SWIZZLE_A,VK_COMPONENT_SWIZZLE_A};
         vk_check(vkCreateImageView(device,&view,nullptr,&texture.view),"texture view");
     } catch (...) {
         if (texture.view) vkDestroyImageView(device,texture.view,nullptr);
@@ -240,7 +252,7 @@ VulkanRenderer::Texture VulkanRenderer::make_copy_texture(const std::shared_ptr<
     const VkExtent2D physical{std::max(1u,uint32_t((uint64_t(level.width)*efb_extent_.width+320)/640)),std::max(1u,uint32_t((uint64_t(level.height)*efb_extent_.height+240)/480))};
     const auto mip_levels=std::min(uint32_t(source->levels.size()),uint32_t(std::bit_width(std::max(physical.width,physical.height))));
     auto found=std::find_if(recycled_copies_.begin(),recycled_copies_.end(),[&](const auto& texture) {
-        return texture.extent.width==physical.width && texture.extent.height==physical.height && texture.mip_levels==mip_levels;
+        return texture.extent.width==physical.width && texture.extent.height==physical.height && texture.mip_levels==mip_levels && texture.channels==source->channels;
     });
     Texture result;
     if(found==recycled_copies_.end()) result=make_texture(source.get(),physical);
@@ -285,6 +297,13 @@ VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pa
     if (blend.mode>3 || blend.source>7 || blend.destination>7 || blend.logic>15) throw std::invalid_argument("invalid native blend state");
     if (blend.mode==2 && !logic_ops_) throw std::runtime_error("native GX logic operation requires GPU logicOp support");
     PipelineKey key{};
+    switch(draw.primitive) {
+    case 0x80: case 0x90: case 0x98: case 0xA0: key[69]=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
+    case 0xA8: case 0xB0: key[69]=VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
+    default:
+        std::fprintf(stderr,"[unsupported-primitive] type %02X callsite %08X vertices %zu indices %zu\n",draw.primitive,draw.callsite,draw.vertices.size(),draw.indices.size());
+        throw std::invalid_argument("unsupported native draw topology");
+    }
     if(draw.state.cull>3) throw std::invalid_argument("invalid native cull mode");
     key[0]=blend.mode|(blend.source<<2)|(blend.destination<<5)|(blend.logic<<8)|(uint32_t(blend.color_write)<<12)|(uint32_t(blend.alpha_write)<<13);
     key[0]|=uint32_t(draw.state.cull)<<14;
@@ -357,7 +376,7 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
         attributes[13]={13,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,normal))};
         attributes[14]={14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuVertex,color1))};
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
-        VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
         constexpr VkCullModeFlags culls[]={VK_CULL_MODE_NONE,VK_CULL_MODE_BACK_BIT,VK_CULL_MODE_FRONT_BIT,VK_CULL_MODE_FRONT_AND_BACK};
         VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode = VK_POLYGON_MODE_FILL; raster.cullMode = culls[(key[0]>>14)&3]; raster.frontFace = VK_FRONT_FACE_CLOCKWISE; raster.lineWidth = 1;
@@ -559,6 +578,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     if (!requested_.width || !requested_.height) return false;
     if (!packet.serial || packet.serial <= last_serial_) throw std::invalid_argument("frame serial must increase");
     if(packet.clear_depth>0xFFFFFF) throw std::invalid_argument("invalid native EFB clear depth");
+    for(const auto& prompt:packet.prompts) {
+        for(float value:prompt.efb_corners)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt geometry");
+        for(float value:prompt.alpha)if(!std::isfinite(value) || value<0 || value>1)throw std::invalid_argument("invalid native prompt alpha");
+        for(float value:prompt.clip)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt clip");
+        if(prompt.clip[2]<prompt.clip[0] || prompt.clip[3]<prompt.clip[1])throw std::invalid_argument("invalid native prompt clip");
+    }
     const auto& display=packet.display_source;
     if(packet.present && (!display[2] || !display[3] || display[0]>=640 || display[2]>640-display[0] || display[1]>=480 || display[3]>480-display[1])) throw std::invalid_argument("invalid native display source rectangle");
     if (resized_) rebuild();
@@ -612,8 +637,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(draw.state.scissor && ((*draw.state.scissor)[2]<0 || (*draw.state.scissor)[3]<0)) throw std::invalid_argument("negative native draw scissor extent");
         pipeline_for(draw);
         // shortcut: indirect texturing/depth/material parity remains TD-036.
-        if (draw.primitive != 0x80 && draw.primitive != 0x90 && draw.primitive != 0x98 && draw.primitive != 0xA0) throw std::invalid_argument("Vulkan smoke requires triangle geometry");
-        if (draw.indices.size() % 3 != 0) throw std::invalid_argument("triangle index count is not divisible by three");
+        const size_t group=(draw.primitive==0xA8 || draw.primitive==0xB0) ? 2 : 3;
+        if (draw.indices.size() % group != 0) throw std::invalid_argument("index count does not match native draw topology");
         for (uint32_t index : draw.indices) if (index >= draw.vertices.size()) throw std::invalid_argument("draw index exceeds owned vertices");
         if (draw.vertices.size() > size_t(INT32_MAX) - vertex_count || draw.indices.size() > size_t(UINT32_MAX) - index_count) throw std::invalid_argument("frame exceeds indexed draw limits");
         vertex_count += draw.vertices.size(); index_count += draw.indices.size();
@@ -788,6 +813,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,copy_target->mip_levels);
     }
     if (packet.present) {
+        if(!packet.prompts.empty())prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 slot.initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE,slot.initialized ? VK_ACCESS_2_TRANSFER_READ_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
@@ -795,6 +821,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)),1};
         copy.dstOffsets[1]={int32_t(extent_.width),int32_t(extent_.height),1};
         vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_NEAREST);
+        if(!packet.prompts.empty()) {
+            barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=slot.view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
+            vkCmdBeginRendering(slot.command,&ui);
+            prompt_overlay_.record(slot.command,packet.prompts,extent_,display);
+            vkCmdEndRendering(slot.command);
+            barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
+        } else
         barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
     }
         if (packet.clear_after_copy && (packet.present || copy_target)) {
@@ -848,6 +883,7 @@ void VulkanRenderer::shutdown() {
     owner();
     if (device) {
         retire_images();
+        prompt_overlay_.shutdown();
         for(auto& [source,texture]:copy_textures_) destroy_texture(texture);
         copy_textures_.clear();
         for(auto& texture:recycled_copies_) destroy_texture(texture);

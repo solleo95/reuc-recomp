@@ -24,6 +24,9 @@ gx::BlendState blend_state,live_blend;
 gx::DrawUniform color_uniforms,live_uniforms;
 gx::TevMaterial live_material;
 bool profile_mesh;
+uint64_t prompt_batch=0;
+std::vector<gx::PromptDraw> carried_prompts;
+std::atomic<uint64_t> prompt_annotations{},prompt_present{},prompt_fallback{};
 uint32_t mesh_profile_count;
 uint32_t copy_profile_count;
 uint32_t channel_profile_count;
@@ -53,6 +56,7 @@ struct CopyState { std::array<uint8_t,4> color{0,0,0,255}; uint32_t depth=0xFFFF
 CopyState copy_state;
 std::array<uint32_t,4> texture_copy_source{};
 uint32_t texture_copy_width=0,texture_copy_height=0;
+uint32_t texture_copy_format=6;
 using CopiedTextures=std::map<uint32_t,std::shared_ptr<const gx::TexturePixels>>;
 CopiedTextures copied_textures;
 struct CopiedTexture { gx::TextureCopy request; bool clear; CopyState clear_state; };
@@ -86,6 +90,8 @@ struct RecordedDraw {
     gx::TevMaterial material;
     gx::DrawUniform uniforms;
     TextureSelectors texture_selectors;
+    std::optional<uc::PromptDescription> prompt;
+    bool compact=false;
 };
 struct Resource {
     std::vector<std::byte> bytes;
@@ -96,7 +102,7 @@ struct Resource {
     struct IndexedPosition { uint16_t index; uint32_t row; };
     struct Current { uint32_t row; };
     struct CopyClear { CopyState state; };
-    struct TextureCopy { std::array<uint32_t,4> source; uint32_t address,width,height; bool clear; };
+    struct TextureCopy { std::array<uint32_t,4> source; uint32_t address,width,height; bool clear; uint32_t format=6; };
     struct TextureBinding { uint32_t map; TextureSource source; };
     struct PaletteLoad { uint32_t region; PaletteSource source; };
     struct Blend { gx::BlendState state; };
@@ -116,6 +122,7 @@ struct ListRecording {
     gx::DrawUniform color_shadow;
     std::array<uint32_t,4> texture_copy_source_shadow;
     uint32_t texture_copy_width_shadow=0,texture_copy_height_shadow=0;
+    uint32_t texture_copy_format_shadow=6;
     TextureMatrices texture_shadow;
     std::vector<std::byte> bytes;
     Resource native;
@@ -256,9 +263,10 @@ std::shared_ptr<const PaletteData> load_palette(const PaletteSource& source) {
     return std::make_shared<const PaletteData>(PaletteData{source.format,{bytes.begin(),bytes.end()}});
 }
 gx::TextureCache texture_cache;
-std::shared_ptr<const gx::TexturePixels> make_copy_texture(uint32_t address,uint32_t width,uint32_t height) {
-    memory.read(address,gx::encoded_texture_size({width,height,gx::TextureFormat::rgba8,1}));
+std::shared_ptr<const gx::TexturePixels> make_copy_texture(uint32_t address,uint32_t width,uint32_t height,uint32_t format) {
+    memory.read(address,gx::encoded_texture_size({width,height,format==0x27 ? gx::TextureFormat::i8 : gx::TextureFormat(format),1}));
     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true;
+    target->channels=format==0x27 ? gx::TextureChannels::alpha_intensity : format==4 ? gx::TextureChannels::rgb565 : gx::TextureChannels::rgba;
     for(;;) {
         target->levels.push_back({width,height,{}});
         if(width==1 && height==1) break;
@@ -270,7 +278,8 @@ std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<Te
     if (!source) return {};
     if(auto found=versions.find(source->address&0x3FFFFFFF);found!=versions.end() && found->second) {
         const auto& level=found->second->levels[0];
-        if(source->desc.format!=gx::TextureFormat::rgba8 || source->palette || source->desc.width>level.width || source->desc.height>level.height) throw std::invalid_argument("unsupported native EFB texture view");
+        const auto expected=found->second->channels==gx::TextureChannels::alpha_intensity ? gx::TextureFormat::i8 : found->second->channels==gx::TextureChannels::rgb565 ? gx::TextureFormat::rgb565 : gx::TextureFormat::rgba8;
+        if(source->desc.format!=expected || source->palette || source->desc.width>level.width || source->desc.height>level.height) throw std::invalid_argument("unsupported native EFB texture view");
         // shortcut: cropped GX views share the GPU copy; exact sampler/view coordinates remain TD-045.
         return found->second;
     }
@@ -314,6 +323,7 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             resolve_texture_matrices(draw.uniforms,source->texture_selectors,matrices);
             draw.texture_wrap=wraps(textures);
             draw.blend=blend;
+            if(source->prompt)if(auto prompt=uc::prompt_from_quad(draw,*source->prompt)) {prompt->compact=source->compact;draw.native_prompt=std::move(*prompt);++prompt_annotations;}
             imported.push_back(std::move(draw));
         } else if (const auto* array=std::get_if<Resource::ArrayBinding>(&item)) bindings.arrays[array->attribute]=array->array;
         else if (const auto* projection=std::get_if<Resource::Projection>(&item)) transform_state.projection=projection->matrix;
@@ -322,7 +332,7 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
         else if (const auto* current=std::get_if<Resource::Current>(&item)) transform_state.current=current->row;
         else if (const auto* clear=std::get_if<Resource::CopyClear>(&item)) copy=clear->state;
         else if (const auto* command=std::get_if<Resource::TextureCopy>(&item)) {
-            auto target=make_copy_texture(command->address,command->width,command->height);
+            auto target=make_copy_texture(command->address,command->width,command->height,command->format);
             versions[command->address&0x3FFFFFFF]=target;
             imported.push_back(CopiedTexture{{command->source,std::move(target)},command->clear,copy});
         }
@@ -348,7 +358,19 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
 uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::TextureCopy> texture_copy={},std::array<uint32_t,4> display_source={0,0,640,480}) {
     if (!packets) return 0;
     try {
-        const uint64_t serial=packets->seal_batch({0,std::move(draws),present,clear,copy_state.color,copy_state.depth,xfb,std::move(texture_copy),display_source});
+        gx::FramePacket frame{0,std::move(draws),present,clear,copy_state.color,copy_state.depth,xfb,std::move(texture_copy),display_source};
+        if(frame.texture_copy && clear) {
+            // The copy erases the EFB: prompts drawn so far leave with it, originals stay in the copied texture.
+            carried_prompts.clear();
+            for(const auto& draw:frame.draws)if(draw.native_prompt)++prompt_fallback;
+        } else {
+            // EFB content persists across DrawDone/non-clearing copies until the display copy presents it.
+            for(auto& draw:frame.draws)if(draw.native_prompt)carried_prompts.push_back(std::move(*draw.native_prompt));
+            std::erase_if(frame.draws,[](const auto& draw){return draw.native_prompt.has_value();});
+            if(present) {prompt_present+=carried_prompts.size();frame.prompts=std::move(carried_prompts);carried_prompts.clear();}
+        }
+        ++prompt_batch;
+        const uint64_t serial=packets->seal_batch(std::move(frame));
         draws.clear(); return serial;
     } catch (const gx::Error& error) {
         if (error.code==gx::ErrorCode::canceled) throw uc::ThreadExit{};
@@ -371,7 +393,31 @@ void request_finish(ppc::Ctx& ctx) {
 }
 }
 namespace uc {
+GxPromptCheckpoint gx_prompt_checkpoint() {
+    if(recording)return {prompt_batch,draws.size(),producer(),recording->address,recording->native.geometry.size()};
+    return {prompt_batch,draws.size(),producer(),0,0};
+}
+bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& description,bool compact) {
+    if(checkpoint.batch!=prompt_batch || checkpoint.producer!=producer())return false;
+    if(recording) {
+        auto& geometry=recording->native.geometry;
+        if(recording->overflow || checkpoint.list!=recording->address || geometry.size()<=checkpoint.recorded)return false;
+        RecordedDraw* quad=nullptr;
+        for(size_t i=checkpoint.recorded;i<geometry.size();++i)if(auto* draw=std::get_if<RecordedDraw>(&geometry[i])) {
+            if(quad)return false; // More than one primitive: not a single glyph/picture quad.
+            quad=draw;
+        }
+        if(!quad || quad!=std::get_if<RecordedDraw>(&geometry.back()) || quad->primitive!=0x80 || quad->count!=4)return false;
+        quad->prompt=description;quad->compact=compact;return true;
+    }
+    if(checkpoint.list || draws.size()!=checkpoint.draw+1)return false;
+    auto prompt=prompt_from_quad(draws.back(),description);
+    if(!prompt)return false;
+    prompt->compact=compact;draws.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
+}
 void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) {
+    prompt_batch=0;carried_prompts.clear();
+    prompt_annotations=prompt_present=prompt_fallback=0;
     profile_mesh=profile; mesh_profile_count=0;
     copy_profile_count=0;
     channel_profile_count=0;
@@ -380,7 +426,7 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     memory = {{reinterpret_cast<const std::byte*>(base), 24u << 20}, {reinterpret_cast<const std::byte*>(base + 0x10000000), 64u << 20}, {reinterpret_cast<const std::byte*>(base + 0x20000000), 0x4000}};
     state = {}; transforms={}; live_transforms={}; draws.clear(); finishes.clear(); resources.clear(); recording.reset(); capture = std::make_unique<gx::Vertices>(memory);
     copy_state={}; copies=0;
-    texture_copy_source={}; texture_copy_width=texture_copy_height=0; copied_textures.clear();
+    texture_copy_source={}; texture_copy_width=texture_copy_height=0; texture_copy_format=6; copied_textures.clear();
     texture_cache.clear(); texture_decodes=0;
     mesh_index.clear(); mesh_cache.clear(); mesh_cache_bytes=0; geometry_hits=0; geometry_misses=0;
     blend_state={}; live_blend={}; color_uniforms={}; live_uniforms={}; live_material={}; texture_matrices={}; indirect_stages={};
@@ -440,7 +486,7 @@ void gx_completed(uint64_t serial) {
         sched->wake_all(base - 25336);
     });
 }
-GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load(),geometry_hits.load(),geometry_misses.load()}; }
+GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load(),geometry_hits.load(),geometry_misses.load(),prompt_annotations.load(),prompt_present.load(),prompt_fallback.load()}; }
 }
 void hle_GXBegin(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80284FD0, c);
@@ -515,6 +561,7 @@ void hle_GXBeginDisplayList(ppc::Ctx& c) {
         list->color_shadow=color_uniforms; list->texture_shadow=texture_matrices;
         list->texture_copy_source_shadow=texture_copy_source;
         list->texture_copy_width_shadow=texture_copy_width; list->texture_copy_height_shadow=texture_copy_height;
+        list->texture_copy_format_shadow=texture_copy_format;
     }
     list->bytes.reserve(std::min<size_t>(capacity,1024));
     ppc::wr8(c,sdk+0x5F8,1);
@@ -549,6 +596,7 @@ void hle_GXEndDisplayList(ppc::Ctx& c) {
         color_uniforms=list->color_shadow; texture_matrices=std::move(list->texture_shadow);
         texture_copy_source=list->texture_copy_source_shadow;
         texture_copy_width=list->texture_copy_width_shadow; texture_copy_height=list->texture_copy_height_shadow;
+        texture_copy_format=list->texture_copy_format_shadow;
     }
     ppc::wr8(c,list->sdk+0x5F8,0);
     c.r[3]=length;
@@ -765,19 +813,25 @@ void hle_GXSetTexCopySrc(ppc::Ctx& c) {
 void hle_GXSetTexCopyDst(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80285398,c); capture->finish();
     const auto width=c.r[3],height=c.r[4],format=c.r[5],half=c.r[6],sdk=read32(c.r[2]-8968);
-    if(!width || !height || width>1024 || height>1024 || format!=6 || half>1) throw std::invalid_argument("unsupported native EFB texture destination");
+    if(!width || !height || width>1024 || height>1024 || (format!=4 && format!=6 && format!=0x27) || half>1) {
+        std::fprintf(stderr,"[efb-destination-invalid] %ux%u format %08X half %u caller %08X\n",width,height,format,half,c.lr);
+        throw std::invalid_argument("unsupported native EFB texture destination");
+    }
     memory.read(sdk+0x248,9);
-    // Verified RGBA8 SDK stride: ceil(width/4) tiles,64bytes per tile, in32byte units.
-    ppc::wr32(c,sdk+0x248,0x4D000000u|((width+3)/4)*2);
-    ppc::wr32(c,sdk+0x24C,(read32(sdk+0x24C)&~0x18278u)|0x10000u|half<<9|6<<4);
+    // Original SDK tile stride in32byte units: RGBA8=4x4/64; RGB565=4x4/32; A8=8x4/32.
+    const auto stride=format==0x27 ? (width+7)/8 : ((width+3)/4)*(format==6 ? 2 : 1);
+    const auto copy_type=format==0x27 ? 0x70u : format<<4;
+    ppc::wr32(c,sdk+0x248,0x4D000000u|stride);
+    ppc::wr32(c,sdk+0x24C,(read32(sdk+0x24C)&~0x18278u)|0x10000u|half<<9|copy_type);
     ppc::wr8(c,sdk+0x250,0);
     texture_copy_width=width; texture_copy_height=height;
+    texture_copy_format=format;
 }
 void hle_GXCopyTex(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80285974,c); capture->finish();
     const auto address=c.r[3],sdk=read32(c.r[2]-8968);
     if((address&31) || c.r[4]>1 || !texture_copy_source[2] || !texture_copy_width || !texture_copy_height) throw std::invalid_argument("invalid native EFB texture copy request");
-    memory.read(address,gx::encoded_texture_size({texture_copy_width,texture_copy_height,gx::TextureFormat::rgba8,1}));
+    memory.read(address,gx::encoded_texture_size({texture_copy_width,texture_copy_height,texture_copy_format==0x27 ? gx::TextureFormat::i8 : gx::TextureFormat(texture_copy_format),1}));
     memory.read(sdk,0x254);
     const auto control=(read32(sdk+0x24C)&~0xFF004800u)|0x52000000u|c.r[4]<<11;
     if(profile_mesh && mesh_profile_count && copy_profile_count<24) {
@@ -789,11 +843,11 @@ void hle_GXCopyTex(ppc::Ctx& c) {
         if(c.r[4]) for(auto word:{read32(sdk+0x228)|15,read32(sdk+0x220)&~3u}) { uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word); }
         for(auto word:{read32(sdk+0x240),read32(sdk+0x244),read32(sdk+0x248),0x4B000000u|((address&0x3FFFFFFF)>>5),control}) { uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word); }
         if(c.r[4]) for(auto word:{read32(sdk+0x228),read32(sdk+0x220)}) { uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word); }
-        if(!recording->overflow) recording->native.geometry.push_back(Resource::TextureCopy{texture_copy_source,address,texture_copy_width,texture_copy_height,c.r[4]!=0});
+        if(!recording->overflow) recording->native.geometry.push_back(Resource::TextureCopy{texture_copy_source,address,texture_copy_width,texture_copy_height,c.r[4]!=0,texture_copy_format});
         ppc::wr32(c,sdk+0x24C,control); ppc::wr16(c,sdk+2,0);
         return;
     }
-    auto target=make_copy_texture(address,texture_copy_width,texture_copy_height);
+    auto target=make_copy_texture(address,texture_copy_width,texture_copy_height,texture_copy_format);
     const auto [entry,inserted]=copied_textures.try_emplace(address&0x3FFFFFFF);
     try { submit_batch(false,c.r[4]!=0,0,gx::TextureCopy{texture_copy_source,target}); }
     catch(...) { if(inserted) copied_textures.erase(entry); throw; }

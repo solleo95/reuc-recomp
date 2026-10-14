@@ -2,8 +2,7 @@
 #include <charconv>
 #include <cmath>
 namespace uc {
-std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments) {
-    Options options;
+std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options) {
     for (size_t i = 0; i < arguments.size(); ++i) {
         auto arg = arguments[i];
         if (arg == "--headless") options.headless = true;
@@ -15,7 +14,8 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root" || arg=="--render-scale" || arg=="--window-mode") {
+        else if (arg == "--input-probe") options.input_probe = true;
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -25,9 +25,15 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 else return "invalid value for " + std::string(arg);
                 continue;
             }
-            if (arg == "--game") { options.game = std::filesystem::path(std::string(value)); continue; }
-            if(arg=="--test-control") { options.test_control=std::filesystem::path(std::string(value)); continue; }
-            if(arg=="--save-root") { options.save_root=std::filesystem::path(std::string(value)); continue; }
+            if(arg=="--game" || arg=="--test-control" || arg=="--save-root" || arg=="--config") {
+                if(value.find('\0')!=std::string_view::npos)return "invalid path for "+std::string(arg);
+                auto path=std::filesystem::path(std::u8string(value.begin(),value.end()));
+                if(arg=="--game")options.game=std::move(path);
+                else if(arg=="--test-control")options.test_control=std::move(path);
+                else if(arg=="--save-root")options.save_root=std::move(path);
+                else options.config=std::move(path);
+                continue;
+            }
             if(arg=="--render-scale") {
                 double scale=0;
                 auto parsed=std::from_chars(value.data(),value.data()+value.size(),scale);

@@ -9,6 +9,12 @@
 #include "hle/os.h"
 #include "hle/save.h"
 #include "native_input.h"
+#include "input_probe.h"
+#include "entry_probe.h"
+#include "game_input.h"
+#include "input_config.h"
+#include "options_config.h"
+#include "host_input.h"
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -136,8 +142,12 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--capture-scene-passes]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
+    const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
+    parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
+    if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
+    options=std::get<uc::Options>(std::move(parsed));
     const bool controlled=!options.test_control.empty();
     if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control requires Vulkan and an isolated --save-root");
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
@@ -198,6 +208,8 @@ static int real_main(int argc, char** argv) {
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
     uc::VulkanRenderer renderer;
     uc::NativeInput input;
+    input.bindings(input_config.input);
+    uc::HostInput host_input;
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
@@ -228,6 +240,11 @@ static int real_main(int argc, char** argv) {
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
+    uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);
+    uc::input_probe_init(options.input_probe);
+    uc::entry_probe_init(options.input_probe);
+    uc::prompt_hooks_init(input_config.input,options.input_probe);
+    uc::input_hle_set_probe(options.input_probe ? uc::input_probe_sample : nullptr);
     std::optional<uc::AudioOutput> audio;
     if (!options.headless) audio.emplace();
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
@@ -263,26 +280,12 @@ static int real_main(int argc, char** argv) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
                 if(controlled) continue;
-                if (event.type==SDL_EVENT_WINDOW_FOCUS_LOST) input.focus(false);
-                if (event.type==SDL_EVENT_WINDOW_FOCUS_GAINED) input.focus(SDL_GetWindowRelativeMouseMode(window.get()));
-                if (event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-                    uc::cursor_release_key(options.window_mode,event.key.key)) {
-                    if (!SDL_SetWindowRelativeMouseMode(window.get(),false)) throw std::runtime_error(SDL_GetError());
-                    input.focus(false);
-                }
-                if (event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key==SDLK_E &&
-                    (event.key.mod & SDL_KMOD_CTRL)) debug_capture_requested=true;
-                if (event.type==SDL_EVENT_MOUSE_MOTION && SDL_GetWindowRelativeMouseMode(window.get())) {
-                    int width=0,height=0;
-                    if (!SDL_GetWindowSizeInPixels(window.get(),&width,&height)) throw std::runtime_error(SDL_GetError());
-                    input.move_raw(event.motion.xrel,event.motion.yrel,uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
-                }
-                if (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) {
-                    const bool down=event.type==SDL_EVENT_MOUSE_BUTTON_DOWN;
-                    if (down && event.button.button==SDL_BUTTON_LEFT && !SDL_GetWindowRelativeMouseMode(window.get())) {
-                        if (!SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
-                        input.focus(true);
-                    } else if (event.button.button==SDL_BUTTON_LEFT) input.button(uc::kButtonA,down);
+                int width=0,height=0;
+                if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
+                host_input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
+                if(host_input.event(event,input,SDL_GetWindowRelativeMouseMode(window.get()))) {
+                    if(!SDL_SetWindowRelativeMouseMode(window.get(),true))throw std::runtime_error(SDL_GetError());
+                    input.focus(true);
                 }
             }
             if(controlled && std::chrono::steady_clock::now()>=next_control) {
@@ -290,7 +293,22 @@ static int real_main(int argc, char** argv) {
                 std::ifstream file(options.test_control);
                 std::string line;
                 if(std::getline(file,line)) if(auto command=uc::parse_test_command(line);command && command->sequence>control_sequence) {
-                    if(!input.apply_test_command(command->sequence,command->x,command->y,command->held)) throw std::runtime_error("internal input command rejected");
+                    if(command->kind==uc::TestKind::legacy) {
+                        if(!input.apply_test_command(command->sequence,command->x,command->y,command->held))throw std::runtime_error("internal input command rejected");
+                    } else {
+                        uc::HostEventKind kind;
+                        switch(command->kind) {
+                        case uc::TestKind::key: kind=uc::HostEventKind::key; break;
+                        case uc::TestKind::mouse: kind=uc::HostEventKind::mouse; break;
+                        case uc::TestKind::wheel: kind=uc::HostEventKind::wheel; break;
+                        case uc::TestKind::motion: kind=uc::HostEventKind::motion; break;
+                        case uc::TestKind::focus: kind=uc::HostEventKind::focus; break;
+                        case uc::TestKind::legacy: throw std::logic_error("unexpected legacy event");
+                        }
+                        int width=0,height=0;
+                        if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
+                        if(!input.apply_test_event(command->sequence,{kind,command->code,int(command->value),command->x,command->y},uint32_t(std::max(0,width)),uint32_t(std::max(0,height))))throw std::runtime_error("internal host command rejected");
+                    }
                     control_sequence=command->sequence;
                     debug_capture_requested|=command->capture;
                     std::fprintf(stderr,"[test-control] applied %llu aim %.3f %.3f held %u capture %u\n",(unsigned long long)control_sequence,command->x,command->y,command->held,command->capture);
@@ -300,6 +318,13 @@ static int real_main(int argc, char** argv) {
                     control_consumed=consumed;
                     std::fprintf(stderr,"[test-control] consumed %llu\n",(unsigned long long)consumed);
                 }
+            }
+            const auto services=input.consume_service_actions();
+            debug_capture_requested|=(services.pressed&(uint64_t(1)<<unsigned(uc::Action::screenshot)))!=0;
+            if(!controlled && options.window_mode==uc::WindowMode::windowed &&
+                (services.pressed&(uint64_t(1)<<unsigned(uc::Action::release_cursor)))) {
+                if(!SDL_SetWindowRelativeMouseMode(window.get(),false))throw std::runtime_error(SDL_GetError());
+                input.focus(false);
             }
             if (!pending) pending = packets.try_take();
             // Keep the captured slot alive until its fence completes and readback finishes.
@@ -410,9 +435,19 @@ static int real_main(int argc, char** argv) {
         }
     }
     runner.stop();
+    const auto prompt_stats=uc::gx_stats();
+    std::fprintf(stderr,"native prompt stats: annotations %llu present %llu fallback %llu\n",(unsigned long long)prompt_stats.prompt_annotations,(unsigned long long)prompt_stats.prompt_present,(unsigned long long)prompt_stats.prompt_fallback);
+    uc::input_hle_set_probe(nullptr);
+    const auto probe_stats=uc::input_probe_stats();
+    if(options.input_probe) std::fprintf(stderr,"input probe stats: samples %llu changes %llu records %llu\n",(unsigned long long)probe_stats.samples,(unsigned long long)probe_stats.changes,(unsigned long long)probe_stats.records);
     const auto sound_stats=uc::audio_stats();
+    const auto event_stats=uc::entry_probe_stats();
+    const auto picture_stats=uc::picture_probe_stats();
+    std::fprintf(stderr,"picture probe stats: calls %llu records %llu invalid %llu\n",(unsigned long long)picture_stats.calls,(unsigned long long)picture_stats.records,(unsigned long long)picture_stats.invalid);
+    std::fprintf(stderr,"player event probe stats: events %llu records %llu invalid %llu\n",(unsigned long long)event_stats.events,(unsigned long long)event_stats.records,(unsigned long long)event_stats.invalid);
     std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
     uc::audio_hle_shutdown();
+    uc::game_input_shutdown();
     uc::input_hle_init(nullptr);
     uc::save_hle_shutdown();
     uc::dvd_hle_shutdown();
@@ -428,9 +463,20 @@ static int real_main(int argc, char** argv) {
     return result;
 }
 
-int main(int argc, char** argv) {
+int wmain(int argc, wchar_t** argv) {
     try {
-        return real_main(argc, argv);
+        std::vector<std::string> encoded;
+        std::vector<char*> arguments;
+        encoded.reserve(size_t(argc));arguments.reserve(size_t(argc));
+        for(int i=0;i<argc;++i) {
+            const int size=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,argv[i],-1,nullptr,0,nullptr,nullptr);
+            if(!size)throw std::invalid_argument("invalid Unicode argument");
+            std::string text(size_t(size),'\0');
+            if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,argv[i],-1,text.data(),size,nullptr,nullptr))throw std::runtime_error("cannot encode Unicode argument");
+            text.pop_back();encoded.push_back(std::move(text));
+        }
+        for(auto& text:encoded)arguments.push_back(text.data());
+        return real_main(argc, arguments.data());
     } catch (const std::exception& e) {
         uc::fatal("startup failed: %s", e.what());
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include "gx_packets.h"
+#include "prompt_overlay.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -43,6 +44,7 @@ private:
         Buffer upload;
         VkExtent2D extent{};
         uint32_t mip_levels=1;
+        gx::TextureChannels channels=gx::TextureChannels::rgba;
         VkDeviceSize allocation_size=0;
         std::shared_ptr<const gx::TexturePixels> source;
         bool initialized=false;
@@ -81,12 +83,13 @@ private:
     void retire_textures(Slot& slot);
     void rebuild();
     void retire_images();
-    using PipelineKey=std::array<uint32_t,69>;
+    using PipelineKey=std::array<uint32_t,70>;
     VkPipeline pipeline_for(const gx::DrawPacket& draw,bool alpha_pass=false);
     VkPipeline make_pipeline(const gx::BlendState& blend,const PipelineKey& key);
     void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent,bool depth=false);
     void collect();
     SDL_Window* window_ = nullptr;
+    PromptOverlay prompt_overlay_;
     std::thread::id owner_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;

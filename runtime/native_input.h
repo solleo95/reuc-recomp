@@ -1,5 +1,6 @@
 #pragma once
 #include "ppc_rt.h"
+#include "input_bindings.h"
 #include <mutex>
 
 namespace uc {
@@ -9,20 +10,43 @@ struct InputSample {
     uint32_t held=0,pressed=0,released=0;
     bool valid=false;
 };
+enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus };
+struct HostEvent { HostEventKind kind; uint32_t code; int value; float x=0,y=0; };
+using InputProbe=void(*)(const ppc::Ctx&,const InputSample&);
+void input_hle_set_probe(InputProbe probe);
+using InputMap=InputSample(*)(const ppc::Ctx&,const InputSample&);
+void input_hle_set_map(InputMap map);
 class NativeInput {
 public:
+    NativeInput();
     void focus(bool focused);
+    void bindings(const Bindings&);
+    void context(InputContext);
+    void qte_window(bool);
+    void host_button(PhysicalInput,bool);
+    void host_wheel(int);
+    void host_motion(float,float,uint64_t timestamp_ns=0);
+    ActionFrame consume_actions();
+    ActionFrame consume_service_actions();
     bool move_raw(float dx,float dy,uint32_t width,uint32_t height);
     bool aim(float x,float y);
     bool apply_test_command(uint64_t sequence,float x,float y,uint32_t held);
+    bool apply_test_event(uint64_t sequence,const HostEvent&,uint32_t width,uint32_t height);
+    bool using_host_input();
+    uint64_t generation();
     uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
 private:
+    void cancel_host(); // Requires mutex_.
     std::mutex mutex_;
+    BindingResolver actions_,services_;
     InputSample state_;
     float previous_x_=0,previous_y_=0;
-    uint64_t sequence_=0,consumed_sequence_=0;
+    uint64_t sequence_=0,host_sequence_=0,consumed_sequence_=0;
+    bool legacy_test_input_=false;
+    uint64_t generation_=0;
+    InputContext context_=InputContext::inactive;
 };
 void input_hle_init(NativeInput* input);
 }

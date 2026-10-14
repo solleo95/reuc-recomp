@@ -3,7 +3,7 @@
 #include <stdexcept>
 namespace uc {
 bool cursor_release_key(WindowMode mode,SDL_Keycode key) {
-    return key==SDLK_ESCAPE || (mode==WindowMode::windowed && (key==SDLK_LALT || key==SDLK_RALT));
+    return mode==WindowMode::windowed && (key==SDLK_LALT || key==SDLK_RALT);
 }
 void configure_window_mode(SDL_Window* window,WindowMode mode,int width,int height) {
     if(!window || width<=0 || height<=0) throw std::invalid_argument("invalid window/output extent");

@@ -26,7 +26,8 @@ struct TextureLevel {
     uint32_t width, height;
     std::vector<uint8_t> rgba;
 };
-struct TexturePixels { std::vector<TextureLevel> levels; bool gpu_only=false; };
+enum class TextureChannels:uint8_t { rgba,alpha_intensity,rgb565 };
+struct TexturePixels { std::vector<TextureLevel> levels; bool gpu_only=false; TextureChannels channels=TextureChannels::rgba; };
 
 // Decodes texture data into owned RGBA8 pixels; guest addresses never escape.
 TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette = {});

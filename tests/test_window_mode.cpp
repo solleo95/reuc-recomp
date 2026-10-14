@@ -6,7 +6,7 @@ int main() try {
     CHECK(SDL_SetEnvironmentVariable(SDL_GetEnvironment(),"SDL_VIDEODRIVER","dummy",true));
     CHECK(SDL_Init(SDL_INIT_VIDEO));
     for(auto mode:{uc::WindowMode::windowed,uc::WindowMode::borderless,uc::WindowMode::exclusive}) {
-        CHECK(uc::cursor_release_key(mode,SDLK_ESCAPE));
+        CHECK(!uc::cursor_release_key(mode,SDLK_ESCAPE));
         CHECK(uc::cursor_release_key(mode,SDLK_LALT)==(mode==uc::WindowMode::windowed));
         CHECK(uc::cursor_release_key(mode,SDLK_RALT)==(mode==uc::WindowMode::windowed));
         CHECK(!uc::cursor_release_key(mode,SDLK_A));

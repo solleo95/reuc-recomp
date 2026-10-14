@@ -1,0 +1,38 @@
+add_library(uc_binding_editor STATIC binding_editor.cpp)
+target_include_directories(uc_binding_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_binding_editor PUBLIC uc_input)
+add_library(uc_launch STATIC launch.cpp)
+target_include_directories(uc_launch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_launch PUBLIC uc_options_config)
+include(FetchContent)
+set(imgui_archive "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9b.zip")
+if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/imgui-1.92.9b.zip")
+  set(imgui_archive "${CMAKE_SOURCE_DIR}/build/deps/imgui-1.92.9b.zip")
+endif()
+FetchContent_Declare(imgui URL "${imgui_archive}"
+  URL_HASH SHA256=e1c46d676c2bcb7ced847ba27f50553e33a19db97b3cadaec7f8be64449139f8
+  DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
+FetchContent_MakeAvailable(imgui)
+add_library(uc_imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+target_sources(uc_imgui PRIVATE ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp)
+target_include_directories(uc_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp)
+target_link_libraries(uc_imgui PUBLIC SDL3::SDL3)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
+  # SDL3-3.2.0's prefetch workaround needs the Clang intrinsic guard loaded first.
+  target_compile_options(uc_imgui PRIVATE /FIintrin.h)
+endif()
+install(FILES ${imgui_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/imgui)
+add_library(uc_imgui_vulkan STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+find_package(Vulkan 1.3 REQUIRED)
+target_link_libraries(uc_imgui_vulkan PUBLIC uc_imgui Vulkan::Vulkan)
+add_executable(uc_launcher WIN32 main.cpp)
+target_link_libraries(uc_launcher PRIVATE uc_binding_editor uc_launch uc_imgui shell32)
+target_include_directories(uc_launcher PRIVATE ${CMAKE_SOURCE_DIR}/renderer)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
+  target_compile_options(uc_launcher PRIVATE /FIintrin.h)
+endif()
+add_custom_command(TARGET uc_launcher POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:uc_launcher>)
+install(TARGETS uc_launcher RUNTIME DESTINATION .)

@@ -18,6 +18,8 @@ std::string format_insn(uint32_t pc, uint32_t w) {
     bool fp = (op->primary >= 48 && op->primary <= 55) ||
               (op->primary == 31 && (op->xo == 535 || op->xo == 567 || op->xo == 599 || op->xo == 631 || op->xo == 663 || op->xo == 695 || op->xo == 727 || op->xo == 759 || op->xo == 983));
     auto rt = [&](uint32_t n) { return fp ? f(n) : r(n); };
+    const bool fp_arithmetic = op->primary == 4 || op->primary == 59 || op->primary == 63;
+    auto operand = [&](uint32_t n) { return fp_arithmetic ? f(n) : r(n); };
     std::string o;
     switch (op->kind) {
         case Kind::NONE: return name;
@@ -28,7 +30,7 @@ std::string format_insn(uint32_t pc, uint32_t w) {
                 // logical and shift forms: the destination is rA, the sources are rS (t field) and rB (or the shift amount)
                 o = r(a(w)) + "," + r(t(w)) + "," + (name.rfind("srawi", 0) == 0 ? std::to_string(b(w)) : r(b(w)));
             } else {
-                o = rt(t(w)) + "," + r(a(w)) + "," + r(b(w));
+                o = (fp_arithmetic ? f(t(w)) : rt(t(w))) + "," + operand(a(w)) + "," + operand(b(w));
             }
             break;
         case Kind::RRS:
@@ -36,14 +38,18 @@ std::string format_insn(uint32_t pc, uint32_t w) {
             else o = r(t(w)) + "," + r(a(w)) + "," + std::to_string(simm(w));
             break;
         case Kind::RRU: o = r(a(w)) + "," + r(t(w)) + "," + std::to_string(uimm(w)); break;
-        case Kind::RR: o = r(a(w)) + "," + r(t(w)); break;
+        case Kind::RR:
+            if (op->xo == 104 || op->xo == 200 || op->xo == 202 || op->xo == 232 || op->xo == 234)
+                o = r(t(w)) + "," + r(a(w));
+            else o = r(a(w)) + "," + r(t(w));
+            break;
         case Kind::AB: o = r(a(w)) + "," + r(b(w)); break;
         case Kind::RB: o = f(t(w)) + "," + f(b(w)); break;
         case Kind::R: o = r(t(w)); break;
         case Kind::CRF: o = "cr" + std::to_string(crfd(w)); break;
         case Kind::RRM: o = r(a(w)) + "," + r(t(w)) + "," + std::to_string(sh(w)) + "," + std::to_string(mb(w)) + "," + std::to_string(me(w)); break;
         case Kind::RRRM: o = r(a(w)) + "," + r(t(w)) + "," + r(b(w)) + "," + std::to_string(mb(w)) + "," + std::to_string(me(w)); break;
-        case Kind::CMP: o = "cr" + std::to_string(crfd(w)) + "," + r(a(w)) + "," + r(b(w)); break;
+        case Kind::CMP: o = "cr" + std::to_string(crfd(w)) + "," + operand(a(w)) + "," + operand(b(w)); break;
         case Kind::CMPS: o = "cr" + std::to_string(crfd(w)) + "," + r(a(w)) + "," + std::to_string(simm(w)); break;
         case Kind::CMPU: o = "cr" + std::to_string(crfd(w)) + "," + r(a(w)) + "," + std::to_string(uimm(w)); break;
         case Kind::CRB: o = std::to_string(t(w)) + "," + std::to_string(a(w)) + "," + std::to_string(b(w)); break;

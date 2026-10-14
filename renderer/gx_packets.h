@@ -21,6 +21,7 @@ struct FramePacket {
     uint32_t clear_depth = 0xFFFFFF, xfb = 0;
     std::optional<TextureCopy> texture_copy;
     std::array<uint32_t,4> display_source{0,0,640,480};
+    std::vector<PromptDraw> prompts;
 };
 
 class Packets {

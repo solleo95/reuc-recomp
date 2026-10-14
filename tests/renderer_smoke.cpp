@@ -57,8 +57,11 @@ int main(int argc, char** argv) {
         CHECK(SDL_CreateWindowWithProperties(invalid_window)==nullptr);
         SDL_DestroyProperties(invalid_window);
         std::fprintf(stderr,"GPU smoke: create Vulkan window\n");
-        window = SDL_CreateWindow("Umbrella Chronicles — Vulkan smoke", 320, 240, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        window = SDL_CreateWindow("Umbrella Chronicles — Vulkan smoke", 320, 240, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
         if (!window) throw std::runtime_error(SDL_GetError());
+        const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
+        if(!hwnd)throw std::runtime_error("smoke window has no native handle");
+        ShowWindow(hwnd,SW_SHOWNOACTIVATE);
         std::fprintf(stderr,"GPU smoke: initialize renderer\n");
         uc::VulkanRenderer renderer;
         renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
@@ -436,10 +439,132 @@ int main(int argc, char** argv) {
         CHECK(sampled.rgba[(size_t(sampled.height-1)*sampled.width+sampled.width/2)*4]==255);
         high_resolution=renderer.capture(91,true);
         CHECK(high_resolution.width==1600 && high_resolution.height==1200);
+        renderer.set_render_scale(.5);
+        auto alpha_copy=std::make_shared<gx::TexturePixels>(); alpha_copy->gpu_only=true;
+        alpha_copy->channels=gx::TextureChannels::alpha_intensity; alpha_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+        work=packet; work.serial=92; work.present=false; work.draws[0]=quad;
+        work.draws[0].uniforms.pixel[2]=256|77;
+        for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,255};
+        work.texture_copy=gx::TextureCopy{{0,0,640,480},alpha_copy}; submit(work);
+        work=packet; work.serial=93; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material;
+        work.draws[0].texture=alpha_copy;
+        for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
+        submit(work); sampled=renderer.capture(93);
+        center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
+        CHECK(sampled.rgba[center]==77 && sampled.rgba[center+1]==77 && sampled.rgba[center+2]==77 && sampled.rgba[center+3]==77);
+        // Dropping an alpha-only version must never recycle its swizzled view as RGBA.
+        alpha_copy.reset(); work.draws[0].texture.reset(); work.serial=94; submit(work);
+        auto rgba_copy=std::make_shared<gx::TexturePixels>(); rgba_copy->gpu_only=true; rgba_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+        work=packet; work.serial=95; work.present=false; work.draws[0]=quad;
+        for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,255};
+        work.texture_copy=gx::TextureCopy{{0,0,640,480},rgba_copy}; submit(work);
+        work=packet; work.serial=96; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgba_copy;
+        for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
+        submit(work); sampled=renderer.capture(96);
+        CHECK(sampled.rgba[center]==17 && sampled.rgba[center+1]==33 && sampled.rgba[center+2]==65);
+        work=packet; work.serial=97; work.draws[0]=quad; work.clear_color={0,0,0,255};
+        auto& line=work.draws[0]; line.primitive=0xA8;
+        line.vertices={quad.vertices[0],quad.vertices[2]}; line.indices={0,1};
+        for(auto& vertex:line.vertices)vertex.color[0]={255,0,0,255};
+        submit(work); sampled=renderer.capture(97);
+        size_t line_pixels=0;
+        for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==255 && sampled.rgba[i+1]==0)++line_pixels;
+        CHECK(line_pixels>100 && line_pixels<5000);
+        work.serial=98; line.primitive=0xB0; submit(work); sampled=renderer.capture(98);
+        size_t strip_pixels=0;
+        for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==255 && sampled.rgba[i+1]==0)++strip_pixels;
+        CHECK(strip_pixels==line_pixels);
+        work.serial=99; line.indices.push_back(0); bool odd_line_rejected=false;
+        try {renderer.render(work);}catch(const std::invalid_argument&){odd_line_rejected=true;}
+        CHECK(odd_line_rejected);
+        work=packet; work.serial=99; work.draws[0]=quad;
+        submit(work); sampled=renderer.capture(99);
+        CHECK(sampled.rgba[center]==255); // Triangle pipeline survives line topology cache entries.
+        auto rgb565_copy=std::make_shared<gx::TexturePixels>(); rgb565_copy->gpu_only=true;
+        rgb565_copy->channels=gx::TextureChannels::rgb565; rgb565_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+        work=packet; work.serial=100; work.present=false; work.draws[0]=quad;
+        for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,19};
+        work.texture_copy=gx::TextureCopy{{0,0,640,480},rgb565_copy}; submit(work);
+        work=packet; work.serial=101; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgb565_copy;
+        for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
+        submit(work); sampled=renderer.capture(101);
+        CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==66 && sampled.rgba[center+3]==255);
+        work={};work.serial=102;work.clear_color={16,32,64,255};submit(work);
+        const auto prompt_background=renderer.capture(102);
+        const auto prompt_efb_background=renderer.capture(102,true);
+        work.serial=103;
+        work.prompts.push_back({uc::describe_prompt(uc::default_bindings(),uc::Action::interact),{160,120,480,120,480,360,160,360}});
+        submit(work);sampled=renderer.capture(103);
+        CHECK(sampled.rgba!=prompt_background.rgba);
+        CHECK(std::equal(sampled.rgba.begin(),sampled.rgba.begin()+4,prompt_background.rgba.begin()));
+        CHECK(renderer.capture(103,true).rgba==prompt_efb_background.rgba);
+        uc::save_png(sampled,executable_dir()/"native-prompts.png");
+        work.serial=104;work.prompts[0].alpha={0,0,0,0};submit(work);
+        CHECK(renderer.capture(104).rgba==prompt_background.rgba);
+        work.serial=105;work.prompts.clear();
+        const auto assignments=uc::default_bindings();
+        const uc::Action prompt_actions[]={uc::Action::grenade,uc::Action::knife,uc::Action::weapon_previous,uc::Action::weapon_next,uc::Action::confirm,uc::Action::qte_shake};
+        for(size_t i=0;i<6;++i) {
+            const float x=20+float(i%2)*320,y=20+float(i/2)*150;
+            work.prompts.push_back({uc::describe_prompt(assignments,prompt_actions[i]),{x,y,x+280,y,x+280,y+120,x,y+120}});
+        }
+        submit(work);sampled=renderer.capture(105);
+        CHECK(sampled.rgba!=prompt_background.rgba);
+        uc::save_png(sampled,executable_dir()/"native-prompt-cases.png");
+        work.serial=106;work.prompts.resize(1);
+        auto cleared_assignments=assignments;cleared_assignments[size_t(uc::Action::grenade)].clear();
+        work.prompts[0]={uc::describe_prompt(cleared_assignments,uc::Action::grenade),{320,40,520,180,320,320,120,180},{.5f,.5f,.5f,.5f},{100,100,540,260}};
+        submit(work);sampled=renderer.capture(106);
+        CHECK(sampled.rgba!=prompt_background.rgba);
+        CHECK(std::equal(sampled.rgba.begin(),sampled.rgba.begin()+4,prompt_background.rgba.begin()));
+        work.serial=107;work.prompts[0].alpha[0]=2;
+        bool bad_prompt=false;try{renderer.render(work);}catch(const std::invalid_argument&){bad_prompt=true;}
+        CHECK(bad_prompt);work.prompts[0].alpha={1,1,1,1};
+        size_t previous_prompt_pixels=0;
+        for(const auto output: {VkExtent2D{3840,2160},VkExtent2D{7680,4320}}) {
+            CHECK(SDL_SetWindowSize(window,int(output.width),int(output.height)));
+            renderer.resize(output.width,output.height);submit(work);sampled=renderer.capture(work.serial++);
+            CHECK(sampled.width==output.width && sampled.height==output.height);
+            size_t changed=0;for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]!=16 || sampled.rgba[i+1]!=32 || sampled.rgba[i+2]!=64)++changed;
+            std::fprintf(stderr,"Native prompt output %ux%u: changed pixels %zu\n",sampled.width,sampled.height,changed);
+            CHECK(changed>100 && changed<size_t(output.width)*output.height/2);
+            CHECK(changed>previous_prompt_pixels*2);previous_prompt_pixels=changed;
+        }
+        CHECK(SDL_SetWindowSize(window,1280,720));renderer.resize(1280,720);
+        for(uint64_t serial:{109u,110u}) {
+            work.serial=serial;auto until=std::chrono::steady_clock::now()+3s;
+            while(!renderer.render(work)) {CHECK(std::chrono::steady_clock::now()<until);std::this_thread::sleep_for(1ms);}
+        }
+        uint64_t prompt_complete=109;auto prompt_deadline=std::chrono::steady_clock::now()+3s;
+        while(prompt_complete<=110) {
+            CHECK(std::chrono::steady_clock::now()<prompt_deadline);
+            for(auto serial:renderer.poll_completions()) {CHECK(serial==prompt_complete);++prompt_complete;}
+            std::this_thread::sleep_for(1ms);
+        }
+        // Inline text glyph cell: primary binding only, drawn inside the 24x26 EFB cell.
+        auto inline_cell=[&](uint64_t serial,const uc::PromptDescription& description,size_t minimum) {
+            work.serial=serial;work.prompts={{description,{300,200,324,200,324,226,300,226}}};work.prompts[0].compact=true;
+            submit(work);auto pixels=renderer.capture(serial);
+            size_t inside=0,outside=0;
+            for(uint32_t y=0;y<pixels.height;++y)for(uint32_t x=0;x<pixels.width;++x) {
+                const size_t i=(size_t(y)*pixels.width+x)*4;
+                if(pixels.rgba[i]==16 && pixels.rgba[i+1]==32 && pixels.rgba[i+2]==64)continue;
+                const bool cell=x>=598 && x<=650 && y>=298 && y<=341;
+                (cell ? inside : outside)++;
+            }
+            std::fprintf(stderr,"Native inline glyph: inside %zu outside %zu\n",inside,outside);
+            CHECK(inside>minimum && outside==0);
+            uc::save_png(pixels,executable_dir()/("native-inline-"+std::to_string(serial)+".png"));
+            return inside;
+        };
+        inline_cell(111,uc::primary_prompt(assignments,{uc::Action::interact}),150);
+        inline_cell(112,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
+        auto cleared_interact=assignments;cleared_interact[size_t(uc::Action::interact)].clear();
+        inline_cell(113,uc::primary_prompt(cleared_interact,{uc::Action::interact}),10);
         bool invalid_scale=false; try { renderer.set_render_scale(7); } catch(const std::invalid_argument&) { invalid_scale=true; }
         CHECK(invalid_scale);
         renderer.set_render_scale(0.5);
-        packet.serial = 92; draw.indices[2] = 999;
+        packet.serial = 114;packet.prompts=work.prompts;draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -448,7 +573,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({92}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({114}));
         CHECK(renderer.validation_errors() == 0);
         uc::VulkanRenderer portrait;
         portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25);

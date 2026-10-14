@@ -2,6 +2,7 @@
 #include "gx_transforms.h"
 #include "gx_textures.h"
 #include "gx_materials.h"
+#include "prompt_draw.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,7 @@ struct DrawPacket {
     DrawUniform uniforms;
     BlendState blend;
     std::array<uint8_t,8> texture_wrap{}; // SDK mode: S0..1,T2..3,mag4,mip5..6,min7
+    std::optional<PromptDraw> native_prompt;
 };
 
 // Owned by the guest scheduler baton; callers identify its current producer.

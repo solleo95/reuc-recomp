@@ -6,7 +6,7 @@ target_sources(uc_runtime PRIVATE savefs.cpp hle/save.cpp)
 target_sources(uc_runtime PRIVATE native_input.cpp)
 target_sources(uc_runtime PRIVATE ax_audio.cpp)
 target_sources(uc_runtime PRIVATE locked_copy.cpp)
-target_link_libraries(uc_runtime PUBLIC uc_gx)
+target_link_libraries(uc_runtime PUBLIC uc_gx uc_input)
 # Real hook implementations for uc.exe (ppc::trap, mmio_*, timebase); tests use tests/mmio_stub.cpp instead.
 add_library(uc_platform STATIC platform.cpp)
 target_link_libraries(uc_platform PUBLIC uc_runtime)

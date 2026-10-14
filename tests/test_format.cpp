@@ -22,6 +22,18 @@ int main() {
     CHECK(ppc::format_insn(0x80003100, 0x7C832830) == "slw r3,r4,r5");
     CHECK(ppc::format_insn(0x80003100, 0x7C832E70) == "srawi r3,r4,5");
     CHECK(ppc::format_insn(0x80003100, 0x7C832838) == "and r3,r4,r5");
+    CHECK(ppc::format_insn(0, 0x7C7E00D0) == "neg r3,r30");
+    for (auto [xo, name] : {std::pair{200u, "subfze"}, {202u, "addze"},
+                           {232u, "subfme"}, {234u, "addme"}})
+        CHECK(ppc::format_insn(0, (31u<<26)|(3u<<21)|(30u<<16)|(xo<<1)) ==
+              std::string(name) + " r3,r30");
+    CHECK(ppc::format_insn(0, (31u<<26)|(4u<<21)|(3u<<16)|(26u<<1)) == "cntlzw r3,r4");
+    CHECK(ppc::format_insn(0, (59u<<26)|(1u<<21)|(2u<<16)|(3u<<11)|(20u<<1)) == "fsubs f1,f2,f3");
+    CHECK(ppc::format_insn(0, (63u<<26)|(1u<<21)|(2u<<16)|(3u<<11)|(21u<<1)) == "fadd f1,f2,f3");
+    CHECK(ppc::format_insn(0, (4u<<26)|(1u<<21)|(2u<<16)|(3u<<11)|(21u<<1)) == "ps_add f1,f2,f3");
+    CHECK(ppc::format_insn(0, (63u<<26)|(2u<<16)|(3u<<11)|(32u<<1)) == "fcmpo cr0,f2,f3");
+    CHECK(ppc::format_insn(0, (4u<<26)|(2u<<16)|(3u<<11)) == "ps_cmpu0 cr0,f2,f3");
+    CHECK(ppc::format_insn(0, (31u<<26)|(1u<<21)|(2u<<16)|(3u<<11)|(535u<<1)) == "lfsx f1,r2,r3");
     CHECK(ppc::format_insn(0x80003100, 0x14000000).rfind(".long 0x14000000", 0) == 0);
     return 0;
 }

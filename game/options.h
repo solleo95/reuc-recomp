@@ -16,7 +16,8 @@ struct Options {
     bool profile = false;
     bool capture_scene_passes = false;
     bool unlock_60fps = false;
-    std::filesystem::path test_control,save_root;
+    bool input_probe = false;
+    std::filesystem::path test_control,save_root,config;
 };
-std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments);
+std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});
 }

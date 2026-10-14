@@ -194,3 +194,9 @@ KPADRead
 @802882C4 GXSetColorUpdate
 @802882F0 GXSetAlphaUpdate
 KPADEnableMotor Nop
+
+# Native action binding getter; exact scoped Grenade recognition belongs to host actions.
+@8003FB98 GameActionMask
+@8006C268 GameWeaponUpdate
+@801AB350 GameActionOwnerUpdate
+@80171D38 GameMotionCount
