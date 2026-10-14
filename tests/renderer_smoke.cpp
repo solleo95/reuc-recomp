@@ -555,16 +555,68 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,"Native inline glyph: inside %zu outside %zu\n",inside,outside);
             CHECK(inside>minimum && outside==0);
             uc::save_png(pixels,executable_dir()/("native-inline-"+std::to_string(serial)+".png"));
+            uc::RenderPixels detail{serial,480,440,std::vector<uint8_t>(480*440*4)};
+            for(uint32_t y=0;y<440;++y)for(uint32_t x=0;x<480;++x) {
+                const size_t source=(size_t(292+y/8)*pixels.width+595+x/8)*4,target=(size_t(y)*480+x)*4;
+                std::copy_n(pixels.rgba.begin()+source,4,detail.rgba.begin()+target);
+            }
+            uc::save_png(detail,executable_dir()/("native-inline-detail-"+std::to_string(serial)+".png"));
             return inside;
         };
         inline_cell(111,uc::primary_prompt(assignments,{uc::Action::interact}),150);
+        const auto monochrome_mouse=renderer.capture(111);
         inline_cell(112,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
         auto cleared_interact=assignments;cleared_interact[size_t(uc::Action::interact)].clear();
         inline_cell(113,uc::primary_prompt(cleared_interact,{uc::Action::interact}),10);
+        renderer.set_prompt_style(uc::PromptStyle::sculpted);
+        inline_cell(114,uc::primary_prompt(assignments,{uc::Action::interact}),150);
+        const auto sculpted_left=renderer.capture(114);
+        CHECK(sculpted_left.rgba!=monochrome_mouse.rgba);
+        bool invalid_prompt_style=false;
+        try{renderer.set_prompt_style(uc::PromptStyle(99));}catch(const std::invalid_argument&){invalid_prompt_style=true;}
+        CHECK(invalid_prompt_style);
+        inline_cell(115,uc::primary_prompt(assignments,{uc::Action::fire}),150);
+        const auto sculpted_right=renderer.capture(115);
+        auto active_pixels=[](const uc::RenderPixels& pixels) {
+            // Weight antialiased cyan coverage; exact-color counts depend on subpixel placement.
+            double count=0;for(size_t i=0;i<pixels.rgba.size();i+=4) {
+                const int chroma=int(pixels.rgba[i+1])-pixels.rgba[i];
+                if(chroma>25)count+=chroma/105.;
+            }
+            return count;
+        };
+        const auto left_fill=active_pixels(sculpted_left),right_fill=active_pixels(sculpted_right);
+        std::fprintf(stderr,"Native sculpted fill: left %.2f right %.2f\n",left_fill,right_fill);
+        CHECK(std::min(left_fill,right_fill)>20);
+        CHECK(std::max(left_fill,right_fill)-std::min(left_fill,right_fill)<std::max(left_fill,right_fill)*.05+1);
+        for(const auto* pixels:{&monochrome_mouse,&sculpted_left,&sculpted_right})
+            for(auto xy:{std::pair{602u,301u},{646u,301u},{602u,337u},{646u,337u}}) {
+                const size_t i=(size_t(xy.second)*pixels->width+xy.first)*4;
+                CHECK(pixels->rgba[i]==16 && pixels->rgba[i+1]==32 && pixels->rgba[i+2]==64);
+            }
+        inline_cell(116,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
+        inline_cell(117,uc::primary_prompt(assignments,{uc::Action::reload}),150);
+        const auto sculpted_key=renderer.capture(117);
+        renderer.set_prompt_style(uc::PromptStyle::monochrome);
+        inline_cell(118,uc::primary_prompt(assignments,{uc::Action::reload}),150);
+        CHECK(renderer.capture(118).rgba!=sculpted_key.rgba);
+        renderer.set_prompt_style(uc::PromptStyle::sculpted);
+        work.serial=119;
+        gx::PromptDraw main_glyph{uc::primary_prompt(assignments,{uc::Action::interact}),{300,200,324,200,324,226,300,226}};main_glyph.compact=true;
+        auto shadow=main_glyph;for(auto& tint:shadow.tint)tint={0,0,0};
+        for(size_t i=0;i<4;++i) {shadow.efb_corners[i*2]+=1;shadow.efb_corners[i*2+1]+=.75f;}
+        work.prompts={shadow};submit(work);sampled=renderer.capture(119);
+        CHECK(active_pixels(sampled)==0);
+        size_t shadow_pixels=0;for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==0 && sampled.rgba[i+1]==0 && sampled.rgba[i+2]==0)++shadow_pixels;
+        CHECK(shadow_pixels>150);
+        work.serial=120;work.prompts={shadow,main_glyph};submit(work);sampled=renderer.capture(120);
+        auto white_pixels=[](const uc::RenderPixels& pixels) {size_t count=0;for(size_t i=0;i<pixels.rgba.size();i+=4)if(pixels.rgba[i]==255 && pixels.rgba[i+1]==255 && pixels.rgba[i+2]==255)++count;return count;};
+        CHECK(white_pixels(sampled)<=white_pixels(sculpted_left)+2 && active_pixels(sampled)>20);
+        uc::save_png(sampled,executable_dir()/"native-prompt-shadow.png");
         bool invalid_scale=false; try { renderer.set_render_scale(7); } catch(const std::invalid_argument&) { invalid_scale=true; }
         CHECK(invalid_scale);
         renderer.set_render_scale(0.5);
-        packet.serial = 114;packet.prompts=work.prompts;draw.indices[2] = 999;
+        packet.serial = 121;packet.prompts=work.prompts;draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -573,7 +625,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({114}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({121}));
         CHECK(renderer.validation_errors() == 0);
         uc::VulkanRenderer portrait;
         portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25);

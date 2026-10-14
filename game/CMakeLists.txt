@@ -1,7 +1,7 @@
 set(UC_GENERATED_DIR ${CMAKE_SOURCE_DIR}/generated CACHE PATH "translator output")
 add_library(uc_options STATIC options.cpp window_mode.cpp)
 target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_options PUBLIC SDL3::SDL3)
+target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts)
 add_library(uc_options_config STATIC options_config.cpp)
 target_include_directories(uc_options_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_options_config PUBLIC uc_options uc_input_config)

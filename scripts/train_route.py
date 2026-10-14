@@ -65,6 +65,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", type=pathlib.Path)
     parser.add_argument("--render-scale", type=float, default=1)
+    parser.add_argument("--prompt-style",choices=("monochrome","sculpted"),default="monochrome")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--unlock-60fps", action="store_true")
@@ -94,7 +95,7 @@ def main():
         bindings={"fire":[{"kind":"key","code":9},{"kind":"key","code":12}],
                   "grenade":[{"kind":"key","code":11},{"kind":"interact_fire"}],
                   "knife":[{"kind":"key","code":5},{"kind":"interact_motion"}]}
-    config_path.write_text(json.dumps({"input":{"version":1,"bindings":bindings}}),encoding="utf-8")
+    config_path.write_text(json.dumps({"input":{"version":1,"bindings":bindings},"graphics":{"prompt_style":args.prompt_style}}),encoding="utf-8")
     sequence = 0
     last_aim = (0.0,0.0)
     last_held = 0

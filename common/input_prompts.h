@@ -4,6 +4,7 @@
 #include <optional>
 #include <vector>
 namespace uc {
+enum class PromptStyle:uint8_t {monochrome,sculpted};
 enum class PromptGesture:uint8_t {directional_motion,shake};
 struct PromptChoice {std::vector<Binding> bindings;bool held=false;};
 struct PromptAlternative {std::vector<PromptChoice> choices;std::optional<PromptGesture> gesture;};

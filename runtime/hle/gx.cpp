@@ -24,6 +24,7 @@ gx::BlendState blend_state,live_blend;
 gx::DrawUniform color_uniforms,live_uniforms;
 gx::TevMaterial live_material;
 bool profile_mesh;
+uint32_t prompt_color_logs=0;
 uint64_t prompt_batch=0;
 std::vector<gx::PromptDraw> carried_prompts;
 std::atomic<uint64_t> prompt_annotations{},prompt_present{},prompt_fallback{};
@@ -323,7 +324,10 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             resolve_texture_matrices(draw.uniforms,source->texture_selectors,matrices);
             draw.texture_wrap=wraps(textures);
             draw.blend=blend;
-            if(source->prompt)if(auto prompt=uc::prompt_from_quad(draw,*source->prompt)) {prompt->compact=source->compact;draw.native_prompt=std::move(*prompt);++prompt_annotations;}
+            if(source->prompt)if(auto prompt=uc::prompt_from_quad(draw,*source->prompt)) {
+                if(profile_mesh && source->compact && prompt_color_logs++<12)std::fprintf(stderr,"[prompt-color] action %u pos %.2f %.2f rgba %u %u %u %u material %.2f %.2f %.2f channel %08X\n",unsigned(source->prompt->action),prompt->efb_corners[0],prompt->efb_corners[1],draw.vertices[0].color[0][0],draw.vertices[0].color[0][1],draw.vertices[0].color[0][2],draw.vertices[0].color[0][3],draw.uniforms.materials[0][0],draw.uniforms.materials[0][1],draw.uniforms.materials[0][2],draw.uniforms.channels[0]);
+                prompt->compact=source->compact;draw.native_prompt=std::move(*prompt);++prompt_annotations;
+            }
             imported.push_back(std::move(draw));
         } else if (const auto* array=std::get_if<Resource::ArrayBinding>(&item)) bindings.arrays[array->attribute]=array->array;
         else if (const auto* projection=std::get_if<Resource::Projection>(&item)) transform_state.projection=projection->matrix;
@@ -419,6 +423,7 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     prompt_batch=0;carried_prompts.clear();
     prompt_annotations=prompt_present=prompt_fallback=0;
     profile_mesh=profile; mesh_profile_count=0;
+    prompt_color_logs=0;
     copy_profile_count=0;
     channel_profile_count=0;
     texgen_profile_count=0;

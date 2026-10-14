@@ -44,6 +44,9 @@ int main() {
     CHECK(prompt->efb_corners[4]==480 && prompt->efb_corners[5]==360);
     draw.vertices[0].color[0][3]=128;prompt=uc::prompt_from_quad(draw,description);
     CHECK(prompt && prompt->alpha[0]==128.f/255);
+    draw.vertices[0].color[0]={0,0,0,128};prompt=uc::prompt_from_quad(draw,description);
+    CHECK(prompt && prompt->tint[0]==(std::array<float,3>{0,0,0}));
+    CHECK(prompt->tint[1]==(std::array<float,3>{1,1,1}) && prompt->alpha[0]==128.f/255);
     draw.transforms.projection[3][3]=0;CHECK(!uc::prompt_from_quad(draw,description));
     draw.transforms={};draw.vertices[0].position[0]=std::numeric_limits<float>::quiet_NaN();
     CHECK(!uc::prompt_from_quad(draw,description));

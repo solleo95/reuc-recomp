@@ -26,6 +26,7 @@ public:
     bool render(const gx::FramePacket& packet);
     void resize(uint32_t width, uint32_t height);
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
+    void set_prompt_style(PromptStyle);
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
     RenderPixels capture(uint64_t serial, bool efb = false);
@@ -90,6 +91,7 @@ private:
     void collect();
     SDL_Window* window_ = nullptr;
     PromptOverlay prompt_overlay_;
+    PromptStyle prompt_style_=PromptStyle::monochrome;
     std::thread::id owner_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;

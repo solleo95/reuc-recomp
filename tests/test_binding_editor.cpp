@@ -13,8 +13,9 @@ int main() {
     auto binding=editor.bindings()[size_t(Action::fire)].back();
     CHECK(binding.input==key(9) && binding.modifiers==std::vector<PhysicalInput>{key(224)});
     editor.begin_capture(Action::fire); editor.event(key(41),true);
-    CHECK(!editor.capturing() && editor.bindings()[size_t(Action::fire)].size()==2);
-    CHECK(!editor.add(Action::fire,{BindingKind::physical,key(41),{}})); // Explicit Esc choice.
+    CHECK(!editor.capturing() && editor.bindings()[size_t(Action::fire)].size()==3);
+    CHECK(editor.bindings()[size_t(Action::fire)].back().input==key(41));
+    CHECK(editor.bindings()[size_t(Action::fire)].back().modifiers.empty());
     editor.begin_capture(Action::knife); editor.event(key(230),true); editor.event(key(230),false);
     CHECK(editor.bindings()[size_t(Action::knife)].back().input==key(230));
     editor.begin_capture(Action::knife); editor.focus(false); editor.event(key(5),true);
@@ -28,5 +29,16 @@ int main() {
     CHECK(editor.add(Action::fire,{BindingKind::interact_fire,{},{}}));
     editor.restore_defaults(); CHECK(editor.bindings()==default_bindings());
     editor.remove(Action::fire,0); CHECK(editor.bindings()[size_t(Action::fire)].empty());
+    editor.restore_defaults();
+    const auto original=editor.bindings();
+    editor.begin_capture(Action::weapon_next,true);editor.focus(false);
+    CHECK(editor.bindings()==original);
+    editor.begin_capture(Action::weapon_next,true);editor.event(key(0),true);
+    CHECK(editor.error() && editor.capturing());CHECK(editor.bindings()==original);
+    editor.event(key(41),true);
+    CHECK(!editor.capturing());
+    CHECK(editor.bindings()[size_t(Action::weapon_next)]==std::vector<Binding>({{BindingKind::physical,key(41),{}}}));
+    editor.begin_capture(Action::weapon_next);editor.event(key(9),true);
+    CHECK(editor.bindings()[size_t(Action::weapon_next)].size()==2);
     return 0;
 }

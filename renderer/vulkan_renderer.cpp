@@ -470,6 +470,11 @@ void VulkanRenderer::set_render_scale(double scale) {
     manual_render_extent(scale,render_aspect_);
     if(configured_scale_!=scale) { configured_scale_=scale; resized_=true; }
 }
+void VulkanRenderer::set_prompt_style(PromptStyle style) {
+    owner();
+    if(style!=PromptStyle::monochrome && style!=PromptStyle::sculpted)throw std::invalid_argument("invalid native prompt style");
+    prompt_style_=style;
+}
 void VulkanRenderer::retire_images() {
     if (!device) return;
     VkResult status = vkDeviceWaitIdle(device);
@@ -581,6 +586,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     for(const auto& prompt:packet.prompts) {
         for(float value:prompt.efb_corners)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt geometry");
         for(float value:prompt.alpha)if(!std::isfinite(value) || value<0 || value>1)throw std::invalid_argument("invalid native prompt alpha");
+        for(const auto& tint:prompt.tint)for(float value:tint)if(!std::isfinite(value) || value<0 || value>1)throw std::invalid_argument("invalid native prompt tint");
         for(float value:prompt.clip)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt clip");
         if(prompt.clip[2]<prompt.clip[0] || prompt.clip[3]<prompt.clip[1])throw std::invalid_argument("invalid native prompt clip");
     }
@@ -826,7 +832,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=slot.view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
             vkCmdBeginRendering(slot.command,&ui);
-            prompt_overlay_.record(slot.command,packet.prompts,extent_,display);
+            prompt_overlay_.record(slot.command,packet.prompts,extent_,display,prompt_style_);
             vkCmdEndRendering(slot.command);
             barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
         } else

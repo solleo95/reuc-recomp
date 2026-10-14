@@ -1,4 +1,5 @@
 #include "prompt_overlay.h"
+#include "prompt_icons.h"
 #include <intrin.h>
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -67,7 +68,7 @@ std::vector<std::vector<Token>> tokens(const PromptDescription& description,bool
     return rows;
 }
 float length(ImVec2 a,ImVec2 b) {return std::hypot(a.x-b.x,a.y-b.y);}
-void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,const std::array<uint32_t,4>& source) {
+void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,const std::array<uint32_t,4>& source,PromptStyle style) {
     std::array<ImVec2,4> corners;
     for(size_t i=0;i<4;++i)corners[i]={(prompt.efb_corners[i*2]-source[0])*extent.width/source[2],(prompt.efb_corners[i*2+1]-source[1])*extent.height/source[3]};
     const float width=length(corners[0],corners[1]),height=length(corners[0],corners[3]);
@@ -78,7 +79,12 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,con
     const float density=float(extent.height)/720;
     float font_size=prompt.compact ? height*.6f : std::min(24.f*density,std::min(width/5,height/3));
     auto has_icon=[](const Token& token){return token.cap && (!token.input || token.input->kind!=PhysicalKind::key);};
-    auto token_width=[&](const Token& token) {return font->CalcTextSizeA(font_size,FLT_MAX,0,token.label.c_str()).x+(token.cap ? font_size*.8f : 0)+(has_icon(token) ? font_size : 0);};
+    auto mouse=[](const Token& token){return token.input && token.input->kind!=PhysicalKind::key;};
+    auto token_width=[&](const Token& token) {
+        const float label=font->CalcTextSizeA(font_size,FLT_MAX,0,token.label.c_str()).x;
+        if(mouse(token))return label+font_size*(prompt.compact ? .85f : 1.1f);
+        return label+(token.cap ? font_size*.8f : 0)+(has_icon(token) ? font_size : 0);
+    };
     float used_width=0;
     auto layout=[&](bool draw) {
         used_width=0;
@@ -88,24 +94,12 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,con
                 const float w=token_width(token),h=font_size*1.55f;
                 if(!prompt.compact && x>pad && x+w>width-pad) {x=pad;y+=h;}
                 if(draw) {
-                    if(token.cap) {
-                        list.AddRectFilled({x,y},{x+w,y+h},IM_COL32(28,32,40,235),font_size*.22f);
-                        list.AddRect({x,y},{x+w,y+h},IM_COL32(230,235,240,255),font_size*.22f,0,1.5f*density);
-                    }
-                    float text_x=x+(token.cap ? font_size*.4f : 0);
-                    if(token.input && token.input->kind!=PhysicalKind::key) {
-                        const float mx=text_x,my=y+font_size*.15f,mw=font_size*.7f,mh=font_size*1.2f;
-                        list.AddRect({mx,my},{mx+mw,my+mh},IM_COL32_WHITE,font_size*.25f,0,1.2f*density);
-                        if(token.input->kind==PhysicalKind::mouse && (token.input->code==1 || token.input->code==3)) {
-                            const float left=mx+(token.input->code==3 ? mw/2 : 0);
-                            list.AddRectFilled({left+1,my+2},{left+mw/2-1,my+mh*.45f},IM_COL32(90,190,255,255),1);
-                        } else list.AddLine({mx+mw/2,my+mh*.2f},{mx+mw/2,my+mh*.55f},IM_COL32(90,190,255,255),2*density);
-                        if(token.input->kind==PhysicalKind::wheel)for(int up:{1,0}) {
-                            if(!token.both_directions && up!=(token.input->code==1))continue;
-                            const float tip=up ? my-mh*.12f : my+mh*1.12f,base=up ? my+mh*.08f : my+mh*.92f;
-                            list.AddTriangleFilled({mx+mw/2,tip},{mx+mw*.15f,base},{mx+mw*.85f,base},IM_COL32(90,190,255,255));
-                        }
-                        text_x+=font_size;
+                    if(token.cap && !mouse(token))draw_keycap(list,{x,y},{w,h},style);
+                    float text_x=x+(token.cap && !mouse(token) ? font_size*.4f : 0);
+                    if(mouse(token)) {
+                        const bool wheel=token.input->kind==PhysicalKind::wheel;
+                        draw_mouse_icon(list,{x,y+font_size*(wheel ? .2f : .1f)},{font_size*.85f,font_size*(wheel ? 1.15f : 1.35f)},*token.input,token.both_directions,style);
+                        text_x+=font_size*1.1f;
                     } else if(has_icon(token)) {
                         const ImVec2 points[]={{text_x,y+font_size},{text_x+font_size*.25f,y+font_size*.35f},{text_x+font_size*.5f,y+font_size},{text_x+font_size*.75f,y+font_size*.35f}};
                         list.AddPolyline(points,4,IM_COL32(90,190,255,255),2*density,0);text_x+=font_size;
@@ -134,14 +128,26 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,con
     const int first_command=list.CmdBuffer.Size-1;
     const int first=list.VtxBuffer.Size;
     const float content_height=layout(false);
-    const float offset_x=(width-used_width)/2,offset_y=(height-content_height)/2;
+    float offset_x=(width-used_width)/2;
+    const float offset_y=(height-content_height)/2;
+    if(prompt.compact && rows.size()==1 && rows[0].size()==1 && mouse(rows[0][0]) &&
+       corners[0].y==corners[1].y && corners[0].x==corners[3].x && corners[1].x>corners[0].x && corners[3].y>corners[0].y) {
+        // A pixel-aligned mouse center keeps mirrored button coverage equal at HUD sizes.
+        const float center=corners[0].x+pad+font_size*.425f+offset_x;
+        offset_x+=std::round(center)-center;
+    }
     layout(true);
     for(int i=first;i<list.VtxBuffer.Size;++i) {
         auto& v=list.VtxBuffer[i];const float u=(v.pos.x+offset_x)/width,t=(v.pos.y+offset_y)/height;
         v.pos={corners[0].x*(1-u)*(1-t)+corners[1].x*u*(1-t)+corners[2].x*u*t+corners[3].x*(1-u)*t,
                corners[0].y*(1-u)*(1-t)+corners[1].y*u*(1-t)+corners[2].y*u*t+corners[3].y*(1-u)*t};
         const float alpha=prompt.alpha[0]*(1-u)*(1-t)+prompt.alpha[1]*u*(1-t)+prompt.alpha[2]*u*t+prompt.alpha[3]*(1-u)*t;
-        v.col=(v.col&0x00FFFFFFu)|(uint32_t(std::clamp(float(v.col>>24)*alpha,0.f,255.f))<<24);
+        ImU32 color=uint32_t(std::clamp(float(v.col>>24)*alpha,0.f,255.f))<<24;
+        for(size_t lane=0;lane<3;++lane) {
+            const float tint=prompt.tint[0][lane]*(1-u)*(1-t)+prompt.tint[1][lane]*u*(1-t)+prompt.tint[2][lane]*u*t+prompt.tint[3][lane]*(1-u)*t;
+            color|=uint32_t(std::clamp(float((v.col>>(lane*8))&255)*tint,0.f,255.f))<<(lane*8);
+        }
+        v.col=color;
     }
     for(int i=first_command;i<list.CmdBuffer.Size;++i)list.CmdBuffer[i].ClipRect={left,top,right,bottom};
     list.PopClipRect();
@@ -154,7 +160,7 @@ void PromptOverlay::initialize(VkInstance instance,VkPhysicalDevice physical,VkD
         auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;
         wchar_t directory[32768];const auto size=GetWindowsDirectoryW(directory,32768);
         if(!size || size>=32768)throw std::runtime_error("Windows fonts directory unavailable");
-        std::ifstream file(std::filesystem::path(std::wstring(directory,size))/"Fonts"/"segoeui.ttf",std::ios::binary);
+        std::ifstream file(std::filesystem::path(std::wstring(directory,size))/"Fonts"/"segoeuib.ttf",std::ios::binary);
         font_bytes_.assign(std::istreambuf_iterator<char>(file),{});
         if(font_bytes_.empty() || font_bytes_.size()>INT_MAX)throw std::runtime_error("Segoe UI font unavailable");
         ImFontConfig font_config;font_config.FontDataOwnedByAtlas=false;
@@ -166,11 +172,11 @@ void PromptOverlay::initialize(VkInstance instance,VkPhysicalDevice physical,VkD
         if(!ImGui_ImplVulkan_Init(&info))throw std::runtime_error("native prompt Vulkan initialization failed");
     } catch(...) {shutdown();throw;}
 }
-void PromptOverlay::record(VkCommandBuffer command,std::span<const gx::PromptDraw> prompts,VkExtent2D extent,const std::array<uint32_t,4>& source) {
+void PromptOverlay::record(VkCommandBuffer command,std::span<const gx::PromptDraw> prompts,VkExtent2D extent,const std::array<uint32_t,4>& source,PromptStyle style) {
     if(!context_ || !source[2] || !source[3])throw std::logic_error("native prompt renderer not initialized");
     Context current(context_);auto& io=ImGui::GetIO();io.DisplaySize={float(extent.width),float(extent.height)};io.DeltaTime=1.f/60;
     ImGui_ImplVulkan_NewFrame();ImGui::NewFrame();
-    for(const auto& prompt:prompts)picture(*ImGui::GetBackgroundDrawList(),prompt,extent,source);
+    for(const auto& prompt:prompts)picture(*ImGui::GetBackgroundDrawList(),prompt,extent,source,style);
     ImGui::Render();ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),command);
 }
 void PromptOverlay::shutdown() {

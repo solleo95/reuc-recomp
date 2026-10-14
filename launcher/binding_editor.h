@@ -11,7 +11,7 @@ public:
     void remove(Action,size_t);
     void clear(Action);
     void restore_defaults();
-    void begin_capture(Action);
+    void begin_capture(Action,bool replace=false);
     void cancel_capture();
     void event(PhysicalInput,bool);
     void wheel(int);
@@ -20,6 +20,7 @@ private:
     void capture(PhysicalInput);
     Bindings bindings_;
     std::optional<Action> capture_;
+    bool replace_=false;
     std::vector<PhysicalInput> modifiers_;
     std::optional<std::string> error_;
 };

@@ -238,6 +238,7 @@ static int real_main(int argc, char** argv) {
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
+        renderer.set_prompt_style(options.prompt_style);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);

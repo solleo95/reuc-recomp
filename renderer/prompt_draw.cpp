@@ -26,6 +26,7 @@ std::optional<gx::PromptDraw> prompt_from_quad(const gx::DrawPacket& draw,const 
             result.efb_corners[i*2+1]=viewport[1]+(clip[1]/clip[3]+1)*viewport[3]/2;
             for(size_t lane=0;lane<2;++lane)if(!std::isfinite(result.efb_corners[i*2+lane]) || std::abs(result.efb_corners[i*2+lane])>16384)return {};
             result.alpha[i]=vertex.color[3]/255.f;
+            for(size_t lane=0;lane<3;++lane)result.tint[i][lane]=vertex.color[lane]/255.f;
         }
     } catch(const gx::Error&) {return {};}
     return result;

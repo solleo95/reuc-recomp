@@ -7,7 +7,7 @@ namespace uc {
 class PromptOverlay {
 public:
     void initialize(VkInstance,VkPhysicalDevice,VkDevice,VkQueue,uint32_t family,uint32_t slots);
-    void record(VkCommandBuffer,std::span<const gx::PromptDraw>,VkExtent2D,const std::array<uint32_t,4>& source);
+    void record(VkCommandBuffer,std::span<const gx::PromptDraw>,VkExtent2D,const std::array<uint32_t,4>& source,PromptStyle);
     void shutdown(); // Renderer waits for its GPU work before calling this.
 private:
     ImGuiContext* context_=nullptr;

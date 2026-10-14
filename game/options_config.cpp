@@ -33,6 +33,13 @@ Options options_from_config(const ConfigDocument& document) {
         if(graphics.contains("width"))options.width=extent(graphics["width"]);
         if(graphics.contains("height"))options.height=extent(graphics["height"]);
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
+        if(graphics.contains("prompt_style")) {
+            if(!graphics["prompt_style"].is_string())invalid("prompt_style must be a string");
+            const auto style=graphics["prompt_style"].get<std::string>();
+            if(style=="monochrome")options.prompt_style=PromptStyle::monochrome;
+            else if(style=="sculpted")options.prompt_style=PromptStyle::sculpted;
+            else invalid("unknown prompt_style");
+        }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
             const auto mode=graphics["window_mode"].get<std::string>();
@@ -45,6 +52,7 @@ Options options_from_config(const ConfigDocument& document) {
     return options;
 }
 void store_options(ConfigDocument& document,const Options& options) {
+    if(options.prompt_style!=PromptStyle::monochrome && options.prompt_style!=PromptStyle::sculpted)invalid("unknown prompt_style");
     if(options.window_mode!=WindowMode::windowed && options.window_mode!=WindowMode::borderless && options.window_mode!=WindowMode::exclusive)invalid("unknown window_mode");
     auto replacement=document;
     replacement.properties["game"]=utf8_path(options.game);
@@ -55,6 +63,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["render_scale"]=options.render_scale;
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;
+    graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";
     graphics["window_mode"]=options.window_mode==WindowMode::windowed ? "windowed" : options.window_mode==WindowMode::borderless ? "borderless" : "exclusive";
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);

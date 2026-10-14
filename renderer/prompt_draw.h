@@ -8,6 +8,7 @@ struct PromptDraw {
     std::array<float,4> alpha{1,1,1,1};
     std::array<float,4> clip{0,0,640,480};
     bool compact=false; // inline text glyph: primary binding, icon-only mouse
+    std::array<std::array<float,3>,4> tint{{{1,1,1},{1,1,1},{1,1,1},{1,1,1}}};
 };
 struct DrawPacket;
 }

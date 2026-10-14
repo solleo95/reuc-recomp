@@ -2,12 +2,16 @@
 #include "launch.h"
 #include "options_config.h"
 #include "render_scale.h"
+#include "prompt_icons.h"
+#include "localization.h"
+#include "graphite.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -15,6 +19,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#include <dwmapi.h>
 namespace fs=std::filesystem;
 namespace {
 std::string utf8(const fs::path& path) {auto value=path.u8string();return {value.begin(),value.end()};}
@@ -26,38 +31,74 @@ fs::path executable_dir() {
 struct Ui {
     SDL_Window* window=nullptr;SDL_Renderer* renderer=nullptr;
     bool context=false,platform=false,backend=false;
-    std::vector<char> font;
+    std::vector<std::vector<char>> fonts;
+    SDL_Texture* banner=nullptr;
+    ImFont* sans=nullptr;
+    ImFont* serif=nullptr;
+    std::string artwork_error;
     ~Ui() {
         if(backend)ImGui_ImplSDLRenderer3_Shutdown();
         if(platform)ImGui_ImplSDL3_Shutdown();
         if(context)ImGui::DestroyContext();
-        SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
+        SDL_DestroyTexture(banner);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
     }
     void init(bool diagnostic) {
         if(!SDL_Init(SDL_INIT_VIDEO))throw std::runtime_error(SDL_GetError());
-        window=SDL_CreateWindow("Umbrella Chronicles — настройки",1000,780,SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIDDEN|SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        window=SDL_CreateWindow("Resident Evil: The Umbrella Chronicles",1200,820,SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIDDEN|SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if(!window)throw std::runtime_error(SDL_GetError());
+        SDL_SetWindowMinimumSize(window,1000,720);
+        const float dpi=std::max(1.f,SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
+        SDL_Rect bounds{};
+        if(SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(),&bounds)) {
+            const float scale=std::min({1200*dpi/1504,(bounds.w-48.f)/1504,(bounds.h-64.f)/916});
+            SDL_SetWindowSize(window,int(1504*scale),int(916*scale));
+        }
+        auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
+        if(hwnd) {BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE,&dark,sizeof(dark));}
         renderer=SDL_CreateRenderer(window,nullptr);
         if(!renderer || !SDL_SetRenderVSync(renderer,1))throw std::runtime_error(SDL_GetError());
         ImGui::CreateContext();context=true;
         auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
         if(diagnostic)io.ConfigInputTrickleEventQueue=false;
-        ImGui::StyleColorsDark();
-        const float dpi=SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-        if(dpi>0) {ImGui::GetStyle().ScaleAllSizes(dpi);ImGui::GetStyle().FontScaleDpi=dpi;}
+        uc::launcher::graphite_style();
+        ImGui::GetStyle().FontScaleDpi=1;
         wchar_t windows[32768];const auto length=GetWindowsDirectoryW(windows,32768);
         if(!length || length>=32768)throw std::runtime_error("Windows font directory unavailable");
-        std::ifstream source(fs::path(windows)/L"Fonts"/L"segoeui.ttf",std::ios::binary);
-        font.assign(std::istreambuf_iterator<char>(source),{});
-        if(font.empty() || font.size()>16*1024*1024)throw std::runtime_error("Segoe UI font unavailable");
-        ImFontConfig config;config.FontDataOwnedByAtlas=false;
-        if(!io.Fonts->AddFontFromMemoryTTF(font.data(),int(font.size()),18,&config))throw std::runtime_error("cannot load launcher font");
+        // Windows fonts keep the distribution small; ImGui rasterizes glyphs on demand.
+        for(const auto* filename:{L"segoeui.ttf",L"msyh.ttc",L"malgun.ttf",L"msgothic.ttc"}) {
+            std::ifstream source(fs::path(windows)/L"Fonts"/filename,std::ios::binary);
+            std::vector<char> data(std::istreambuf_iterator<char>(source),{});
+            if(data.empty()) {if(fonts.empty())throw std::runtime_error("Segoe UI font unavailable");continue;}
+            if(data.size()>64*1024*1024)throw std::runtime_error("launcher font too large");
+            ImFontConfig config;config.FontDataOwnedByAtlas=false;config.MergeMode=!fonts.empty();
+            fonts.push_back(std::move(data));auto& bytes=fonts.back();
+            if(!io.Fonts->AddFontFromMemoryTTF(bytes.data(),int(bytes.size()),16,&config))throw std::runtime_error("cannot load launcher font");
+        }
+        sans=io.Fonts->Fonts[0];
+        std::ifstream serif_source(fs::path(windows)/L"Fonts"/L"georgia.ttf",std::ios::binary);
+        std::vector<char> serif_data(std::istreambuf_iterator<char>(serif_source),{});
+        if(serif_data.empty())throw std::runtime_error("Georgia font unavailable");
+        const size_t fallback_count=fonts.size();fonts.push_back(std::move(serif_data));
+        ImFontConfig serif_config;serif_config.FontDataOwnedByAtlas=false;
+        serif=io.Fonts->AddFontFromMemoryTTF(fonts.back().data(),int(fonts.back().size()),22,&serif_config);
+        if(!serif)throw std::runtime_error("cannot load launcher serif font");
+        for(size_t i=1;i<fallback_count;++i) {
+            ImFontConfig fallback;fallback.FontDataOwnedByAtlas=false;fallback.MergeMode=true;
+            if(!io.Fonts->AddFontFromMemoryTTF(fonts[i].data(),int(fonts[i].size()),22,&fallback))throw std::runtime_error("cannot merge serif fallback");
+        }
         platform=ImGui_ImplSDL3_InitForSDLRenderer(window,renderer);
         backend=ImGui_ImplSDLRenderer3_Init(renderer);
         if(!platform || !backend)throw std::runtime_error("ImGui backend initialization failed");
+        try {banner=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-atlas.png");}
+        catch(const std::exception& e) {artwork_error=e.what();std::fprintf(stderr,"launcher artwork: %s\n",e.what());}
         if(diagnostic) {
             auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
             if(!hwnd)throw std::runtime_error("launcher window handle unavailable");
+            if(GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd))!=DPI_AWARENESS_PER_MONITOR_AWARE)
+                throw std::runtime_error("launcher is not per-monitor DPI aware");
+            int pixel_width=0,pixel_height=0;
+            if(!SDL_GetWindowSizeInPixels(window,&pixel_width,&pixel_height))throw std::runtime_error(SDL_GetError());
+            std::fprintf(stderr,"launcher DPI=%u content-scale=%.2f framebuffer=%dx%d\n",GetDpiForWindow(hwnd),SDL_GetWindowDisplayScale(window),pixel_width,pixel_height);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
         } else if(!SDL_ShowWindow(window))throw std::runtime_error(SDL_GetError());
     }
@@ -67,26 +108,31 @@ struct Ui {
         const bool saved=SDL_SaveBMP(surface,utf8(path).c_str());SDL_DestroySurface(surface);
         if(!saved)throw std::runtime_error(SDL_GetError());
     }
+    void art(ImDrawList& draw,ImVec2 at,ImVec2 size,ImVec2 source,ImVec2 end) {
+        if(banner)draw.AddImage((ImTextureID)(intptr_t)banner,at,{at.x+size.x,at.y+size.y},
+            {source.x/banner->w,source.y/banner->h},{end.x/banner->w,end.y/banner->h});
+    }
 };
-constexpr std::array<const char*,size_t(uc::Action::count)> labels={"Взаимодействие","Выстрел","Предыдущее оружие","Следующее оружие","Перезарядка","Граната","Нож","Пауза","Подтверждение","Назад","Освободить курсор","Скриншот","QTE: встряхивание"};
+std::string active_language="en";
+const char* tr(std::string_view key){return uc::launcher::text(active_language,key).data();}
 std::string physical_name(uc::PhysicalInput input) {
     if(input.kind==uc::PhysicalKind::key) {
-        const auto* name=SDL_GetKeyName(SDL_GetKeyFromScancode(SDL_Scancode(input.code),SDL_KMOD_NONE,false));
-        return name && *name ? name : "Клавиша "+std::to_string(input.code);
+        const auto* name=SDL_GetScancodeName(SDL_Scancode(input.code));
+        return name && *name ? name : std::string(tr("key"))+" "+std::to_string(input.code);
     }
-    if(input.kind==uc::PhysicalKind::wheel)return input.code==1 ? "Колесо вверх" : "Колесо вниз";
-    if(input.code==1)return "ЛКМ";if(input.code==3)return "ПКМ";if(input.code==2)return "СКМ";
-    return "Мышь "+std::to_string(input.code);
+    if(input.kind==uc::PhysicalKind::wheel)return tr(input.code==1 ? "wheel_up" : "wheel_down");
+    if(input.code==1)return tr("lmb");if(input.code==3)return tr("rmb");if(input.code==2)return tr("mmb");
+    return std::string(tr("mouse"))+" "+std::to_string(input.code);
 }
 std::string binding_name(const uc::Binding& binding) {
-    if(binding.kind==uc::BindingKind::interact_fire)return "Удержание взаимодействия + выстрел";
-    if(binding.kind==uc::BindingKind::interact_motion)return "Движение мыши + взаимодействие";
-    if(binding.kind==uc::BindingKind::qte_motion)return "Резкие движения мышью";
+    if(binding.kind==uc::BindingKind::interact_fire)return tr("interact_fire");
+    if(binding.kind==uc::BindingKind::interact_motion)return tr("interact_motion");
+    if(binding.kind==uc::BindingKind::qte_motion)return tr("rapid");
     std::string text;for(auto modifier:binding.modifiers)text+=physical_name(modifier)+" + ";
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.unlock_60fps==b.unlock_60fps;
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.unlock_60fps==b.unlock_60fps && a.prompt_style==b.prompt_style;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -105,9 +151,14 @@ int run(int argc,wchar_t** argv) {
     }
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
     std::string error;bool blocked=false;
+    const auto system_language=uc::launcher::system_language();
+    std::string language="system",saved_language="system";
+    active_language=system_language;
     auto reload=[&] {
         try {auto loaded=uc::load_config(config_path);auto settings=uc::options_from_config(loaded);
-            editor=uc::BindingEditor(loaded.input);document=std::move(loaded);options=saved_options=settings;blocked=false;error.clear();
+            auto locale=uc::launcher::config_language(loaded);
+            editor=uc::BindingEditor(loaded.input);document=std::move(loaded);options=saved_options=settings;
+            language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
     reload();std::string game_path=utf8(options.game);
@@ -115,14 +166,16 @@ int run(int argc,wchar_t** argv) {
     const auto* monitor=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     if(!monitor || monitor->w<=0 || monitor->h<=0)throw std::runtime_error("monitor mode unavailable");
     std::map<std::string,ImVec2> positions;
-    auto track=[&](const std::string& name) {if(!smoke.empty()) {auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();positions[name]={(a.x+b.x)/2,(a.y+b.y)/2};}};
-    auto button=[&](const char* label,const std::string& id) {bool clicked=ImGui::Button(label);track(id);return clicked;};
+    auto track=[&](const std::string& name) {if(!smoke.empty()) {auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();positions[name]={(a.x+b.x)/2,(a.y+b.y)/2};
+        if((name=="save" || name=="launch" || name=="browse") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher footer clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
+    }};
+    auto button=[&](const char* label,const std::string& id,ImVec2 size=ImVec2{0,0}) {ImGui::PushID(id.c_str());bool clicked=ImGui::Button(label,size);track(id);ImGui::PopID();return clicked;};
     auto save=[&] {
-        try {auto next=document;next.input=editor.bindings();uc::store_options(next,options);uc::save_config(config_path,next);
-            document=std::move(next);saved_options=options;error.clear();return true;
+        try {auto next=document;next.input=editor.bindings();uc::store_options(next,options);uc::launcher::store_language(next,language);uc::save_config(config_path,next);
+            document=std::move(next);saved_options=options;saved_language=language;error.clear();return true;
         } catch(const std::exception& e) {error=e.what();return false;}
     };
-    bool done=false;unsigned frame=0;const auto start=SDL_GetTicks();
+    bool done=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
     while(!done) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
@@ -139,93 +192,340 @@ int run(int argc,wchar_t** argv) {
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();
         if(!smoke.empty()) {
             auto& io=ImGui::GetIO();io.AddFocusEvent(true);
-            std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{38,"save"},{48,"save"}};
-            if(smoke_exe.empty())clicks[58]="defaults";
+            io.AddMousePosEvent(-100,-100);
+            std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{38,"save"},{48,"save"},
+                {80,"controls"},{84,"style"},{88,"style3"},{92,"save"},{98,"style"},{102,"style2"},{106,"save"},{110,"general"},
+                {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
+                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"save"},
+                {424,"controls"},{430,"replace2"},{438,"save"}};
+            if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
+            for(size_t i=0;i<uc::launcher::languages().size();++i) {
+                unsigned first=114+unsigned(i)*18;
+                clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);clicks[first+8]="save";
+            }
+            if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";}
             else {clicks[56]="reload";clicks[62]="defaults";clicks[66]="save";clicks[70]="launch";}
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
                 const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
                 if(frame==when || frame==when+1)io.AddMouseButtonEvent(0,frame==when);
             }
-            if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,9},true);}
-            if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=true;uc::save_config(config_path,other);}
+            if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,41},true);}
+            if(frame==434) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
+            if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=!other.properties.value("smoke_external_edit",false);uc::save_config(config_path,other);}
         }
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::Begin("Настройки",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextUnformatted("Resident Evil: The Umbrella Chronicles");
-        if(ImGui::BeginTabBar("settings")) {
-            if(ImGui::BeginTabItem("Основные")) {
-                if(ImGui::InputText("Папка игры",&game_path))options.game=fs::path(std::u8string(game_path.begin(),game_path.end()));
-                int mode=int(options.window_mode);
-                if(ImGui::Combo("Режим окна",&mode,"Windowed\0Borderless Window\0Exclusive Fullscreen\0"))options.window_mode=uc::WindowMode(mode);
-                bool native_monitor=options.render_scale==0;
-                if(ImGui::Checkbox("Разрешение монитора при запуске",&native_monitor))options.render_scale=native_monitor ? 0 : uc::monitor_render_scale(monitor->w,monitor->h);
-                ImGui::BeginDisabled(native_monitor);
-                float scale=float(options.render_scale ? options.render_scale : uc::monitor_render_scale(monitor->w,monitor->h));
-                if(ImGui::SliderFloat("Множитель Native720p",&scale,.5f,6.f,"%.2fx"))options.render_scale=scale;
-                ImGui::EndDisabled();
-                try {auto extent=uc::manual_render_extent(scale,double(monitor->w)/monitor->h);ImGui::Text("%u × %u → окно / экран",extent.width,extent.height);}catch(const std::invalid_argument& e) {ImGui::TextWrapped("%s",e.what());}
-                ImGui::Checkbox("Пропустить вступительные ролики",&options.skip_intro);
-                ImGui::Checkbox("60 FPS игрового обновления (экспериментально)",&options.unlock_60fps);
-                ImGui::TextUnformatted("Лимит вывода:240 FPS. ALT освобождает курсор в Windowed.");
-                ImGui::EndTabItem();
+        if(!smoke.empty() && frame==2) {
+            for(const auto& [code,name]:std::map<uint16_t,std::string>{{26,"W"},{22,"S"},{21,"R"},{10,"G"},{25,"V"},{41,"Escape"}})
+                if(physical_name({uc::PhysicalKind::key,code})!=name)throw std::runtime_error("physical key label mismatch: "+name);
+            for(auto* font:{ui.sans,ui.serif}) {
+            auto* baked=font->GetFontBaked(22);
+            for(auto locale:uc::launcher::languages())for(auto key:uc::launcher::translation_keys()) {
+                auto value=uc::launcher::text(locale.code,key);const auto length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,value.data(),int(value.size()),nullptr,0);
+                if(length<=0)throw std::runtime_error("invalid UTF-8 translation");
+                std::wstring wide(length,L'\0');MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,value.data(),int(value.size()),wide.data(),length);
+                for(auto character:wide)if(character>32 && !baked->FindGlyphNoFallback(character))throw std::runtime_error("missing launcher glyph: "+std::string(locale.code)+" "+std::to_string(unsigned(character)));
             }
-            const bool controls=ImGui::BeginTabItem("Управление");track("controls");
-            if(controls) {
-                if(button("Восстановить стандартные назначения","defaults"))editor.restore_defaults();
-                if(editor.capturing())ImGui::TextWrapped("Нажмите кнопку или поверните колесо. Esc — отменить. Модификатор отдельно: нажмите и отпустите.");
-                if(editor.error())ImGui::TextWrapped("Назначение не добавлено: %s",editor.error()->c_str());
-                ImGui::BeginDisabled(editor.capturing().has_value());
-                if(ImGui::BeginTable("bindings",3,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,{0,-160})) {
-                    ImGui::TableSetupColumn("Действие",ImGuiTableColumnFlags_WidthFixed,200);
-                    ImGui::TableSetupColumn("Назначения");ImGui::TableSetupColumn("Изменить",ImGuiTableColumnFlags_WidthFixed,240);ImGui::TableHeadersRow();
-                    for(size_t i=0;i<size_t(uc::Action::count);++i) {
-                        auto action=uc::Action(i);ImGui::PushID(int(i));ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(labels[i]);
-                        ImGui::TableSetColumnIndex(1);const auto& entries=editor.bindings()[i];
-                        if(entries.empty())ImGui::TextDisabled("Не назначено");
-                        for(size_t j=0;j<entries.size();++j) {
-                            ImGui::PushID(int(j));ImGui::TextWrapped("%s",binding_name(entries[j]).c_str());ImGui::SameLine();
-                            if(ImGui::SmallButton("Удалить")) {editor.remove(action,j);ImGui::PopID();break;}
-                            for(size_t other=0;other<size_t(uc::Action::count);++other)if(other!=i)
-                                for(const auto& shared:editor.bindings()[other])if(shared.kind==entries[j].kind && shared.input==entries[j].input && shared.modifiers.size()==entries[j].modifiers.size() && std::is_permutation(shared.modifiers.begin(),shared.modifiers.end(),entries[j].modifiers.begin()))
-                                    ImGui::TextDisabled("Также: %s",labels[other]);
-                            ImGui::PopID();
-                        }
-                        ImGui::TableSetColumnIndex(2);
-                        if(button("Добавить","add"+std::to_string(i)))editor.begin_capture(action);
-                        ImGui::SameLine();if(button("Очистить все","clear"+std::to_string(i)))editor.clear(action);
-                        if(ImGui::SmallButton("Назначить Esc"))editor.add(action,{uc::BindingKind::physical,{uc::PhysicalKind::key,41},{}});
-                        if(action==uc::Action::grenade && ImGui::SmallButton("Добавить сочетание"))editor.add(action,{uc::BindingKind::interact_fire,{},{}});
-                        if(action==uc::Action::knife && ImGui::SmallButton("Добавить жест"))editor.add(action,{uc::BindingKind::interact_motion,{},{}});
-                        if(action==uc::Action::qte_shake && ImGui::SmallButton("Добавить движения мышью"))editor.add(action,{uc::BindingKind::qte_motion,{},{}});
-                        ImGui::PopID();
-                    }
-                    ImGui::EndTable();
-                }
-                ImGui::EndDisabled();ImGui::EndTabItem();
             }
-            ImGui::EndTabBar();
         }
-        if(!error.empty())ImGui::TextWrapped("Ошибка: %s",error.c_str());
-        const bool dirty=editor.bindings()!=document.input || !same_options(options,saved_options);
-        if(dirty)ImGui::TextUnformatted("Есть несохранённые изменения");
-        if((blocked || !error.empty()) && button("Загрузить config заново (сбросить правки)","reload")) {reload();game_path=utf8(options.game);}
+        const float unit=std::max(.60f,std::min(ImGui::GetIO().DisplaySize.x/1504.f,ImGui::GetIO().DisplaySize.y/916.f));
+        uc::launcher::graphite_style();ImGui::GetStyle().ScaleAllSizes(unit);
+        // ScaleAllSizes floors thin borders to zero below 1×.
+        ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;
+        auto push_font=[&](ImFont* font,float size){ImGui::PushFont(font,std::round(size*unit));};
+        push_font(ui.sans,22);
+        ImGui::Begin("Launcher",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
+        const auto available=ImGui::GetContentRegionAvail();
+        const float sidebar=std::round(344*unit);
+        auto combo=[&](const char* id,const char* preview,ImGuiComboFlags flags=0) {
+            const auto expected_origin=ImGui::GetCursorScreenPos();
+            auto* list=ImGui::GetWindowDrawList();auto* font=ImGui::GetFont();const float size=ImGui::GetFontSize();
+            const auto color=ImGui::GetColorU32(ImGuiCol_Text);
+            // BeginCombo switches to the popup window; retain the parent frame geometry.
+            const auto a=expected_origin;
+            const ImVec2 b{a.x+ImGui::CalcItemWidth(),a.y+ImGui::GetFrameHeight()};
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,8*unit});
+            const bool opened=ImGui::BeginCombo(id,"",flags|ImGuiComboFlags_NoArrowButton);
+            ImGui::PopStyleVar();
+            if(!smoke.empty() && opened && (a.x!=expected_origin.x || a.y!=expected_origin.y))
+                throw std::runtime_error(std::string("combo anchor changed while opening: ")+id);
+            const ImVec4 clip{a.x+14*unit,a.y,b.x-36*unit,b.y};
+            list->AddRectFilledMultiColor({a.x+2,a.y+2},{b.x-2,b.y-2},IM_COL32(255,255,255,5),IM_COL32(255,255,255,5),0,0);
+            list->AddText(font,size,{std::round(a.x+16*unit),std::round(a.y+(b.y-a.y-size)/2)},color,preview,nullptr,0,&clip);
+            const float x=b.x-25*unit,y=(a.y+b.y)/2;
+            list->AddLine({x-6*unit,y-3*unit},{x,y+3*unit},color,unit);
+            list->AddLine({x,y+3*unit},{x+6*unit,y-3*unit},color,unit);
+            return opened;
+        };
+        auto* background=ImGui::GetWindowDrawList();
+        background->AddRectFilledMultiColor({0,0},{sidebar,available.y},IM_COL32(12,16,17,255),IM_COL32(15,19,20,255),IM_COL32(12,16,17,255),IM_COL32(9,13,14,255));
+        background->AddRectFilledMultiColor({sidebar,0},available,IM_COL32(25,29,30,255),IM_COL32(19,23,24,255),IM_COL32(15,19,20,255),IM_COL32(22,26,27,255));
+        ImGui::BeginChild("sidebar",{sidebar,0},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
+        auto* draw=ImGui::GetWindowDrawList();
+        if(ui.banner)ui.art(*draw,{0,0},{sidebar,std::round(446*unit)},{17,75},{359,521});
+        else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
+        const char* sections[]={"game","graphics","controls","audio"};
+        ImGui::SetCursorPos({6*unit,455*unit});
+        for(int i=0;i<4;++i) {
+            ImGui::SetCursorPosX(std::round(6*unit));
+            ImGui::PushID(i);auto p=ImGui::GetCursorScreenPos();
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
+            ImGui::PushStyleColor(ImGuiCol_Button,page==i ? ImVec4{.34f,.055f,.075f,1} : ImVec4{0,0,0,0});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.30f,.07f,.09f,1});
+            if(button("##navigation",i==1 ? "general" : sections[i],{sidebar-12*unit,60*unit}))page=i;
+            ImGui::PopStyleColor(2);ImGui::PopStyleVar();
+            const auto color=page==i ? IM_COL32(246,243,237,255) : IM_COL32(161,164,164,255);
+            if(page==i)draw->AddRectFilled(p,{p.x+5*unit,p.y+60*unit},IM_COL32(200,33,47,255),2*unit);
+            uc::launcher::draw_navigation_icon(*draw,i,{std::round(p.x+32*unit),std::round(p.y+15*unit)},30*unit,color);
+            draw->AddText(ui.sans,std::round(24*unit),{std::round(p.x+89*unit),std::round(p.y+16*unit)},color,tr(sections[i]));
+            ImGui::PopID();
+        }
+        ImGui::SetCursorPos({38*unit,std::max(ImGui::GetCursorPosY()+16*unit,available.y-150*unit)});
+        ImGui::PushFont(ui.sans,std::round(22*unit));ImGui::TextDisabled("%s",tr("language"));
+        const char* language_label=tr("system");
+        for(auto item:uc::launcher::languages())if(item.code==language)language_label=item.name.data();
+        ImGui::SetCursorPosX(38*unit);
+        ImGui::SetNextItemWidth(sidebar-76*unit);
+        const bool languages_open=combo("##language",language_label,ImGuiComboFlags_HeightLargest);track("language");
+        if(languages_open) {
+            if(ImGui::Selectable(tr("system"),language=="system"))language="system";track("lang-system");
+            for(auto item:uc::launcher::languages()) {
+                if(ImGui::Selectable(item.name.data(),language==item.code))language=item.code;
+                track("lang-"+std::string(item.code));
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopFont();active_language=language=="system" ? system_language : language;
+        if(ui.banner)ui.art(*draw,{20*unit,available.y-67*unit},{304*unit,56*unit},{36,902},{340,958});
+        ImGui::EndChild();ImGui::SetCursorPos({sidebar,0});
+        ImGui::BeginChild("main",{0,0},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
+        const auto main_size=ImGui::GetContentRegionAvail();
+        const auto main_origin=ImGui::GetCursorScreenPos();
+        const float hero_height=page==2 ? 0.f : std::round(232*unit);
+        if(page==2) {
+            // Give the binding editor the full height; artwork stays in the sidebar.
+        } else if(ui.banner) {
+            auto at=ImGui::GetCursorScreenPos();
+            const float source_top=page==2 ? 130.f : 75.f,source_bottom=page==2 ? 226.f : 307.f;
+            ui.art(*ImGui::GetWindowDrawList(),at,{main_size.x,hero_height},{360,source_top},{1520,source_bottom});
+            ImGui::Dummy({main_size.x,hero_height});
+        } else {ImGui::TextWrapped("%s",tr("artwork"));ImGui::Dummy({0,hero_height-ImGui::GetTextLineHeightWithSpacing()});}
+        auto* main_draw=ImGui::GetWindowDrawList();
+        main_draw->AddLine({main_origin.x+.5f,main_origin.y},{main_origin.x+.5f,main_origin.y+main_size.y},IM_COL32(52,57,58,255),1);
+        main_draw->AddLine({main_origin.x,main_origin.y+hero_height+.5f},{main_origin.x+main_size.x,main_origin.y+hero_height+.5f},IM_COL32(52,57,58,255),1);
+        ImGui::SetCursorPos({54*unit,hero_height+32*unit});
+        ImGui::BeginChild("body",{main_size.x-104*unit,main_size.y-hero_height-32*unit},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
+        push_font(ui.serif,36);ImGui::TextUnformatted(tr(page==1 ? "graphics_title" : sections[page]));ImGui::PopFont();
+        ImGui::PushFont(ui.sans,std::round(22*unit));
+        const char* hints[]={"game_hint","graphics_hint","controls_hint","audio_hint"};
+        ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
+        ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
+        auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false) {
+            ImGui::BeginDisabled(disabled);ImGui::PushID(id);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{6*unit,6*unit});
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,3*unit);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,{12*unit,0});
+            ImGui::Checkbox(label,&value);track(id);
+            if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("unavailable"));
+            ImGui::PopStyleVar(3);ImGui::PopID();ImGui::EndDisabled();
+        };
+        const float footer=((page==2 ? 140.f : 212.f)+(error.empty() ? 0.f : 100.f))*unit;
+        ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},ImGuiChildFlags_None);
+        if(page==0) {
+            toggle("##skip-game",tr("skip"),options.skip_intro);
+            ImGui::Dummy({0,20*unit});toggle("##unlock",tr("unlock"),options.unlock_60fps);
+            ImGui::Dummy({0,25*unit});ImGui::TextWrapped("%s",tr("alt"));
+        } else if(page==1) {
+            const float column_gap=88*unit;
+            const float column=(ImGui::GetContentRegionAvail().x-column_gap)/2;
+            ImGui::BeginChild("display",{column,0},ImGuiChildFlags_None);
+            ImGui::PushItemWidth(-1);ImGui::TextUnformatted(tr("window"));
+            push_font(ui.sans,22);
+            const char* modes[]={"windowed","borderless","exclusive"};
+            const bool window_open=combo("##window",tr(modes[int(options.window_mode)]));track("window");
+            if(window_open) {
+                for(int i=0;i<3;++i) {if(ImGui::Selectable(tr(modes[i]),int(options.window_mode)==i))options.window_mode=uc::WindowMode(i);track("mode"+std::to_string(i));}
+                ImGui::EndCombo();
+            }
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            ImGui::TextUnformatted(tr("scale"));push_font(ui.sans,22);
+            auto scale_label=[&](double scale) {
+                const double effective=scale ? scale : uc::monitor_render_scale(monitor->w,monitor->h);
+                const auto extent=uc::manual_render_extent(effective,double(monitor->w)/monitor->h);
+                char value[100];std::snprintf(value,sizeof(value),"%.2g× · %u × %u",effective,extent.width,extent.height);
+                return scale ? (scale==1 ? std::string("1× (Native) · ")+std::to_string(extent.width)+" × "+std::to_string(extent.height) : std::string(value)) : std::string(tr("monitor"))+" · "+std::to_string(extent.width)+" × "+std::to_string(extent.height);
+            };
+            const auto current_scale=scale_label(options.render_scale);
+            const bool scale_open=combo("##scale",current_scale.c_str(),ImGuiComboFlags_HeightLarge);track("scale");
+            if(scale_open) {
+                if(ImGui::Selectable(scale_label(0).c_str(),options.render_scale==0))options.render_scale=0;
+                for(const double scale:{1.,1.5,2.,3.}) {
+                    if(ImGui::Selectable(scale_label(scale).c_str(),options.render_scale==scale))options.render_scale=scale;
+                    if(scale==1.5)track("scale1.5");
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            ImGui::TextUnformatted(tr("fps_limit"));push_font(ui.sans,22);
+            ImGui::BeginDisabled();if(combo("##fps","240"))ImGui::EndCombo();ImGui::EndDisabled();
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("fps"));
+            ImGui::PopFont();ImGui::PopItemWidth();ImGui::EndChild();
+            ImGui::SameLine(0,column_gap);
+            ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_None);ImGui::PushItemWidth(-1);
+            ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
+            ImGui::BeginDisabled();if(combo("##upscaling",tr("unavailable")))ImGui::EndCombo();ImGui::EndDisabled();
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            ImGui::TextUnformatted(tr("quality"));push_font(ui.sans,22);
+            ImGui::BeginDisabled();if(combo("##quality","—"))ImGui::EndCombo();ImGui::EndDisabled();
+            ImGui::PopFont();ImGui::Dummy({0,16*unit});
+            bool framegen=false;toggle("##framegen",tr("framegen"),framegen,true);
+            ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
+            ImGui::PopItemWidth();ImGui::EndChild();
+        } else if(page==2) {
+            push_font(ui.sans,22);
+            ImGui::TextUnformatted(tr("style"));
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+            const char* styles[]={tr("gray"),tr("cyan")};
+            const bool style_combo=combo("##style",styles[size_t(options.prompt_style)]);track("style");
+            if(style_combo) {
+                for(size_t i=0;i<2;++i) {if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i))options.prompt_style=uc::PromptStyle(i);track(i ? "style3" : "style2");}
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine(0,25*unit);
+            const float ph=44*unit;const auto p=ImGui::GetCursorScreenPos();auto* preview=ImGui::GetWindowDrawList();
+            for(int i=0;i<3;++i)uc::draw_mouse_icon(*preview,{p.x+i*ph,p.y},{ph*.65f,ph},{i==2 ? uc::PhysicalKind::wheel : uc::PhysicalKind::mouse,uint16_t(i==0 ? 1 : i==1 ? 3 : 1)},false,options.prompt_style);
+            ImGui::Dummy({ph*3,ph});ImGui::Spacing();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*unit,10*unit});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{8*unit,8*unit});
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{4*unit,3*unit});
+            if(button(tr("defaults"),"defaults"))editor.restore_defaults();
+            if(editor.capturing())ImGui::TextWrapped("%s",tr("capture"));
+            if(editor.error()) {ImGui::TextWrapped("%s",tr("rejected"));if(ImGui::TreeNode(tr("details"))) {ImGui::TextWrapped("%s",editor.error()->c_str());ImGui::TreePop();}}
+            ImGui::BeginDisabled(editor.capturing().has_value());
+            if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_PadOuterX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
+                ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);
+                ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
+                ImGui::TableSetupColumn("+",ImGuiTableColumnFlags_WidthFixed,46*unit);
+                ImGui::TableSetupColumn(tr("clear"),ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(tr("clear")).x+28*unit);
+                for(size_t i=0;i<size_t(uc::Action::count);++i) {
+                    auto action=uc::Action(i);ImGui::PushID(int(i));ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::AlignTextToFramePadding();ImGui::TextWrapped("%s",tr(uc::action_names[i]));
+                    ImGui::TableSetColumnIndex(1);const auto& entries=editor.bindings()[i];
+                    std::string names;
+                    for(const auto& entry:entries) {if(!names.empty())names+=", ";names+=binding_name(entry);}
+                    if(names.empty())names=tr("unbound");
+                    if(button(names.c_str(),"replace"+std::to_string(i),{-1,0}))editor.begin_capture(action,true);
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",names.c_str());
+                    if(ImGui::BeginPopupContextItem("binding-menu")) {
+                    for(size_t j=0;j<entries.size();++j) {
+                        ImGui::PushID(int(j));const auto label=std::string(tr("remove"))+": "+binding_name(entries[j]);
+                        const bool remove=ImGui::MenuItem(label.c_str());ImGui::PopID();
+                        if(remove) {editor.remove(action,j);break;}
+                    }
+                    ImGui::EndPopup();
+                    }
+                    ImGui::TableSetColumnIndex(2);
+                    const bool special=action==uc::Action::grenade || action==uc::Action::knife || action==uc::Action::qte_shake;
+                    if(button("+","add"+std::to_string(i),{-1,0})) {
+                        if(special)ImGui::OpenPopup("add-binding");else editor.begin_capture(action);
+                    }
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("add"));
+                    if(ImGui::BeginPopup("add-binding")) {
+                        if(ImGui::MenuItem(tr("add")))editor.begin_capture(action);
+                        if(action==uc::Action::grenade && ImGui::MenuItem(tr("chord")))editor.add(action,{uc::BindingKind::interact_fire,{},{}});
+                        if(action==uc::Action::knife && ImGui::MenuItem(tr("gesture")))editor.add(action,{uc::BindingKind::interact_motion,{},{}});
+                        if(action==uc::Action::qte_shake && ImGui::MenuItem(tr("motion")))editor.add(action,{uc::BindingKind::qte_motion,{},{}});
+                        ImGui::EndPopup();
+                    }
+                    ImGui::TableSetColumnIndex(3);
+                    if(button(tr("clear"),"clear"+std::to_string(i),{-1,0}))editor.clear(action);
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
+        } else ImGui::TextWrapped("%s",tr("audio_info"));
+        ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
+        if(!error.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1});ImGui::TextWrapped("%s",tr(error.find("changed since loading")!=std::string::npos ? "stale" : "error"));ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",error.c_str());
+            if(button(tr("reload_config"),"reload")) {reload();game_path=utf8(options.game);}
+        }
+        const bool dirty=editor.bindings()!=document.input || !same_options(options,saved_options) || language!=saved_language;
+        const auto foot=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
+        const float path_width=width*.55f,launch_x=foot.x+width*.605f,save_x=foot.x+width*.835f;
+        std::error_code path_error;const bool game_found=fs::is_regular_file(options.game/L"DATA"/L"sys"/L"main.dol",path_error);
+        if(page!=2) {
+        ImGui::BeginGroup();ImGui::TextUnformatted(tr("folder"));
+        ImGui::PushFont(ui.sans,std::round(22*unit));ImGui::SetNextItemWidth(path_width-70*unit);
+        if(ImGui::InputText("##game",&game_path))options.game=fs::path(std::u8string(game_path.begin(),game_path.end()));
+        ImGui::SameLine(0,12*unit);
+        if(button("##browse","browse",{58*unit,ImGui::GetFrameHeight()})) {
+            try {auto selected=options.game;if(uc::launcher::choose_game_folder(ui.window,selected)) {options.game=selected;game_path=utf8(selected);}}
+            catch(const std::exception& e) {error=e.what();}
+        }
+        auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();auto* folder_draw=ImGui::GetWindowDrawList();
+        const ImVec2 c{std::round((a.x+b.x)/2),std::round((a.y+b.y)/2)};
+        ImVec2 folder_points[]={{c.x-13*unit,c.y-9*unit},{c.x-3*unit,c.y-9*unit},{c.x+1*unit,c.y-5*unit},{c.x+13*unit,c.y-5*unit},{c.x+13*unit,c.y+9*unit},{c.x-13*unit,c.y+9*unit}};
+        folder_draw->AddConvexPolyFilled(folder_points,6,IM_COL32(192,196,196,255));
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("browse"));ImGui::PopFont();
+        ImGui::Dummy({0,20*unit});
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+path_width);ImGui::PushStyleColor(ImGuiCol_Text,game_found ? ImVec4{.47f,.74f,.52f,1} : ImVec4{.85f,.68f,.42f,1});
+        if(game_found) {
+            const auto p=ImGui::GetCursorScreenPos();auto* d=ImGui::GetWindowDrawList();
+            d->AddCircleFilled({p.x+10*unit,p.y+13*unit},9*unit,IM_COL32(77,145,89,255));
+            d->AddLine({p.x+6*unit,p.y+13*unit},{p.x+9*unit,p.y+16*unit},IM_COL32(14,45,25,255),2*unit);
+            d->AddLine({p.x+9*unit,p.y+16*unit},{p.x+15*unit,p.y+9*unit},IM_COL32(14,45,25,255),2*unit);
+            ImGui::Dummy({22*unit,0});ImGui::SameLine(0,9*unit);
+        }
+        ImGui::TextWrapped("%s",tr(game_found ? "found" : "missing"));ImGui::PopStyleColor();ImGui::PopTextWrapPos();
+        if(dirty) {push_font(ui.sans,20);ImGui::TextDisabled("%s",tr("dirty"));ImGui::PopFont();}
+        ImGui::EndGroup();
+        } else if(dirty)ImGui::TextDisabled("%s",tr("dirty"));
+        const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
+        ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        if(button("Сохранить","save"))save();ImGui::SameLine();
-        const bool running=uc::game_running(process);
-        ImGui::BeginDisabled(running);
-        if(button("Запустить игру","launch") && save()) {try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic);}catch(const std::exception& e) {error=e.what();}}
-        ImGui::EndDisabled();ImGui::EndDisabled();if(running) {ImGui::SameLine();ImGui::TextUnformatted("Игра запущена");}
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || !game_found);
+        ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
+        push_font(ui.serif,26);
+        if(button(tr(running ? "running" : "play"),"launch",{width*.215f,74*unit}) && save()) {
+            try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic);}
+            catch(const std::exception& e) {error=e.what();}
+        }
+        ImGui::PopFont();ImGui::PopStyleColor(3);ImGui::EndDisabled();
+        ImGui::SetCursorScreenPos({save_x,button_y});
+        if(button(tr("save"),"save",{width*.165f,74*unit}))save();
+        ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
         ImGui::End();ImGui::Render();
         if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
         if(!smoke.empty()) {
             if(frame==24) {if(!editor.bindings()[size_t(uc::Action::fire)].empty())throw std::runtime_error("Clear All UI failed");ui.capture(smoke/L"cleared.bmp");}
             if(frame==14)ui.capture(smoke/L"tab.bmp");
-            if(frame==42) {if(uc::load_config(config_path).input[size_t(uc::Action::fire)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,9},{}}})throw std::runtime_error("capture/save UI failed");ui.capture(smoke/L"saved.bmp");}
+            if(frame==42) {if(uc::load_config(config_path).input[size_t(uc::Action::fire)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,41},{}}})throw std::runtime_error("Esc capture/save UI failed");ui.capture(smoke/L"saved.bmp");}
             if(frame==52) {if(error.find("changed since loading")==std::string::npos)throw std::runtime_error("stale-save error UI failed");ui.capture(smoke/L"error.bmp");}
             if(frame==66) {if(editor.bindings()!=uc::default_bindings())throw std::runtime_error("restore defaults UI failed");ui.capture(smoke/L"defaults.bmp");}
-            if(frame>=76) {
+            if(frame==96 || frame==110) {
+                const auto expected=frame==96 ? uc::PromptStyle::sculpted : uc::PromptStyle::monochrome;
+                ui.capture(smoke/(frame==96 ? L"style3.bmp" : L"style2.bmp"));
+                if(options.prompt_style!=expected || uc::options_from_config(uc::load_config(config_path)).prompt_style!=expected || !same_options(options,saved_options))throw std::runtime_error("style select/save UI failed: selected="+std::to_string(int(options.prompt_style))+" expected="+std::to_string(int(expected))+" dirty="+std::to_string(!same_options(options,saved_options))+" error="+error);
+            }
+            for(size_t i=0;i<uc::launcher::languages().size();++i)if(frame==126+i*18) {
+                const auto expected=uc::launcher::languages()[i].code;
+                if(language!=expected || active_language!=expected || uc::launcher::config_language(uc::load_config(config_path))!=expected || language!=saved_language)throw std::runtime_error("language select/save UI failed: "+std::string(expected));
+                ui.capture(smoke/(std::string(expected)+".bmp"));
+                reload();if(active_language!=expected)throw std::runtime_error("language reload failed");
+            }
+            if(frame==370 || frame==378 || frame==386 || frame==394)ui.capture(smoke/("small-"+std::to_string(frame)+".bmp"));
+            if(frame==116 || frame==134 || frame==402 || frame==412)ui.capture(smoke/("popup-"+std::to_string(frame)+".bmp"));
+            if(frame==422) {
+                const auto saved=uc::options_from_config(uc::load_config(config_path));
+                if(saved.render_scale!=1.5 || saved.window_mode!=uc::WindowMode::borderless)throw std::runtime_error("window/scale popup select/save failed");
+            }
+            if(frame==442) {
+                if(uc::load_config(config_path).input[size_t(uc::Action::weapon_previous)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,26},{}}})throw std::runtime_error("grid replacement/save failed");
+                ui.capture(smoke/L"grid-replaced.bmp");
+            }
+            if(frame>=446) {
                 if(smoke_exe.empty())done=true;
                 else {
                     if(!process)throw std::runtime_error("launch button failed: "+error);
@@ -239,7 +539,7 @@ int run(int argc,wchar_t** argv) {
         if(!SDL_RenderPresent(ui.renderer))throw std::runtime_error(SDL_GetError());
         ++frame;
     }
-    if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults; no OS input\n");
+    if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage; no OS input\n");
     return 0;
 }
 }

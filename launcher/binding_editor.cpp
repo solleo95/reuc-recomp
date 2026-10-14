@@ -28,15 +28,18 @@ void BindingEditor::clear(Action action) {
     bindings_[index(action)].clear(); if(capture_==action)cancel_capture();
 }
 void BindingEditor::restore_defaults() {bindings_=default_bindings();cancel_capture();}
-void BindingEditor::begin_capture(Action action) {index(action);cancel_capture();capture_=action;}
-void BindingEditor::cancel_capture() {capture_.reset();modifiers_.clear();error_.reset();}
+void BindingEditor::begin_capture(Action action,bool replace) {index(action);cancel_capture();capture_=action;replace_=replace;}
+void BindingEditor::cancel_capture() {capture_.reset();replace_=false;modifiers_.clear();error_.reset();}
 void BindingEditor::capture(PhysicalInput input) {
     auto modifiers=modifiers_; std::erase(modifiers,input);
-    if(!add(*capture_,{BindingKind::physical,input,std::move(modifiers)}))cancel_capture();
+    auto replacement=bindings_;auto& entries=replacement[index(*capture_)];
+    if(replace_)entries.clear();
+    entries.push_back({BindingKind::physical,input,std::move(modifiers)});
+    error_=validate_bindings(replacement);
+    if(!error_) {bindings_=std::move(replacement);cancel_capture();}
 }
 void BindingEditor::event(PhysicalInput input,bool down) {
     if(!capture_)return;
-    if(input==PhysicalInput{PhysicalKind::key,41} && down) {cancel_capture();return;}
     if(modifier(input)) {
         const auto held=std::find(modifiers_.begin(),modifiers_.end(),input);
         if(down && held==modifiers_.end())modifiers_.push_back(input);
