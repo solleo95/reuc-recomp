@@ -206,3 +206,20 @@ KPADEnableMotor Nop
 @8006C268 GameWeaponUpdate
 @801AB350 GameActionOwnerUpdate
 @80171D38 GameMotionCount
+
+# --- Dolphin SDK matrix/vector library (mtx.a, runtime/hle/sdk_math.cpp): bit-exact native versions of the translated paired-single code.
+# Mapped by address because identified_sdk.txt lists other, unrelated functions under the same names.
+@80264680 PSMTXIdentity
+@802646AC PSMTXCopy
+@802646E0 PSMTXConcat
+@80264DE0 PSMTXTransApply
+@80264E54 PSMTXScaleApply
+@802652E8 PSMTXMultVec
+@802656EC PSVECAdd
+@80265710 PSVECSubtract
+@80265734 PSVECScale
+@80265750 PSVECNormalize
+@80265794 PSVECSquareMag
+@802657AC PSVECMag
+@802657F0 PSQUATDotProduct
+@80265810 PSVECCrossProduct
