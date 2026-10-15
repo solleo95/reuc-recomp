@@ -58,11 +58,11 @@ PPC_INLINE uint32_t rd8(Ctx& c, uint32_t ea) {
 }
 PPC_INLINE void wr32(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, v); return; }
-    gx::note_write(ea); gx::note_write(ea + 3); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4);
+    gx::note_write(ea); if ((ea & 0xFFFu) > 0xFFCu) [[unlikely]] gx::note_write(ea + 3); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4);
 }
 PPC_INLINE void wr16(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 2, v & 0xFFFF); return; }
-    gx::note_write(ea); gx::note_write(ea + 1); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2);
+    gx::note_write(ea); if ((ea & 0xFFFu) == 0xFFFu) [[unlikely]] gx::note_write(ea + 1); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2);
 }
 PPC_INLINE void wr8(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 1, v & 0xFF); return; }
@@ -77,7 +77,7 @@ PPC_INLINE void wrf32(Ctx& c, uint32_t ea, float v) { uint32_t b; std::memcpy(&b
 PPC_INLINE void wrf64(Ctx& c, uint32_t ea, double v) {
     uint64_t b; std::memcpy(&b, &v, 8);
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, uint32_t(b >> 32)); mmio_write(ea + 4, 4, uint32_t(b)); return; }
-    gx::note_write(ea); gx::note_write(ea + 7); b = _byteswap_uint64(b); std::memcpy(hp(c, ea), &b, 8);
+    gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7); b = _byteswap_uint64(b); std::memcpy(hp(c, ea), &b, 8);
 }
 
 PPC_INLINE uint32_t ea_d(Ctx& c, int a, int32_t d) { return (a ? c.r[a] : 0u) + uint32_t(d); }
@@ -422,12 +422,23 @@ PPC_INLINE void gq_store1(Ctx& c, uint32_t ea, int type, int scale, double v) {
 }
 PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i) {
     uint32_t g = c.gqr[i]; int type = (g >> 16) & 7, scale = gq_scale(g >> 24);
+    if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
+        uint64_t v; std::memcpy(&v, hp(c, ea), 8);
+        const uint32_t b0 = _byteswap_ulong(uint32_t(v)), b1 = _byteswap_ulong(uint32_t(v >> 32)); float f0, f1; std::memcpy(&f0, &b0, 4); std::memcpy(&f1, &b1, 4);
+        c.f[t] = f0; c.ps1[t] = f1; return;
+    }
     double p0 = gq_load1(c, ea, type, scale);
     double p1 = w ? 1.0 : gq_load1(c, ea + gq_bytes(type), type, scale);
     c.f[t] = p0; c.ps1[t] = p1;
 }
 PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i) {
     uint32_t g = c.gqr[i]; int type = g & 7, scale = gq_scale(g >> 8);
+    if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
+        const float f0 = float(c.f[t]), f1 = float(c.ps1[t]); uint32_t b0, b1; std::memcpy(&b0, &f0, 4); std::memcpy(&b1, &f1, 4);
+        const uint64_t v = uint64_t(_byteswap_ulong(b0)) | uint64_t(_byteswap_ulong(b1)) << 32;
+        gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
+        std::memcpy(hp(c, ea), &v, 8); return;
+    }
     gq_store1(c, ea, type, scale, c.f[t]);
     if (!w) gq_store1(c, ea + gq_bytes(type), type, scale, c.ps1[t]);
 }

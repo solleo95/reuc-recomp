@@ -102,6 +102,15 @@ int main() {
     // float type passes through: GQR2 type 0
     c.gqr[2] = 0; wrf32(c, 0x80003400, 1.25f); wrf32(c, 0x80003404, -2.5f); c.r[3] = 0x80003400;
     op_psq_l(c, 7, 3, 0, 0, 2);        CHECK(c.f[7] == 1.25 && c.ps1[7] == -2.5);
+    // float pair store: big-endian bytes, rounded to single, and the write barrier stamps both pages of a store that crosses a 4 KiB boundary
+    c.f[8] = 1.5; c.ps1[8] = -0.1; c.r[3] = 0x80004FFC;
+    gx::page_epoch[0x4000 >> 12] = gx::page_epoch[0x5000 >> 12] = 0; gx::write_epoch = 7;
+    op_psq_st(c, 8, 3, 0, 0, 2);
+    CHECK(rd32(c, 0x80004FFC) == 0x3FC00000u && rd32(c, 0x80005000) == 0xBDCCCCCDu);
+    CHECK(gx::page_epoch[0x4000 >> 12] == 7 && gx::page_epoch[0x5000 >> 12] == 7);
+    op_psq_l(c, 9, 3, 0, 0, 2);        CHECK(c.f[9] == 1.5 && c.ps1[9] == double(-0.1f));
+    gx::page_epoch[0x6000 >> 12] = 0; c.r[3] = 0x80006000; op_psq_st(c, 8, 3, 0, 0, 2);
+    CHECK(gx::page_epoch[0x6000 >> 12] == 7 && gx::page_epoch[0x7000 >> 12] != 7);   // inside one page: only that page
     // ps_cmpu0 / ps_cmpu1 write a CR field like fcmp
     op_ps_cmpu0(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
     op_ps_cmpu1(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
