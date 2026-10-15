@@ -9,10 +9,11 @@
 int main(int argc,char** argv) {
     SDL_Window* window=nullptr;
     try {
-        if(argc<4)throw std::runtime_error("usage: uc_fifo_replay capture.dff frame output.png [--validation] [--reference image.png] [--dump-efb dir]");
-        bool validation=false;std::filesystem::path reference_path,efb_dump;
+        if(argc<4)throw std::runtime_error("usage: uc_fifo_replay capture.dff frame output.png [--validation] [--uber] [--reference image.png] [--dump-efb dir]");
+        bool validation=false,uber=false;std::filesystem::path reference_path,efb_dump;
         for(int i=4;i<argc;++i) {
             if(std::string_view(argv[i])=="--validation")validation=true;
+            else if(std::string_view(argv[i])=="--uber")uber=true;
             else if(std::string_view(argv[i])=="--reference" && i+1<argc)reference_path=argv[++i];
             else if(std::string_view(argv[i])=="--dump-efb" && i+1<argc)efb_dump=argv[++i];
             else throw std::runtime_error("unknown or incomplete option");
@@ -39,7 +40,7 @@ int main(int argc,char** argv) {
         if(!hwnd)throw std::runtime_error("replay window has no native handle");
         ShowWindow(hwnd,SW_SHOWNOACTIVATE);
         {
-            uc::VulkanRenderer renderer;renderer.initialize(window,validation,std::filesystem::path(SDL_GetBasePath())/"data/shaders",2.0/3,4.0/3);
+            uc::VulkanRenderer renderer;renderer.initialize(window,validation,std::filesystem::path(SDL_GetBasePath())/"data/shaders",2.0/3,4.0/3);renderer.set_uber_only(uber);
             uc::RenderPixels pixels;
             for(const auto& packet:packets) {
                 bool submitted=false,completed=false;auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(60);

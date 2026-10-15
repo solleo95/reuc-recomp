@@ -1,0 +1,18 @@
+#pragma once
+#include <cstddef>
+
+namespace uc {
+// A small topmost window with a progress bar, shown while pipelines compile before the game starts.
+// It stays hidden for the first 400 ms, so a start with a warm driver cache never flashes it.
+class CompileScreen {
+public:
+    CompileScreen();
+    ~CompileScreen();
+    CompileScreen(const CompileScreen&)=delete;
+    CompileScreen& operator=(const CompileScreen&)=delete;
+    void update(size_t done,size_t total);   // also pumps this thread's window messages, so the game window stays responsive
+    struct State;
+private:
+    State* state_=nullptr;
+};
+}

@@ -5,6 +5,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstring>
 #include <cmath>
 #include <fstream>
@@ -14,6 +15,8 @@
 
 namespace uc {
 namespace {
+// Per-draw uniform block: the GX draw state followed by the pipeline key words the ubershader reads (key[1..67], padded to 17 vec4).
+constexpr size_t kTevWords=68, kDrawUniformBytes=sizeof(gx::DrawUniform)+kTevWords*sizeof(uint32_t);
 const std::shared_ptr<const gx::TexturePixels>& draw_texture(const gx::DrawPacket& draw,size_t map) { return map ? draw.texture_maps[map-1] : draw.texture; }
 void vk_check(VkResult result, const char* operation) {
     if (result != VK_SUCCESS) throw std::runtime_error(std::string(operation) + " failed: VkResult " + std::to_string(result));
@@ -142,7 +145,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     vkGetDeviceQueue(device, family_, 0, &queue_); vkGetPhysicalDeviceMemoryProperties(physical_, &memory_);
     VkPhysicalDeviceProperties limits{}; vkGetPhysicalDeviceProperties(physical_,&limits);
     const auto alignment=size_t(limits.limits.minUniformBufferOffsetAlignment);
-    uniform_stride_=(sizeof(gx::DrawUniform)+alignment-1)/alignment*alignment;
+    uniform_stride_=(kDrawUniformBytes+alignment-1)/alignment*alignment;
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; pool_info.queueFamilyIndex = family_;
     vk_check(vkCreateCommandPool(device, &pool_info, nullptr, &pool_), "command pool");
     VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool = pool_; allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount = uint32_t(slots_.size());
@@ -157,13 +160,17 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &slots_[i].acquired), "acquire semaphore");
     }
-    shaders_=shaders; gx::DrawPacket initial; initial.primitive=0x90; pipeline_for(initial);
+    shaders_=shaders; cache_dir_=shaders_.parent_path();
+    vertex_module_=shader(device, shaders_ / "smoke.vert.spv"); fragment_module_=shader(device, shaders_ / "smoke.frag.spv"); uber_module_=shader(device, shaders_ / "smoke.uber.spv");
+    load_pipeline_cache();
+    gx::DrawPacket initial; initial.primitive=0x90; pipeline_for(pipeline_key(initial));
+    start_workers();
     int width, height; if (!SDL_GetWindowSizeInPixels(window, &width, &height)) throw std::runtime_error(SDL_GetError());
     resize(uint32_t(std::max(0, width)), uint32_t(std::max(0, height)));
     if (requested_.width && requested_.height) rebuild();
 }
 // Push constants of every draw: clip matrix plus where to find this draw's matrices (see smoke.slang).
-struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, padding; };
+struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass; };
 static_assert(sizeof(DrawPush)==80);
 uint32_t VulkanRenderer::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
     for (uint32_t i = 0; i < memory_.memoryTypeCount; ++i)
@@ -301,12 +308,15 @@ void VulkanRenderer::retire_textures(Slot& slot) {
     slot.textures.clear();
     slot.copy_sources.clear();
 }
-VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pass) {
+PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_pass) const {
     auto blend=draw.blend;
     if(alpha_pass) blend={0,1,0,3,false,true};
     else if(draw.uniforms->pixel[2]&256) blend.alpha_write=false;
     if (blend.mode>3 || blend.source>7 || blend.destination>7 || blend.logic>15) throw std::invalid_argument("invalid native blend state");
     if (blend.mode==2 && !logic_ops_) throw std::runtime_error("native GX logic operation requires GPU logicOp support");
+    // Fields the pipeline ignores in this mode must not split the key space (factors only matter when blending, the logic op only in logic mode).
+    if (blend.mode!=1) { blend.source=1; blend.destination=0; }
+    if (blend.mode!=2) blend.logic=3;
     PipelineKey key{};
     switch(draw.primitive) {
     case 0x80: case 0x90: case 0x98: case 0xA0: key[69]=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
@@ -332,19 +342,51 @@ VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pa
         const auto& stage=material.stage[i];
         key[3+i*4]=stage.color; key[4+i*4]=stage.alpha; key[5+i*4]=stage.order; key[6+i*4]=stage.konst;
     }
-    auto found=pipelines_.find(key);
-    if (found!=pipelines_.end()) return found->second;
-    auto pipeline=make_pipeline(blend,key);
-    try { pipelines_.emplace(key,pipeline); } catch (...) { vkDestroyPipeline(device,pipeline,nullptr); throw; }
-    return pipeline;
+    return key;
 }
-VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const PipelineKey& key) {
-    VkShaderModule vertex = shader(device, shaders_ / "smoke.vert.spv"), fragment = VK_NULL_HANDLE;
+VulkanRenderer::PipelineChoice VulkanRenderer::pipeline_for(const PipelineKey& key) {
+    const auto fixed=uber_key(key);
+    PipelineChoice choice;
+    bool fresh=false;
+    {
+        std::lock_guard lock(pipelines_mutex_);
+        if (!uber_only_) {
+            if (auto found=pipelines_.find(key); found!=pipelines_.end()) return {found->second,false};
+            fresh=known_keys_.insert(key).second;
+        }
+        if (auto found=uber_pipelines_.find(fixed); found!=uber_pipelines_.end()) {
+            choice={found->second,true};
+            if (!uber_only_) queue_pipeline(key,false);
+        }
+    }
+    if (fresh && !append_pipeline_key(cache_dir_/"pipeline_keys.bin",key)) std::fprintf(stderr,"[pipeline] cannot record key in %s\n",cache_dir_.string().c_str());
+    if (choice.pipeline) {
+        if (fresh) std::fprintf(stderr,"[pipeline] new key: ubershader until its pipeline is compiled\n");
+        return choice;
+    }
+    // Neither pipeline exists yet: compile synchronously (the ubershader in uber-only mode, else the specialized one) and queue the ubershader for later misses.
+    const bool uber=uber_only_;
+    const PipelineKey& wanted=uber ? fixed : key;
+    const auto start=std::chrono::steady_clock::now();
+    auto pipeline=make_pipeline(wanted,uber);
+    const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+    std::lock_guard lock(pipelines_mutex_);
+    std::pair<std::map<PipelineKey,VkPipeline>::iterator,bool> placed;
+    try { placed=(uber ? uber_pipelines_ : pipelines_).emplace(wanted,pipeline); } catch (...) { vkDestroyPipeline(device,pipeline,nullptr); throw; }
+    if (!placed.second) { vkDestroyPipeline(device,pipeline,nullptr); return {placed.first->second,uber}; }   // a compile thread finished it first
+    if (!uber) queue_pipeline(fixed,true);
+    if (fresh || ms>=2) std::fprintf(stderr,"[pipeline] %s %s compiled on the render thread: %.1f ms\n",fresh ? "new" : "not yet ready",uber ? "ubershader" : "key",ms);
+    return {pipeline,uber};
+}
+VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
+    gx::BlendState mode;
+    mode.mode=key[0]&3; mode.source=(key[0]>>2)&7; mode.destination=(key[0]>>5)&7; mode.logic=(key[0]>>8)&15;
+    mode.color_write=key[0]>>12&1; mode.alpha_write=key[0]>>13&1;
+    const VkShaderModule vertex=vertex_module_, fragment=uber ? uber_module_ : fragment_module_;
     VkPipeline pipeline=VK_NULL_HANDLE;
-    try {
-        fragment = shader(device, shaders_ / "smoke.frag.spv");
+    {
         if (!layout_) {
-        VkPushConstantRange projection{VK_SHADER_STAGE_VERTEX_BIT,0,uint32_t(sizeof(DrawPush))};
+        VkPushConstantRange projection{VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof(DrawPush))};
         VkDescriptorSetLayoutBinding texture_bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_SAMPLER,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{2,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}};
         VkDescriptorSetLayoutCreateInfo texture_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; texture_layout.bindingCount=4; texture_layout.pBindings=texture_bindings;
         vk_check(vkCreateDescriptorSetLayout(device,&texture_layout,nullptr,&texture_layout_),"texture descriptor layout");
@@ -372,7 +414,7 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
         std::array<VkSpecializationMapEntry,67> spec_entries{};
         for(uint32_t i=0;i<spec_entries.size();++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
         VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
-        stages[1].pSpecializationInfo=&specialization;
+        if (!uber) stages[1].pSpecializationInfo=&specialization;
         static_assert(sizeof(gx::GpuMeshVertex)==100 && sizeof(gx::Projection)==64);
         VkVertexInputBindingDescription binding{0, uint32_t(sizeof(gx::GpuMeshVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
         std::array<VkVertexInputAttributeDescription,13> attributes{{
@@ -410,10 +452,99 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
         create.pInputAssemblyState = &assembly; create.pViewportState = &viewport; create.pRasterizationState = &raster; create.pMultisampleState = &samples;
         create.pColorBlendState = &blending; create.pDynamicState = &dynamic; create.layout = layout_;
         create.pDepthStencilState=&depth;
-        vk_check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &create, nullptr, &pipeline), "graphics pipeline");
-    } catch (...) { if (fragment) vkDestroyShaderModule(device, fragment, nullptr); vkDestroyShaderModule(device, vertex, nullptr); throw; }
-    vkDestroyShaderModule(device, fragment, nullptr); vkDestroyShaderModule(device, vertex, nullptr);
+        vk_check(vkCreateGraphicsPipelines(device, pipeline_cache_, 1, &create, nullptr, &pipeline), "graphics pipeline");
+    }
     return pipeline;
+}
+// The driver cache makes recompiling a known pipeline cheap on later runs; the key files let a loading screen compile everything before the game starts.
+void VulkanRenderer::load_pipeline_cache() {
+    std::vector<char> data;
+    if (std::ifstream file(cache_dir_/"pipeline_cache.bin",std::ios::binary|std::ios::ate); file) {
+        data.resize(size_t(file.tellg())); file.seekg(0); file.read(data.data(),std::streamsize(data.size()));
+        if (!file) data.clear();
+    }
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO}; info.initialDataSize=data.size(); info.pInitialData=data.data();
+    vk_check(vkCreatePipelineCache(device,&info,nullptr,&pipeline_cache_),"pipeline cache");   // the driver ignores data from another driver or version
+    pipeline_cache_loaded_=data.size();
+    for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"})
+        for (const auto& key:load_pipeline_keys(cache_dir_/name))
+            if (valid_pipeline_key(key,logic_ops_) && known_keys_.insert(key).second) warm_keys_.push_back(key);
+}
+void VulkanRenderer::save_pipeline_cache() {
+    static std::mutex saving;   // compile threads and shutdown may save concurrently
+    std::lock_guard guard(saving);
+    size_t size=0;
+    if (vkGetPipelineCacheData(device,pipeline_cache_,&size,nullptr)!=VK_SUCCESS || size==0 || size==pipeline_cache_loaded_) return;
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device,pipeline_cache_,&size,data.data())!=VK_SUCCESS) return;
+    const auto path=cache_dir_/"pipeline_cache.bin", temporary=cache_dir_/"pipeline_cache.tmp";
+    if (std::ofstream file(temporary,std::ios::binary|std::ios::trunc); !file.write(data.data(),std::streamsize(size))) { std::fprintf(stderr,"[pipeline] cannot write %s\n",temporary.string().c_str()); return; }
+    std::error_code error; std::filesystem::rename(temporary,path,error);   // atomic replace: a crash never leaves a torn cache
+    if (error) std::fprintf(stderr,"[pipeline] cannot replace %s: %s\n",path.string().c_str(),error.message().c_str());
+    else pipeline_cache_loaded_=size;
+}
+// Pipelines missing at draw time are compiled by these threads, off the render thread (the ubershader draws meanwhile).
+void VulkanRenderer::queue_pipeline(const PipelineKey& key,bool uber) {
+    if ((uber ? uber_queued_ : queued_).insert(key).second) { compile_queue_.push_back({key,uber}); compile_cv_.notify_one(); }
+}
+void VulkanRenderer::start_workers() {
+    const unsigned count=std::clamp(std::thread::hardware_concurrency()/2,2u,8u);
+    for (unsigned t=0;t<count;++t) compilers_.emplace_back([this] { compile_worker(); });
+}
+void VulkanRenderer::compile_worker() {
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_LOW);   // in game these never compete with the guest and render threads; on the loading screen nothing else runs
+    std::unique_lock lock(pipelines_mutex_);
+    for (;;) {
+        compile_cv_.wait(lock,[this] { return compile_stop_ || !compile_queue_.empty(); });
+        if (compile_stop_) return;
+        const CompileJob job=compile_queue_.front(); compile_queue_.pop_front();
+        auto& target=job.uber ? uber_pipelines_ : pipelines_;
+        if (target.count(job.key)) { ++jobs_done_; continue; }
+        ++compiling_;
+        lock.unlock();
+        VkPipeline pipeline=VK_NULL_HANDLE;
+        const auto start=std::chrono::steady_clock::now();
+        try { pipeline=make_pipeline(job.key,job.uber); }
+        catch (const std::exception& error) { std::fprintf(stderr,"[pipeline] background compile failed: %s\n",error.what()); }
+        lock.lock();
+        --compiling_; ++jobs_done_;
+        if (pipeline) {
+            ++compiled_; (job.uber ? compiled_uber_ms_ : compiled_ms_)+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(); compiled_ubers_+=job.uber;
+            if (!target.emplace(job.key,pipeline).second) vkDestroyPipeline(device,pipeline,nullptr);
+        }
+        if (compile_queue_.empty() && !compiling_ && compiled_) {
+            const size_t done=std::exchange(compiled_,0), ubers=std::exchange(compiled_ubers_,0);
+            const double ms=std::exchange(compiled_ms_,0.0), uber_ms=std::exchange(compiled_uber_ms_,0.0);
+            lock.unlock();
+            save_pipeline_cache();
+            std::fprintf(stderr,"[pipeline] background compile idle: %zu pipelines ready (%zu ubershaders: %.0f ms, others: %.0f ms)\n",done,ubers,uber_ms,ms);
+            lock.lock();
+        }
+    }
+}
+void VulkanRenderer::warm_pipelines(const std::function<void(size_t,size_t)>& progress) {
+    owner();
+    const auto begin=std::chrono::steady_clock::now();
+    std::unique_lock lock(pipelines_mutex_);
+    for (const auto& key:warm_keys_) queue_pipeline(uber_key(key),true);   // the few ubershader variants first: they cover any key still missing
+    for (const auto& key:warm_keys_) queue_pipeline(key,false);
+    const size_t base=jobs_done_, total=compile_queue_.size()+compiling_;
+    while (!compile_queue_.empty() || compiling_) {
+        const size_t done=jobs_done_-base;
+        lock.unlock();
+        progress(done,total);
+        lock.lock();
+        compile_cv_.wait_for(lock,std::chrono::milliseconds(50),[this] { return compile_queue_.empty() && !compiling_; });
+    }
+    lock.unlock();
+    progress(total,total);
+    std::fprintf(stderr,"[pipeline] warm-up: %zu pipelines in %.0f ms\n",total,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count());
+}
+void VulkanRenderer::stop_workers() {
+    { std::lock_guard lock(pipelines_mutex_); compile_stop_=true; }
+    compile_cv_.notify_all();
+    for (auto& thread:compilers_) thread.join();
+    compilers_.clear();
 }
 // Persistent vertex/index buffers of a cached mesh. An entry whose owner expired is stale (the guest freed the mesh, its address may be reused):
 // no submission can still hold it, because every slot keeps a strong reference until its fence completed.
@@ -743,7 +874,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         else { if (it->initialized) destroy_buffer(it->upload); ++it; }
     }
     // Per draw: where its vertices live (a persistent mesh buffer, or this frame's dynamic buffer for non-mesh draws) and which palette it reads.
-    struct DrawGpu { const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0; };
+    struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0; };
     std::vector<DrawGpu> gpu_draws; gpu_draws.reserve(packet.draws.size());
     std::unordered_map<const gx::Transforms*,uint32_t> palette_of;   // one palette per distinct transform block
     std::vector<const gx::Transforms*> palette_blocks;
@@ -755,11 +886,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if(std::abs(v[0])>2048 || std::abs(v[1])>2048 || v[2]<=0 || v[3]<=0 || v[2]>1024 || v[3]>1024 || v[4]<0 || v[4]>1 || v[5]<0 || v[5]>1) throw std::invalid_argument("invalid native draw viewport");
         }
         if(draw.state->scissor && ((*draw.state->scissor)[2]<0 || (*draw.state->scissor)[3]<0)) throw std::invalid_argument("negative native draw scissor extent");
-        pipeline_for(draw);
         // shortcut: indirect texturing/depth/material parity remains TD-036.
         const size_t group=(draw.primitive==0xA8 || draw.primitive==0xB0) ? 2 : 3;
         const bool indexed=draw.state->descriptors[0]!=gx::Mode::none;
         DrawGpu info; info.indexed=indexed; info.current=draw.transforms->current;
+        info.key=pipeline_key(draw); info.choice=pipeline_for(info.key);
         if (draw.mesh) {
             GpuMesh& mesh=gpu_mesh(draw.mesh);   // uploaded and validated on first use
             if (mesh.index_count % group != 0) throw std::invalid_argument("index count does not match native draw topology");
@@ -839,8 +970,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 }
                 image[map]={VK_NULL_HANDLE,slot.textures[found->second].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
-            std::memcpy(static_cast<std::byte*>(slot.uniforms.mapped)+i*uniform_stride_,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
-            VkDescriptorBufferInfo uniform{slot.uniforms.buffer,i*uniform_stride_,sizeof(gx::DrawUniform)};
+            auto* uniform_at=static_cast<std::byte*>(slot.uniforms.mapped)+i*uniform_stride_;
+            std::memcpy(uniform_at,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
+            std::array<uint32_t,kTevWords> tev{}; std::copy(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,tev.begin());
+            std::memcpy(uniform_at+sizeof(gx::DrawUniform),tev.data(),sizeof tev);
+            VkDescriptorBufferInfo uniform{slot.uniforms.buffer,i*uniform_stride_,kDrawUniformBytes};
             std::array<VkDescriptorImageInfo,8> samplers{};
             for(size_t map=0;map<8;++map) {
                 const auto wrap=packet.draws[i].texture_wrap[map];
@@ -934,15 +1068,17 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const Buffer& index_buffer=info.indices ? *info.indices : slot.indices;
             if (&vertex_buffer!=bound_vertices || info.vertex_offset!=bound_vertex_offset) { VkDeviceSize offset=info.vertex_offset; vkCmdBindVertexBuffers(slot.command,0,1,&vertex_buffer.buffer,&offset); bound_vertices=&vertex_buffer; bound_vertex_offset=info.vertex_offset; }
             if (&index_buffer!=bound_indices || info.index_offset!=bound_index_offset) { vkCmdBindIndexBuffer(slot.command,index_buffer.buffer,info.index_offset,VK_INDEX_TYPE_UINT32); bound_indices=&index_buffer; bound_index_offset=info.index_offset; }
-            vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_for(draw));
+            vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,info.choice.pipeline);
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[set_index],0,nullptr);
-            const DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0};
-            vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT,0,uint32_t(sizeof push),&push);
+            DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0};
+            vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push);
             vkCmdDrawIndexed(slot.command, info.index_count, 1, info.first_index, info.first_vertex, 0);
             const auto depth=draw.uniforms->pixel[1]&31;
             if((draw.uniforms->pixel[2]&256) && draw.blend.alpha_write && !(depth&1 && ((depth>>1)&7)==0)) {
                 // GX destination alpha replaces stored alpha after RGB blending.
-                vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_for(draw,true));
+                const auto alpha=pipeline_for(pipeline_key(draw,true));
+                vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,alpha.pipeline);
+                if (alpha.uber) { push.alpha_pass=1; vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push); }
                 vkCmdDrawIndexed(slot.command,info.index_count,1,info.first_index,info.first_vertex,0);
             }
         }
@@ -1056,8 +1192,13 @@ void VulkanRenderer::shutdown() {
         if (efb_) vkDestroyImage(device,efb_,nullptr);
         if (efb_memory_) vkFreeMemory(device,efb_memory_,nullptr);
         efb_view_=VK_NULL_HANDLE; efb_=VK_NULL_HANDLE; efb_memory_=VK_NULL_HANDLE; efb_initialized_=false; efb_extent_={};
+        stop_workers();
         for (auto [key,pipeline]:pipelines_) vkDestroyPipeline(device,pipeline,nullptr);
-        pipelines_.clear();
+        for (auto [key,pipeline]:uber_pipelines_) vkDestroyPipeline(device,pipeline,nullptr);
+        pipelines_.clear(); uber_pipelines_.clear();
+        if (pipeline_cache_) { save_pipeline_cache(); vkDestroyPipelineCache(device,pipeline_cache_,nullptr); pipeline_cache_=VK_NULL_HANDLE; }
+        for (auto module:{vertex_module_,fragment_module_,uber_module_}) if (module) vkDestroyShaderModule(device,module,nullptr);
+        vertex_module_=fragment_module_=uber_module_=VK_NULL_HANDLE;
         if (layout_) vkDestroyPipelineLayout(device, layout_, nullptr);
         if (texture_layout_) vkDestroyDescriptorSetLayout(device,texture_layout_,nullptr);
         for(auto& sampler:texture_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }

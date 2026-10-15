@@ -1,4 +1,5 @@
 #include "clock.h"
+#include "compile_screen.h"
 #include "dispatch.h"
 #include "dol.h"
 #include "dvdfs.h"
@@ -326,6 +327,10 @@ static int real_main(int argc, char** argv) {
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
         renderer.set_prompt_style(options.prompt_style);
+        {   // compile every known pipeline now, so no pipeline is built while the game runs
+            uc::CompileScreen screen;
+            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
+        }
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);

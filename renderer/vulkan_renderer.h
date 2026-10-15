@@ -1,5 +1,6 @@
 #pragma once
 #include "gx_packets.h"
+#include "pipeline_keys.h"
 #include "prompt_overlay.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -10,7 +11,12 @@
 #include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
+#include <mutex>
+#include <set>
 #include <thread>
 #include <unordered_map>
 
@@ -26,6 +32,9 @@ public:
     void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9);
     bool render(const gx::FramePacket& packet);
     void resize(uint32_t width, uint32_t height);
+    // Compiles every known pipeline (seed and recorded keys) before the game starts; progress(done,total) is called on this thread.
+    void warm_pipelines(const std::function<void(size_t,size_t)>& progress);
+    void set_uber_only(bool enabled) { owner(); uber_only_=enabled; }   // tests: draw everything with the ubershader
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
     std::vector<uint64_t> poll_completions();
@@ -96,9 +105,17 @@ private:
     void retire_images();
     void retire_for_resize();
     void reap_retired(bool wait);
-    using PipelineKey=std::array<uint32_t,70>;
-    VkPipeline pipeline_for(const gx::DrawPacket& draw,bool alpha_pass=false);
-    VkPipeline make_pipeline(const gx::BlendState& blend,const PipelineKey& key);
+    // A pipeline for a draw: the specialized one when compiled, else the ubershader variant of the same fixed state (see queue_pipeline).
+    struct PipelineChoice { VkPipeline pipeline=VK_NULL_HANDLE; bool uber=false; };
+    PipelineKey pipeline_key(const gx::DrawPacket& draw,bool alpha_pass=false) const;
+    PipelineChoice pipeline_for(const PipelineKey& key);
+    VkPipeline make_pipeline(const PipelineKey& key,bool uber);
+    void queue_pipeline(const PipelineKey& key,bool uber);   // pipelines_mutex_ held
+    void load_pipeline_cache();
+    void save_pipeline_cache();
+    void start_workers();
+    void stop_workers();
+    void compile_worker();
     void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent,bool depth=false);
     void collect();
     SDL_Window* window_ = nullptr;
@@ -119,7 +136,23 @@ private:
     double configured_scale_=0.5, render_aspect_=16.0/9;
     uint32_t max_image_dimension_=0;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    std::map<PipelineKey,VkPipeline> pipelines_;
+    std::map<PipelineKey,VkPipeline> pipelines_, uber_pipelines_;   // guarded by pipelines_mutex_ with the members below: compile threads insert too
+    std::mutex pipelines_mutex_;
+    struct CompileJob { PipelineKey key; bool uber; };
+    std::deque<CompileJob> compile_queue_;
+    std::set<PipelineKey> queued_, uber_queued_;
+    std::condition_variable compile_cv_;
+    size_t compiling_ = 0, compiled_ = 0, compiled_ubers_ = 0, jobs_done_ = 0;
+    double compiled_ms_ = 0, compiled_uber_ms_ = 0;   // compile time since the last idle report
+    bool compile_stop_ = false;
+    bool uber_only_ = false;
+    VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
+    size_t pipeline_cache_loaded_ = 0;
+    VkShaderModule vertex_module_ = VK_NULL_HANDLE, fragment_module_ = VK_NULL_HANDLE, uber_module_ = VK_NULL_HANDLE;
+    std::filesystem::path cache_dir_;
+    std::set<PipelineKey> known_keys_;        // keys already in the seed or recorded file
+    std::vector<PipelineKey> warm_keys_;
+    std::vector<std::thread> compilers_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
     std::unordered_map<const gx::MeshBuffers*,GpuMesh> meshes_;
     std::vector<std::unique_ptr<MeshSlab>> mesh_slabs_;   // the last one is the one being filled

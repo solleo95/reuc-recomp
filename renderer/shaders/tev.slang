@@ -1,4 +1,11 @@
 // Native TEV: specialization constants fold stage control and selectors.
+// Specialized pipelines fold the TEV state into specialization constants. The ubershader (-DUBER) reads the same
+// words from the draw's uniform block instead, so it draws any TEV setup without a per-setup pipeline compile.
+#ifdef UBER
+#define TEV_CONST(id, name) static uint name
+#else
+#define TEV_CONST(id, name) [[vk::constant_id(id)]] const uint name = 0
+#endif
 struct NativeLight { float4 color; float4 cosine; float4 distance; float4 position; float4 direction; };
 struct DrawState {
     float4 registers[4];
@@ -15,76 +22,87 @@ struct DrawState {
     uint4 fog[2];
     uint4 indirect[3];
     uint4 indCmd[4];
+    uint4 tevWords[17];   // pipeline key words 1..67 (only the ubershader reads them)
 };
 [[vk::binding(2,0)]] ConstantBuffer<DrawState> drawState;
 [[vk::binding(0,0)]] Texture2D<float4> images[8];
 [[vk::binding(1,0)]] SamplerState imageSamplers[8];
-[[vk::constant_id(0)]] const uint stageCount = 0;
-[[vk::constant_id(1)]] const uint swapTables = 0;
-[[vk::constant_id(2)]] const uint colorEnv0 = 0;
-[[vk::constant_id(3)]] const uint alphaEnv0 = 0;
-[[vk::constant_id(4)]] const uint order0 = 0;
-[[vk::constant_id(5)]] const uint konst0 = 0;
-[[vk::constant_id(6)]] const uint colorEnv1 = 0;
-[[vk::constant_id(7)]] const uint alphaEnv1 = 0;
-[[vk::constant_id(8)]] const uint order1 = 0;
-[[vk::constant_id(9)]] const uint konst1 = 0;
-[[vk::constant_id(10)]] const uint colorEnv2 = 0;
-[[vk::constant_id(11)]] const uint alphaEnv2 = 0;
-[[vk::constant_id(12)]] const uint order2 = 0;
-[[vk::constant_id(13)]] const uint konst2 = 0;
-[[vk::constant_id(14)]] const uint colorEnv3 = 0;
-[[vk::constant_id(15)]] const uint alphaEnv3 = 0;
-[[vk::constant_id(16)]] const uint order3 = 0;
-[[vk::constant_id(17)]] const uint konst3 = 0;
-[[vk::constant_id(18)]] const uint colorEnv4 = 0;
-[[vk::constant_id(19)]] const uint alphaEnv4 = 0;
-[[vk::constant_id(20)]] const uint order4 = 0;
-[[vk::constant_id(21)]] const uint konst4 = 0;
-[[vk::constant_id(22)]] const uint colorEnv5 = 0;
-[[vk::constant_id(23)]] const uint alphaEnv5 = 0;
-[[vk::constant_id(24)]] const uint order5 = 0;
-[[vk::constant_id(25)]] const uint konst5 = 0;
-[[vk::constant_id(26)]] const uint colorEnv6 = 0;
-[[vk::constant_id(27)]] const uint alphaEnv6 = 0;
-[[vk::constant_id(28)]] const uint order6 = 0;
-[[vk::constant_id(29)]] const uint konst6 = 0;
-[[vk::constant_id(30)]] const uint colorEnv7 = 0;
-[[vk::constant_id(31)]] const uint alphaEnv7 = 0;
-[[vk::constant_id(32)]] const uint order7 = 0;
-[[vk::constant_id(33)]] const uint konst7 = 0;
-[[vk::constant_id(34)]] const uint colorEnv8 = 0;
-[[vk::constant_id(35)]] const uint alphaEnv8 = 0;
-[[vk::constant_id(36)]] const uint order8 = 0;
-[[vk::constant_id(37)]] const uint konst8 = 0;
-[[vk::constant_id(38)]] const uint colorEnv9 = 0;
-[[vk::constant_id(39)]] const uint alphaEnv9 = 0;
-[[vk::constant_id(40)]] const uint order9 = 0;
-[[vk::constant_id(41)]] const uint konst9 = 0;
-[[vk::constant_id(42)]] const uint colorEnv10 = 0;
-[[vk::constant_id(43)]] const uint alphaEnv10 = 0;
-[[vk::constant_id(44)]] const uint order10 = 0;
-[[vk::constant_id(45)]] const uint konst10 = 0;
-[[vk::constant_id(46)]] const uint colorEnv11 = 0;
-[[vk::constant_id(47)]] const uint alphaEnv11 = 0;
-[[vk::constant_id(48)]] const uint order11 = 0;
-[[vk::constant_id(49)]] const uint konst11 = 0;
-[[vk::constant_id(50)]] const uint colorEnv12 = 0;
-[[vk::constant_id(51)]] const uint alphaEnv12 = 0;
-[[vk::constant_id(52)]] const uint order12 = 0;
-[[vk::constant_id(53)]] const uint konst12 = 0;
-[[vk::constant_id(54)]] const uint colorEnv13 = 0;
-[[vk::constant_id(55)]] const uint alphaEnv13 = 0;
-[[vk::constant_id(56)]] const uint order13 = 0;
-[[vk::constant_id(57)]] const uint konst13 = 0;
-[[vk::constant_id(58)]] const uint colorEnv14 = 0;
-[[vk::constant_id(59)]] const uint alphaEnv14 = 0;
-[[vk::constant_id(60)]] const uint order14 = 0;
-[[vk::constant_id(61)]] const uint konst14 = 0;
-[[vk::constant_id(62)]] const uint colorEnv15 = 0;
-[[vk::constant_id(63)]] const uint alphaEnv15 = 0;
-[[vk::constant_id(64)]] const uint order15 = 0;
-[[vk::constant_id(65)]] const uint konst15 = 0;
+TEV_CONST(0, stageCount);
+TEV_CONST(1, swapTables);
+TEV_CONST(2, colorEnv0);
+TEV_CONST(3, alphaEnv0);
+TEV_CONST(4, order0);
+TEV_CONST(5, konst0);
+TEV_CONST(6, colorEnv1);
+TEV_CONST(7, alphaEnv1);
+TEV_CONST(8, order1);
+TEV_CONST(9, konst1);
+TEV_CONST(10, colorEnv2);
+TEV_CONST(11, alphaEnv2);
+TEV_CONST(12, order2);
+TEV_CONST(13, konst2);
+TEV_CONST(14, colorEnv3);
+TEV_CONST(15, alphaEnv3);
+TEV_CONST(16, order3);
+TEV_CONST(17, konst3);
+TEV_CONST(18, colorEnv4);
+TEV_CONST(19, alphaEnv4);
+TEV_CONST(20, order4);
+TEV_CONST(21, konst4);
+TEV_CONST(22, colorEnv5);
+TEV_CONST(23, alphaEnv5);
+TEV_CONST(24, order5);
+TEV_CONST(25, konst5);
+TEV_CONST(26, colorEnv6);
+TEV_CONST(27, alphaEnv6);
+TEV_CONST(28, order6);
+TEV_CONST(29, konst6);
+TEV_CONST(30, colorEnv7);
+TEV_CONST(31, alphaEnv7);
+TEV_CONST(32, order7);
+TEV_CONST(33, konst7);
+TEV_CONST(34, colorEnv8);
+TEV_CONST(35, alphaEnv8);
+TEV_CONST(36, order8);
+TEV_CONST(37, konst8);
+TEV_CONST(38, colorEnv9);
+TEV_CONST(39, alphaEnv9);
+TEV_CONST(40, order9);
+TEV_CONST(41, konst9);
+TEV_CONST(42, colorEnv10);
+TEV_CONST(43, alphaEnv10);
+TEV_CONST(44, order10);
+TEV_CONST(45, konst10);
+TEV_CONST(46, colorEnv11);
+TEV_CONST(47, alphaEnv11);
+TEV_CONST(48, order11);
+TEV_CONST(49, konst11);
+TEV_CONST(50, colorEnv12);
+TEV_CONST(51, alphaEnv12);
+TEV_CONST(52, order12);
+TEV_CONST(53, konst12);
+TEV_CONST(54, colorEnv13);
+TEV_CONST(55, alphaEnv13);
+TEV_CONST(56, order13);
+TEV_CONST(57, konst13);
+TEV_CONST(58, colorEnv14);
+TEV_CONST(59, alphaEnv14);
+TEV_CONST(60, order14);
+TEV_CONST(61, konst14);
+TEV_CONST(62, colorEnv15);
+TEV_CONST(63, alphaEnv15);
+TEV_CONST(64, order15);
+TEV_CONST(65, konst15);
+
+#ifdef UBER
+uint tevWord(uint i) { return drawState.tevWords[i / 4][i % 4]; }
+#define LOAD_STAGE(n) colorEnv##n = tevWord(2 + 4 * n); alphaEnv##n = tevWord(3 + 4 * n); order##n = tevWord(4 + 4 * n); konst##n = tevWord(5 + 4 * n);
+void loadTevKey() {
+    stageCount = tevWord(0); swapTables = tevWord(1);
+    LOAD_STAGE(0) LOAD_STAGE(1) LOAD_STAGE(2) LOAD_STAGE(3) LOAD_STAGE(4) LOAD_STAGE(5) LOAD_STAGE(6) LOAD_STAGE(7)
+    LOAD_STAGE(8) LOAD_STAGE(9) LOAD_STAGE(10) LOAD_STAGE(11) LOAD_STAGE(12) LOAD_STAGE(13) LOAD_STAGE(14) LOAD_STAGE(15)
+}
+#endif
 
 float4 sampleImage(uint id, float2 uv) {
     switch (id) {

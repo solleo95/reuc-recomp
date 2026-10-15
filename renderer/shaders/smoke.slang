@@ -1,5 +1,5 @@
 #include "tev.slang"
-[[vk::constant_id(66)]] const uint destinationAlphaPass=0;
+TEV_CONST(66, destinationAlphaPass);
 
 struct Input {
     [[vk::location(0)]] float3 position : POSITION;
@@ -12,7 +12,7 @@ struct Input {
 // Position and normal matrices of a draw: 64 rows each (gx::PaletteBlock). A vertex stores only its row.
 struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint padding; };
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; };   // alphaPass: ubershader only
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 struct Output {
     float4 position : SV_Position;
@@ -130,6 +130,10 @@ float3 applyFog(float3 color, float depth) {
     return float3((prev*(256-ifog)+fogColor*ifog)>>8)/255.0;
 }
 float4 fragmentMain(Output input) : SV_Target0 {
+#ifdef UBER
+    loadTevKey();
+    destinationAlphaPass = projection.alphaPass;
+#endif
     float2 uv[8];
     [unroll] for(uint i=0;i<8;++i) uv[i]=input.texcoords[i].xy / (input.texcoords[i].z != 0.0 ? input.texcoords[i].z : 1.0);
     float4 result=evaluateTev(uv,input.color,input.color1);
