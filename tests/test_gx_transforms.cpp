@@ -80,4 +80,40 @@ int main() {
     CHECK(std::abs(projected[2]/projected[3]-1)<1e-6f && projected[3]==10);
     rejects([&]{gx::make_projection({1,0,1,0,1,0},2);});
     rejects([&]{gx::make_projection({1,0,1,0,std::numeric_limits<float>::quiet_NaN(),0},0);});
+    // The GPU path (static GpuMeshVertex + PaletteBlock, evaluated like smoke.slang does) must equal gpu_vertex().
+    {
+        gx::Transforms t;
+        t.current=6;
+        gx::set_position_matrix(t,6,{{{1,0,0,5},{0,2,0,6},{0,0,3,7}}});
+        gx::set_position_matrix(t,9,{{{0,1,0,1},{-1,0,0,2},{0,0,1,3}}});
+        gx::set_normal_matrix(t,6,{{{2,0,0},{0,3,0},{0,0,4}}});   // normal rows 6..8 loaded; rows 9..11 (position matrix at 9) are not
+        gx::PaletteBlock block; gx::fill_palette(block,t);
+        auto shader=[&](const gx::Vertex& v,bool indexed) {
+            const gx::GpuMeshVertex m=gx::mesh_vertex(v);
+            const uint32_t row=indexed ? m.row : t.current, nr=row&31;
+            bool all=true;
+            for (uint32_t i=0;i<3;++i) { const uint32_t r=nr+i; const uint32_t word=r<32 ? block.loaded[0] : block.loaded[1]; all=all && ((word>>(r&31))&1u); }
+            std::array<float,3> normal=m.object_normal;
+            if (all) for (size_t i=0;i<3;++i) { const auto& n=block.normal[nr+i]; normal[i]=n[0]*m.object_normal[0]+n[1]*m.object_normal[1]+n[2]*m.object_normal[2]; }
+            return std::pair{std::array{block.position[row],block.position[row+1],block.position[row+2]},normal};
+        };
+        gx::Vertex v; v.position={1,2,3}; v.normal={1,-1,2,0,0,0,0,0,0};
+        for (bool indexed : {false,true}) for (uint8_t row : {uint8_t(6),uint8_t(9)}) {
+            v.position_matrix=row;
+            const auto cpu=gx::gpu_vertex(v,t,indexed,0); const auto gpu=shader(v,indexed);
+            CHECK(gpu.first[0]==cpu.position_rows[0] && gpu.first[1]==cpu.position_rows[1] && gpu.first[2]==cpu.position_rows[2]);
+            CHECK(gpu.second==cpu.normal);
+        }
+        const gx::Vertex rows[]={[]{ gx::Vertex x; x.position_matrix=9; return x; }(),[]{ gx::Vertex x; x.position_matrix=6; return x; }()};
+        CHECK(gx::used_rows(rows)==((uint64_t(1)<<9)|(uint64_t(1)<<6)));
+        gx::validate_draw_rows(t,true,gx::used_rows(rows),0);
+        gx::validate_draw_rows(t,false,0,0);
+        gx::Vertex unloaded; unloaded.position_matrix=20;
+        rejects([&]{gx::validate_draw_rows(t,true,gx::used_rows(std::span(&unloaded,1)),0);});   // rows 20..22 were never loaded
+        gx::Vertex far_row; far_row.position_matrix=62;
+        rejects([&]{gx::validate_draw_rows(t,true,gx::used_rows(std::span(&far_row,1)),0);});     // above 61
+        gx::Vertex wild; wild.position_matrix=200;
+        rejects([&]{gx::validate_draw_rows(t,true,gx::used_rows(std::span(&wild,1)),0);});        // past the mask: still rejected
+        t.current=30; rejects([&]{gx::validate_draw_rows(t,false,0,0);});
+    }
 }

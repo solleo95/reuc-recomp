@@ -12,6 +12,7 @@
 #include <atomic>
 #include <filesystem>
 #include <thread>
+#include <unordered_map>
 
 namespace uc {
 struct RenderPixels { uint64_t serial = 0; uint32_t width = 0, height = 0; std::vector<uint8_t> rgba; };
@@ -58,7 +59,8 @@ private:
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
-        Buffer vertices, indices, pixels, uniforms;
+        Buffer vertices, indices, pixels, uniforms, palettes;   // vertices/indices: this frame's non-mesh draws
+        std::vector<std::shared_ptr<const gx::MeshBuffers>> mesh_refs;   // keeps the meshes this submission draws alive until its fence completed
         std::vector<Texture> textures;
         std::vector<std::shared_ptr<const gx::TexturePixels>> copy_sources;
         std::vector<VkDescriptorSet> texture_sets;
@@ -67,6 +69,10 @@ private:
         uint64_t serial = 0;
         bool submitted = false, reported = false, initialized = false, copied = false, timed = false;
     };
+    // A mesh uploaded once and drawn from every frame; freed once the guest dropped it (owner expired) and no submission still holds it.
+    // Meshes live in a few large buffers (one vkAllocateMemory per slab, not per mesh): vertices then indices at the given offsets.
+    struct MeshSlab { Buffer buffer; VkDeviceSize used=0; uint32_t live=0; };
+    struct GpuMesh { MeshSlab* slab=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0; uint64_t rows=0; std::weak_ptr<const gx::MeshBuffers> owner; };
     struct PresentImage {
         VkImage image = VK_NULL_HANDLE;
         VkSemaphore ready = VK_NULL_HANDLE;
@@ -76,7 +82,10 @@ private:
     static VKAPI_ATTR VkBool32 VKAPI_CALL debug(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* message, void* user);
     void owner() const;
     uint32_t memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const;
-    Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage);
+    Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool prefer_device_local=false);
+    GpuMesh& gpu_mesh(const std::shared_ptr<const gx::MeshBuffers>& source);
+    void sweep_meshes(bool all);
+    void release_mesh(GpuMesh& mesh);
     void destroy_buffer(Buffer& buffer);
     Texture make_texture(const gx::TexturePixels* pixels, VkExtent2D physical_extent = {});
     Texture make_copy_texture(const std::shared_ptr<const gx::TexturePixels>& source);
@@ -112,6 +121,9 @@ private:
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     std::map<PipelineKey,VkPipeline> pipelines_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
+    std::unordered_map<const gx::MeshBuffers*,GpuMesh> meshes_;
+    std::vector<std::unique_ptr<MeshSlab>> mesh_slabs_;   // the last one is the one being filled
+    uint64_t renders_=0;
     std::vector<Texture> recycled_copies_;
     VkDeviceSize recycled_copy_bytes_=0;
     size_t uniform_stride_=sizeof(gx::DrawUniform);

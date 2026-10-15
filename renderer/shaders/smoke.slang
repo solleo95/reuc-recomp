@@ -4,15 +4,15 @@
 struct Input {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float4 color : COLOR0;
-    [[vk::location(2)]] float4 row0 : TEXCOORD0;
-    [[vk::location(3)]] float4 row1 : TEXCOORD1;
-    [[vk::location(4)]] float4 row2 : TEXCOORD2;
+    [[vk::location(2)]] uint matrixRow : BLENDINDICES;
     [[vk::location(5)]] float2 texcoords[8] : TEXCOORD3;
-    [[vk::location(13)]] float3 normal : NORMAL;
     [[vk::location(14)]] float4 color1 : COLOR1;
     [[vk::location(15)]] float3 objectNormal : NORMAL1;
 };
-struct Projection { float4 rows[4]; };
+// Position and normal matrices of a draw: 64 rows each (gx::PaletteBlock). A vertex stores only its row.
+struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
+[[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint padding; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 struct Output {
     float4 position : SV_Position;
@@ -79,9 +79,20 @@ float3 generateTexcoord(uint id, Input input) {
 Output vertexMain(Input input) {
     Output output;
     float4 objectPosition = float4(input.position, 1.0);
-    float4 viewPosition = float4(dot(input.row0, objectPosition), dot(input.row1, objectPosition), dot(input.row2, objectPosition), 1.0);
+    uint row = projection.indexed != 0 ? input.matrixRow : projection.currentRow;   // validated on the CPU: row <= 61, rows loaded
+    float4 row0 = palettes[projection.palette].position[row];
+    float4 row1 = palettes[projection.palette].position[row + 1];
+    float4 row2 = palettes[projection.palette].position[row + 2];
+    float4 viewPosition = float4(dot(row0, objectPosition), dot(row1, objectPosition), dot(row2, objectPosition), 1.0);
     output.position = float4(dot(projection.rows[0], viewPosition), dot(projection.rows[1], viewPosition), dot(projection.rows[2], viewPosition), dot(projection.rows[3], viewPosition));
-    float3 normal = dot(input.normal,input.normal)>0.0 ? normalize(input.normal) : float3(0.0);
+    // View-space normal: the loaded normal matrix applied to the object normal; without a loaded matrix the object normal stays (position-only fixtures).
+    uint normalRow = row & 31;
+    uint4 loaded = palettes[projection.palette].loaded;
+    bool allLoaded = true;
+    [unroll] for (uint i = 0; i < 3; ++i) { uint r = normalRow + i; uint word = r < 32 ? loaded.x : loaded.y; allLoaded = allLoaded && (((word >> (r & 31)) & 1u) != 0); }
+    float3 viewNormal = input.objectNormal;
+    if (allLoaded) viewNormal = float3(dot(palettes[projection.palette].normal[normalRow].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 1].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 2].xyz, input.objectNormal));
+    float3 normal = dot(viewNormal,viewNormal)>0.0 ? normalize(viewNormal) : float3(0.0);
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
     [unroll] for (uint id = 0; id < 8; ++id) output.texcoords[id] = generateTexcoord(id, input);

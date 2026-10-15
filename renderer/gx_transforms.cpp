@@ -30,6 +30,31 @@ void set_normal_matrix(Transforms& transforms,uint32_t row,const NormalMatrix& m
         if (!std::isfinite(value)) throw Error(ErrorCode::layout,0x802888A8,9,0);
     for (size_t i=0;i<3;++i) { transforms.normal_rows[row+i]=matrix[i]; transforms.loaded_normal_rows.set(row+i); }
 }
+GpuMeshVertex mesh_vertex(const Vertex& vertex) {
+    GpuMeshVertex result;
+    result.position=vertex.position; result.color=vertex.color[0]; result.texcoords=vertex.texcoord;
+    result.object_normal={vertex.normal[0],vertex.normal[1],vertex.normal[2]};
+    result.color1=vertex.color[1]; result.row=vertex.position_matrix;
+    return result;
+}
+void fill_palette(PaletteBlock& block,const Transforms& transforms) {
+    block.position=transforms.position_rows;
+    for (size_t i=0;i<64;++i) block.normal[i]={transforms.normal_rows[i][0],transforms.normal_rows[i][1],transforms.normal_rows[i][2],0};
+    block.loaded={uint32_t(transforms.loaded_normal_rows.to_ullong()),uint32_t(transforms.loaded_normal_rows.to_ullong()>>32),0,0};
+}
+uint64_t used_rows(std::span<const Vertex> vertices) {
+    uint64_t rows=0;
+    for (const auto& vertex : vertices) rows|=uint64_t(1)<<std::min<uint32_t>(vertex.position_matrix,63);   // rows past 63 land on bit 63, which validation rejects like any row above 61
+    return rows;
+}
+void validate_draw_rows(const Transforms& transforms,bool indexed,uint64_t rows,uint32_t callsite) {
+    const auto check=[&](uint32_t row) {
+        if (row>61) throw Error(ErrorCode::layout,callsite,61,row);
+        for (size_t i=0;i<3;++i) if (!transforms.loaded_rows[row+i]) throw Error(ErrorCode::layout,callsite,row+i,0);
+    };
+    if (!indexed) { check(transforms.current); return; }
+    for (uint32_t row=0;row<64;++row) if (rows&(uint64_t(1)<<row)) check(row);
+}
 GpuVertex gpu_vertex(const Vertex& vertex,const Transforms& transforms,bool indexed,uint32_t callsite) {
     const uint32_t row=indexed ? vertex.position_matrix : transforms.current;
     if (row>61) throw Error(ErrorCode::layout,callsite,61,row);
