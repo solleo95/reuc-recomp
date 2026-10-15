@@ -48,6 +48,7 @@ Thread* Sched::create(uint32_t guest_addr, int priority, Body body, const ppc::C
     auto t = std::make_unique<Thread>();
     t->id = ++next_id_;
     t->guest_addr = guest_addr;
+    if (t->id < 32) entry_[t->id] = guest_addr;
     t->priority = priority;
     t->body = std::move(body);
     if (inherit) t->ctx = *inherit;
@@ -306,8 +307,13 @@ void Sched::reschedule(Thread* self) {
     }
 }
 
+uint64_t Sched::steady_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
+
 void Sched::handoff(Thread* self, Thread* next) {
     if (next == self) { self->state = Thread::State::Running; ee_ = self->ee; return; }
+    const uint64_t now = steady_ns();
+    if (self->id < 32 && run_started_ns_) run_ns_[self->id] += now - run_started_ns_;
+    ++switches_; notified_ns_ = now;
     next->state = Thread::State::Running;
     ee_ = next->ee;
     if (switch_hook_) switch_hook_(next);
@@ -321,6 +327,7 @@ void Sched::handoff(Thread* self, Thread* next) {
     std::unique_lock<std::mutex> lk(baton_m_);
     self->cv.wait(lk, [&] { return running_ == self || shutdown_ || self->cancelled; });
     if (shutdown_ || self->cancelled || running_ != self) throw ThreadExit{};
+    run_started_ns_ = steady_ns(); wake_ns_ += run_started_ns_ - notified_ns_;
 }
 
 void Sched::start_host(Thread* t) {
@@ -335,6 +342,7 @@ void Sched::thread_main(Thread* t) {
         std::unique_lock<std::mutex> lk(baton_m_);
         t->cv.wait(lk, [&] { return running_ == t || shutdown_ || t->cancelled; });
         if (shutdown_ || t->cancelled || running_ != t) return;
+        run_started_ns_ = steady_ns(); wake_ns_ += run_started_ns_ - notified_ns_;
     }
     try {
         t->body(t->ctx);

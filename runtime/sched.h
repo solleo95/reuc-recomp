@@ -116,6 +116,16 @@ private:
     std::function<void(const std::string&)> err_;
     std::function<void(Thread*)> switch_hook_;
     Event shutdown_hook_;
+    // --profile: thread switches, how long the woken thread took to start running, and the time each guest thread held the baton.
+    std::atomic<uint64_t> switches_{0}, wake_ns_{0}, notified_ns_{0}, run_started_ns_{0};
+    std::atomic<uint64_t> run_ns_[32] = {};
+    std::atomic<uint32_t> entry_[32] = {};
+    static uint64_t steady_ns();
+public:
+    struct SwitchStats { uint64_t switches, wake_ns; };
+    SwitchStats switch_stats() const { return {switches_.load(), wake_ns_.load()}; }
+    uint64_t thread_run_ns(int id) const { return id > 0 && id < 32 ? run_ns_[id].load() : 0; }
+    uint32_t thread_entry(int id) const { return id > 0 && id < 32 ? entry_[id].load() : 0; }
 };
 
 }  // namespace uc
