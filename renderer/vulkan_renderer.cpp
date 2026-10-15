@@ -201,6 +201,7 @@ void VulkanRenderer::destroy_buffer(Buffer& buffer) {
     buffer = {};
 }
 static size_t validate_texture_chain(const gx::TexturePixels* pixels) {
+    if(pixels) pixels->wait();   // the background decode of a freshly created texture
     const gx::TextureLevel white{1,1,{255,255,255,255}};
     const bool gpu_only=pixels && pixels->gpu_only;
     if(pixels && (unsigned(pixels->channels)>unsigned(gx::TextureChannels::rgb565) ||

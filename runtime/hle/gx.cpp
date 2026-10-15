@@ -506,6 +506,7 @@ bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& des
     if(!prompt)return false;
     prompt->compact=compact;draws.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
 }
+void gx_enable_async_textures() { texture_cache.set_async(true); }
 void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) {
     prompt_batch=0;carried_prompts.clear();
     prompt_annotations=prompt_present=prompt_fallback=0;
@@ -1227,6 +1228,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         if(!textures[map]) textures[map]=snapshot_texture(bound_textures[map],palettes);
     }
     if(profile_this_mesh && mesh_profile_count==1) for(size_t map=0;map<2;++map) {
+        if(textures[map]) textures[map]->wait();
         if(!textures[map] || textures[map]->gpu_only || textures[map]->levels.empty()) continue;
         const auto& level=textures[map]->levels[0];
         try {

@@ -359,6 +359,7 @@ static int real_main(int argc, char** argv) {
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
     gx::Packets packets;
     uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets, options.profile);
+    if (!options.headless) uc::gx_enable_async_textures();
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);

@@ -28,6 +28,7 @@ std::vector<TestDrawStat> summarize_draws(const gx::FramePacket& packet) {
         }
         if (!any) continue;
         TestDrawStat stat{0, draw.callsite, uint32_t(draw.vertex_view().size())};
+        if (draw.texture) draw.texture->wait();
         if (draw.texture && !draw.texture->levels.empty()) { stat.tex_w = draw.texture->levels[0].width; stat.tex_h = draw.texture->levels[0].height; stat.tex_id = uint64_t(reinterpret_cast<uintptr_t>(draw.texture.get())); }
         stat.x0 = x0; stat.y0 = y0; stat.x1 = x1; stat.y1 = y1;
         out.push_back(stat);

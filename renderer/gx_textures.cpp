@@ -2,6 +2,9 @@
 #include "../runtime/gx_write_watch.h"
 #include <algorithm>
 #include <array>
+#include <deque>
+#include <functional>
+#include <thread>
 
 namespace gx {
 namespace {
@@ -137,6 +140,30 @@ TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte>
     }
     return result;
 }
+namespace {
+// Small fixed pool: texture decoding is independent per texture. Jobs own everything they touch (shared_ptr results, copied bytes).
+class DecodePool {
+public:
+    static DecodePool& instance() { static DecodePool pool; return pool; }
+    void submit(std::function<void()> job) { { std::lock_guard lock(mutex_); queue_.push_back(std::move(job)); } wake_.notify_one(); }
+    ~DecodePool() { { std::lock_guard lock(mutex_); stop_ = true; } wake_.notify_all(); for (auto& worker : workers_) worker.join(); }
+private:
+    DecodePool() { const unsigned count = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u); for (unsigned i = 0; i < count; ++i) workers_.emplace_back([this] { run(); }); }
+    void run() {
+        for (;;) {
+            std::function<void()> job;
+            { std::unique_lock lock(mutex_); wake_.wait(lock, [&] { return stop_ || !queue_.empty(); }); if (queue_.empty()) return; job = std::move(queue_.front()); queue_.pop_front(); }
+            job();
+        }
+    }
+    std::mutex mutex_; std::condition_variable wake_; std::deque<std::function<void()>> queue_; std::vector<std::thread> workers_; bool stop_ = false;
+};
+size_t decoded_bytes(const TextureDesc& desc) {
+    size_t total = 0; uint32_t width = desc.width, height = desc.height;
+    for (unsigned level = 0; level < desc.levels; ++level) { total += size_t(width) * height * 4; width = std::max(1u, width / 2); height = std::max(1u, height / 2); }
+    return total;
+}
+} // namespace
 std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette) {
     const auto required = encoded_texture_size(desc);
     if (pixels.size() < required) throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
@@ -159,10 +186,23 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
             return result;
         }
     }
-    auto result = std::make_shared<const TexturePixels>(decode_texture(desc, pixels, palette));
-    ++decodes_;
+    std::shared_ptr<const TexturePixels> result;
     size_t bytes = pixels.size() + palette.bytes.size();
-    for (const auto& level : result->levels) bytes += level.rgba.size();
+    if (async_) {
+        auto pending = std::make_shared<TexturePixels>();
+        pending->job = std::make_shared<TextureJob>();
+        bytes += decoded_bytes(desc);
+        DecodePool::instance().submit([pending, desc, format = palette.format, encoded = std::vector<std::byte>(pixels.begin(), pixels.end()), colors = std::vector<std::byte>(palette.bytes.begin(), palette.bytes.end())] {
+            std::exception_ptr failure;
+            try { pending->levels = decode_texture(desc, encoded, PaletteView{format, colors}).levels; } catch (...) { failure = std::current_exception(); }
+            pending->job->finish(std::move(failure));
+        });
+        result = pending;
+    } else {
+        result = std::make_shared<const TexturePixels>(decode_texture(desc, pixels, palette));
+        for (const auto& level : result->levels) bytes += level.rgba.size();
+    }
+    ++decodes_;
     if (bytes <= budget_) {
         while (!entries_.empty() && (resident_ > budget_ - bytes || entries_.size() >= 4096)) {
             auto last = entries_.end(); --last;

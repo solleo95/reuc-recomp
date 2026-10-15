@@ -153,6 +153,24 @@ int main() {
     CHECK(cleared!=first && cache.decodes()==1);
     auto resized=cache.snapshot(0x80001000,{2,1,gx::TextureFormat::i8},bytes(data));
     CHECK(resized!=cleared && resized->levels[0].width==2);
+    // Background decoding: the pixels match the synchronous decode once wait() returns, a cache hit shares the pending texture, and a decode error surfaces in wait().
+    {
+        gx::TextureCache async_cache; async_cache.set_async(true);
+        std::vector<std::byte> source(5592576); for (size_t i=0;i<source.size();++i) source[i]=std::byte(i*7);
+        const gx::TextureDesc big{1024,1024,gx::TextureFormat::rgba8,11};
+        auto pending=async_cache.snapshot(0x80100000,big,source);
+        CHECK(async_cache.snapshot(0x80100000,big,source)==pending && async_cache.decodes()==1);
+        pending->wait(); pending->wait();
+        const auto reference=gx::decode_texture(big,source);
+        CHECK(pending->levels.size()==11 && pending->levels[0].rgba==reference.levels[0].rgba && pending->levels[10].rgba==reference.levels[10].rgba);
+        std::vector<std::byte> indices(32,std::byte(255)), colors(2);   // index 255 is past the 1-colour palette
+        auto broken=async_cache.snapshot(0x80200000,{1,1,gx::TextureFormat::c8},indices,{gx::PaletteFormat::ia8,colors});
+        bool failed=false; try { broken->wait(); } catch (const gx::TextureError& error) { failed=error.code==gx::TextureErrorCode::truncated; }
+        CHECK(failed);
+        std::vector<std::shared_ptr<const gx::TexturePixels>> burst;
+        for (uint32_t i=0;i<300;++i) burst.push_back(async_cache.snapshot(0x80300000+i*32,{1,1,gx::TextureFormat::i8},indices));
+        for (auto& texture : burst) { texture->wait(); CHECK(texture->levels[0].rgba[0]==255); }
+    }
     gx::TextureCache many;
     std::vector<std::shared_ptr<const gx::TexturePixels>> expected;
     for(uint32_t i=0;i<512;++i) expected.push_back(many.snapshot(0x80010000+i*32,{1,1,gx::TextureFormat::i8},bytes(data)));

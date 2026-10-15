@@ -1,7 +1,11 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <exception>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -30,7 +34,21 @@ struct TextureLevel {
     std::vector<uint8_t> rgba;
 };
 enum class TextureChannels:uint8_t { rgba,alpha_intensity,rgb565 };
-struct TexturePixels { std::vector<TextureLevel> levels; bool gpu_only=false; TextureChannels channels=TextureChannels::rgba; };
+// A background decode in flight: `done` is set (release) after the worker wrote TexturePixels::levels or stored the error.
+struct TextureJob {
+    std::mutex mutex; std::condition_variable ready; std::atomic<bool> done{false}; std::exception_ptr error;
+    void finish(std::exception_ptr failure) { { std::lock_guard lock(mutex); error = std::move(failure); done.store(true, std::memory_order_release); } ready.notify_all(); }
+};
+struct TexturePixels {
+    std::vector<TextureLevel> levels; bool gpu_only=false; TextureChannels channels=TextureChannels::rgba;
+    std::shared_ptr<TextureJob> job;   // set while a worker still fills `levels`
+    // Blocks until the pixels are decoded (no-op for finished textures) and rethrows a decode error. Call before reading `levels`.
+    void wait() const {
+        if (!job || job->done.load(std::memory_order_acquire)) { if (job && job->error) std::rethrow_exception(job->error); return; }
+        std::unique_lock lock(job->mutex); job->ready.wait(lock, [&] { return job->done.load(std::memory_order_acquire); });
+        if (job->error) std::rethrow_exception(job->error);
+    }
+};
 
 // Decodes texture data into owned RGBA8 pixels; guest addresses never escape.
 TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette = {});
@@ -43,6 +61,8 @@ public:
     TextureCache(TextureCache&&) = delete;
     TextureCache& operator=(TextureCache&&) = delete;
     std::shared_ptr<const TexturePixels> snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette = {});
+    // With async on, a cache miss returns at once and a small worker pool fills the pixels; the renderer calls TexturePixels::wait() before it reads them.
+    void set_async(bool on) { async_ = on; }
     size_t resident_bytes() const { return resident_; }
     uint64_t decodes() const { return decodes_; }
     void clear() { by_address_.clear(); entries_.clear(); resident_ = 0; decodes_ = 0; }
@@ -60,5 +80,6 @@ private:
     std::unordered_multimap<uint32_t, std::list<Entry>::iterator> by_address_;
     size_t budget_, resident_ = 0;
     uint64_t decodes_ = 0;
+    bool async_ = false;
 };
 } // namespace gx
