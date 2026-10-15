@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include <array>
 #include <cstring>
 #include <intrin.h>
 #include "gx_write_watch.h"
@@ -412,6 +413,9 @@ PPC_INLINE void op_ps_cmpu1(Ctx& c, int f, int a, int b) { fcmp(c, f, c.ps1[a], 
 PPC_INLINE void op_ps_cmpo1(Ctx& c, int f, int a, int b) { fcmp(c, f, c.ps1[a], c.ps1[b]); }
 
 // ---- quantized load/store (GQR: LD_SCALE bits 24-29, LD_TYPE 16-18, ST_SCALE 8-13, ST_TYPE 0-2; types 4=u8 5=u16 6=s8 7=s16, else float) ----
+// 2^e for e in -32..32 (the GQR scale range plus its negation): exact, and a table read instead of a libm call per quantized element.
+inline const std::array<double, 65> kGqPow2 = [] { std::array<double, 65> t{}; for (int e = -32; e <= 32; ++e) t[size_t(e + 32)] = std::ldexp(1.0, e); return t; }();
+PPC_INLINE double gq_pow2(int e) { return kGqPow2[size_t(e + 32)]; }
 PPC_INLINE int gq_scale(uint32_t v) { int s = int(v & 0x3F); return s & 0x20 ? s - 64 : s; }
 PPC_INLINE int gq_bytes(int type) { return (type == 4 || type == 6) ? 1 : (type == 5 || type == 7) ? 2 : 4; }
 PPC_INLINE double gq_load1(Ctx& c, uint32_t ea, int type, int scale) {
@@ -423,11 +427,11 @@ PPC_INLINE double gq_load1(Ctx& c, uint32_t ea, int type, int scale) {
         case 7: v = double(int16_t(rd16(c, ea))); break;
         default: return double(rdf32(c, ea));
     }
-    return v * std::ldexp(1.0, -scale);
+    return v * gq_pow2(-scale);
 }
 PPC_INLINE void gq_store1(Ctx& c, uint32_t ea, int type, int scale, double v) {
     if (type < 4 || type > 7) { wrf32(c, ea, float(v)); return; }
-    double x = std::trunc(v * std::ldexp(1.0, scale));
+    double x = std::trunc(v * gq_pow2(scale));
     double lo = type == 4 ? 0 : type == 5 ? 0 : type == 6 ? -128 : -32768;
     double hi = type == 4 ? 255 : type == 5 ? 65535 : type == 6 ? 127 : 32767;
     x = std::isnan(x) ? lo : x < lo ? lo : x > hi ? hi : x;
@@ -435,6 +439,10 @@ PPC_INLINE void gq_store1(Ctx& c, uint32_t ea, int type, int scale, double v) {
 }
 PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i) {
     uint32_t g = c.gqr[i]; int type = (g >> 16) & 7, scale = gq_scale(g >> 24);
+    if (type < 4 && w && !is_mmio(ea)) [[likely]] {   // single float: ps1 reads as 1.0
+        const uint32_t bits = rd32_ram(c, ea); float f; std::memcpy(&f, &bits, 4);
+        c.f[t] = f; c.ps1[t] = 1.0; return;
+    }
     if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
         uint64_t v; std::memcpy(&v, hp(c, ea), 8);
         const uint32_t b0 = _byteswap_ulong(uint32_t(v)), b1 = _byteswap_ulong(uint32_t(v >> 32)); float f0, f1; std::memcpy(&f0, &b0, 4); std::memcpy(&f1, &b1, 4);
@@ -446,6 +454,10 @@ PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i) {
 }
 PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i) {
     uint32_t g = c.gqr[i]; int type = g & 7, scale = gq_scale(g >> 8);
+    if (type < 4 && w && !is_mmio(ea)) [[likely]] {   // single float
+        const float f = float(c.f[t]); uint32_t bits; std::memcpy(&bits, &f, 4);
+        wr32_ram(c, ea, bits); return;
+    }
     if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
         const float f0 = float(c.f[t]), f1 = float(c.ps1[t]); uint32_t b0, b1; std::memcpy(&b0, &f0, 4); std::memcpy(&b1, &f1, 4);
         const uint64_t v = uint64_t(_byteswap_ulong(b0)) | uint64_t(_byteswap_ulong(b1)) << 32;

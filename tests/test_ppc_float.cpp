@@ -112,6 +112,28 @@ int main() {
     op_psq_l(c, 9, 3, 0, 0, 2);        CHECK(c.f[9] == 1.5 && c.ps1[9] == double(-0.1f));
     gx::page_epoch[0x6000 >> 12] = 0; c.r[3] = 0x80006000; op_psq_st(c, 8, 3, 0, 0, 2);
     CHECK(gx::page_epoch[0x6000 >> 12] == 7 && gx::page_epoch[0x7000 >> 12] != 7);   // inside one page: only that page
+    // single float (W=1): a load leaves ps1 = 1.0, a store writes only the four bytes
+    c.gqr[2] = 0; wrf32(c, 0x80003500, 2.5f); wr32(c, 0x80003504, 0xDEADBEEFu); c.r[3] = 0x80003500;
+    op_psq_l(c, 7, 3, 0, 1, 2);        CHECK(c.f[7] == 2.5 && c.ps1[7] == 1.0);
+    c.f[7] = -3.75; op_psq_st(c, 7, 3, 0, 1, 2);   CHECK(rdf32(c, 0x80003500) == -3.75f && rd32(c, 0x80003504) == 0xDEADBEEFu);
+    // quantized elements use the exact powers of two of the table: same result as ldexp for every scale and integer type
+    for (int type = 4; type <= 7; ++type) for (int scale = -32; scale < 32; ++scale) {
+        c.gqr[3] = (uint32_t(scale) & 0x3Fu) << 24 | uint32_t(type) << 16 | (uint32_t(scale) & 0x3Fu) << 8 | uint32_t(type);
+        for (double v : {0.0, 1.0, -1.0, 12.5, 300.25, -70000.5, 1e-3, 1e9}) {
+            c.f[6] = v; c.ps1[6] = -v; c.r[3] = 0x80003600;
+            op_psq_st(c, 6, 3, 0, 0, 3);
+            const bool one = type == 4 || type == 6;
+            const double lo = type == 4 || type == 5 ? 0 : type == 6 ? -128 : -32768, hi = type == 4 ? 255 : type == 5 ? 65535 : type == 6 ? 127 : 32767;
+            auto quantize = [&](double x) { double q = std::trunc(x * std::ldexp(1.0, scale)); return std::isnan(q) ? lo : q < lo ? lo : q > hi ? hi : q; };
+            const double q0 = quantize(v), q1 = quantize(-v);
+            const int32_t raw0 = one ? int32_t(rd8(c, 0x80003600)) : int32_t(rd16(c, 0x80003600)), raw1 = one ? int32_t(rd8(c, 0x80003601)) : int32_t(rd16(c, 0x80003602));
+            CHECK(raw0 == (one ? int32_t(uint8_t(int32_t(q0))) : int32_t(uint16_t(int32_t(q0)))));
+            CHECK(raw1 == (one ? int32_t(uint8_t(int32_t(q1))) : int32_t(uint16_t(int32_t(q1)))));
+            op_psq_l(c, 5, 3, 0, 0, 3);
+            const double l0 = (type == 4 ? double(uint8_t(raw0)) : type == 5 ? double(uint16_t(raw0)) : type == 6 ? double(int8_t(raw0)) : double(int16_t(raw0))) * std::ldexp(1.0, -scale);
+            CHECK(c.f[5] == l0);
+        }
+    }
     // r1 (stack) accesses skip the MMIO test and the write barrier, r2/r13 skip only the MMIO test, other bases keep both; values agree on every path
     for (int base : {1, 2, 13, 3}) {
         const uint32_t page = 0x80010000u + uint32_t(base) * 0x1000u;
