@@ -54,6 +54,18 @@ def main(argv=None):
         report, run_dir = run_once(args.scenario, args)
         failures += not report["ok"]
         detail = "" if report["ok"] else f" - {report['error']}"
+        series = (report.get("result") or {}).get("series", [])
+        for second in sorted({int(row["t"]) for row in series}):   # one line per second from the 50 ms windows; full data in <run>/fps50.csv
+            rows = [row for row in series if int(row["t"]) == second]
+            rates = [row["fps"] for row in rows]
+            gaps = [row["gap_ms"] for row in rows if row["gap_ms"] is not None]
+            print(f"  t={second:3d}s fps avg {sum(rates) / len(rates):6.1f} min {min(rates):6.1f} max {max(rates):6.1f}  worst gap {max(gaps) if gaps else 0:5.1f} ms  {'/'.join(sorted({row['state'] for row in rows}))}", flush=True)
+        result = report.get("result") or {}
+        dips = sorted((row for row in series if row["state"] == "active" and row["gap_ms"]), key=lambda row: -row["gap_ms"])[:6]
+        if dips:
+            print("  worst frames: " + "  ".join(f"t={row['t']:.2f}s {row['gap_ms']:.1f}ms" for row in dips), flush=True)
+        if "fps_p5" in result:
+            print(f"  ACTIVE gameplay ({result['samples']} windows of 50 ms): mean {result['fps_mean']:.1f}  p50 {result['fps_p50']:.1f}  p5 {result['fps_p5']:.1f}  min {result['fps_min']:.1f}  frame gap p99 {result['gap_p99_ms']:.1f} ms  max {result['gap_max_ms']:.1f} ms  (non-active windows: {result['non_active_windows']})", flush=True)
         print(f"{args.scenario} {index + 1}/{args.repeat} {'PASS' if report['ok'] else 'FAIL'} {report['seconds']}s {run_dir}{detail}", flush=True)
     return 1 if failures else 0
 

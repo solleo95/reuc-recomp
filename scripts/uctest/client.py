@@ -48,6 +48,7 @@ class Game:
         self.transport = None
         self.frame = {}
         self.history = collections.deque(maxlen=600)
+        self.timing = collections.deque(maxlen=40000)   # (arrival time, frame event) of every frame event, for fine-grained rate measurements
         self.exited = False
         self.steps = []
         self.counters = collections.Counter()   # e.g. press_retries: menu presses the game dropped
@@ -138,6 +139,7 @@ class Game:
                 if kind == "frame":
                     self.frame = message
                     self.history.append(message)
+                    self.timing.append((time.perf_counter(), message))
                 elif kind == "action":
                     self._actions.append(message)
                 elif kind == "exit":

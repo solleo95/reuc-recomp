@@ -92,20 +92,84 @@ def perform(g, action, *, seconds=10):
     return found[0]
 
 
-def measure_fps(g, seconds):
+def _tutorial_up(f):
+    return bool(f.get("tutorial_loaded") and f.get("tutorial") not in (0, 0x100000))
+
+
+def play_state(f):
+    """What the game is doing right now: only 'active' is real gameplay (a tutorial page or the pause panel stops the game while the context still reads gameplay)."""
+    if f.get("context") != "gameplay":
+        return screen_of(f) or "menu"
+    if _tutorial_up(f):
+        return "tutorial"
+    if f.get("pause") == 2:
+        return "paused"
+    if not f["player"]["valid"]:
+        return "loading"
+    return "active"
+
+
+WINDOW = 0.05   # seconds per FPS sample
+
+
+def _windows(events, begin, end):
+    """Bin frame events (arrival time, frame) into WINDOW-second samples: presentation rate, longest gap between events, game state."""
+    rows, previous_presents = [], None
+    index = int((end - begin) / WINDOW)
+    by_bin = [[] for _ in range(index)]
+    for t, f in events:
+        b = int((t - begin) / WINDOW)
+        if 0 <= b < index:
+            by_bin[b].append((t, f))
+    last_t = None
+    for b, items in enumerate(by_bin):
+        if not items:
+            continue
+        gaps = [items[i][0] - items[i - 1][0] for i in range(1, len(items))]
+        if last_t is not None:
+            gaps.append(items[0][0] - last_t)
+        last_t = items[-1][0]
+        presents = items[-1][1]["presents"]
+        fps = None if previous_presents is None else (presents - previous_presents) / WINDOW
+        previous_presents = presents
+        states = {play_state(f) for _, f in items}
+        rows.append({"t": round(b * WINDOW, 2), "fps": None if fps is None else round(fps, 1), "gap_ms": round(max(gaps) * 1000, 1) if gaps else None,
+                     "state": "+".join(sorted(states)), "n": len(items)})
+    return [row for row in rows if row["fps"] is not None]
+
+
+def measure_fps(g, seconds, *, max_seconds=None, csv_path=None):
+    """FPS in 50 ms windows from the first call on. Tutorial/mission pages are dismissed with A; only windows that are active gameplay throughout count
+    towards the statistics, and the loop runs until `seconds` of them were collected (or max_seconds, default 3x). All windows are returned."""
     if g.frame.get("speed") != 1:
         g.fail("performance is measured at speed 1 only", "speed 1")
-    samples = []
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        start, presents = time.monotonic(), g.frame["presents"]
-        contexts = {g.frame["context"]}
-        while time.monotonic() - start < 1.0:
-            time.sleep(0.05)
-            contexts.add(g.frame["context"])
-        elapsed = time.monotonic() - start
-        if contexts == {"gameplay"}:   # discard seconds with a context change
-            samples.append((g.frame["presents"] - presents) / elapsed)
-    if not samples:
-        g.fail("no clean gameplay seconds to measure", "gameplay")
-    return {"fps_mean": sum(samples) / len(samples), "fps_min": min(samples), "samples": len(samples)}
+    max_seconds = max_seconds or seconds * 3
+    begin = time.perf_counter()
+    mark = len(g.timing)
+    next_tick, active_time = begin, 0.0
+    while active_time < seconds and time.perf_counter() - begin < max_seconds:
+        next_tick += WINDOW
+        time.sleep(max(0.0, next_tick - time.perf_counter()))
+        state = play_state(g.frame)
+        if state in ("tutorial", "mission"):   # pages over the scene: dismiss them, they are not gameplay
+            g.press("A", PRESS_FRAMES, wait=False)
+        elif state == "active":
+            active_time += WINDOW
+    end = time.perf_counter()
+    events = [(t, f) for t, f in list(g.timing)[mark:]]
+    rows = _windows(events, begin, end)
+    rows = [row for row in rows if row["t"] >= 0.5]   # the first half second follows the speed switch
+    active = [row for row in rows if row["state"] == "active"]
+    if len(active) < 20:
+        g.fail("no active gameplay seconds to measure", "gameplay")
+    active = active[:int(seconds / WINDOW)]
+    fps = sorted(row["fps"] for row in active)
+    gaps = sorted(row["gap_ms"] for row in active if row["gap_ms"] is not None)
+    if csv_path:
+        with open(csv_path, "w", encoding="utf-8") as out:
+            out.write("t,fps,gap_ms,state\n")
+            for row in rows:
+                out.write(f"{row['t']},{row['fps']},{row['gap_ms']},{row['state']}\n")
+    pick = lambda values, q: values[min(len(values) - 1, int(len(values) * q))]
+    return {"fps_mean": sum(fps) / len(fps), "fps_min": fps[0], "fps_p5": pick(fps, 0.05), "fps_p50": pick(fps, 0.5), "gap_p99_ms": pick(gaps, 0.99), "gap_max_ms": gaps[-1],
+            "samples": len(active), "non_active_windows": len(rows) - len(active), "series": rows}

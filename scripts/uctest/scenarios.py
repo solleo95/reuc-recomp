@@ -56,7 +56,7 @@ def perf(g, args):
         g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
     result = {"capture": g.capture()}
     with g.step("measure_fps"):
-        result.update(steps.measure_fps(g, args.measure or 15))
+        result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
     return result
 
 
