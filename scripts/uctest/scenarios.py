@@ -83,6 +83,37 @@ def perf(g, args):
     return result
 
 
+def fight(g, args):
+    """Skip to the heavy train fight: the bot plays at speed 8 until `--enemies` actors are in the scene, then the game runs at speed 1 with an idle
+    player (god mode) and the FPS is measured. With UC_CPU_SAMPLE_FLAG=<file> set for the run, the game's CPU sampler starts when this scenario
+    creates that file, so a profile covers only the fight."""
+    import os
+    import time
+    from pathlib import Path
+    from .autoplay import Autoplay
+    g.set_speed(8)
+    reach_gameplay(g, args.chapter)
+    bot = Autoplay(g, g.run_dir / "autoplay.jsonl", speed=8, god=True)
+    deadline = time.monotonic() + args.max_minutes * 60
+    with g.step("skip_to_fight"):
+        while len(g.frame.get("enemies") or []) < args.enemies:
+            if time.monotonic() > deadline:
+                g.fail(f"the scene never reached {args.enemies} actors", "fight")
+            reason = bot.step()
+            if reason:
+                g.fail(f"autoplay stopped before the fight: {reason}", "fight")
+    with g.step("normal_speed"):
+        g.set_speed(1)
+        g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
+    flag = os.environ.get("UC_CPU_SAMPLE_FLAG")
+    if flag:
+        Path(flag).write_text("go")
+    result = {"actors": len(g.frame.get("enemies") or []), "capture": g.capture()}
+    with g.step("measure_fps"):
+        result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
+    return result
+
+
 def autoplay(g, args):
     """Play from the train chapter start as far as the bot gets; the report says where and why it stopped."""
     from .autoplay import Autoplay
@@ -152,4 +183,4 @@ def resize(g, args):
     return {"idle": idle, "storm": storm, "after": after}
 
 
-SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "autoplay": autoplay, "resize": resize}
+SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize}

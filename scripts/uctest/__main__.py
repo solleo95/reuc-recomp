@@ -46,6 +46,7 @@ def main(argv=None):
     run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
     run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
+    run.add_argument("--enemies", type=int, default=25, help="fight: actors in the scene that end the x8 skip")
     run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
     inspect = sub.add_parser("inspect", help="read a crash bundle (see uctest/dumpview.py)")
     inspect.add_argument("bundle", help="crash-*.txt report or its .dump folder")

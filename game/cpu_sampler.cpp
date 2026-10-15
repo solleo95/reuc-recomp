@@ -33,9 +33,12 @@ void cpu_sampler_start_once(const char* thread) {
         auto last = std::chrono::steady_clock::now();
         const char* delay = std::getenv("UC_CPU_SAMPLE_DELAY");   // seconds to skip first (boot, menus)
         const auto begin = last + std::chrono::seconds(delay ? std::atoi(delay) : 0);
-        for (;;) {
+        const char* flag = std::getenv("UC_CPU_SAMPLE_FLAG");   // sample only once this file exists (a test scenario creates it at the scene of interest)
+        bool armed = !flag;
+        for (unsigned tick = 0;; ++tick) {
             std::this_thread::sleep_for(std::chrono::microseconds(500));
             if (std::chrono::steady_clock::now() < begin) continue;
+            if (!armed) { if (tick % 100 == 0) armed = GetFileAttributesA(flag) != INVALID_FILE_ATTRIBUTES; if (!armed) continue; }
             if (SuspendThread(target) == DWORD(-1)) continue;
             CONTEXT context{};
             context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
