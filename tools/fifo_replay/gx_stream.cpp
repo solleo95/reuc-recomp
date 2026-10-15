@@ -130,7 +130,7 @@ void GxStream::walk(std::span<const std::byte> bytes,unsigned depth,uint32_t ori
                 vertices.write_attribute(0,bytes.subspan(p,size));
                 for(const auto& source:vertices.sources()) if(source) (void)memory_.read(source->address,source->size);
                 auto draw=vertices.take_draw();draw.transforms=transforms();material(draw);
-                bind_textures(draw);generate_texcoords(draw);pending_.draws.push_back(std::move(draw));
+                bind_textures(draw);check_texgen(draw);pending_.draws.push_back(std::move(draw));
                 ++stats.draws;stats.vertices+=count;p+=size;
             } else throw std::runtime_error("unknown opcode "+std::to_string(op));
             command_bytes_+=p-start;

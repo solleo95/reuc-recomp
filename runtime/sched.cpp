@@ -1,5 +1,6 @@
 #include "sched.h"
 #include "clock.h"
+#include "crash_report.h"
 #include "fatal.h"
 #include <algorithm>
 #include <chrono>
@@ -13,6 +14,7 @@ namespace {
 struct Tramp { Sched* s; Thread* t; };
 DWORD WINAPI tramp(LPVOID p) {
     std::unique_ptr<Tramp> tp(static_cast<Tramp*>(p));
+    uc::crash_guard_thread();
     tp->s->thread_main(tp->t);
     return 0;
 }
@@ -261,7 +263,7 @@ void Sched::idle_wait() {
     bool timed = false;
     if (!timed_.empty()) {   // the idle loop of the real OS runs with interrupts on, whatever state the blocked threads had
         uint64_t t = timed_.begin()->first, now = now_ticks();
-        until = std::chrono::steady_clock::now() + std::chrono::milliseconds(t > now ? ticks_to_ms(t - now) + 1 : 0);
+        until = std::chrono::steady_clock::now() + std::chrono::milliseconds(t > now ? ticks_to_ms(t - now) / clock_speed() + 1 : 0);
         timed = true;
     }
     bool woke = ext_cv_.wait_until(lk, until, [&] { return !ext_q_.empty() || shutdown_; });

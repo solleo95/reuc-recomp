@@ -661,15 +661,33 @@ int main(int argc, char** argv) {
         work.serial=6; work.draws[0].material.stage[0].indirect=0; work.draws[0].uniforms.ind_cmd[0]=0;
         submit(work,&portrait); sampled=portrait.capture(6);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0); // without the indirect stage the left texel stays
+        // Texgen STQ from the position (ABC1): left S/Q 0.8/1, right 0.6/3.
         work.serial=7;
-        for(auto& vertex:work.draws[0].vertices) {
-            const bool left=vertex.position[0]<0;
-            vertex.texcoord[0]={left?0.8f:0.6f,0.5f};vertex.texture_q[0]=left?1.f:3.f;
-        }
+        work.draws[0].uniforms.tex_gens[0]=6;
+        work.draws[0].uniforms.tex_rows[0]={-0.1f,0,0,0.7f}; work.draws[0].uniforms.tex_rows[1]={0.5f,0,0,1}; work.draws[0].uniforms.tex_rows[2]={1,0,0,2};
         submit(work,&portrait);sampled=portrait.capture(7);
         const auto projected_sample=(size_t(sampled.height/2)*sampled.width+sampled.width*2/5)*4;
         // Divide interpolated ST by interpolated Q; dividing at vertices would select blue.
         CHECK(sampled.rgba[projected_sample]==255 && sampled.rgba[projected_sample+2]==0);
+        // Texgen ST from the untransformed normal (1,0,0), normalized (S=0.707) before post S'=1.25-S: right texel. Without normalizing S'=0.25.
+        work.serial=8;
+        work.draws[0].uniforms.tex_gens[0]=(1u<<7)|4; work.draws[0].uniforms.tex_posts[0]=256;
+        work.draws[0].uniforms.tex_rows[0]={1,0,0,0}; work.draws[0].uniforms.tex_rows[1]={0,1,0,0}; work.draws[0].uniforms.tex_rows[2]={0,0,1,0};
+        work.draws[0].uniforms.post_rows[0]={-1,0,0,1.25f}; work.draws[0].uniforms.post_rows[1]={0,0,0,0.5f}; work.draws[0].uniforms.post_rows[2]={0,0,0,1};
+        for(auto& vertex:work.draws[0].vertices) vertex.normal={1,0,0};
+        submit(work,&portrait);sampled=portrait.capture(8);
+        CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        // Integer TEV: input A uses only the low 8 bits of an s10 register, 1.5 (382) reads as 126.
+        work.serial=9; work.draws[0].uniforms=gx::DrawUniform{};
+        work.draws[0].material.stages=1; work.draws[0].material.stage[0]={0x82FFF,0x8FF80,0x380,0,0};
+        work.draws[0].uniforms.registers[1]={1.5f,1.5f,1.5f,1};
+        submit(work,&portrait);sampled=portrait.capture(9);
+        CHECK(sampled.rgba[center]==126 && sampled.rgba[center+1]==126);
+        // Blanked VI output: the presented frame is black although the EFB holds the same draw.
+        work.serial=10; work.black_output=true;
+        submit(work,&portrait);sampled=portrait.capture(10);
+        CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
+        work.black_output=false;
         portrait.shutdown(); CHECK(portrait.validation_errors()==0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");

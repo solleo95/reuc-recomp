@@ -19,7 +19,7 @@ template<class Fn> static void rejects(Fn fn) {
     CHECK(caught);
 }
 int main() {
-    static_assert(sizeof(gx::GpuVertex)==176);
+    static_assert(sizeof(gx::GpuVertex)==156);
     gx::Transforms transforms;
     gx::Vertex vertex; vertex.position={1,2,3}; vertex.color[0]={1,2,3,4};
     vertex.texcoord[0]={0.25f,0.75f};
@@ -27,12 +27,13 @@ int main() {
     auto uploaded=gx::gpu_vertex(vertex,transforms,false,0x80000000);
     CHECK((clip(uploaded,transforms.projection)==std::array<float,4>{1,2,3,1}));
     CHECK(uploaded.color==vertex.color[0]);
-    CHECK((uploaded.texcoord==std::array<float,3>{0.25f,0.75f,1}));
-    CHECK((uploaded.extra_texcoords[6]==std::array<float,3>{0.125f,0.875f,1}));
+    CHECK((uploaded.texcoords[0]==std::array<float,2>{0.25f,0.75f}));
+    CHECK((uploaded.texcoords[7]==std::array<float,2>{0.125f,0.875f}));
     vertex.normal[0]=1; vertex.normal[1]=2; vertex.normal[2]=3;
     gx::set_normal_matrix(transforms,0,{{{0,1,0},{-1,0,0},{0,0,2}}});
     uploaded=gx::gpu_vertex(vertex,transforms,false,0);
     CHECK((uploaded.normal==std::array<float,3>{2,-1,6}));
+    CHECK((uploaded.object_normal==std::array<float,3>{1,2,3})); // texgen reads the untransformed normal
     CHECK(uploaded.color1==vertex.color[1]);
     rejects([&]{gx::set_normal_matrix(transforms,62,{});});
     auto invalid_normal=gx::NormalMatrix{}; invalid_normal[0][0]=std::numeric_limits<float>::quiet_NaN();

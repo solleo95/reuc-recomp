@@ -9,11 +9,12 @@
 int main(int argc,char** argv) {
     SDL_Window* window=nullptr;
     try {
-        if(argc<4)throw std::runtime_error("usage: uc_fifo_replay capture.dff frame output.png [--validation] [--reference image.png]");
-        bool validation=false;std::filesystem::path reference_path;
+        if(argc<4)throw std::runtime_error("usage: uc_fifo_replay capture.dff frame output.png [--validation] [--reference image.png] [--dump-efb dir]");
+        bool validation=false;std::filesystem::path reference_path,efb_dump;
         for(int i=4;i<argc;++i) {
             if(std::string_view(argv[i])=="--validation")validation=true;
             else if(std::string_view(argv[i])=="--reference" && i+1<argc)reference_path=argv[++i];
+            else if(std::string_view(argv[i])=="--dump-efb" && i+1<argc)efb_dump=argv[++i];
             else throw std::runtime_error("unknown or incomplete option");
         }
         std::optional<uc::RenderPixels> reference;
@@ -51,6 +52,11 @@ int main(int argc,char** argv) {
                     if(!completed)SDL_Delay(1);
                 }
                 if(packet.present)pixels=renderer.capture(packet.serial);
+                // Diagnostics: the EFB each texture copy read, for stage-by-stage comparison with Dolphin's EFB copy dumps.
+                if(!efb_dump.empty() && packet.texture_copy) {
+                    std::filesystem::create_directories(efb_dump);
+                    uc::save_png(renderer.capture(packet.serial,true),efb_dump/("efb-"+std::to_string(packet.serial)+".png"));
+                }
             }
             if(renderer.validation_errors())throw std::runtime_error("Vulkan validation errors");
             if(pixels.rgba.empty())throw std::runtime_error("capture has no displayed frame");

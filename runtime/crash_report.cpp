@@ -15,6 +15,7 @@ namespace {
 std::filesystem::path g_directory;
 std::function<std::string()> g_stats;
 std::atomic<bool> g_written{false};
+std::atomic<bool> g_done{false};
 // Stack of the most recent C++ throw on this thread: fatal() reports run after the catch unwound it.
 thread_local std::array<void*, 48> t_throw_frames{};
 thread_local unsigned short t_throw_count = 0;
@@ -48,12 +49,25 @@ void crash_report_init(std::filesystem::path directory, std::function<std::strin
     g_directory = std::move(directory);
     g_stats = std::move(stats);
     g_written = false;
+    g_done = false;
     static bool installed = false;
     if (!installed) { AddVectoredExceptionHandler(1, record_throw); installed = true; }
 }
 
-bool crash_report_write(std::string_view reason, const _CONTEXT* context) {
-    if (g_directory.empty() || g_written.exchange(true)) return false;
+void crash_guard_thread() {
+    ULONG size = 64 * 1024;
+    SetThreadStackGuarantee(&size);
+}
+
+bool crash_report_write(std::string_view reason, const _CONTEXT* context) noexcept {
+    if (g_directory.empty()) return false;
+    if (g_written.exchange(true)) {
+        // Another thread is writing: let it finish before this thread exits the process.
+        for (int i = 0; i < 500 && !g_done; ++i) Sleep(10);
+        return false;
+    }
+    struct Done { ~Done() { g_done = true; } } done;
+    try {
     std::error_code error;
     std::filesystem::create_directories(g_directory, error);
     const auto now = std::time(nullptr);
@@ -83,5 +97,6 @@ bool crash_report_write(std::string_view reason, const _CONTEXT* context) {
     std::fclose(out);
     std::fprintf(stderr, "crash report: %ls\n", (g_directory / name).c_str());
     return true;
+    } catch (...) { return false; }
 }
 }

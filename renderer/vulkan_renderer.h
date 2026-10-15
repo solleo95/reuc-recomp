@@ -84,6 +84,8 @@ private:
     void retire_textures(Slot& slot);
     void rebuild();
     void retire_images();
+    void retire_for_resize();
+    void reap_retired(bool wait);
     using PipelineKey=std::array<uint32_t,70>;
     VkPipeline pipeline_for(const gx::DrawPacket& draw,bool alpha_pass=false);
     VkPipeline make_pipeline(const gx::BlendState& blend,const PipelineKey& key);
@@ -126,10 +128,14 @@ private:
     VkImageView depth_view_=VK_NULL_HANDLE;
     std::array<Slot, 2> slots_{};
     std::vector<PresentImage> images_;
+    struct RetiredSwapchain { VkSwapchainKHR chain; std::vector<PresentImage> images; };
+    std::vector<RetiredSwapchain> retired_;   // swapchains replaced by a resize, freed once their queued presentations finished
+    VkSwapchainKHR old_swapchain_ = VK_NULL_HANDLE;   // the newest retired chain, passed as oldSwapchain to its successor
     std::vector<uint64_t> completed_;
     size_t next_slot_ = 0;
     uint64_t last_serial_ = 0;
     bool resized_ = true;
+    std::chrono::steady_clock::time_point last_rebuild_{};
     std::atomic<uint32_t> errors_{0};
     std::atomic<uint64_t> presentations_{0};
     uint64_t texture_creations_=0;

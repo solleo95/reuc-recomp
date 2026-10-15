@@ -1,6 +1,7 @@
 #include "check.h"
 #include "clock.h"
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 int main() {
@@ -19,5 +20,17 @@ int main() {
     uint64_t t = 1000;
     for (int i = 0; i < 1000; ++i) t = uc::next_periodic(t, 100, t + 3);
     CHECK(t == 1000 + 1000 * 100);
+    // Virtual clock: speed scales elapsed time, changes keep it monotonic.
+    {
+        const auto a = uc::now_ticks(); std::this_thread::sleep_for(std::chrono::milliseconds(50)); const auto b = uc::now_ticks();
+        uc::set_clock_speed(4); CHECK(uc::clock_speed() == 4);
+        const auto c = uc::now_ticks(); CHECK(c >= b);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50)); const auto d = uc::now_ticks();
+        const double base = double(b - a), fast = double(d - c);
+        CHECK(fast > base * 3.0 && fast < base * 5.5);
+        uc::set_clock_speed(1); CHECK(uc::now_ticks() >= d);   // speed_change_is_monotonic
+        bool rejected = false; try { uc::set_clock_speed(0); } catch (const std::invalid_argument&) { rejected = true; } CHECK(rejected);
+        rejected = false; try { uc::set_clock_speed(9); } catch (const std::invalid_argument&) { rejected = true; } CHECK(rejected);
+    }
     return 0;
 }

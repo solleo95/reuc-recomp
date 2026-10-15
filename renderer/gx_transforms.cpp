@@ -34,9 +34,8 @@ GpuVertex gpu_vertex(const Vertex& vertex,const Transforms& transforms,bool inde
     const uint32_t row=indexed ? vertex.position_matrix : transforms.current;
     if (row>61) throw Error(ErrorCode::layout,callsite,61,row);
     for (size_t i=0;i<3;++i) if (!transforms.loaded_rows[row+i]) throw Error(ErrorCode::layout,callsite,row+i,0);
-    GpuVertex result{vertex.position,vertex.color[0],{transforms.position_rows[row],transforms.position_rows[row+1],transforms.position_rows[row+2]},{vertex.texcoord[0][0],vertex.texcoord[0][1],vertex.texture_q[0]}};
-    for(size_t i=1;i<8;++i) result.extra_texcoords[i-1]={vertex.texcoord[i][0],vertex.texcoord[i][1],vertex.texture_q[i]};
-    result.normal={vertex.normal[0],vertex.normal[1],vertex.normal[2]};
+    GpuVertex result{vertex.position,vertex.color[0],{transforms.position_rows[row],transforms.position_rows[row+1],transforms.position_rows[row+2]},vertex.texcoord};
+    result.normal=result.object_normal={vertex.normal[0],vertex.normal[1],vertex.normal[2]};
     const auto normal_row=row&31;
     // shortcut: unloaded normal rows use identity for position-only fixtures, revisit when actual missing-normal handling is verified.
     if (transforms.loaded_normal_rows[normal_row] && transforms.loaded_normal_rows[normal_row+1] && transforms.loaded_normal_rows[normal_row+2]) {

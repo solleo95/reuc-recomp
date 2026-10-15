@@ -1,5 +1,7 @@
 #include "options.h"
 #include <charconv>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 namespace uc {
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options) {
@@ -17,7 +19,8 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--input-probe") options.input_probe = true;
         else if (arg == "--gx-gaps") options.gx_gaps = true;
         else if (arg == "--audio-audit") options.audio_audit = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode") {
+        else if (arg == "--god") options.god = true;
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -27,12 +30,17 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 else return "invalid value for " + std::string(arg);
                 continue;
             }
-            if(arg=="--game" || arg=="--test-control" || arg=="--save-root" || arg=="--config") {
+            if(arg=="--test-server") {
+                if(value.size()>32 || !std::all_of(value.begin(),value.end(),[](char c){return std::isalnum(static_cast<unsigned char>(c)) || c=='_' || c=='-';}))return "invalid value for --test-server";
+                options.test_server=std::string(value); continue;
+            }
+            if(arg=="--game" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--capture-dir") {
                 if(value.find('\0')!=std::string_view::npos)return "invalid path for "+std::string(arg);
                 auto path=std::filesystem::path(std::u8string(value.begin(),value.end()));
                 if(arg=="--game")options.game=std::move(path);
                 else if(arg=="--test-control")options.test_control=std::move(path);
                 else if(arg=="--save-root")options.save_root=std::move(path);
+                else if(arg=="--capture-dir")options.capture_dir=std::move(path);
                 else options.config=std::move(path);
                 continue;
             }
@@ -45,11 +53,14 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             uint32_t number = 0;
             auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && number == 0)) return "invalid value for " + std::string(arg);
-            if (arg == "--width") options.width = number;
+            if (arg == "--speed") { if (number > 8) return "invalid value for --speed"; options.speed = number; }
+            else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
             else options.seconds = number;
         } else return "unknown option " + std::string(arg);
     }
+    if (options.speed != 1 && options.test_server.empty()) return "--speed requires --test-server";
+    if (options.god && options.test_server.empty()) return "--god requires --test-server";
     return options;
 }
 }

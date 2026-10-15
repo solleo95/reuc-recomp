@@ -8,7 +8,7 @@
 using namespace ppc;
 
 void hle_VIWaitForRetrace(Ctx&); void hle_VISetNextFrameBuffer(Ctx&);
-void hle_VIConfigure(Ctx&); void hle_VIGetTvFormat(Ctx&);
+void hle_VIConfigure(Ctx&); void hle_VIGetTvFormat(Ctx&); void hle_VISetBlack(Ctx&);
 
 static int g_cb_calls = 0, g_pre_calls = 0; static uint32_t g_cb_arg = 0;
 static void post_cb(Ctx& c) { ++g_cb_calls; g_cb_arg = c.r[3]; }
@@ -35,6 +35,10 @@ int main() {
         uint64_t ms = uc::ticks_to_ms(uc::now_ticks() - a);
         CHECK(ms >= 40 && ms < 400);                    // five retraces at 10 ms
         CHECK(uc::vi_stats().current_fb == 0x80400000);
+        // VISetBlack blanks the video output until it is released.
+        CHECK(!uc::vi_stats().black);
+        c.r[3] = 1; hle_VISetBlack(c); CHECK(uc::vi_stats().black);
+        c.r[3] = 0; hle_VISetBlack(c); CHECK(!uc::vi_stats().black);
         CHECK(rd32(c, c.r[13] - 25948) >= 5);           // the guest-visible retrace count advances
         CHECK(hook_calls >= 5 && g_cb_calls >= 5 && g_pre_calls >= 5 && g_cb_arg >= 5);   // callbacks get the retrace count in r3
         // a PAL render mode (viTVmode >> 2 == 1) switches the period to 50 Hz

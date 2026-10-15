@@ -1,4 +1,5 @@
 #include "game_input.h"
+#include "test_state.h"
 #include "gx_vertices.h"
 #include "guest_call.h"
 #include "dispatch.h"
@@ -61,6 +62,7 @@ void original_update(ppc::Ctx& c,uint32_t body,uint32_t stack_size,size_t object
     ppc::wr32(c,stack-stack_size,stack); c.r[1]=stack-stack_size; uc::call_indirect(c,body);
 }
 void action_log(const char* action,uint32_t object,bool accepted) {
+    uc::test_state_action(action,accepted);
     if(trace_actions && trace_records<64) { ++trace_records; std::fprintf(stderr,"[native-action] %s object %08X accepted %u\n",action,object,accepted); }
 }
 }
@@ -117,6 +119,8 @@ InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
     if(!input)return raw;
     const auto state=input_probe_snapshot(c);
     const auto context=game_input_context(state);
+    test_state_publish(state,uint8_t(context));
+    test_state_apply_god(const_cast<ppc::Ctx&>(c),state);   // cheat for --god only; guest memory is written through the shared mapping
     if(trace_actions && state.tutorial_loaded && state.tutorial_state!=traced_tutorial) {
         traced_tutorial=state.tutorial_state;
         if(tutorial_records++<64)std::fprintf(stderr,"[native-tutorial] %08X\n",traced_tutorial);

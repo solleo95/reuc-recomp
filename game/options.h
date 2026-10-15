@@ -20,7 +20,10 @@ struct Options {
     bool unlock_60fps = false;
     bool input_probe = false;
     bool gx_gaps = false, audio_audit = false; // diagnostics: reports in <exe>/debug at exit
-    std::filesystem::path test_control,save_root,config;
+    std::filesystem::path test_control,save_root,config,capture_dir;
+    std::string test_server; // agent test server pipe name [A-Za-z0-9_-]{1,32}
+    bool god = false;        // test-mode cheat: health and ammo stay at their maxima, needs test_server
+    uint32_t speed = 1;      // test-mode virtual clock factor 1..8, needs test_server
 };
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});
 }

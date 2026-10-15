@@ -40,13 +40,17 @@ void GxStream::material(gx::DrawPacket& draw) const {
             light.cosine[j]=fp(xf_[base+4+j]);light.distance[j]=fp(xf_[base+7+j]);
             light.position[j]=fp(xf_[base+10+j]);light.direction[j]=fp(xf_[base+13+j]);
         }
-        auto source=(xf_[0x1040+i]>>7)&31;
-        // Replaced with owned generated STQ coordinates after texture binding.
-        u.tex_sources[i]=(source>=5 && source<=12)?source-5:0;
+        // Texgen runs in the game's vertex shader: hand it the XF words and the matrices they select.
+        const bool dual=xf_[0x1012]&1; // without dual-texture transform the post stage is identity
+        u.tex_gens[i]=xf_[0x1040+i];u.tex_posts[i]=dual?xf_[0x1050+i]:0;
         auto selector=i<4?(xf_[0x1018]>>(6+i*6))&63:(xf_[0x1019]>>((i-4)*6))&63;
         if(selector!=60) {
             if(selector>61)throw std::runtime_error("invalid texture matrix selector");
-            for(size_t row=0;row<2;++row)for(size_t j=0;j<4;++j)u.tex_rows[i*2+row][j]=fp(xf_[(selector+row)*4+j]);
+            for(size_t row=0;row<3;++row)for(size_t j=0;j<4;++j)u.tex_rows[i*3+row][j]=fp(xf_[(selector+row)*4+j]);
+        }
+        if(dual) {
+            auto post=xf_[0x1050+i]&63;
+            for(size_t row=0;row<3;++row)for(size_t j=0;j<4;++j)u.post_rows[i*3+row][j]=fp(xf_[0x500+((post+row)&63)*4+j]);
         }
     }
     auto blend=bp_[0x41];
@@ -58,53 +62,14 @@ void GxStream::material(gx::DrawPacket& draw) const {
     int32_t height=int32_t(bottom&2047)-int32_t(top&2047)+1;
     draw.state.scissor=std::array<int32_t,4>{left,upper,width,height};
 }
-void GxStream::generate_texcoords(gx::DrawPacket& draw) const {
+void GxStream::check_texgen(gx::DrawPacket& draw) const {
     const auto count=xf_[0x103F];
     if(count>8)throw std::runtime_error("invalid texgen count");
-    for(auto& vertex:draw.vertices) {
-        const auto original=vertex.texcoord;
-        for(size_t slot=0;slot<count;++slot) {
-            auto control=xf_[0x1040+slot],source=(control>>7)&31;
-            if((control>>4)&7)throw std::runtime_error("unsupported nonregular texgen");
-            std::array<float,4> input{0,0,1,1};
-            if(source==0)for(size_t i=0;i<3;++i)input[i]=vertex.position[i];
-            else if(source==1 || source==3 || source==4) {
-                size_t base=source==1?0:source==3?3:6;
-                for(size_t i=0;i<3;++i)input[i]=vertex.normal[base+i];
-            } else if(source>=5 && source<=12) {
-                input[0]=original[source-5][0];input[1]=original[source-5][1];
-            } else throw std::runtime_error("unsupported texgen source");
-            if(!(control&4))input[2]=1;
-            auto selector=slot<4?(xf_[0x1018]>>(6+slot*6))&63:(xf_[0x1019]>>((slot-4)*6))&63;
-            if(draw.state.descriptors[slot+1]!=gx::Mode::none)selector=vertex.texture_matrix[slot];
-            std::array<float,3> stq{input[0],input[1],(control&2)?input[2]:1};
-            if(selector!=60) {
-                if(selector>61)throw std::runtime_error("texture matrix outside XF bank");
-                for(size_t row=0;row<((control&2)?3u:2u);++row) {
-                    stq[row]=0;
-                    for(size_t i=0;i<4;++i)stq[row]+=fp(xf_[(selector+row)*4+i])*input[i];
-                }
-            }
-            if(xf_[0x1012]&1) {
-                auto post=xf_[0x1050+slot],row=post&63;
-                if(post&256) {
-                    float length=std::sqrt(stq[0]*stq[0]+stq[1]*stq[1]+stq[2]*stq[2]);
-                    if(length>0)for(auto& v:stq)v/=length;
-                }
-                auto before=stq;
-                for(size_t r=0;r<3;++r) {
-                    auto base=0x500+((row+r)&63)*4;
-                    stq[r]=fp(xf_[base+3]);
-                    for(size_t i=0;i<3;++i)stq[r]+=fp(xf_[base+i])*before[i];
-                }
-            }
-            for(float v:stq)if(!std::isfinite(v))throw std::runtime_error("nonfinite generated texture coordinate");
-            vertex.texcoord[slot]={stq[0],stq[1]};vertex.texture_q[slot]=stq[2];
-        }
-    }
     for(size_t slot=0;slot<count;++slot) {
-        draw.uniforms.tex_sources[slot]=uint32_t(slot);
-        draw.uniforms.tex_rows[slot*2]={1,0,0,0};draw.uniforms.tex_rows[slot*2+1]={0,1,0,0};
+        auto control=xf_[0x1040+slot],source=(control>>7)&31;
+        if((control>>4)&7)throw std::runtime_error("unsupported nonregular texgen");
+        if(!(source<=1 || (source>=5 && source<=12)))throw std::runtime_error("unsupported texgen source");
+        if(draw.state.descriptors[slot+1]!=gx::Mode::none)throw std::runtime_error("per-vertex texture matrix index unsupported");
     }
 }
 }

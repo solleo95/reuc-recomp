@@ -142,6 +142,20 @@ int main() {
         CHECK(packet->draws[0].transforms.position_rows[0][3]==5);
         CHECK(packet->draws[1].vertices.size()==3 && packet->draws[1].transforms.position_rows[0][3]==15);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
+
+        // Indexed texture matrix load (GX_LOAD_INDX_C, texmtx 30 at XF 0x78) applies to the draws after it.
+        const float texture_matrix[]={1,0,0,0.25f,0,1,0,0,0,0,1,0};
+        for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80003900+i*4,texture_matrix[i]);
+        c.r[3]=23; c.r[4]=0x80003900; c.r[5]=48; hle_GXSetArray(c);
+        ppc::wr32(c,0x80001080,30u<<6);
+        ppc::wr8(c,0x80002546,0x30); ppc::wr32(c,0x80002547,0xB078);
+        ppc::wr8(c,0x8000254B,0x90); ppc::wr16(c,0x8000254C,3);
+        for(uint32_t i=0;i<3;++i) ppc::wr8(c,0x8000254E+i,uint8_t(i));
+        c.r[3]=0x80002000; hle_ResMeshDraw(c);
+        c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+        packet=packets.try_take(); CHECK(packet && packet->draws.size()==3);
+        CHECK(packet->draws[1].uniforms.tex_rows[0][3]==0 && packet->draws[2].uniforms.tex_rows[0][3]==0.25f);
+        CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
-    sched.run(thread); CHECK(uc::gx_stats().draws==8);
+    sched.run(thread); CHECK(uc::gx_stats().draws==11);
 }

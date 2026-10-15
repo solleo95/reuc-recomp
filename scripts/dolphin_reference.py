@@ -29,6 +29,7 @@ def main():
     parser.add_argument("capture", type=Path)
     parser.add_argument("--dolphin", type=Path, default=Path(r"D:\Tools\Dolphin-scripting\Dolphin.exe"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--dump-efb", action="store_true", help="also dump every EFB copy (Dolphin DumpEFBTarget)")
     args = parser.parse_args()
     capture = args.capture.resolve(strict=True)
     dolphin = args.dolphin.resolve(strict=True)
@@ -44,6 +45,7 @@ def main():
         "[Analytics]\nEnabled = False\nPermissionAsked = True\n[AutoUpdate]\nUpdateTrack = \n", encoding="utf-8")
     (config / "GFX.ini").write_text(
         "[Settings]\nInternalResolution = 1\nAspectRatio = 2\nShowFPS = False\nDumpTextures = True\n"
+        + ("DumpEFBTarget = True\n" if args.dump_efb else "") +
         "InternalResolutionFrameDumps = True\n[Hardware]\nVSync = False\n", encoding="utf-8")
     script = output / "capture.py"
     script.write_text(capture_script(output), encoding="utf-8")

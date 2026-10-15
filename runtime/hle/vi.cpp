@@ -11,6 +11,7 @@ constexpr uint32_t kRetraceCount = uint32_t(-25948), kPostCb = uint32_t(-25992),
 struct Vi {
     std::atomic<uint64_t> retraces{0};
     std::atomic<uint32_t> cur_fb{0}, next_fb{0}, tv{0};
+    std::atomic<bool> black{false}; // VISetBlack; starts released so a missed release can never blank the port for good
     uint64_t period = kViPeriodNtsc;
     std::function<void()> hook;
 } g;
@@ -39,7 +40,7 @@ void vi_hle_init(Sched&, uint64_t period_ticks, std::function<void()> on_retrace
     g.hook = std::move(on_retrace);
     arm(now_ticks() + period_ticks);
 }
-ViStats vi_stats() { return {g.retraces.load(), g.cur_fb.load(), g.next_fb.load(), g.tv.load()}; }
+ViStats vi_stats() { return {g.retraces.load(), g.cur_fb.load(), g.next_fb.load(), g.tv.load(), g.black.load()}; }
 }  // namespace uc
 
 void hle_VIInit(ppc::Ctx&) {}
@@ -50,6 +51,6 @@ void hle_VIConfigure(ppc::Ctx& c) {   // r3 = GXRenderModeObj*; viTVmode (first 
 }
 void hle_VIFlush(ppc::Ctx&) {}
 void hle_VISetNextFrameBuffer(ppc::Ctx& c) { g.next_fb = c.r[3]; }
-void hle_VISetBlack(ppc::Ctx&) {}
+void hle_VISetBlack(ppc::Ctx& c) { g.black = c.r[3] != 0; }
 void hle_VIGetTvFormat(ppc::Ctx& c) { c.r[3] = g.tv == 1 || g.tv == 4 ? 1 : g.tv == 2 ? 2 : g.tv == 5 ? 5 : 0; }   // VI_NTSC 0, VI_PAL 1, VI_MPAL 2, VI_EURGB60 5
 void hle_VIWaitForRetrace(ppc::Ctx&) { os_sched().block_on(kViKey); }

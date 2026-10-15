@@ -16,8 +16,10 @@ struct LightUniform {
 struct alignas(16) DrawUniform {
     std::array<std::array<float,4>,4> registers{};
     std::array<std::array<float,4>,4> konst{{{1,1,1,1},{1,1,1,1},{1,1,1,1},{1,1,1,1}}};
-    std::array<std::array<float,4>,16> tex_rows{};
-    std::array<uint32_t,8> tex_sources{0,1,2,3,4,5,6,7};
+    std::array<std::array<float,4>,24> tex_rows{}; // texture matrix (3 rows) per texgen; identity for GX_IDENTITY
+    std::array<uint32_t,8> tex_gens{}; // raw XF 0x1040+n texgen control (projection, input form, type, source row)
+    std::array<uint32_t,8> tex_posts{}; // raw XF 0x1050+n post-transform word (bit 8 normalize)
+    std::array<std::array<float,4>,24> post_rows{}; // dual-texture post matrix (3 rows) per texgen
     std::array<uint32_t,4> pixel{0x3F0000,0,0,2}; // alpha compare, depth, destination alpha, color channel count
     std::array<LightUniform,8> lights;
     std::array<std::array<float,4>,2> materials{{{1,1,1,1},{1,1,1,1}}},ambient{};
@@ -25,9 +27,14 @@ struct alignas(16) DrawUniform {
     std::array<uint32_t,8> fog{}; // raw BP 0xEE..0xF2 (A, B magnitude, B shift, C/proj/fsel, color); fsel 0 = off
     std::array<uint32_t,12> indirect{}; // raw BP 0x06..0x0E (three indirect matrices), 0x27 IREF, 0x25/0x26 RAS1_SS0/1
     std::array<uint32_t,16> ind_cmd{}; // per TEV stage BP 0x10+n IND_CMD; 0 = direct
-    DrawUniform() { for(size_t i=0;i<8;++i) { tex_rows[i*2]={1,0,0,0}; tex_rows[i*2+1]={0,1,0,0}; } }
+    DrawUniform() {
+        for(size_t i=0;i<8;++i) {
+            tex_gens[i]=uint32_t(5+i)<<7; // regular ST from UVi, AB11
+            for(size_t row=0;row<3;++row) { tex_rows[i*3+row]={}; tex_rows[i*3+row][row]=1; post_rows[i*3+row]={}; post_rows[i*3+row][row]=1; }
+        }
+    }
 };
-static_assert(sizeof(DrawUniform)==1296);
+static_assert(sizeof(DrawUniform)==1840);
 struct PixelMaterial { uint32_t alpha,depth,blend,destination_alpha; };
 PixelMaterial import_pixel_material(std::span<const std::byte> bytes);
 struct ColorMaterial {

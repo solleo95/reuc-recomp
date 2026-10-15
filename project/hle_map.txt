@@ -181,6 +181,11 @@ GXLoadNrmMtxImm
 @802879CC GXSetTevKColor
 @80288954 GXLoadTexMtxImm
 @80287650 GXSetTevDirect
+@802872A4 GXSetTevIndirect
+@8028730C GXSetIndTexMtx
+@80287460 GXSetIndTexCoordScale
+@80287564 GXSetIndTexOrder
+@80287DC4 GXSetFog
 
 # RBUE08 startup logo update; original body continues at80245860 (game/intro.cpp).
 @8024585C IntroLogoUpdate

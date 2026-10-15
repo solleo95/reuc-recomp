@@ -2,10 +2,12 @@
 #include "guest_call.h"
 #include "hle/os.h"
 #include "gx_audit.h"
+#include "vi.h"
 #include <atomic>
 #include <bit>
 #include <cstring>
 #include <map>
+
 #include <variant>
 #include <algorithm>
 #include <string>
@@ -28,14 +30,13 @@ gx::TevMaterial live_material;
 bool profile_mesh;
 uint32_t prompt_color_logs=0;
 uint64_t prompt_batch=0;
-bool bp_pending=false; // previous FIFO byte was the BP opcode 0x61
 std::vector<gx::PromptDraw> carried_prompts;
 std::atomic<uint64_t> prompt_annotations{},prompt_present{},prompt_fallback{};
 uint32_t mesh_profile_count;
 uint32_t copy_profile_count;
 uint32_t channel_profile_count;
 uint32_t texgen_profile_count;
-using TextureMatrix=std::array<std::array<float,4>,2>;
+using TextureMatrix=std::array<std::array<float,4>,3>;
 using TextureMatrices=std::array<std::optional<TextureMatrix>,126>;
 using TextureSelectors=std::array<uint32_t,8>;
 TextureMatrices texture_matrices;
@@ -69,11 +70,12 @@ std::unique_ptr<gx::Vertices> capture;
 struct MeshGeometry { std::vector<gx::Vertex> vertices; std::vector<uint32_t> indices; };
 struct MeshPosition { uint16_t index; uint32_t row; };
 struct MeshNormal { uint16_t index; uint32_t row; };
+struct MeshTexture { uint16_t index; uint32_t id; uint32_t words; };
 struct CachedMesh {
     struct Source { uint32_t address; std::vector<std::byte> bytes; };
     gx::State layout;
     std::vector<std::byte> bytes;
-    std::vector<std::variant<MeshGeometry,MeshPosition,MeshNormal>> operations;
+    std::vector<std::variant<MeshGeometry,MeshPosition,MeshNormal,MeshTexture>> operations;
     std::vector<Source> sources;
     size_t size=0;
 };
@@ -151,12 +153,14 @@ TextureSelectors texture_selectors(uint32_t sdk) {
     for(uint32_t i=0;i<8;++i) result[i]=((i<4 ? low : high)>>(i<4 ? 6+i*6 : (i-4)*6))&63;
     return result;
 }
+// Texture matrix ids follow GX: 0..61 (GX_IDENTITY 60), post matrices at 64+row (XF 0x500+row*4).
 void resolve_texture_matrices(gx::DrawUniform& uniforms,const TextureSelectors& selectors,const TextureMatrices& matrices) {
+    constexpr TextureMatrix identity{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
     for(size_t i=0;i<8;++i) {
-        uniforms.tex_rows[i*2]={1,0,0,0}; uniforms.tex_rows[i*2+1]={0,1,0,0};
-        if(selectors[i]!=60 && matrices[selectors[i]]) {
-            uniforms.tex_rows[i*2]=(*matrices[selectors[i]])[0]; uniforms.tex_rows[i*2+1]=(*matrices[selectors[i]])[1];
-        }
+        const auto& rows=selectors[i]!=60 && matrices[selectors[i]] ? *matrices[selectors[i]] : identity;
+        const auto post=64+(uniforms.tex_posts[i]&63);
+        const auto& post_rows=post<matrices.size() && matrices[post] ? *matrices[post] : identity;
+        for(size_t row=0;row<3;++row) { uniforms.tex_rows[i*3+row]=rows[row]; uniforms.post_rows[i*3+row]=post_rows[row]; }
     }
 }
 std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
@@ -184,8 +188,10 @@ std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
     }
     for(uint32_t i=0;i<8;++i) {
         const auto generator=read32(sdk+0xC8+i*4),source=(generator>>7)&31;
-        // shortcut: UV generators only; position/normal/post-projection generators remain TD-036.
-        uniforms.tex_sources[i]=(source>=5 && source<=12) ? source-5 : 0;
+        uniforms.tex_gens[i]=generator; uniforms.tex_posts[i]=read32(sdk+0xE8+i*4); // dual-texture post is always on (XF 0x1012 set once by __GXInitRevisionBits)
+        static int unsupported_logs=0;
+        if(((generator>>4)&7 || source==2 || source==3 || source==4 || source>12) && unsupported_logs<8 && ++unsupported_logs)
+            std::fprintf(stderr,"[native-texgen] unsupported generator %08X slot %u callsite %08X\n",generator,i,c.lr);
         const auto id=selectors[i];
         if(profile_mesh && texgen_profile_count<16 && (source<5 || (generator&2))) {
             const bool used=std::any_of(material.stage.begin(),material.stage.begin()+material.stages,[&](const auto& stage){return (stage.order&64) && ((stage.order>>3)&7)==i;});
@@ -228,6 +234,16 @@ void indexed_normal(gx::Transforms& target,const gx::State& bindings,uint16_t in
     for(uint32_t i=0;i<9;++i) matrix[i/3][i%3]=std::bit_cast<float>(read32(uint32_t(source)+i*4));
     gx::set_normal_matrix(target,row,matrix);
 }
+// GX_TEXMTX_ARRAY entry (arrays[14]): a 3x4 or 2x4 matrix of consecutive floats, as the hardware's indexed XF load reads it.
+void indexed_texture(TextureMatrices& target,const gx::State& bindings,uint16_t index,uint32_t id,uint32_t words) {
+    const auto& array=bindings.arrays[14];
+    const uint64_t source=uint64_t(array.address)+uint64_t(index)*array.stride;
+    if(!array.address || !array.stride || source>UINT32_MAX) throw gx::Error(gx::ErrorCode::array_bounds,array.address,words*4,array.stride);
+    memory.read(uint32_t(source),words*4);
+    TextureMatrix matrix{{{},{},{0,0,1,0}}};
+    for(uint32_t i=0;i<words;++i) { const auto value=std::bit_cast<float>(read32(uint32_t(source)+i*4)); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,uint32_t(source),0,i); matrix[i/4][i%4]=value; }
+    target[id]=matrix;
+}
 bool apply_bp(gx::DrawUniform& target,uint32_t reg,uint32_t data) {
     if(reg>=0xEE && reg<=0xF2) target.fog[reg-0xEE]=data;
     else if(reg>=0x06 && reg<=0x0E) target.indirect[reg-0x06]=data;
@@ -236,6 +252,15 @@ bool apply_bp(gx::DrawUniform& target,uint32_t reg,uint32_t data) {
     else if(reg>=0x10 && reg<=0x1F) target.ind_cmd[reg-0x10]=data;
     else return false;
     return true;
+}
+// BP state set by a replaced SDK call: emit the word the SDK writes, then apply it natively (into a recording too, as the SDK does).
+void native_bp(uint32_t word) {
+    uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,word);
+    const uint32_t reg=word>>24,data=word&0xFFFFFF;
+    if(apply_bp(color_uniforms,reg,data)) {
+        if(reg>=0x10 && reg<=0x1F) indirect_stages[reg-0x10]=data;
+        if(recording && !recording->overflow) recording->native.geometry.push_back(Resource::BpRegister{reg,data});
+    }
 }
 bool recording_primitive() {
     if (!recording || recording->native.geometry.empty()) return false;
@@ -396,10 +421,11 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
     }
     path.pop_back();
 }
-uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::TextureCopy> texture_copy={},std::array<uint32_t,4> display_source={0,0,640,480}) {
+uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::TextureCopy> texture_copy={},std::array<uint32_t,4> display_source={0,0,640,480},bool black=false) {
     if (!packets) return 0;
     try {
         gx::FramePacket frame{0,std::move(draws),present,clear,copy_state.color,copy_state.depth,xfb,std::move(texture_copy),display_source};
+        frame.black_output=black;
         if(frame.texture_copy && clear) {
             // The copy erases the EFB: prompts drawn so far leave with it, originals stay in the copied texture.
             carried_prompts.clear();
@@ -459,7 +485,7 @@ bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& des
     prompt->compact=compact;draws.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
 }
 void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) {
-    prompt_batch=0;carried_prompts.clear();bp_pending=false;
+    prompt_batch=0;carried_prompts.clear();
     prompt_annotations=prompt_present=prompt_fallback=0;
     profile_mesh=profile; mesh_profile_count=0;
     prompt_color_logs=0;
@@ -477,23 +503,8 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     bound_textures={}; palettes.clear(); live_texture.reset(); live_texture_maps={};
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
-// Fog and indirect texturing have no SDK shadow: GXSetFog/GXSetTevIndirect/GXSetIndTex* write BP directly,
-// so the native state follows those BP registers. Like the SDK shadow, setters inside a recording also update live state.
-void observe_bp(int size,uint32_t value) {
-    const bool in_primitive=(capture && capture->active()) || recording_primitive();
-    if(in_primitive) { bp_pending=false; return; }
-    if(bp_pending && size==4) {
-        const uint32_t reg=value>>24,data=value&0xFFFFFF;
-        if(apply_bp(color_uniforms,reg,data)) {
-            if(reg>=0x10 && reg<=0x1F) indirect_stages[reg-0x10]=data;
-            if(recording && !recording->overflow) recording->native.geometry.push_back(Resource::BpRegister{reg,data});
-        }
-    }
-    bp_pending=size==1 && value==0x61;
-}
 void gx_fifo_write(int size, uint32_t value) {
     if (size != 1 && size != 2 && size != 4) throw std::invalid_argument("invalid native GX write width");
-    observe_bp(size,value);
     if (recording) {
         if (producer() != recording->owner) throw gx::Error(gx::ErrorCode::producer,recording->address,recording->owner,producer());
         if (recording->overflow) return; // GXEndDisplayList reports this failed recording with length zero
@@ -867,7 +878,7 @@ void hle_GXCopyDisp(ppc::Ctx& c) {
     std::array<uint32_t,4> source{0,0,640,480};
     if ((origin>>24)==0x49 && (extent>>24)==0x4A) source={origin&1023,(origin>>10)&1023,(extent&1023)+1,((extent>>10)&1023)+1};
     if(source[0]>=640 || source[2]>640-source[0] || source[1]>=480 || source[3]>480-source[1]) throw std::invalid_argument("invalid native display source rectangle");
-    submit_batch(true,clear,xfb,{},source); ++copies;
+    submit_batch(true,clear,xfb,{},source,uc::vi_stats().black); ++copies;
 }
 void hle_GXSetTexCopySrc(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80285334,c); capture->finish();
@@ -1075,6 +1086,15 @@ std::shared_ptr<const CachedMesh> native_mesh(std::span<const std::byte> bytes,c
     for(size_t at=0;at<bytes.size();) {
         const auto opcode=std::to_integer<uint8_t>(bytes[at++]);
         if(!opcode) continue;
+        if(opcode==0x30) {
+            if(bytes.size()-at<4) throw std::invalid_argument("truncated native mesh matrix binding");
+            uint32_t word=0; for(auto byte:bytes.subspan(at,4)) word=word<<8|std::to_integer<uint8_t>(byte); at+=4;
+            const auto target=word&0xFFF,format=(word>>12)&15;
+            const auto id=target>=0x500 ? 64+(target-0x500)/4 : target/4;
+            if((format!=11 && format!=7) || (target&3) || (target<0x500 && id>61) || id>125) throw std::invalid_argument("invalid native mesh texture matrix binding");
+            result->operations.push_back(MeshTexture{uint16_t(word>>16),id,format+1});
+            continue;
+        }
         if(opcode==0x20 || opcode==0x28) {
             if(bytes.size()-at<4) throw std::invalid_argument("truncated native mesh matrix binding");
             uint32_t word=0; for(auto byte:bytes.subspan(at,4)) word=word<<8|std::to_integer<uint8_t>(byte); at+=4;
@@ -1152,7 +1172,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         }
         for(uint32_t i=0;i<8;++i) if(bound_textures[i]) {
             const auto& rows=uniforms.tex_rows;
-            std::fprintf(stderr,"[mesh-map] %u source %08X extent %u:%u format %u texgen %08X uv %u rows %.6g:%.6g:%.6g:%.6g %.6g:%.6g:%.6g:%.6g\n",i,bound_textures[i]->address,bound_textures[i]->desc.width,bound_textures[i]->desc.height,unsigned(bound_textures[i]->desc.format),read32(sdk+0xC8+i*4),uniforms.tex_sources[i],rows[i*2][0],rows[i*2][1],rows[i*2][2],rows[i*2][3],rows[i*2+1][0],rows[i*2+1][1],rows[i*2+1][2],rows[i*2+1][3]);
+            std::fprintf(stderr,"[mesh-map] %u source %08X extent %u:%u format %u texgen %08X rows %.6g:%.6g:%.6g:%.6g %.6g:%.6g:%.6g:%.6g\n",i,bound_textures[i]->address,bound_textures[i]->desc.width,bound_textures[i]->desc.height,unsigned(bound_textures[i]->desc.format),uniforms.tex_gens[i],rows[i*3][0],rows[i*3][1],rows[i*3][2],rows[i*3][3],rows[i*3+1][0],rows[i*3+1][1],rows[i*3+1][2],rows[i*3+1][3]);
         }
     }
     const auto maps=texture_mask(material,uniforms);
@@ -1177,7 +1197,15 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     }
     std::vector<gx::DrawPacket> imported;
     auto mesh_transforms=transforms;
+    auto mesh_uniforms=uniforms;
+    auto mesh_matrices=texture_matrices;
+    const auto selectors=texture_selectors(read32(c.r[2]-8968));
     for(const auto& operation:cached->operations) {
+        if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
+            indexed_texture(mesh_matrices,layout,texture->index,texture->id,texture->words);
+            resolve_texture_matrices(mesh_uniforms,selectors,mesh_matrices);
+            continue;
+        }
         if(const auto* position=std::get_if<MeshPosition>(&operation)) {
             indexed_position(mesh_transforms,layout,position->index,position->row);
         } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
@@ -1185,7 +1213,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         } else {
             const auto& geometry=std::get<MeshGeometry>(operation);
             gx::DrawPacket draw{0x80366E14,0x90,0,layout,geometry.vertices,geometry.indices};
-            draw.transforms=mesh_transforms; draw.material=material; draw.uniforms=uniforms; draw.blend=blend_state; draw.texture=textures[0];
+            draw.transforms=mesh_transforms; draw.material=material; draw.uniforms=mesh_uniforms; draw.blend=blend_state; draw.texture=textures[0];
             draw.texture_wrap=wraps(bound_textures);
             std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
             imported.push_back(std::move(draw));
@@ -1206,7 +1234,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         }
     }
     for(auto& draw:imported) { vertex_count+=draw.vertices.size(); ++draw_count; draws.push_back(std::move(draw)); }
-    transforms=mesh_transforms;
+    transforms=mesh_transforms; texture_matrices=mesh_matrices;
 }
 namespace {
 void native_tev_color(ppc::Ctx& c,bool signed_color,bool konst) {
@@ -1236,9 +1264,90 @@ void hle_GXSetTevDirect(ppc::Ctx& c) {
     matrix_boundary(0x80287650);
     const auto stage=c.r[3],sdk=read32(c.r[2]-8968);
     if(stage>15) throw gx::Error(gx::ErrorCode::layout,0x80287650,15,stage);
-    indirect_stages[stage]=0;
-    uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,(0x10+stage)<<24);
+    native_bp((0x10+stage)<<24);
     ppc::wr16(c,sdk+2,0);
+}
+// Fog and indirect setters, call-level replacements of the RBUE08 SDK bodies (bit layouts from their disassembly).
+// The FIFO words stay byte-identical for display lists; native state comes from the arguments, never from FIFO decoding.
+void hle_GXSetTevIndirect(ppc::Ctx& c) {
+    matrix_boundary(0x802872A4);
+    const auto stage=c.r[3],utc_lod=ppc::rd8(c,c.r[1]+11),alpha=read32(c.r[1]+12); // 9th/10th arguments on the caller's stack
+    if(stage>15) throw gx::Error(gx::ErrorCode::layout,0x802872A4,15,stage);
+    native_bp((0x10+stage)<<24|(c.r[4]&3)|(c.r[5]&3)<<2|(c.r[6]&7)<<4|(alpha&3)<<7|(c.r[7]&15)<<9|(c.r[8]&7)<<13|(c.r[9]&7)<<16|(utc_lod&1u)<<19|(c.r[10]&1)<<20);
+    ppc::wr16(c,read32(c.r[2]-8968)+2,0);
+}
+void hle_GXSetIndTexMtx(ppc::Ctx& c) {
+    matrix_boundary(0x8028730C);
+    const auto id=c.r[3];
+    const uint32_t index=(id>=1 && id<=3) ? id-1 : (id>=5 && id<=7) ? id-5 : (id>=9 && id<=11) ? id-9 : 0;
+    memory.read(c.r[4],24);
+    // offset[2][3] row-major; the SDK scales by 1024.0f (SDA2 constant) and truncates like fctiwz.
+    auto fixed=[&](uint32_t i) {
+        const float scaled=std::bit_cast<float>(read32(c.r[4]+i*4))*1024.0f;
+        const float clamped=std::isnan(scaled) ? 0.f : std::clamp(scaled,-2147483648.f,2147483520.f);
+        return uint32_t(int32_t(clamped))&0x7FF;
+    };
+    const uint32_t exponent=uint32_t(int32_t(c.r[5])+17);
+    for(uint32_t column=0;column<3;++column)
+        native_bp((index*3+6+column)<<24|fixed(column)|fixed(3+column)<<11|((exponent>>(column*2))&3)<<22);
+    ppc::wr16(c,read32(c.r[2]-8968)+2,0);
+}
+void hle_GXSetIndTexCoordScale(ppc::Ctx& c) {
+    matrix_boundary(0x80287460);
+    const auto stage=c.r[3],sdk=read32(c.r[2]-8968);
+    if(stage<4) {
+        const uint32_t at=sdk+(stage<2 ? 0x178 : 0x17C),shift=(stage&1)*8;
+        const auto word=(read32(at)&~(0xFFu<<shift)&0xFFFFFF)|(c.r[4]&15)<<shift|(c.r[5]&15)<<(shift+4)|(stage<2 ? 0x25u : 0x26u)<<24;
+        ppc::wr32(c,at,word);
+        native_bp(word);
+    }
+    ppc::wr16(c,sdk+2,0);
+}
+void hle_GXSetIndTexOrder(ppc::Ctx& c) {
+    matrix_boundary(0x80287564);
+    const auto stage=c.r[3],sdk=read32(c.r[2]-8968);
+    const uint32_t coord=c.r[4]==255 ? 0 : c.r[4],map=c.r[5]==255 ? 0 : c.r[5];
+    auto word=read32(sdk+0x170);
+    if(stage<4) word=(word&~(0x3Fu<<(stage*6)))|(map&7)<<(stage*6)|(coord&7)<<(stage*6+3);
+    ppc::wr32(c,sdk+0x170,word);
+    native_bp(word);
+    ppc::wr32(c,sdk+0x5FC,read32(sdk+0x5FC)|3);
+    ppc::wr16(c,sdk+2,0);
+}
+namespace {
+uint32_t fog_float(float value) { const auto bits=std::bit_cast<uint32_t>(value); return ((bits>>12)&0x7FF)|((bits>>23)&0xFF)<<11|(bits>>31)<<19; }
+}
+// GXSetFog (80287DC4): single-precision steps and constants as in the SDK body (0, 0.5, 1, 2, 8388638 from SDA2).
+void hle_GXSetFog(ppc::Ctx& c) {
+    matrix_boundary(0x80287DC4);
+    const auto type=c.r[3];
+    const float start=float(c.f[1]),end=float(c.f[2]),nearz=float(c.f[3]),farz=float(c.f[4]);
+    const auto color=read32(c.r[4]);
+    float a=0,cvalue=0; uint32_t b_word=0,e_word=0; // ortho leaves both B words zero
+    if(type&8) {
+        if(farz!=nearz && end!=start) {
+            const float scale=1.0f/(end-start);
+            a=scale*(farz-nearz); cvalue=scale*(start-nearz);
+        }
+    } else {
+        float b=0.5f,a_num=0;
+        if(farz!=nearz && end!=start) {
+            const float depth=farz-nearz,range=end-start;
+            a_num=farz*nearz; b=farz/depth; a_num=a_num/(depth*range); cvalue=start/range;
+        }
+        int exponent=0;
+        while(double(b)>1.0) { b*=0.5f; ++exponent; }
+        while(b>0.0f && double(b)<0.5) { b*=2.0f; --exponent; }
+        a=a_num/float(int32_t(1u<<(exponent+1)));
+        const float mantissa=8388638.0f*b;
+        b_word=0xEF000000|(uint32_t(std::max(mantissa,0.f))&0xFFFFFF);
+        e_word=0xF0000000|(uint32_t(exponent+1)&31);
+    }
+    native_bp(0xEE000000|fog_float(a));
+    native_bp(b_word); native_bp(e_word);
+    native_bp(0xF1000000|fog_float(cvalue)|((type>>3)&1)<<20|(type&7)<<21);
+    native_bp(0xF2000000|color>>8);
+    ppc::wr16(c,read32(c.r[2]-8968)+2,0);
 }
 void hle_ResChannelApply(ppc::Ctx& c) {
     matrix_boundary(0x80376148);
@@ -1373,8 +1482,8 @@ void hle_GXLoadTexMtxImm(ppc::Ctx& c) {
     if(type>1 || id>125) throw gx::Error(gx::ErrorCode::layout,pointer,125,id);
     const auto count=type ? 8u : 12u;
     memory.read(pointer,count*4);
-    TextureMatrix matrix{};
-    for(size_t i=0;i<count;++i) { const auto value=std::bit_cast<float>(read32(pointer+uint32_t(i*4))); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,pointer,0,i); if(i<8) matrix[i/4][i%4]=value; }
+    TextureMatrix matrix{{{},{},{0,0,1,0}}}; // a 2x4 load leaves Q to the identity row
+    for(size_t i=0;i<count;++i) { const auto value=std::bit_cast<float>(read32(pointer+uint32_t(i*4))); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,pointer,0,i); matrix[i/4][i%4]=value; }
     texture_matrices[id]=matrix;
     const auto address=id>=64 ? 0x500+(id-64)*4 : id*4;
     uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,(count-1)<<16|address);

@@ -43,7 +43,6 @@ struct Vertex {
     std::array<float, 9> normal{};
     std::array<std::array<uint8_t, 4>, 2> color{{{255, 255, 255, 255}, {255, 255, 255, 255}}};
     std::array<std::array<float, 2>, 8> texcoord{};
-    std::array<float,8> texture_q{1,1,1,1,1,1,1,1};
     uint8_t position_matrix = 0;
     std::array<uint8_t, 8> texture_matrix{};
 };

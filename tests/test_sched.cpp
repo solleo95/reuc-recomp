@@ -165,6 +165,16 @@ static void test_sleep_is_at_least_requested() {
     CHECK(waited >= 24 && waited < 400);
 }
 
+static void test_idle_wait_scales() {   // a guest sleep of 200 virtual ms at speed 4 completes in roughly 50 real ms
+    set_clock_speed(4);
+    Sched s(nullptr); bool done = false;
+    Thread* m = s.create(0, 16, [&](ppc::Ctx&) { s.sleep_ticks(ms_to_ticks(200)); done = true; });
+    const auto start = std::chrono::steady_clock::now(); s.run(m);
+    const auto real_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    set_clock_speed(1);
+    CHECK(done && real_ms < 150);
+}
+
 static void test_blocked_with_interrupts_off() {   // the idle loop runs with interrupts on, and every thread keeps its own interrupt state
     g_log.clear(); Sched s(nullptr); bool b_saw_enabled = false, a_back_disabled = false;
     s.set_deadlock_timeout_ms(500);
@@ -226,6 +236,6 @@ int main() {
     test_priorities_and_join(); test_round_robin(); test_wake_order(); test_wake_preempts();
     test_busy_wait_sees_events(); test_events_wait_for_interrupts(); test_external_wakes_idle();
     test_deadlock_report(); test_irq_block_is_fatal(); test_exit_and_join_values();
-    test_suspend_resume(); test_sleep_is_at_least_requested(); test_blocked_with_interrupts_off(); test_irq_context_uses_small_data_bases(); test_scheduler_lock(); test_cancel();
+    test_suspend_resume(); test_sleep_is_at_least_requested(); test_idle_wait_scales(); test_blocked_with_interrupts_off(); test_irq_context_uses_small_data_bases(); test_scheduler_lock(); test_cancel();
     return 0;
 }

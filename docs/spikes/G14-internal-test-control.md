@@ -1,5 +1,7 @@
 # Internal diagnostic control
 
+> Superseded 2026-10-15 by `--test-server` and `python -m uctest` (docs/testing/test-server.md). `--test-control` and `scripts/train_route.py` stay until the owner removes them.
+
 Owner authorizes autonomous launching/navigation/measurement inside the game process and requires a visible window, skipped intro, and no system mouse/keyboard interception.
 
 `--test-control <file> --save-root <copy>` enables internal absolute aim/button/capture commands. Window is created hidden to avoid initial activation, then shown with Win32 `SW_SHOWNOACTIVATE`. Relative mouse mode is never enabled; ordinary focus/mouse/key events are ignored by the diagnostic input source. NativeInput retains its mutex; KPAD consumes the same ordinary samples. AX still advances; diagnostic audio output is muted. Saves must use an explicit isolated root. Intro uses `--skip-intro`; story movies are skipped through ordinary internal A presses.

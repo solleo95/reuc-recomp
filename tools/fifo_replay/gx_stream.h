@@ -43,7 +43,7 @@ private:
     void color_write(uint32_t reg,uint32_t value);
     void material(gx::DrawPacket& draw) const;
     void bind_textures(gx::DrawPacket& draw);
-    void generate_texcoords(gx::DrawPacket& draw) const;
+    void check_texgen(gx::DrawPacket& draw) const;
     void load_palette();
     void advance_memory(size_t frame,uint32_t position);
     void resolve_textures();

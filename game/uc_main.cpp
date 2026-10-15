@@ -27,6 +27,9 @@
 #include "vi.h"
 #include "options.h"
 #include "test_control.h"
+#include "test_server.h"
+#include "test_state.h"
+#include "test_draws.h"
 #include "intro.h"
 #include "game_pacing.h"
 #include "render_scale.h"
@@ -39,6 +42,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <exception>
+#include <functional>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -54,6 +59,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <timeapi.h>
 
 extern const uc::FnEntry uc_functions[];
 extern const size_t uc_function_count;
@@ -134,6 +140,27 @@ struct VideoSession {
     VideoSession() { if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError()); }
     ~VideoSession() { SDL_Quit(); }
 };
+struct NativeInputSink : uc::TestInputSink {
+    uc::NativeInput& input; SDL_Window* window; const uint8_t* guest;
+    NativeInputSink(uc::NativeInput& i, SDL_Window* w, const uint8_t* g) : input(i), window(w), guest(g) {}
+    std::string peek(uint32_t address, uint32_t size) override {
+        // MEM1 24 MB at 0x80000000, MEM2 64 MB at 0x90000000 (guest_mem layout).
+        const uint64_t end = uint64_t(address) + size;
+        const bool mem1 = address >= 0x80000000u && end <= 0x80000000ull + (24u << 20), mem2 = address >= 0x90000000u && end <= 0x90000000ull + (64u << 20);
+        if (!mem1 && !mem2) return {};
+        const uint8_t* source = guest + (mem2 ? 0x10000000u + (address - 0x90000000u) : address - 0x80000000u);
+        static const char digits[] = "0123456789ABCDEF"; std::string hex; hex.reserve(size_t(size) * 2);
+        for (uint32_t i = 0; i < size; ++i) { hex += digits[source[i] >> 4]; hex += digits[source[i] & 15]; }
+        return hex;
+    }
+    bool kpad(uint64_t sequence, float x, float y, uint32_t buttons) override { return input.apply_test_command(sequence, x, y, buttons); }
+    bool host(uint64_t sequence, const uc::HostEvent& event) override {
+        int width = 0, height = 0;
+        if (!SDL_GetWindowSizeInPixels(window, &width, &height)) return false;
+        return input.apply_test_event(sequence, event, uint32_t(std::max(0, width)), uint32_t(std::max(0, height)));
+    }
+    uint64_t consumed() override { return input.last_consumed_sequence(); }
+};
 struct GuestRunner {
     uc::Sched& sched;
     gx::Packets& packets;
@@ -151,17 +178,20 @@ struct GuestRunner {
 }  // namespace
 
 static int real_main(int argc, char** argv) {
+    timeBeginPeriod(1);   // 1 ms timers: sleeps and the modal drag/resize loop's WM_TIMER tick (otherwise 15.6 ms granularity)
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
     if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
     options=std::get<uc::Options>(std::move(parsed));
-    const bool controlled=!options.test_control.empty();
-    if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control requires Vulkan and an isolated --save-root");
+    const bool server_mode=!options.test_server.empty();
+    if(server_mode && !options.test_control.empty()) throw std::invalid_argument("--test-server replaces --test-control; use only one");
+    const bool controlled=!options.test_control.empty() || server_mode;
+    if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control and --test-server require Vulkan and an isolated --save-root");
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
     uc::intro_init(options.skip_intro);
@@ -184,7 +214,23 @@ static int real_main(int argc, char** argv) {
             (unsigned long long)vi.retraces, (unsigned long long)d.opens, (unsigned long long)d.reads, (unsigned long long)gx.draws,
             (unsigned long long)gx.submitted, (unsigned long long)gx.completed, (unsigned long long)gx.copies, (unsigned long long)gx.outside_bytes,
             (unsigned long long)sound.frames, (unsigned long long)sound.nonzero_samples);
-        return std::string(text);
+        std::string state(text);
+        try {   // guest registers of the crashed thread and the memory behind r3/r4 (the usual object/argument pointers)
+            if (const auto* thread = uc::os_sched().current()) {
+                char line[96];
+                state += "guest registers of the current thread:";
+                for (unsigned i = 0; i < 32; ++i) { std::snprintf(line, sizeof line, "%s r%u=%08X", i % 8 == 0 ? "\n" : "", i, thread->ctx.r[i]); state += line; }
+                std::snprintf(line, sizeof line, "\nlr=%08X\n", thread->ctx.lr); state += line;
+                for (const uint32_t reg : {3u, 4u}) {
+                    const uint32_t address = thread->ctx.r[reg];
+                    if (address < 0x80000000u || address > 0x817FFFC0u) continue;
+                    std::snprintf(line, sizeof line, "memory at r%u (%08X):", reg, address); state += line;
+                    for (unsigned i = 0; i < 64; ++i) { std::snprintf(line, sizeof line, "%s%02X", i % 16 == 0 ? "\n  " : " ", thread->ctx.mem[(address & 0x3FFFFFFFu) + i]); state += line; }
+                    state += "\n";
+                }
+            }
+        } catch (...) {}
+        return state;
     });
     for (const char* n : {"identified_sdk.txt", "symbols.txt", "gx_symbols.txt"}) {   // installed next to the exe, or the project folder of a build tree
         for (const fs::path& d : {exe_dir() / "data", exe_dir() / ".." / ".." / "project"}) if (fs::exists(d / n)) { uc::symbols_load((d / n).string()); break; }
@@ -214,6 +260,9 @@ static int real_main(int argc, char** argv) {
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
+    uc::set_clock_speed(options.speed);
+    uc::test_state_enable(server_mode);
+    uc::test_state_set_god(options.god);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
     sched.irq_ctx().r[1] = 0x817EFF00;
     uc::vi_hle_init(sched, uc::kViPeriodNtsc, [] { g_fifo_snapshot.store(g_fifo.bytes, std::memory_order_relaxed); });
@@ -246,7 +295,14 @@ static int real_main(int argc, char** argv) {
         if(!options.height) options.height=uint32_t(mode->h);
         if(!options.render_scale) options.render_scale=uc::monitor_render_scale(uint32_t(mode->w),uint32_t(mode->h));
         std::fprintf(stderr,"Monitor: %dx%d %.3g Hz;720p multiplier %.4gx\n",mode->w,mode->h,mode->refresh_rate,options.render_scale);
-        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", int(options.width), int(options.height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0) | (monitor_window && options.window_mode==uc::WindowMode::windowed ? SDL_WINDOW_MAXIMIZED : 0)));
+        int window_width=int(options.width),window_height=int(options.height);
+        if(monitor_window && options.window_mode==uc::WindowMode::windowed) {   // windowed start: the selected render resolution (shrunk only to fit the desktop)
+            SDL_Rect usable{0,0,mode->w,mode->h};
+            SDL_GetDisplayUsableBounds(display,&usable);
+            const auto extent=uc::windowed_extent(options.render_scale,aspect,uint32_t(std::max(0,usable.w)),uint32_t(std::max(0,usable.h)));
+            window_width=int(extent.width); window_height=int(extent.height);
+        }
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0)));
         if (!window) throw std::runtime_error(SDL_GetError());
         uc::configure_window_mode(window.get(),options.window_mode,int(options.width),int(options.height));
         const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
@@ -268,6 +324,12 @@ static int real_main(int argc, char** argv) {
     uc::entry_probe_init(options.input_probe);
     uc::prompt_hooks_init(input_config.input,options.input_probe);
     uc::input_hle_set_probe(options.input_probe ? uc::input_probe_sample : nullptr);
+    std::optional<uc::TestPipes> test_pipes;
+    std::optional<NativeInputSink> test_sink;
+    std::optional<uc::TestServer> test_server;
+    if (server_mode) { test_pipes.emplace(options.test_server); test_sink.emplace(input, window.get(), boot.mem); test_server.emplace(*test_pipes, *test_sink); }
+    bool test_released = false, draws_wanted = false; uint32_t draws_pass = 0; std::vector<uc::TestDrawStat> draw_stats; std::string draw_projection;
+    double last_render_ms = 0;
     std::optional<uc::AudioOutput> audio;
     if (!options.headless) audio.emplace();
     uc::audio_gap_audit_enable(options.audio_audit);
@@ -296,6 +358,175 @@ static int real_main(int argc, char** argv) {
     uint64_t control_sequence=0;
     uint64_t control_consumed=0;
     auto next_control=start;
+    // Takes the next guest frame, renders it and retires finished ones. Called from the loop and, while Windows runs its modal
+    // move/resize loop inside SDL_PollEvent, from the event watch below, so the guest keeps running while the window is dragged.
+    auto render_pending = [&] {
+        if (!pending) pending = packets.try_take();
+        // Keep the captured slot alive until its fence completes and readback finishes.
+        if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
+            const auto render_start=std::chrono::steady_clock::now();
+            const bool rendered=renderer.render(*pending);
+            profile_retries+=!rendered;
+            const auto render_elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
+            render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6;
+            if (rendered) {
+            if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
+            if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
+                scene_capture_serial=pending->serial; ++scene_capture_pass;
+                std::fprintf(stderr,"[scene-pass] %u serial %llu draws %zu present %u clear %u\n",scene_capture_pass,(unsigned long long)pending->serial,pending->draws.size(),pending->present,pending->clear_after_copy);
+                if(pending->texture_copy) {
+                    const auto& copy=*pending->texture_copy;
+                    std::fprintf(stderr,"[scene-pass-copy] source %u:%u:%u:%u target %u:%u\n",copy.source[0],copy.source[1],copy.source[2],copy.source[3],copy.target->levels[0].width,copy.target->levels[0].height);
+                }
+                if(!pending->draws.empty()) {
+                    const auto& draw=pending->draws.back();
+                    std::fprintf(stderr,"[scene-pass-last] callsite %08X vertices %zu stages %u blend %u:%u:%u depth %u\n",draw.callsite,draw.vertices.size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination,draw.uniforms.pixel[1]);
+                    for(uint32_t i=0;i<draw.material.stages;++i) {
+                        const auto& stage=draw.material.stage[i];
+                        std::fprintf(stderr,"[scene-pass-stage] %u color %06X alpha %06X order %03X konst %03X\n",i,stage.color,stage.alpha,stage.order,stage.konst);
+                    }
+                    for(uint32_t i=0;i<4;++i) {
+                        const auto& r=draw.uniforms.registers[i]; const auto& k=draw.uniforms.konst[i];
+                        std::fprintf(stderr,"[scene-pass-color] %u reg %.6g:%.6g:%.6g:%.6g konst %.6g:%.6g:%.6g:%.6g\n",i,r[0],r[1],r[2],r[3],k[0],k[1],k[2],k[3]);
+                    }
+                }
+            }
+            if (test_server && draws_wanted) {   // every rendered packet since the request: scene passes precede the presented copy
+                for (auto stat : uc::summarize_draws(*pending)) { stat.pass = draws_pass; draw_stats.push_back(stat); }
+                ++draws_pass;
+                if (draw_projection.empty()) draw_projection = uc::projection_json(uc::scene_projection(*pending));
+                if (pending->present) { test_server->draws_ready(uc::test_draws_json(draw_stats), draw_projection.empty() ? "[]" : draw_projection); draws_wanted=false; draws_pass=0; draw_stats.clear(); draw_projection.clear(); }
+            }
+            if (pending->present) frame_limit.presented(std::chrono::steady_clock::now());
+            if (pending->present && debug_capture_requested) {
+                debug_capture_serial=pending->serial;
+                debug_capture_requested=false;
+            }
+            audit_seen_geometry |= !pending->draws.empty();
+            const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
+            if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
+            pending.reset();
+            }
+        }
+        for (uint64_t serial : renderer.poll_completions()) {
+            if (packets.complete(serial)) uc::gx_completed(serial);
+            if(serial==scene_capture_serial) {
+                const auto pixels=renderer.capture(serial,true);
+                const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
+                const auto path=directory/("pass-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(scene_capture_pass)+"-"+std::to_string(serial)+".png");
+                try {
+                    fs::create_directories(directory); uc::save_png(pixels,path);
+                    std::fprintf(stderr,"[scene-pass-capture] %s\n",path.string().c_str());
+                } catch(const std::exception& error) { std::fprintf(stderr,"scene pass capture failed: %s\n",error.what()); }
+                scene_capture_serial=0;
+            }
+            if (serial==debug_capture_serial) {
+                const auto pixels=renderer.capture(serial);
+                if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid debug-frame readback");
+                const auto directory=options.capture_dir.empty() ? fs::path(L"S:\\Games\\Umbrella Chronicles\\debug") : options.capture_dir;
+                const auto stamp=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                const auto path=directory/("frame-"+std::to_string(stamp)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(serial)+".png");
+                try {
+                    fs::create_directories(directory);
+                    uc::save_png(pixels,path);
+                    std::fprintf(stderr,"debug screenshot: %s\n",path.string().c_str());
+                    if(test_server)test_server->captured(path.string());
+                } catch(const std::exception& error) {
+                    std::fprintf(stderr,"debug screenshot failed: %s\n",error.what());
+                    if(test_server)test_server->capture_failed(error.what());
+                }
+                debug_capture_serial=0;
+            }
+            if (options.gx_audit && serial==audit_capture_serial) {
+                const auto pixels=renderer.capture(serial);
+                if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid game-frame readback");
+                const auto path=exe_dir()/(audit_captured ? "gx-later-frame.png" : "gx-first-geometry.png");
+                uc::save_png(pixels,path);
+                std::fprintf(stderr,"gx audit capture: serial %llu %ux%u %s\n",static_cast<unsigned long long>(serial),pixels.width,pixels.height,path.string().c_str());
+                audit_late_captured=audit_captured;
+                audit_captured=true;
+                audit_capture_serial=0;
+            }
+        }
+    };
+    // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
+    // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
+    auto service_frame = [&] {
+        if(test_server) {
+            const auto state=uc::test_state_latest();
+            const auto pumped=test_server->pump(state.frame,uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped()));
+            debug_capture_requested|=pumped.capture; draws_wanted|=pumped.draws;
+            close|=pumped.quit;
+            if(test_pipes->disconnected() && !test_released) { test_released=true; test_server->release_all(); }
+        }
+        if(!server_mode && controlled && std::chrono::steady_clock::now()>=next_control) {
+            next_control=std::chrono::steady_clock::now()+std::chrono::milliseconds(50);
+            std::ifstream file(options.test_control);
+            std::string line;
+            if(std::getline(file,line)) if(auto command=uc::parse_test_command(line);command && command->sequence>control_sequence) {
+                if(command->kind==uc::TestKind::legacy) {
+                    if(!input.apply_test_command(command->sequence,command->x,command->y,command->held))throw std::runtime_error("internal input command rejected");
+                } else {
+                    uc::HostEventKind kind;
+                    switch(command->kind) {
+                    case uc::TestKind::key: kind=uc::HostEventKind::key; break;
+                    case uc::TestKind::mouse: kind=uc::HostEventKind::mouse; break;
+                    case uc::TestKind::wheel: kind=uc::HostEventKind::wheel; break;
+                    case uc::TestKind::motion: kind=uc::HostEventKind::motion; break;
+                    case uc::TestKind::focus: kind=uc::HostEventKind::focus; break;
+                    case uc::TestKind::legacy: throw std::logic_error("unexpected legacy event");
+                    }
+                    int width=0,height=0;
+                    if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
+                    if(!input.apply_test_event(command->sequence,{kind,command->code,int(command->value),command->x,command->y},uint32_t(std::max(0,width)),uint32_t(std::max(0,height))))throw std::runtime_error("internal host command rejected");
+                }
+                control_sequence=command->sequence;
+                debug_capture_requested|=command->capture;
+                std::fprintf(stderr,"[test-control] applied %llu aim %.3f %.3f held %u capture %u\n",(unsigned long long)control_sequence,command->x,command->y,command->held,command->capture);
+            }
+            const auto consumed=input.last_consumed_sequence();
+            if(consumed>control_consumed) {
+                control_consumed=consumed;
+                std::fprintf(stderr,"[test-control] consumed %llu\n",(unsigned long long)consumed);
+            }
+        }
+        const auto services=input.consume_service_actions();
+        debug_capture_requested|=(services.pressed&(uint64_t(1)<<unsigned(uc::Action::screenshot)))!=0;
+        if(!controlled && options.window_mode==uc::WindowMode::windowed &&
+            (services.pressed&(uint64_t(1)<<unsigned(uc::Action::release_cursor)))) {
+            if(!SDL_SetWindowRelativeMouseMode(window.get(),false))throw std::runtime_error(SDL_GetError());
+            input.focus(false);
+        }
+        render_pending();
+    };
+    std::exception_ptr watch_error;
+    bool in_render = false;
+    struct Watch { std::function<void()>* render; std::function<void(uint32_t,uint32_t)>* resize; } watch_state;
+    // A guest frame is ~2.4 packets (scene passes + copies), 72 packets/s at 30 fps, and the modal loop's timer ticks only 64-100 times a second:
+    // one packet per tick starves the guest. So each tick keeps servicing while packets are waiting, for at most 12 ms.
+    std::function<void()> render_step = [&] {
+        if (in_render) return;
+        in_render = true;
+        try {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+            do {
+                service_frame();
+                if (close) break;
+                if (pending) std::this_thread::sleep_for(std::chrono::milliseconds(1));        // present spacing of the frame limiter
+                else if (!packets.wait_ready(std::chrono::nanoseconds(0))) break;              // nothing left to render
+            } while (std::chrono::steady_clock::now() < until);
+        } catch (...) { watch_error = std::current_exception(); }
+        in_render = false;
+    };
+    std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); } catch (...) { watch_error = std::current_exception(); } };
+    watch_state = {&render_step, &resize_step};
+    const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the main thread, also inside the modal resize loop
+        auto& state = *static_cast<Watch*>(user);
+        if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) (*state.resize)(uint32_t(std::max(0, event->window.data1)), uint32_t(std::max(0, event->window.data2)));
+        else if (event->type == SDL_EVENT_WINDOW_EXPOSED) (*state.render)();
+        return true;
+    };
+    if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
     while (!close && !runner.done.load()) {
         ++profile_loops;
         if (!options.headless) {
@@ -312,122 +543,8 @@ static int real_main(int argc, char** argv) {
                     input.focus(true);
                 }
             }
-            if(controlled && std::chrono::steady_clock::now()>=next_control) {
-                next_control=std::chrono::steady_clock::now()+std::chrono::milliseconds(50);
-                std::ifstream file(options.test_control);
-                std::string line;
-                if(std::getline(file,line)) if(auto command=uc::parse_test_command(line);command && command->sequence>control_sequence) {
-                    if(command->kind==uc::TestKind::legacy) {
-                        if(!input.apply_test_command(command->sequence,command->x,command->y,command->held))throw std::runtime_error("internal input command rejected");
-                    } else {
-                        uc::HostEventKind kind;
-                        switch(command->kind) {
-                        case uc::TestKind::key: kind=uc::HostEventKind::key; break;
-                        case uc::TestKind::mouse: kind=uc::HostEventKind::mouse; break;
-                        case uc::TestKind::wheel: kind=uc::HostEventKind::wheel; break;
-                        case uc::TestKind::motion: kind=uc::HostEventKind::motion; break;
-                        case uc::TestKind::focus: kind=uc::HostEventKind::focus; break;
-                        case uc::TestKind::legacy: throw std::logic_error("unexpected legacy event");
-                        }
-                        int width=0,height=0;
-                        if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
-                        if(!input.apply_test_event(command->sequence,{kind,command->code,int(command->value),command->x,command->y},uint32_t(std::max(0,width)),uint32_t(std::max(0,height))))throw std::runtime_error("internal host command rejected");
-                    }
-                    control_sequence=command->sequence;
-                    debug_capture_requested|=command->capture;
-                    std::fprintf(stderr,"[test-control] applied %llu aim %.3f %.3f held %u capture %u\n",(unsigned long long)control_sequence,command->x,command->y,command->held,command->capture);
-                }
-                const auto consumed=input.last_consumed_sequence();
-                if(consumed>control_consumed) {
-                    control_consumed=consumed;
-                    std::fprintf(stderr,"[test-control] consumed %llu\n",(unsigned long long)consumed);
-                }
-            }
-            const auto services=input.consume_service_actions();
-            debug_capture_requested|=(services.pressed&(uint64_t(1)<<unsigned(uc::Action::screenshot)))!=0;
-            if(!controlled && options.window_mode==uc::WindowMode::windowed &&
-                (services.pressed&(uint64_t(1)<<unsigned(uc::Action::release_cursor)))) {
-                if(!SDL_SetWindowRelativeMouseMode(window.get(),false))throw std::runtime_error(SDL_GetError());
-                input.focus(false);
-            }
-            if (!pending) pending = packets.try_take();
-            // Keep the captured slot alive until its fence completes and readback finishes.
-            if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
-                const auto render_start=std::chrono::steady_clock::now();
-                const bool rendered=renderer.render(*pending);
-                profile_retries+=!rendered;
-                render_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
-                if (rendered) {
-                if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
-                if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
-                    scene_capture_serial=pending->serial; ++scene_capture_pass;
-                    std::fprintf(stderr,"[scene-pass] %u serial %llu draws %zu present %u clear %u\n",scene_capture_pass,(unsigned long long)pending->serial,pending->draws.size(),pending->present,pending->clear_after_copy);
-                    if(pending->texture_copy) {
-                        const auto& copy=*pending->texture_copy;
-                        std::fprintf(stderr,"[scene-pass-copy] source %u:%u:%u:%u target %u:%u\n",copy.source[0],copy.source[1],copy.source[2],copy.source[3],copy.target->levels[0].width,copy.target->levels[0].height);
-                    }
-                    if(!pending->draws.empty()) {
-                        const auto& draw=pending->draws.back();
-                        std::fprintf(stderr,"[scene-pass-last] callsite %08X vertices %zu stages %u blend %u:%u:%u depth %u\n",draw.callsite,draw.vertices.size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination,draw.uniforms.pixel[1]);
-                        for(uint32_t i=0;i<draw.material.stages;++i) {
-                            const auto& stage=draw.material.stage[i];
-                            std::fprintf(stderr,"[scene-pass-stage] %u color %06X alpha %06X order %03X konst %03X\n",i,stage.color,stage.alpha,stage.order,stage.konst);
-                        }
-                        for(uint32_t i=0;i<4;++i) {
-                            const auto& r=draw.uniforms.registers[i]; const auto& k=draw.uniforms.konst[i];
-                            std::fprintf(stderr,"[scene-pass-color] %u reg %.6g:%.6g:%.6g:%.6g konst %.6g:%.6g:%.6g:%.6g\n",i,r[0],r[1],r[2],r[3],k[0],k[1],k[2],k[3]);
-                        }
-                    }
-                }
-                if (pending->present) frame_limit.presented(std::chrono::steady_clock::now());
-                if (pending->present && debug_capture_requested) {
-                    debug_capture_serial=pending->serial;
-                    debug_capture_requested=false;
-                }
-                audit_seen_geometry |= !pending->draws.empty();
-                const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
-                if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
-                pending.reset();
-                }
-            }
-            for (uint64_t serial : renderer.poll_completions()) {
-                if (packets.complete(serial)) uc::gx_completed(serial);
-                if(serial==scene_capture_serial) {
-                    const auto pixels=renderer.capture(serial,true);
-                    const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
-                    const auto path=directory/("pass-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(scene_capture_pass)+"-"+std::to_string(serial)+".png");
-                    try {
-                        fs::create_directories(directory); uc::save_png(pixels,path);
-                        std::fprintf(stderr,"[scene-pass-capture] %s\n",path.string().c_str());
-                    } catch(const std::exception& error) { std::fprintf(stderr,"scene pass capture failed: %s\n",error.what()); }
-                    scene_capture_serial=0;
-                }
-                if (serial==debug_capture_serial) {
-                    const auto pixels=renderer.capture(serial);
-                    if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid debug-frame readback");
-                    const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
-                    const auto stamp=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    const auto path=directory/("frame-"+std::to_string(stamp)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(serial)+".png");
-                    try {
-                        fs::create_directories(directory);
-                        uc::save_png(pixels,path);
-                        std::fprintf(stderr,"debug screenshot: %s\n",path.string().c_str());
-                    } catch(const std::exception& error) {
-                        std::fprintf(stderr,"debug screenshot failed: %s\n",error.what());
-                    }
-                    debug_capture_serial=0;
-                }
-                if (options.gx_audit && serial==audit_capture_serial) {
-                    const auto pixels=renderer.capture(serial);
-                    if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid game-frame readback");
-                    const auto path=exe_dir()/(audit_captured ? "gx-later-frame.png" : "gx-first-geometry.png");
-                    uc::save_png(pixels,path);
-                    std::fprintf(stderr,"gx audit capture: serial %llu %ux%u %s\n",static_cast<unsigned long long>(serial),pixels.width,pixels.height,path.string().c_str());
-                    audit_late_captured=audit_captured;
-                    audit_captured=true;
-                    audit_capture_serial=0;
-                }
-            }
+            if (watch_error) std::rethrow_exception(watch_error);
+            service_frame();
         }
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
@@ -459,6 +576,7 @@ static int real_main(int argc, char** argv) {
         }
     }
     runner.stop();
+    if(test_pipes) { if(!test_released) test_server->release_all(); test_pipes->send("{\"type\":\"exit\",\"code\":"+std::to_string(result)+"}",false); }
     const auto prompt_stats=uc::gx_stats();
     std::fprintf(stderr,"native prompt stats: annotations %llu present %llu fallback %llu\n",(unsigned long long)prompt_stats.prompt_annotations,(unsigned long long)prompt_stats.prompt_present,(unsigned long long)prompt_stats.prompt_fallback);
     uc::input_hle_set_probe(nullptr);

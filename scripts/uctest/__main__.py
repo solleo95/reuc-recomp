@@ -1,0 +1,62 @@
+"""python -m uctest list | run <scenario> [--speed k] [--measure s] [--repeat n]"""
+import argparse
+import json
+import shutil
+import sys
+import time
+
+from .client import CHECKPOINTS, Game, StepFailed, resolve_saves
+from .scenarios import SCENARIOS
+
+
+def run_once(name, args):
+    g = Game(speed=args.speed, god=args.god, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
+    start = time.monotonic()
+    report = {"scenario": name, "ok": False, "speed": args.speed, "god": args.god}
+    try:
+        with g:
+            report["result"] = SCENARIOS[name](g, args)
+        report["ok"] = True
+    except StepFailed as error:
+        report["error"] = str(error)
+        report["artifacts"] = error.artifacts
+    if args.save_as and (g.run_dir / "saves").is_dir():   # the game is closed: its saves (progress so far) become a reusable starting point
+        shutil.copytree(g.run_dir / "saves", CHECKPOINTS / args.save_as)
+        report["checkpoint"] = str(CHECKPOINTS / args.save_as)
+    report["seconds"] = round(time.monotonic() - start, 1)
+    report["steps"] = g.steps
+    report["counters"] = dict(g.counters)
+    (g.run_dir / "report.json").write_text(json.dumps(report, indent=1, default=str))
+    return report, g.run_dir
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="uctest")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list")
+    run = sub.add_parser("run")
+    run.add_argument("scenario", choices=sorted(SCENARIOS))
+    run.add_argument("--speed", type=int, default=1, choices=range(1, 9))
+    run.add_argument("--measure", type=float, default=0, help="seconds of FPS measurement (perf)")
+    run.add_argument("--repeat", type=int, default=1)
+    run.add_argument("--god", action="store_true", help="cheat: health and ammo stay at their maxima (marked in the report)")
+    run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
+    run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
+    run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
+    run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
+    run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
+    args = parser.parse_args(argv)
+    if args.command == "list":
+        print("\n".join(sorted(SCENARIOS)))
+        return 0
+    failures = 0
+    for index in range(args.repeat):
+        report, run_dir = run_once(args.scenario, args)
+        failures += not report["ok"]
+        detail = "" if report["ok"] else f" - {report['error']}"
+        print(f"{args.scenario} {index + 1}/{args.repeat} {'PASS' if report['ok'] else 'FAIL'} {report['seconds']}s {run_dir}{detail}", flush=True)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

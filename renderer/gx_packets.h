@@ -22,6 +22,7 @@ struct FramePacket {
     std::optional<TextureCopy> texture_copy;
     std::array<uint32_t,4> display_source{0,0,640,480};
     std::vector<PromptDraw> prompts;
+    bool black_output = false; // VI blanked: present black, the EFB copy still happens
 };
 
 class Packets {

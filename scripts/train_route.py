@@ -1,4 +1,6 @@
-"""Run the learned train route through process-local input; never send OS input."""
+"""Run the learned train route through process-local input; never send OS input.
+
+Superseded by `python -m uctest run train_gameplay|controls|perf` (docs/testing/test-server.md); kept until the owner removes it."""
 import argparse
 import json
 import pathlib
@@ -71,6 +73,7 @@ def main():
     parser.add_argument("--unlock-60fps", action="store_true")
     parser.add_argument("--input-probe", action="store_true")
     parser.add_argument("--audio-audit", action="store_true")
+    parser.add_argument("--gx-gaps", action="store_true")
     parser.add_argument("--native-controls", action="store_true")
     parser.add_argument("--progression", action="store_true")
     parser.add_argument("--bindings",choices=("default","cleared","rebound"),default="default")
@@ -106,6 +109,7 @@ def main():
                                     "--render-scale", str(args.render_scale), "--width", str(args.width), "--height", str(args.height),
                                     "--test-control", str(control), "--save-root", str(folder / "saves"),"--config",str(config_path)]
                                    + (["--audio-audit"] if args.audio_audit else [])
+                                   + (["--gx-gaps"] if args.gx_gaps else [])
                                    + (["--unlock-60fps"] if args.unlock_60fps else [])
                                    + (["--input-probe"] if args.input_probe or args.native_controls else []),
                                    cwd=root, stdout=log, stderr=log)

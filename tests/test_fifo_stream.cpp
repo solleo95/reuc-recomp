@@ -98,9 +98,10 @@ int main(int argc,char** argv) try {
         projected.xf[0x500+i]=std::bit_cast<uint32_t>(postmatrix[i]);
     }
     auto generated=GxStream(projected,0).packets()[0].draws[0];
-    CHECK((generated.vertices[0].texcoord[0]==std::array<float,2>{3,2}));
-    CHECK(generated.vertices[0].texture_q[0]==2);
-    CHECK(generated.uniforms.tex_rows[0][0]==1 && generated.uniforms.tex_rows[0][3]==0);
+    // Texgen runs on the GPU as in the game: the draw carries the XF words and matrices, vertices keep raw attributes.
+    CHECK(generated.uniforms.tex_gens[0]==6 && generated.uniforms.tex_posts[0]==0);
+    CHECK((generated.uniforms.tex_rows[0]==std::array<float,4>{2,0,0,1}) && (generated.uniforms.tex_rows[2]==std::array<float,4>{0,0,0,2}));
+    CHECK((generated.uniforms.post_rows[0]==std::array<float,4>{1,0,0,4}));
     auto normals=triangle();auto original_normals=normals.bytes;
     normals.cp[0x50]|=1<<11;normals.cp[0x70]|=4<<10;
     normals.bytes.resize(94);
@@ -115,8 +116,8 @@ int main(int argc,char** argv) try {
     normals.xf_registers[0x18]=60<<6;normals.xf_registers[0x12]=1;normals.xf_registers[0x50]=256;
     for(size_t i=0;i<3;++i)normals.xf[0x500+i*5]=std::bit_cast<uint32_t>(1.f);
     auto normal_generated=GxStream(normals,0).packets()[0].draws[0];
-    CHECK(normal_generated.vertices[0].texcoord[0][1]==0.6f);
-    CHECK(normal_generated.vertices[0].texture_q[0]==0.8f);
+    CHECK(normal_generated.uniforms.tex_gens[0]==0x86 && normal_generated.uniforms.tex_posts[0]==256);
+    CHECK((normal_generated.uniforms.post_rows[1]==std::array<float,4>{0,1,0,0}) && normal_generated.vertices[0].normal[1]==3);
     auto viewport=triangle();
     for(auto [reg,value]:{std::pair{0x1A,320.f},{0x1B,-240.f},{0x1C,16777216.f},{0x1D,662.f},{0x1E,582.f},{0x1F,16777216.f}})
         viewport.xf_registers[reg]=std::bit_cast<uint32_t>(value);

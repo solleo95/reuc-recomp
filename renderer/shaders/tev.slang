@@ -3,8 +3,10 @@ struct NativeLight { float4 color; float4 cosine; float4 distance; float4 positi
 struct DrawState {
     float4 registers[4];
     float4 konst[4];
-    float4 texRows[16];
-    uint4 texSources[2];
+    float4 texRows[24];
+    uint4 texGens[2];
+    uint4 texPosts[2];
+    float4 postRows[24];
     uint4 pixel;
     NativeLight lights[8];
     float4 materials[2];
@@ -153,17 +155,18 @@ uint packedCompare(float3 value, uint mode) {
     if (mode >= 2) result |= quantize(value.b) << 16;
     return result;
 }
-float tevScale(uint env) {
-    switch ((env >> 20) & 3) {
-    case 1: return 2.0;
-    case 2: return 4.0;
-    case 3: return 0.5;
-    }
-    return 1.0;
-}
-float tevBias(uint env) {
-    uint bias = (env >> 16) & 3;
-    return bias == 1 ? 0.5 : (bias == 2 ? -0.5 : 0.0);
+// GX TEV stage in hardware integers: A/B/C use their low 8 bits, C extends to 0..256, D is signed 11-bit;
+// the stage result is rounded to an integer step and clamped like the register it lands in.
+float tevInteger(float af, float bf, float cf, float df, uint env) {
+    int a = int(round(af * 255.0)) & 255, b = int(round(bf * 255.0)) & 255, c = int(round(cf * 255.0)) & 255;
+    int d = clamp(int(round(df * 255.0)), -1024, 1023);
+    c += c >> 7;
+    int lerp = a * (256 - c) + b * c;
+    bool subtract = ((env >> 18) & 1) != 0;
+    uint biasMode = (env >> 16) & 3, scaleMode = (env >> 20) & 3;
+    int value = (d << 8) + (subtract ? -lerp : lerp) + (biasMode == 1 ? 128 << 8 : (biasMode == 2 ? -(128 << 8) : 0));
+    if (scaleMode == 1) value <<= 1; else if (scaleMode == 2) value <<= 2; else if (scaleMode == 3) value >>= 1;
+    return float((value + 128) >> 8) / 255.0; // +128 after scaling: best Dolphin same-frame match (G21)
 }
 float3 combineColor(float3 a, float3 b, float3 c, float3 d, uint env) {
     float3 result;
@@ -181,8 +184,7 @@ float3 combineColor(float3 a, float3 b, float3 c, float3 d, uint env) {
             result = d + ((equal ? qa == qb : qa > qb) ? c : float3(0.0));
         }
     } else {
-        float3 mix = a * (1.0 - c) + b * c;
-        result = (d + (equal ? -mix : mix) + tevBias(env)) * tevScale(env);
+        result = float3(tevInteger(a.r, b.r, c.r, d.r, env), tevInteger(a.g, b.g, c.g, d.g, env), tevInteger(a.b, b.b, c.b, d.b, env));
     }
     return ((env >> 19) & 1) != 0 ? clamp(result, 0.0, 1.0) : clamp(result, -4.0, 4.0);
 }
@@ -194,10 +196,7 @@ float combineAlpha(float a, float b, float c, float d, float3 colorA, float3 col
         uint qa = mode == 3 ? quantize(a) : packedCompare(colorA, mode);
         uint qb = mode == 3 ? quantize(b) : packedCompare(colorB, mode);
         result = d + ((equal ? qa == qb : qa > qb) ? c : 0.0);
-    } else {
-        float mix = a * (1.0 - c) + b * c;
-        result = (d + (equal ? -mix : mix) + tevBias(env)) * tevScale(env);
-    }
+    } else result = tevInteger(a, b, c, d, env);
     return ((env >> 19) & 1) != 0 ? clamp(result, 0.0, 1.0) : clamp(result, -4.0, 4.0);
 }
 float2 imageSize(uint id) {

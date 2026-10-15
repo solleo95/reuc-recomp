@@ -24,4 +24,15 @@ int main() {
     bool rejected=false; try { uc::manual_render_extent(6,3440.0/1440); } catch(const std::invalid_argument&) { rejected=true; } CHECK(rejected);
     rejected=false; try { uc::device_render_scale(1,512); } catch(const std::invalid_argument&) { rejected=true; } CHECK(rejected);
     rejected=false; try { uc::monitor_render_scale(0,1440); } catch(const std::invalid_argument&) { rejected=true; } CHECK(rejected);
+    // A windowed start opens at the selected render resolution, shrunk (same aspect) only when the desktop cannot hold it with its frame.
+    const auto fits=uc::windowed_extent(2,16.0/9,3840,2100);
+    CHECK(fits.width==2560 && fits.height==1440);
+    const auto shrunk=uc::windowed_extent(3,16.0/9,2560,1400);   // 3840x2160 > 2544x1352 usable client area
+    CHECK(shrunk.width==2403 && shrunk.height==1352);
+    const auto ultrawide=uc::windowed_extent(1,3440.0/1440,3440,1400);
+    CHECK(ultrawide.height<=1352 && ultrawide.width<=3424 && std::abs(double(ultrawide.width)/ultrawide.height-3440.0/1440)<0.01);
+    rejected=false; try { uc::windowed_extent(1,16.0/9,10,10); } catch(const std::invalid_argument&) { rejected=true; } CHECK(rejected);
+    // GX samples at pixel centre 7/12 without AA: the scaled viewport moves by -1/12 EFB pixel.
+    const auto viewport=uc::efb_viewport({10,20,600,400,0,1},1280,960);
+    CHECK(viewport.x==(10-1.f/12)*2 && viewport.y==(20-1.f/12)*2 && viewport.width==1200 && viewport.height==800);
 }

@@ -19,10 +19,10 @@ struct GpuVertex {
     std::array<float,3> position;
     std::array<uint8_t,4> color;
     PositionMatrix position_rows;
-    std::array<float,3> texcoord;
-    std::array<std::array<float,3>,7> extra_texcoords;
-    std::array<float,3> normal;
+    std::array<std::array<float,2>,8> texcoords;
+    std::array<float,3> normal; // view space, for lighting
     std::array<uint8_t,4> color1;
+    std::array<float,3> object_normal; // untransformed, the texgen normal source
 };
 struct Vertex;
 Projection make_projection(const std::array<float,6>& coefficients,uint32_t type);

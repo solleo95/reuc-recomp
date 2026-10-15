@@ -7,9 +7,10 @@ struct Input {
     [[vk::location(2)]] float4 row0 : TEXCOORD0;
     [[vk::location(3)]] float4 row1 : TEXCOORD1;
     [[vk::location(4)]] float4 row2 : TEXCOORD2;
-    [[vk::location(5)]] float3 texcoords[8] : TEXCOORD3;
+    [[vk::location(5)]] float2 texcoords[8] : TEXCOORD3;
     [[vk::location(13)]] float3 normal : NORMAL;
     [[vk::location(14)]] float4 color1 : COLOR1;
+    [[vk::location(15)]] float3 objectNormal : NORMAL1;
 };
 struct Projection { float4 rows[4]; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
@@ -60,6 +61,21 @@ float4 shadeChannel(float4 base, uint channel, float3 position, float3 normal) {
     color.a = lightControl(base,channel,drawState.channels[channel+2],position,normal).a;
     return color;
 }
+// GX regular texgen (XF 0x1040+n): source row, AB11/ABC1 input, ST/STQ through the texture matrix,
+// then the dual-texture post matrix (XF 0x1050+n, optional normalize). Q is divided per fragment.
+float3 generateTexcoord(uint id, Input input) {
+    uint gen = drawState.texGens[id / 4][id % 4], source = (gen >> 7) & 31;
+    float4 value = float4(0.0, 0.0, 1.0, 1.0); // shortcut: colour/binormal sources and emboss types unused by RBUE08 (CPU logs them)
+    if (source == 0) value.xyz = input.position;
+    else if (source == 1) value.xyz = input.objectNormal;
+    else if (source >= 5 && source <= 12) value.xy = input.texcoords[source - 5];
+    if ((gen & 4) == 0) value.z = 1.0;
+    float3 stq = float3(dot(drawState.texRows[3 * id], value), dot(drawState.texRows[3 * id + 1], value),
+                        (gen & 2) != 0 ? dot(drawState.texRows[3 * id + 2], value) : 1.0);
+    if ((drawState.texPosts[id / 4][id % 4] & 256) != 0 && dot(stq, stq) > 0.0) stq = normalize(stq);
+    float4 post = float4(stq, 1.0);
+    return float3(dot(drawState.postRows[3 * id], post), dot(drawState.postRows[3 * id + 1], post), dot(drawState.postRows[3 * id + 2], post));
+}
 Output vertexMain(Input input) {
     Output output;
     float4 objectPosition = float4(input.position, 1.0);
@@ -68,12 +84,7 @@ Output vertexMain(Input input) {
     float3 normal = dot(input.normal,input.normal)>0.0 ? normalize(input.normal) : float3(0.0);
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
-    [unroll] for (uint id = 0; id < 8; ++id) {
-        uint source = drawState.texSources[id / 4][id % 4] & 7;
-        float4 uv = float4(input.texcoords[source].xy, 1.0, 1.0);
-        output.texcoords[id] = float3(dot(drawState.texRows[2 * id], uv),
-                                    dot(drawState.texRows[2 * id + 1], uv), input.texcoords[source].z);
-    }
+    [unroll] for (uint id = 0; id < 8; ++id) output.texcoords[id] = generateTexcoord(id, input);
     return output;
 }
 bool alphaCompare(uint value, uint reference, uint operation) {

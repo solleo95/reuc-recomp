@@ -53,6 +53,17 @@ int main() {
         c.r[3]=0x80002000; c.r[4]=0; c.r[5]=0; rejected=false;
         try { hle_GXLoadTexMtxImm(c); } catch(const gx::Error&) { rejected=true; }
         CHECK(rejected); draw(); take(.25f);
+        // A 3x4 load keeps its third row; post matrices (ids 64+) and the raw texgen words reach the draw.
+        for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80002000+i*4,float(i+1));
+        c.r[3]=0x80002000; c.r[4]=30; c.r[5]=0; hle_GXLoadTexMtxImm(c);
+        c.r[3]=0x80002000; c.r[4]=67; c.r[5]=0; hle_GXLoadTexMtxImm(c);
+        ppc::wr32(c,0x80001080,30u<<6); ppc::wr32(c,0x800010C8,6); ppc::wr32(c,0x800010E8,3|256);
+        draw(); c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
+        const auto& u=packet->draws[0].uniforms;
+        CHECK((u.tex_rows[2]==std::array<float,4>{9,10,11,12}) && u.tex_gens[0]==6 && u.tex_posts[0]==0x103);
+        CHECK((u.post_rows[0]==std::array<float,4>{1,2,3,4}) && (u.post_rows[2]==std::array<float,4>{9,10,11,12}));
+        CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
     sched.run(thread);
 }

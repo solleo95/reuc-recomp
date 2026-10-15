@@ -1,5 +1,6 @@
 #include "vulkan_renderer.h"
 #include "render_scale.h"
+#include "rebuild_gate.h"
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
 #include <bit>
@@ -362,18 +363,19 @@ VkPipeline VulkanRenderer::make_pipeline(const gx::BlendState& mode,const Pipeli
         for(uint32_t i=0;i<spec_entries.size();++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
         VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
         stages[1].pSpecializationInfo=&specialization;
-        static_assert(sizeof(gx::GpuVertex)==176 && sizeof(gx::Projection)==64);
+        static_assert(sizeof(gx::GpuVertex)==156 && sizeof(gx::Projection)==64);
         VkVertexInputBindingDescription binding{0, uint32_t(sizeof(gx::GpuVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
-        std::array<VkVertexInputAttributeDescription,15> attributes{{
+        std::array<VkVertexInputAttributeDescription,16> attributes{{
             {0,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position))},
             {1,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuVertex,color))},
             {2,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows))},
             {3,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows)+16)},
             {4,0,VK_FORMAT_R32G32B32A32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,position_rows)+32)},
-            {5,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord))}}};
-        for(uint32_t i=0;i<8;++i) attributes[5+i]={5+i,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoord)+i*12)};
+            {5,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoords))}}};
+        for(uint32_t i=0;i<8;++i) attributes[5+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,texcoords)+i*8)};
         attributes[13]={13,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,normal))};
         attributes[14]={14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuVertex,color1))};
+        attributes[15]={15,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuVertex,object_normal))};
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
@@ -474,12 +476,50 @@ void VulkanRenderer::set_prompt_style(PromptStyle style) {
     if(style!=PromptStyle::monochrome && style!=PromptStyle::sculpted)throw std::invalid_argument("invalid native prompt style");
     prompt_style_=style;
 }
+// Resize path: waits for the slots' GPU work only (no device idle, no presentation fences) and keeps buffers, textures and the EFB.
+// The old swapchain becomes the new one's oldSwapchain and is freed by reap_retired() when its presentations are done.
+void VulkanRenderer::retire_for_resize() {
+    if (!device || !swapchain_) return;
+    for (auto& slot : slots_)
+        if (slot.submitted) vk_check(vkWaitForFences(device, 1, &slot.fence, VK_TRUE, 1000000000ull), "resize frame fence");
+    collect();
+    old_swapchain_ = swapchain_;
+    retired_.push_back({swapchain_, std::move(images_)});
+    images_.clear(); swapchain_ = VK_NULL_HANDLE;
+    for (auto& slot : slots_) {   // the output-sized images are the only per-slot resources that depend on the window
+        if (slot.view) vkDestroyImageView(device, slot.view, nullptr);
+        if (slot.image) vkDestroyImage(device, slot.image, nullptr);
+        if (slot.memory) vkFreeMemory(device, slot.memory, nullptr);
+        slot.view = VK_NULL_HANDLE; slot.image = VK_NULL_HANDLE; slot.memory = VK_NULL_HANDLE;
+        slot.initialized = slot.copied = false;
+    }
+}
+void VulkanRenderer::reap_retired(bool wait) {
+    for (auto it = retired_.begin(); it != retired_.end();) {
+        bool done = wait || it->chain != old_swapchain_;   // a chain still waiting for its successor stays
+        for (const auto& image : it->images) {
+            if (!done || !image.pending) continue;
+            const VkResult status = wait ? vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull) : vkGetFenceStatus(device, image.fence);
+            if (status == VK_NOT_READY || status == VK_TIMEOUT) done = false;
+            else if (status != VK_ERROR_DEVICE_LOST) vk_check(status, "retired presentation fence");
+        }
+        if (!done) { ++it; continue; }
+        for (auto& image : it->images) {
+            if (image.ready) vkDestroySemaphore(device, image.ready, nullptr);
+            if (image.fence) vkDestroyFence(device, image.fence, nullptr);
+        }
+        vkDestroySwapchainKHR(device, it->chain, nullptr);
+        it = retired_.erase(it);
+    }
+}
 void VulkanRenderer::retire_images() {
     if (!device) return;
     VkResult status = vkDeviceWaitIdle(device);
     if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) vk_check(status, "retire device work");
+    old_swapchain_ = VK_NULL_HANDLE;
     if (status == VK_SUCCESS) {
         collect();
+        reap_retired(true);
         for (const auto& image : images_)
             if (image.pending) vk_check(vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull), "presentation retirement fence");
     }
@@ -512,7 +552,7 @@ void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkIm
     vk_check(vkCreateImageView(device, &view, nullptr, &target_view), "attachment view");
 }
 void VulkanRenderer::rebuild() {
-    retire_images();
+    if (swapchain_) retire_for_resize(); else retire_images();
     VkSurfaceCapabilitiesKHR capabilities; vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &capabilities), "surface capabilities");
     VkImageUsageFlags swapchain_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if ((capabilities.supportedUsageFlags & swapchain_usage) != swapchain_usage) throw std::runtime_error("swapchain lacks transfer/color attachment support");
@@ -544,7 +584,9 @@ void VulkanRenderer::rebuild() {
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));
     create.presentMode = VK_PRESENT_MODE_FIFO_KHR; create.clipped = VK_TRUE;
+    create.oldSwapchain = old_swapchain_;
     vk_check(vkCreateSwapchainKHR(device, &create, nullptr, &swapchain_), "swapchain");
+    old_swapchain_ = VK_NULL_HANDLE;   // retired by the call above; reap_retired() frees it when its presentations are done
     vk_check(vkGetSwapchainImagesKHR(device, swapchain_, &count, nullptr), "swapchain image count");
     std::vector<VkImage> swapchain_images(count); vk_check(vkGetSwapchainImagesKHR(device, swapchain_, &count, swapchain_images.data()), "swapchain images");
     images_.resize(count);
@@ -591,9 +633,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     const auto& display=packet.display_source;
     if(packet.present && (!display[2] || !display[3] || display[0]>=640 || display[2]>640-display[0] || display[1]>=480 || display[3]>480-display[1])) throw std::invalid_argument("invalid native display source rectangle");
-    if (resized_) rebuild();
-    if (resized_ || !swapchain_) return false;
+    if (const auto now = std::chrono::steady_clock::now(); uc::rebuild_due(resized_, swapchain_ != VK_NULL_HANDLE, now, last_rebuild_)) {
+        last_rebuild_ = now; rebuild();        if (resized_) return false;
+    }
+    if (!swapchain_) return false;   // while a resize storm postpones the rebuild the old swapchain keeps presenting
     collect();
+    reap_retired(false);
     Slot& slot = slots_[next_slot_];
     VkResult fence_status = vkGetFenceStatus(device, slot.fence);
     if (fence_status == VK_NOT_READY) return false;
@@ -723,15 +768,17 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     if (packet.present) {
         VkResult acquired = vkAcquireNextImageKHR(device, swapchain_, 1000000ull, slot.acquired, VK_NULL_HANDLE, &image_index);
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) return false;
-        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) { resized_ = true; return false; }
-        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) vk_check(acquired, "acquire image");
-        suboptimal = acquired == VK_SUBOPTIMAL_KHR;
-        present_image = &images_.at(image_index);
-        if (present_image->pending) {
-            vk_check(vkWaitForFences(device, 1, &present_image->fence, VK_TRUE, 1000000000ull), "reuse presentation fence");
-            present_image->pending = false;
+        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;   // stale swapchain while the window is resized: the frame is rendered but not shown, the guest must not wait for the rebuild
+        else {
+            if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) vk_check(acquired, "acquire image");
+            suboptimal = acquired == VK_SUBOPTIMAL_KHR;
+            present_image = &images_.at(image_index);
+            if (present_image->pending) {
+                vk_check(vkWaitForFences(device, 1, &present_image->fence, VK_TRUE, 1000000000ull), "reuse presentation fence");
+                present_image->pending = false;
+            }
+            vk_check(vkResetFences(device, 1, &present_image->fence), "reset present fence");
         }
-        vk_check(vkResetFences(device, 1, &present_image->fence), "reset present fence");
     }
     vk_check(vkResetCommandBuffer(slot.command, 0), "reset command buffer");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -769,12 +816,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         uint32_t first_index = 0; int32_t first_vertex = 0;
         size_t texture_index=0;
         for (const auto& draw : packet.draws) {
-            auto draw_viewport=viewport;
+            const auto v=draw.state.viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
+            const auto area=uc::efb_viewport(v,efb_extent_.width,efb_extent_.height);
+            VkViewport draw_viewport{area.x,area.y,area.width,area.height,v[4],v[5]};
             auto draw_scissor=scissor;
-            if(draw.state.viewport) {
-                const auto& v=*draw.state.viewport;
-                draw_viewport={v[0]*efb_extent_.width/640.f,v[1]*efb_extent_.height/480.f,v[2]*efb_extent_.width/640.f,v[3]*efb_extent_.height/480.f,v[4],v[5]};
-            }
             if(draw.state.scissor) {
                 const auto& s=*draw.state.scissor;
                 const auto x=std::clamp<int64_t>(int64_t(s[0])*efb_extent_.width/640,0,efb_extent_.width);
@@ -825,8 +870,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         copy.srcOffsets[0]={int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480),0};
         copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)),1};
         copy.dstOffsets[1]={int32_t(extent_.width),int32_t(extent_.height),1};
-        vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_NEAREST);
-        if(!packet.prompts.empty()) {
+        if(packet.black_output) {
+            const VkClearColorValue black{}; const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+            vkCmdClearColorImage(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&black,1,&range);
+        } else vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_NEAREST);
+        if(!packet.prompts.empty() && !packet.black_output) {
             barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=slot.view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
@@ -856,7 +904,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             vkCmdEndRendering(slot.command);
             barrier(slot.command,efb_,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
         }
-    if(packet.present) {
+    if(present_image) {
         barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = blit.dstOffsets[1] = {int32_t(extent_.width), int32_t(extent_.height), 1};
@@ -867,13 +915,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}; wait.semaphore = slot.acquired; wait.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}; signal.semaphore = present_image ? present_image->ready : VK_NULL_HANDLE; signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command.commandBuffer = slot.command;
-    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = submit.signalSemaphoreInfoCount = packet.present ? 1 : 0; submit.commandBufferInfoCount = 1;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = submit.signalSemaphoreInfoCount = present_image ? 1 : 0; submit.commandBufferInfoCount = 1;
     submit.pWaitSemaphoreInfos = &wait; submit.pSignalSemaphoreInfos = &signal; submit.pCommandBufferInfos = &command;
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
     if(copy_target) copy_target->initialized=true;
     for (auto& texture : slot.textures) texture.initialized=true;
     slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; efb_initialized_=true; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();
-    if (!packet.present) return true;
+    if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; present.pNext = &present_fence; present.waitSemaphoreCount = 1; present.pWaitSemaphores = &present_image->ready;
     present.swapchainCount = 1; present.pSwapchains = &swapchain_; present.pImageIndices = &image_index;

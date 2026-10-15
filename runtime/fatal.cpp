@@ -51,7 +51,9 @@ static void terminate_handler() {
         std::fprintf(stderr, "terminate called without an exception\n");
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "terminate: uncaught C++ exception: %s\n", ex.what());
-        crash_report_write(std::string("uncaught C++ exception: ") + ex.what(), nullptr);
+        char reason[512];  // no heap allocation: this path also runs for bad_alloc
+        std::snprintf(reason, sizeof reason, "uncaught C++ exception: %s", ex.what());
+        crash_report_write(reason, nullptr);
     } catch (...) {
         crash_report_write("uncaught non-standard exception", nullptr);
         std::fprintf(stderr, "terminate: uncaught non-standard exception\n");
@@ -60,6 +62,7 @@ static void terminate_handler() {
     die(3);
 }
 void install_crash_handlers() {
+    crash_guard_thread();
     SetUnhandledExceptionFilter(crash_filter);
     std::set_terminate(terminate_handler);
 }
@@ -70,7 +73,9 @@ void fatal(const char* fmt, ...) {
     std::vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
     std::fprintf(stderr, "fatal: %s\n", message);
-    crash_report_write(std::string("fatal: ") + message, nullptr);
+    char reason[1100];
+    std::snprintf(reason, sizeof reason, "fatal: %s", message);
+    crash_report_write(reason, nullptr);
     trace_dump(stderr);
     die(3);
 }
