@@ -831,12 +831,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         last_rebuild_ = now; rebuild();        if (resized_) return false;
     }
     if (!swapchain_) return false;   // while a resize storm postpones the rebuild the old swapchain keeps presenting
-    collect();
     reap_retired(false);
     Slot& slot = slots_[next_slot_];
     VkResult fence_status = vkGetFenceStatus(device, slot.fence);
     if (fence_status == VK_NOT_READY) return false;
     vk_check(fence_status, "frame slot fence");
+    collect();   // after the check: a fence that finishes between an earlier collect() and the check would be reused unreported and its packet would never complete
     slot.copy_sources.clear();
     slot.mesh_refs.clear();   // the submission that used these meshes completed (fence checked above)
     if ((++renders_ & 255)==0) sweep_meshes(false);

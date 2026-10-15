@@ -41,6 +41,8 @@ public:
     bool wait_ready(std::chrono::nanoseconds timeout);
     bool complete(uint64_t serial);
     void cancel();
+    struct Depth { size_t queued, outstanding, frames_in_flight; };
+    Depth depth() { std::lock_guard lock(mutex_); return {queued_.size(), outstanding_.size(), frames_in_flight_.size()}; }
 private:
     std::mutex mutex_;
     std::condition_variable space_;

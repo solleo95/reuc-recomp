@@ -597,6 +597,7 @@ static int real_main(int argc, char** argv) {
             }
             next_watch = now + std::chrono::seconds(1);
             uint64_t retraces = uc::vi_stats().retraces;
+                { const auto depth=packets.depth(); std::fprintf(stderr,"[packets] queued %zu outstanding %zu presenting in flight %zu\n",depth.queued,depth.outstanding,depth.frames_in_flight); }   // outstanding must stay near the guest lead (tens), never creep to kMaxOutstandingPackets
             if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
             else if (retraces != last_retraces) { last_retraces = retraces; stalled = 0; }
             else if (++stalled >= 10) { result = 4; close = true; }
