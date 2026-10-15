@@ -1,6 +1,7 @@
 #include "vulkan_renderer.h"
 #include "render_scale.h"
 #include "rebuild_gate.h"
+#include "buffer_memory.h"
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
 #include <bit>
@@ -176,12 +177,11 @@ VulkanRenderer::Buffer VulkanRenderer::make_buffer(VkDeviceSize size, VkBufferUs
     try {
         VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device, buffer.buffer, &requirements);
         VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize = requirements.size;
-        const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        try {   // long-lived data in video memory the CPU can still write (resizable BAR) when the device has such a type
-            if (!prefer_device_local) throw std::runtime_error("host memory requested");
-            allocate.memoryTypeIndex = memory_type(requirements.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        } catch (const std::runtime_error&) { allocate.memoryTypeIndex = memory_type(requirements.memoryTypeBits, host); }
-        vk_check(vkAllocateMemory(device, &allocate, nullptr, &buffer.memory), "buffer memory");
+        // A small BAR heap can fill up even when ordinary host memory is still available.
+        vk_check(allocate_host_buffer(memory_, requirements.memoryTypeBits, prefer_device_local, [&](uint32_t type) {
+            allocate.memoryTypeIndex=type;
+            return vkAllocateMemory(device, &allocate, nullptr, &buffer.memory);
+        }), "buffer memory");
         vk_check(vkBindBufferMemory(device, buffer.buffer, buffer.memory, 0), "bind buffer memory");
         vk_check(vkMapMemory(device, buffer.memory, 0, size, 0, &buffer.mapped), "map buffer memory");
     } catch (...) { destroy_buffer(buffer); throw; }
@@ -1042,6 +1042,7 @@ void VulkanRenderer::shutdown() {
     owner();
     if (device) {
         retire_images();
+        sweep_meshes(true);
         prompt_overlay_.shutdown();
         for(auto& [source,texture]:copy_textures_) destroy_texture(texture);
         copy_textures_.clear();

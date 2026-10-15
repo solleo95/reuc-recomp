@@ -1,5 +1,6 @@
 #include "check.h"
 #include "vulkan_renderer.h"
+#include "rebuild_gate.h"
 #include <SDL3/SDL_vulkan.h>
 #include <chrono>
 #include <algorithm>
@@ -62,9 +63,14 @@ int main(int argc, char** argv) {
         const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
         if(!hwnd)throw std::runtime_error("smoke window has no native handle");
         ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+        auto resize_window=[&](int width,int height) {
+            CHECK(SDL_SetWindowSize(window,width,height));
+            CHECK(SDL_SyncWindow(window));
+            // The renderer keeps presenting the old extent during its resize debounce.
+            std::this_thread::sleep_for(uc::kRebuildInterval);
+        };
         std::fprintf(stderr,"GPU smoke: initialize renderer\n");
         uc::VulkanRenderer renderer;
-        renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
         gx::FramePacket packet;
         packet.draws.emplace_back();
         auto& draw = packet.draws.back(); draw.primitive = 0x90;
@@ -78,6 +84,19 @@ int main(int argc, char** argv) {
         gx::set_position_matrix(draw.transforms.edit(),3,{{{0.2f,0,0,-0.8f},{0,0.2f,0,0},{0,0,-0.4f,0}}});
         draw.transforms.edit().current=9; // per-vertex indices override the unloaded current matrix
         draw.transforms.edit().projection=gx::make_projection({1,0,-1,0,-1.f/9,-10.f/9},0);
+        {
+            uc::VulkanRenderer mesh_renderer;
+            mesh_renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
+            auto mesh_packet=packet; mesh_packet.serial=1; mesh_packet.present=false;
+            auto& mesh_draw=mesh_packet.draws[0];
+            mesh_draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{mesh_draw.vertices,mesh_draw.indices});
+            mesh_draw.vertices.clear(); mesh_draw.indices.clear();
+            CHECK(mesh_renderer.render(mesh_packet));
+            // Shutdown must retire in-flight mesh storage even while its CPU owner is alive.
+            mesh_renderer.shutdown();
+            CHECK(mesh_renderer.validation_errors()==0);
+        }
+        renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
         auto render = [&](uint64_t serial) {
             packet.serial = serial;
             auto end = std::chrono::steady_clock::now() + 3s;
@@ -105,7 +124,7 @@ int main(int argc, char** argv) {
             return pixels;
         };
         render(1);
-        CHECK(SDL_SetWindowSize(window, 640, 360));
+        resize_window(640,360);
         renderer.resize(640, 360);
         auto pixels = render(2);
         CHECK(pixels.width == 640 && pixels.height == 360);
@@ -122,7 +141,7 @@ int main(int argc, char** argv) {
         uc::save_png(pixels, executable_dir() / "renderer-smoke.png");
         draw.transforms.edit().position_rows[2]=draw.transforms.edit().position_rows[5]={0,0,0,-0.5f};
         draw.transforms.edit().projection=gx::make_projection({0.5f,0,-0.5f,0,1,0},1);
-        // Both GPU slots stay active; consumer completion order follows native submission serials.
+        // GPU slots stay active; consumer completion order follows native submission serials.
         uint64_t expected = 4;
         const auto descriptor_creations=renderer.descriptor_pool_creations();
         for (uint64_t serial = 4; serial < 20; serial += 2) {
@@ -139,7 +158,7 @@ int main(int argc, char** argv) {
             }
         }
         CHECK(renderer.presentation_count()==19);
-        CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+2);
+        CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+6); // one pool per frame slot
         auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr) {
             auto& target=selected ? *selected : renderer;
             auto until=std::chrono::steady_clock::now()+3s;
@@ -158,7 +177,7 @@ int main(int argc, char** argv) {
         CHECK(unavailable);
         work.serial=21; work.draws.clear(); submit(work);
         CHECK(renderer.presentation_count()==19);
-        CHECK(SDL_SetWindowSize(window,960,540));
+        resize_window(960,540);
         renderer.resize(960,540);
         work.serial=22; work.present=true; submit(work);
         auto retained=renderer.capture(22);
@@ -182,21 +201,24 @@ int main(int argc, char** argv) {
         submit(work);
         auto sampled=renderer.capture(26);
         CHECK(sampled.rgba[center]==32 && sampled.rgba[center+1]==64 && sampled.rgba[center+2]==96);
-        // A replacement image must reach both alternating GPU slots.
+        for(uint64_t serial=27;serial<=31;++serial) { work.serial=serial; submit(work); }
+        // Prime all six slots, then restore an old version after a full slot cycle.
         const auto texture_creations=renderer.texture_creations();
         auto changed=std::make_shared<gx::TexturePixels>(*texture);
         changed->levels[0].rgba[12]=224;
-        work.draws[0].texture=changed; work.serial=27; submit(work);
-        sampled=renderer.capture(27); CHECK(sampled.rgba[center]==224);
+        work.draws[0].texture=changed; work.serial=32; submit(work);
+        sampled=renderer.capture(32); CHECK(sampled.rgba[center]==224);
         const auto after_changed=renderer.texture_creations(); CHECK(after_changed>=texture_creations+1);
-        work.draws[0].texture=texture; work.serial=28; submit(work);
-        sampled=renderer.capture(28); CHECK(sampled.rgba[center]==32);
-        CHECK(renderer.texture_creations()==after_changed); // unchanged slot26 versions are reused in slot28
+        work.draws[0].texture=texture;
+        for(uint64_t serial=33;serial<=37;++serial) { work.serial=serial; submit(work); }
+        work.serial=38; submit(work);
+        sampled=renderer.capture(38); CHECK(sampled.rgba[center]==32);
+        CHECK(renderer.texture_creations()==after_changed); // the original version survives replacement in every slot
         for (auto& vertex : work.draws[0].vertices) vertex.texcoord[0]={0.25f,0.25f};
-        work.serial=29; submit(work);
-        sampled=renderer.capture(29); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
+        work.serial=39; submit(work);
+        sampled=renderer.capture(39); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
         auto invalid=std::make_shared<gx::TexturePixels>(*texture); invalid->levels[0].rgba.pop_back();
-        work.draws[0].texture=invalid; work.serial=30;
+        work.draws[0].texture=invalid; work.serial=40;
         bool invalid_texture=false;
         try { renderer.render(work); } catch (const std::invalid_argument&) { invalid_texture=true; }
         CHECK(invalid_texture);
@@ -204,61 +226,61 @@ int main(int argc, char** argv) {
         work.draws[0].texture=invalid; invalid_texture=false;
         try { renderer.render(work); } catch (const std::invalid_argument&) { invalid_texture=true; }
         CHECK(invalid_texture);
-        work=packet; work.serial=30; work.draws[0].texture.reset();
+        work=packet; work.serial=40; work.draws[0].texture.reset();
         work.draws[0].blend={1,4,5,3,true,true};
         for (auto& vertex:work.draws[0].vertices) vertex.color[0]={255,0,0,0};
-        submit(work); sampled=renderer.capture(30);
+        submit(work); sampled=renderer.capture(40);
         CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==64);
-        work.serial=31;
+        work.serial=41;
         for (auto& vertex:work.draws[0].vertices) vertex.color[0]={255,0,0,128};
-        submit(work); sampled=renderer.capture(31);
+        submit(work); sampled=renderer.capture(41);
         CHECK(sampled.rgba[center]>=134 && sampled.rgba[center]<=137 && sampled.rgba[center+1]>=15 && sampled.rgba[center+1]<=17);
-        work=packet; work.serial=32;
+        work=packet; work.serial=42;
         auto red=std::make_shared<gx::TexturePixels>(); red->levels.push_back({1,1,{255,0,0,255}});
         auto mask=std::make_shared<gx::TexturePixels>(); mask->levels.push_back({1,1,{0,255,0,64}});
         work.draws[0].texture=red; work.draws[0].texture_maps[0]=mask;
         auto& material=work.draws[0].material; material.stages=2; material.swaps={0xE4,0xE4,0xE4,0xE4};
         material.stage[0]={0x8FFF8,0x8FFC0,0x3C0,0,0};
         material.stage[1]={0x8FFF0,0x8FFC0,0x3C1,0,0};
-        submit(work); sampled=renderer.capture(32);
+        submit(work); sampled=renderer.capture(42);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0 && sampled.rgba[center+3]==64);
-        work.serial=33; submit(work); // populate both GPU slots
+        for(uint64_t serial=43;serial<=47;++serial) { work.serial=serial; submit(work); } // populate all six slots
         const auto before_copy_only=renderer.texture_creations();
         auto copy_only=work;
         // A nonempty postprocessing/UI batch must also retain the scene's immutable textures.
         copy_only.draws[0].texture.reset(); copy_only.draws[0].texture_maps={}; copy_only.draws[0].material.stages=0;
-        copy_only.serial=34; submit(copy_only);
-        copy_only.serial=35; submit(copy_only);
-        work.serial=36; submit(work);
+        copy_only.serial=48; submit(copy_only);
+        copy_only.serial=49; submit(copy_only);
+        work.serial=50; submit(work);
         CHECK(renderer.texture_creations()==before_copy_only);
-        sampled=renderer.capture(36);
+        sampled=renderer.capture(50);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+3]==64);
-        work.serial=37; work.draws[0].uniforms.edit().pixel[0]=0; submit(work);
-        sampled=renderer.capture(37); CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32);
-        work.serial=38; work.draws[0].uniforms.edit().pixel={0x3F0000,0,256|123,2}; submit(work);
-        sampled=renderer.capture(38); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+3]==123);
+        work.serial=51; work.draws[0].uniforms.edit().pixel[0]=0; submit(work);
+        sampled=renderer.capture(51); CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32);
+        work.serial=52; work.draws[0].uniforms.edit().pixel={0x3F0000,0,256|123,2}; submit(work);
+        sampled=renderer.capture(52); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+3]==123);
         work.draws[0].uniforms.edit().pixel={0x3F0000,31,0,2};
         auto hidden=work.draws[0]; hidden.material.stages=0; hidden.texture.reset(); hidden.uniforms.edit().pixel[1]=17;
         for(auto& vertex:hidden.vertices) vertex.color[0]={0,255,0,255};
-        work.draws.push_back(hidden); work.serial=39; submit(work);
-        sampled=renderer.capture(39); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+3]==64);
-        work.draws.resize(1); work.serial=40;
+        work.draws.push_back(hidden); work.serial=53; submit(work);
+        sampled=renderer.capture(53); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+3]==64);
+        work.draws.resize(1); work.serial=54;
         work.draws[0].blend={1,4,5,3,true,true}; work.draws[0].uniforms.edit().pixel={0x3F0000,0,256|123,2};
-        submit(work); sampled=renderer.capture(40);
+        submit(work); sampled=renderer.capture(54);
         CHECK(sampled.rgba[center]>=75 && sampled.rgba[center]<=77 && sampled.rgba[center+1]>=23 && sampled.rgba[center+1]<=25 && sampled.rgba[center+3]==123);
-        work=packet; work.serial=41;
+        work=packet; work.serial=55;
         auto mips=std::make_shared<gx::TexturePixels>();
         mips->levels.push_back({2,2,{255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255}});
         mips->levels.push_back({1,1,{17,33,65,255}}); work.draws[0].texture=mips;
         for(auto& vertex:work.draws[0].vertices) vertex.color[0]={255,255,255,255};
         work.draws[0].vertices[0].texcoord[0]={0,0}; work.draws[0].vertices[1].texcoord[0]={512,0}; work.draws[0].vertices[2].texcoord[0]={0,512};
         work.draws[0].texture_wrap[0]=0x20; // Explicit nearest mip selection.
-        submit(work); sampled=renderer.capture(41);
+        submit(work); sampled=renderer.capture(55);
         CHECK(sampled.rgba[center]==17 && sampled.rgba[center+1]==33 && sampled.rgba[center+2]==65);
         auto old_copy=std::make_shared<gx::TexturePixels>(); old_copy->gpu_only=true;
         old_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
         auto new_copy=std::make_shared<gx::TexturePixels>(*old_copy);
-        work=packet; work.serial=42; work.present=false; work.clear_color={0,255,0,255};
+        work=packet; work.serial=56; work.present=false; work.clear_color={0,255,0,255};
         auto quad=work.draws[0]; quad.material.stages=0; quad.primitive=0x90;
         quad.transforms=gx::Transforms{}; quad.state.edit().descriptors[0]=gx::Mode::none;
         quad.vertices.resize(4); quad.indices={0,1,2,0,2,3};
@@ -267,262 +289,269 @@ int main(int argc, char** argv) {
         quad.vertices[2].position={1,1,0}; quad.vertices[3].position={-1,1,0};
         work.draws[0]=quad;
         work.texture_copy=gx::TextureCopy{{0,0,640,480},old_copy}; submit(work);
-        work.serial=43; work.draws.clear(); work.clear_color={0,0,255,255};
+        work.serial=57; work.draws.clear(); work.clear_color={0,0,255,255};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},new_copy}; submit(work);
-        work=packet; work.serial=44; work.draws[0].texture=old_copy;
+        work=packet; work.serial=58; work.draws[0].texture=old_copy;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.5f,0.5f}; }
         work.draws[0].vertices[0].texcoord[0]={0,0}; work.draws[0].vertices[1].texcoord[0]={512,0}; work.draws[0].vertices[2].texcoord[0]={0,512};
-        submit(work); sampled=renderer.capture(44);
+        submit(work); sampled=renderer.capture(58);
         std::fprintf(stderr,"EFB old-copy pixel %u %u %u %u\n",sampled.rgba[center],sampled.rgba[center+1],sampled.rgba[center+2],sampled.rgba[center+3]);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
-        work.serial=45; work.draws[0].texture=new_copy; submit(work); sampled=renderer.capture(45);
+        work.serial=59; work.draws[0].texture=new_copy; submit(work); sampled=renderer.capture(59);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==255);
-        CHECK(SDL_SetWindowSize(window,1024,576)); renderer.resize(1024,576);
-        work.serial=46; work.draws[0].texture=old_copy; submit(work); sampled=renderer.capture(46);
+        resize_window(1024,576); renderer.resize(1024,576);
+        work.serial=60; work.draws[0].texture=old_copy; submit(work); sampled=renderer.capture(60);
         center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
         auto ephemeral=std::make_shared<gx::TexturePixels>(); ephemeral->levels={{1,1,{17,33,65,255}}};
         std::weak_ptr<const gx::TexturePixels> released=ephemeral;
-        work.serial=47; work.draws[0].texture=ephemeral; submit(work);
-        work.serial=48; submit(work); // Both slots own this version.
+        work.serial=61; work.draws[0].texture=ephemeral; submit(work);
+        work.serial=62; submit(work); // Both slots own this version.
         ephemeral.reset(); work.draws[0].texture.reset();
-        work.serial=49; submit(work); CHECK(!released.expired());
-        work.serial=50; submit(work); CHECK(released.expired());
-        work=packet; work.serial=51;
+        work.serial=63; submit(work); CHECK(!released.expired());
+        for(uint64_t serial=64;serial<=68;++serial) { work.serial=serial; submit(work); }
+        CHECK(released.expired());
+        work=packet; work.serial=69;
         work.draws[0]=quad; // A full-screen red quad, limited by native viewport and scissor.
         work.draws[0].state.edit().viewport=std::array<float,6>{0,0,320,480,0,1};
         work.draws[0].state.edit().scissor=std::array<int32_t,4>{0,0,160,480};
-        submit(work); sampled=renderer.capture(51);
+        submit(work); sampled=renderer.capture(69);
         const auto inside=(size_t(sampled.height/2)*sampled.width+sampled.width/8)*4;
         const auto clipped=(size_t(sampled.height/2)*sampled.width+sampled.width*3/8)*4;
         CHECK(sampled.rgba[inside]==255 && sampled.rgba[inside+1]==0);
         CHECK(sampled.rgba[clipped]==16 && sampled.rgba[clipped+1]==32);
         bool rejected = false;
-        work=packet; work.serial=52; work.draws[0]=quad;
+        work=packet; work.serial=70; work.draws[0]=quad;
         work.draws[0].state.edit().viewport=std::array<float,6>{0,0,640,360,0,1};
         work.display_source=std::array<uint32_t,4>{0,0,640,360};
-        submit(work); sampled=renderer.capture(52);
+        submit(work); sampled=renderer.capture(70);
         const auto bottom=(size_t(sampled.height*7/8)*sampled.width+sampled.width/2)*4;
         CHECK(sampled.rgba[bottom]==255 && sampled.rgba[bottom+1]==0);
         auto wrapped=std::make_shared<gx::TexturePixels>(); wrapped->levels={{2,1,{255,0,0,255,0,0,255,255}}};
-        work=packet; work.serial=53; work.draws[0]=quad; work.draws[0].texture=wrapped;
+        work=packet; work.serial=71; work.draws[0]=quad; work.draws[0].texture=wrapped;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={1.1f,0.5f}; }
-        submit(work); sampled=renderer.capture(53); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
-        work.serial=54; work.draws[0].texture_wrap[0]=1;
-        submit(work); sampled=renderer.capture(54); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0);
-        work.serial=55; work.draws[0].texture_wrap[0]=2;
-        submit(work); sampled=renderer.capture(55); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
-        work.serial=56; work.draws[0].texture_maps[0]=wrapped;
+        submit(work); sampled=renderer.capture(71); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        work.serial=72; work.draws[0].texture_wrap[0]=1;
+        submit(work); sampled=renderer.capture(72); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0);
+        work.serial=73; work.draws[0].texture_wrap[0]=2;
+        submit(work); sampled=renderer.capture(73); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        work.serial=74; work.draws[0].texture_maps[0]=wrapped;
         work.draws[0].material.stages=1; work.draws[0].material.swaps={0xE4,0xE4,0xE4,0xE4};
         work.draws[0].material.stage[0]={0x8FFF8,0x8FF80,0x41,0,0};
         work.draws[0].texture_wrap[0]=0; work.draws[0].texture_wrap[1]=1;
-        submit(work); sampled=renderer.capture(56); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0);
-        work.serial=57; work.draws[0].texture_wrap[1]=0;
-        submit(work); sampled=renderer.capture(57); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        submit(work); sampled=renderer.capture(74); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0);
+        work.serial=75; work.draws[0].texture_wrap[1]=0;
+        submit(work); sampled=renderer.capture(75); CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
         auto partial_copy=std::make_shared<gx::TexturePixels>(); partial_copy->gpu_only=true; partial_copy->levels={{4,4,{}}};
-        work=packet; work.serial=58; work.present=false; work.draws[0]=quad; work.clear_color={0,255,0,255};
+        work=packet; work.serial=76; work.present=false; work.draws[0]=quad; work.clear_color={0,255,0,255};
         work.texture_copy=gx::TextureCopy{{0,0,320,480},partial_copy}; submit(work);
-        auto intermediate=renderer.capture(58,true);
+        auto intermediate=renderer.capture(76,true);
         const auto efb_left=(size_t(intermediate.height/2)*intermediate.width+intermediate.width/4)*4;
         const auto efb_right=(size_t(intermediate.height/2)*intermediate.width+intermediate.width*3/4)*4;
         CHECK(intermediate.rgba[efb_left]==0 && intermediate.rgba[efb_left+1]==255);
         CHECK(intermediate.rgba[efb_right]==255 && intermediate.rgba[efb_right+1]==0);
-        work=packet; work.serial=59; work.draws.clear(); work.clear_after_copy=false;
-        submit(work); sampled=renderer.capture(59);
+        work=packet; work.serial=77; work.draws.clear(); work.clear_after_copy=false;
+        submit(work); sampled=renderer.capture(77);
         bool stale_efb=false;
-        try { renderer.capture(58,true); } catch(const std::invalid_argument&) { stale_efb=true; }
+        try { renderer.capture(76,true); } catch(const std::invalid_argument&) { stale_efb=true; }
         CHECK(stale_efb);
         const auto left=(size_t(sampled.height/2)*sampled.width+sampled.width/4)*4;
         const auto right=(size_t(sampled.height/2)*sampled.width+sampled.width*3/4)*4;
         CHECK(sampled.rgba[left]==0 && sampled.rgba[left+1]==255);
         CHECK(sampled.rgba[right]==255 && sampled.rgba[right+1]==0);
-        work=packet; work.serial=60; work.draws[0]=quad; work.draws[0].texture=wrapped;
+        work=packet; work.serial=78; work.draws[0]=quad; work.draws[0].texture=wrapped;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.1f,0.5f}; }
         work.draws[0].uniforms.edit().tex_rows[0]={1,0,0.75f,0}; // AB11 uses both homogeneous components
-        submit(work); sampled=renderer.capture(60);
+        submit(work); sampled=renderer.capture(78);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
-        work=packet; work.serial=61; work.draws[0]=quad;
+        work=packet; work.serial=79; work.draws[0]=quad;
         work.draws[0].uniforms.edit().channels={2,1,0,1};
         work.draws[0].uniforms.edit().materials[0]={1,1,1,1};
         work.draws[0].uniforms.edit().ambient[0]={9/255.f,9/255.f,9/255.f,1};
-        submit(work); sampled=renderer.capture(61);
+        submit(work); sampled=renderer.capture(79);
         std::fprintf(stderr,"native ambient pixel %u %u %u %u\n",sampled.rgba[center],sampled.rgba[center+1],sampled.rgba[center+2],sampled.rgba[center+3]);
         CHECK(sampled.rgba[center]==8 && sampled.rgba[center+1]==8 && sampled.rgba[center+2]==8); // 255*9 >> 8
-        work.serial=62; work.draws[0].uniforms.edit().channels[0]=6;
+        work.serial=80; work.draws[0].uniforms.edit().channels[0]=6;
         work.draws[0].uniforms.edit().lights[0].color={128,128,128,255};
         work.draws[0].uniforms.edit().lights[0].position={0,0,1,0};
-        submit(work); sampled=renderer.capture(62);
+        submit(work); sampled=renderer.capture(80);
         CHECK(sampled.rgba[center]==137 && sampled.rgba[center+1]==137);
-        work=packet; work.serial=63; work.draws[0]=quad; work.draws[0].state.edit().cull=3;
-        submit(work); sampled=renderer.capture(63);
+        work=packet; work.serial=81; work.draws[0]=quad; work.draws[0].state.edit().cull=3;
+        submit(work); sampled=renderer.capture(81);
         CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==64);
-        work=packet; work.serial=64; work.draws[0]=quad; work.draws[0].uniforms.edit().pixel[3]=0;
-        submit(work); sampled=renderer.capture(64);
+        work=packet; work.serial=82; work.draws[0]=quad; work.draws[0].uniforms.edit().pixel[3]=0;
+        submit(work); sampled=renderer.capture(82);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
-        work=packet; work.serial=65; work.draws[0]=quad; work.draws[0].texture=wrapped;
+        work=packet; work.serial=83; work.draws[0]=quad; work.draws[0].texture=wrapped;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.5f,0.5f}; }
         work.draws[0].texture_wrap[0]=0x10; // Linear magnification blends the two texels.
-        submit(work); sampled=renderer.capture(65);
+        submit(work); sampled=renderer.capture(83);
         CHECK(sampled.rgba[center]>=127 && sampled.rgba[center]<=128 && sampled.rgba[center+2]>=127 && sampled.rgba[center+2]<=128);
-        work=packet; work.serial=66; work.draws[0]=quad; work.draws[0].texture=mips;
+        work=packet; work.serial=84; work.draws[0]=quad; work.draws[0].texture=mips;
         for(auto& vertex:work.draws[0].vertices) vertex.color[0]={255,255,255,255};
         work.draws[0].vertices[0].texcoord[0]={0,0}; work.draws[0].vertices[1].texcoord[0]={512,0};
         work.draws[0].vertices[2].texcoord[0]={512,512}; work.draws[0].vertices[3].texcoord[0]={0,512};
-        submit(work); sampled=renderer.capture(66);
+        submit(work); sampled=renderer.capture(84);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0); // Mips exist but this sampler disables them.
         const auto pools_before_growth=renderer.descriptor_pool_creations();
         work=packet; work.draws.assign(8,quad);
-        work.serial=67; submit(work); work.serial=68; submit(work);
-        CHECK(renderer.descriptor_pool_creations()==pools_before_growth+2);
+        for(uint64_t serial=85;serial<=90;++serial) { work.serial=serial; submit(work); }
+        CHECK(renderer.descriptor_pool_creations()==pools_before_growth+6);
         const auto pools_after_growth=renderer.descriptor_pool_creations();
-        work.draws.resize(1); work.serial=69; submit(work);
-        work.draws.clear(); work.serial=70; submit(work);
-        work.draws.assign(8,quad); work.serial=71; submit(work);
+        work.draws.resize(1); work.serial=91; submit(work);
+        work.draws.clear(); work.serial=92; submit(work);
+        work.draws.assign(8,quad); work.serial=93; submit(work);
         CHECK(renderer.descriptor_pool_creations()==pools_after_growth);
-        sampled=renderer.capture(71); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
+        sampled=renderer.capture(93); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
         uint64_t warmed_copy_allocations=0;
-        for(uint64_t serial=72;serial<84;++serial) {
+        for(uint64_t serial=94;serial<106;++serial) {
             auto version=std::make_shared<gx::TexturePixels>(); version->gpu_only=true;
             version->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
             work=packet; work.serial=serial; work.present=false; work.clear_after_copy=false; work.draws[0]=quad;
             for(auto& vertex:work.draws[0].vertices) vertex.color[0]=serial&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
             work.texture_copy=gx::TextureCopy{{0,0,640,480},version}; submit(work);
             work.texture_copy.reset(); version.reset();
-            if(serial==75) warmed_copy_allocations=renderer.texture_creations();
-            if(serial>75) CHECK(renderer.texture_creations()==warmed_copy_allocations);
+            if(serial==101) warmed_copy_allocations=renderer.texture_creations();
+            if(serial>101) CHECK(renderer.texture_creations()==warmed_copy_allocations);
         }
-        work=packet; work.serial=84; work.draws[0]=quad; work.draws[0].texture=old_copy;
+        work=packet; work.serial=106; work.draws[0]=quad; work.draws[0].texture=old_copy;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
-        submit(work); sampled=renderer.capture(84);
+        submit(work); sampled=renderer.capture(106);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0); // Retained version survived allocation recycling.
         auto broken_copy=std::make_shared<gx::TexturePixels>(); broken_copy->gpu_only=true; broken_copy->levels={{4,4,{}},{3,2,{}},{1,1,{}}};
-        work=packet; work.serial=85; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},broken_copy};
+        work=packet; work.serial=107; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},broken_copy};
         bool malformed_copy_rejected=false;
         try { renderer.render(work); } catch(const std::invalid_argument&) { malformed_copy_rejected=true; }
         CHECK(malformed_copy_rejected);
         renderer.set_render_scale(1);
-        work=packet; work.serial=85; work.clear_after_copy=false; work.draws.assign(8,quad);
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        work=packet; work.serial=107; work.clear_after_copy=false; work.draws.assign(8,quad);
         for(size_t i=0;i<work.draws.size();++i) {
             work.draws[i].state.edit().scissor=std::array<int32_t,4>{int32_t(i*80),0,80,480};
             for(auto& vertex:work.draws[i].vertices) vertex.color[0]=i&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
         }
         submit(work);
-        auto high_resolution=renderer.capture(85,true);
+        auto high_resolution=renderer.capture(107,true);
         CHECK(high_resolution.width==1280 && high_resolution.height==960);
         auto scaled_copy=std::make_shared<gx::TexturePixels>(); scaled_copy->gpu_only=true; scaled_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
-        work.serial=86; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},scaled_copy}; submit(work);
+        work.serial=108; work.present=false; work.texture_copy=gx::TextureCopy{{0,0,640,480},scaled_copy}; submit(work);
         renderer.set_render_scale(3);
-        work=packet; work.serial=87; work.clear_after_copy=false; work.draws[0]=quad; work.draws[0].texture=scaled_copy;
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        work=packet; work.serial=109; work.clear_after_copy=false; work.draws[0]=quad; work.draws[0].texture=scaled_copy;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
         work.draws[0].vertices[0].texcoord[0][0]=work.draws[0].vertices[3].texcoord[0][0]=0;
         work.draws[0].vertices[1].texcoord[0][0]=work.draws[0].vertices[2].texcoord[0][0]=1;
-        submit(work); high_resolution=renderer.capture(87,true);
+        submit(work); high_resolution=renderer.capture(109,true);
         CHECK(high_resolution.width==3840 && high_resolution.height==2880);
         for(size_t i=0;i<8;++i) {
             const size_t texel=(size_t(high_resolution.height/2)*high_resolution.width+(2*i+1)*high_resolution.width/16)*4;
             CHECK(high_resolution.rgba[texel]==(i&1 ? 0 : 255) && high_resolution.rgba[texel+1]==(i&1 ? 255 : 0));
         } // Eight physical texels survive a logical four-texel copy and scale change.
         renderer.set_render_scale(1.5);
-        work=packet; work.serial=88; work.clear_after_copy=false; work.draws[0]=quad; submit(work);
-        high_resolution=renderer.capture(88,true);
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        work=packet; work.serial=110; work.clear_after_copy=false; work.draws[0]=quad; submit(work);
+        high_resolution=renderer.capture(110,true);
         CHECK(high_resolution.width==1920 && high_resolution.height==1440);
         renderer.set_render_scale(6);
-        work.serial=89; submit(work); high_resolution=renderer.capture(89,true);
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        work.serial=111; submit(work); high_resolution=renderer.capture(111,true);
         CHECK(high_resolution.width==7680 && high_resolution.height==5760);
-        CHECK(SDL_SetWindowSize(window,1280,720)); renderer.resize(1280,720);
-        work.serial=90; submit(work); high_resolution=renderer.capture(90,true);
+        resize_window(1280,720); renderer.resize(1280,720);
+        work.serial=112; submit(work); high_resolution=renderer.capture(112,true);
         CHECK(high_resolution.width==7680 && high_resolution.height==5760); // Manual internal resolution survives output resize.
         renderer.set_render_scale(1.25);
-        work.serial=91; work.draws[0].state.edit().viewport=std::array<float,6>{0,0,640,360,0,1}; work.display_source={0,0,640,360};
-        submit(work); sampled=renderer.capture(91);
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        work.serial=113; work.draws[0].state.edit().viewport=std::array<float,6>{0,0,640,360,0,1}; work.display_source={0,0,640,360};
+        submit(work); sampled=renderer.capture(113);
         CHECK(sampled.width==1280 && sampled.height==720);
         CHECK(sampled.rgba[(size_t(sampled.height-1)*sampled.width+sampled.width/2)*4]==255);
-        high_resolution=renderer.capture(91,true);
+        high_resolution=renderer.capture(113,true);
         CHECK(high_resolution.width==1600 && high_resolution.height==1200);
         renderer.set_render_scale(.5);
+        std::this_thread::sleep_for(uc::kRebuildInterval);
         auto alpha_copy=std::make_shared<gx::TexturePixels>(); alpha_copy->gpu_only=true;
         alpha_copy->channels=gx::TextureChannels::alpha_intensity; alpha_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
-        work=packet; work.serial=92; work.present=false; work.draws[0]=quad;
+        work=packet; work.serial=114; work.present=false; work.draws[0]=quad;
         work.draws[0].uniforms.edit().pixel[2]=256|77;
         for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,255};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},alpha_copy}; submit(work);
-        work=packet; work.serial=93; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material;
+        work=packet; work.serial=115; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material;
         work.draws[0].texture=alpha_copy;
         for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
-        submit(work); sampled=renderer.capture(93);
+        submit(work); sampled=renderer.capture(115);
         center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
         CHECK(sampled.rgba[center]==77 && sampled.rgba[center+1]==77 && sampled.rgba[center+2]==77 && sampled.rgba[center+3]==77);
         // Dropping an alpha-only version must never recycle its swizzled view as RGBA.
-        alpha_copy.reset(); work.draws[0].texture.reset(); work.serial=94; submit(work);
+        alpha_copy.reset(); work.draws[0].texture.reset(); work.serial=116; submit(work);
         auto rgba_copy=std::make_shared<gx::TexturePixels>(); rgba_copy->gpu_only=true; rgba_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
-        work=packet; work.serial=95; work.present=false; work.draws[0]=quad;
+        work=packet; work.serial=117; work.present=false; work.draws[0]=quad;
         for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,255};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},rgba_copy}; submit(work);
-        work=packet; work.serial=96; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgba_copy;
+        work=packet; work.serial=118; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgba_copy;
         for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
-        submit(work); sampled=renderer.capture(96);
+        submit(work); sampled=renderer.capture(118);
         CHECK(sampled.rgba[center]==17 && sampled.rgba[center+1]==33 && sampled.rgba[center+2]==65);
-        work=packet; work.serial=97; work.draws[0]=quad; work.clear_color={0,0,0,255};
+        work=packet; work.serial=119; work.draws[0]=quad; work.clear_color={0,0,0,255};
         auto& line=work.draws[0]; line.primitive=0xA8;
         line.vertices={quad.vertices[0],quad.vertices[2]}; line.indices={0,1};
         for(auto& vertex:line.vertices)vertex.color[0]={255,0,0,255};
-        submit(work); sampled=renderer.capture(97);
+        submit(work); sampled=renderer.capture(119);
         size_t line_pixels=0;
         for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==255 && sampled.rgba[i+1]==0)++line_pixels;
         CHECK(line_pixels>100 && line_pixels<5000);
-        work.serial=98; line.primitive=0xB0; submit(work); sampled=renderer.capture(98);
+        work.serial=120; line.primitive=0xB0; submit(work); sampled=renderer.capture(120);
         size_t strip_pixels=0;
         for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==255 && sampled.rgba[i+1]==0)++strip_pixels;
         CHECK(strip_pixels==line_pixels);
-        work.serial=99; line.indices.push_back(0); bool odd_line_rejected=false;
+        work.serial=121; line.indices.push_back(0); bool odd_line_rejected=false;
         try {renderer.render(work);}catch(const std::invalid_argument&){odd_line_rejected=true;}
         CHECK(odd_line_rejected);
-        work=packet; work.serial=99; work.draws[0]=quad;
-        submit(work); sampled=renderer.capture(99);
+        work=packet; work.serial=121; work.draws[0]=quad;
+        submit(work); sampled=renderer.capture(121);
         CHECK(sampled.rgba[center]==255); // Triangle pipeline survives line topology cache entries.
         auto rgb565_copy=std::make_shared<gx::TexturePixels>(); rgb565_copy->gpu_only=true;
         rgb565_copy->channels=gx::TextureChannels::rgb565; rgb565_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
-        work=packet; work.serial=100; work.present=false; work.draws[0]=quad;
+        work=packet; work.serial=122; work.present=false; work.draws[0]=quad;
         for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,19};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},rgb565_copy}; submit(work);
-        work=packet; work.serial=101; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgb565_copy;
+        work=packet; work.serial=123; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material; work.draws[0].texture=rgb565_copy;
         for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
-        submit(work); sampled=renderer.capture(101);
+        submit(work); sampled=renderer.capture(123);
         CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==66 && sampled.rgba[center+3]==255);
-        work={};work.serial=102;work.clear_color={16,32,64,255};submit(work);
-        const auto prompt_background=renderer.capture(102);
-        const auto prompt_efb_background=renderer.capture(102,true);
-        work.serial=103;
+        work={};work.serial=124;work.clear_color={16,32,64,255};submit(work);
+        const auto prompt_background=renderer.capture(124);
+        const auto prompt_efb_background=renderer.capture(124,true);
+        work.serial=125;
         work.prompts.push_back({uc::describe_prompt(uc::default_bindings(),uc::Action::interact),{160,120,480,120,480,360,160,360}});
-        submit(work);sampled=renderer.capture(103);
+        submit(work);sampled=renderer.capture(125);
         CHECK(sampled.rgba!=prompt_background.rgba);
         CHECK(std::equal(sampled.rgba.begin(),sampled.rgba.begin()+4,prompt_background.rgba.begin()));
-        CHECK(renderer.capture(103,true).rgba==prompt_efb_background.rgba);
+        CHECK(renderer.capture(125,true).rgba==prompt_efb_background.rgba);
         uc::save_png(sampled,executable_dir()/"native-prompts.png");
-        work.serial=104;work.prompts[0].alpha={0,0,0,0};submit(work);
-        CHECK(renderer.capture(104).rgba==prompt_background.rgba);
-        work.serial=105;work.prompts.clear();
+        work.serial=126;work.prompts[0].alpha={0,0,0,0};submit(work);
+        CHECK(renderer.capture(126).rgba==prompt_background.rgba);
+        work.serial=127;work.prompts.clear();
         const auto assignments=uc::default_bindings();
         const uc::Action prompt_actions[]={uc::Action::grenade,uc::Action::knife,uc::Action::weapon_previous,uc::Action::weapon_next,uc::Action::confirm,uc::Action::qte_shake};
         for(size_t i=0;i<6;++i) {
             const float x=20+float(i%2)*320,y=20+float(i/2)*150;
             work.prompts.push_back({uc::describe_prompt(assignments,prompt_actions[i]),{x,y,x+280,y,x+280,y+120,x,y+120}});
         }
-        submit(work);sampled=renderer.capture(105);
+        submit(work);sampled=renderer.capture(127);
         CHECK(sampled.rgba!=prompt_background.rgba);
         uc::save_png(sampled,executable_dir()/"native-prompt-cases.png");
-        work.serial=106;work.prompts.resize(1);
+        work.serial=128;work.prompts.resize(1);
         auto cleared_assignments=assignments;cleared_assignments[size_t(uc::Action::grenade)].clear();
         work.prompts[0]={uc::describe_prompt(cleared_assignments,uc::Action::grenade),{320,40,520,180,320,320,120,180},{.5f,.5f,.5f,.5f},{100,100,540,260}};
-        submit(work);sampled=renderer.capture(106);
+        submit(work);sampled=renderer.capture(128);
         CHECK(sampled.rgba!=prompt_background.rgba);
         CHECK(std::equal(sampled.rgba.begin(),sampled.rgba.begin()+4,prompt_background.rgba.begin()));
-        work.serial=107;work.prompts[0].alpha[0]=2;
+        work.serial=129;work.prompts[0].alpha[0]=2;
         bool bad_prompt=false;try{renderer.render(work);}catch(const std::invalid_argument&){bad_prompt=true;}
         CHECK(bad_prompt);work.prompts[0].alpha={1,1,1,1};
         size_t previous_prompt_pixels=0;
         for(const auto output: {VkExtent2D{3840,2160},VkExtent2D{7680,4320}}) {
-            CHECK(SDL_SetWindowSize(window,int(output.width),int(output.height)));
+            resize_window(int(output.width),int(output.height));
             renderer.resize(output.width,output.height);submit(work);sampled=renderer.capture(work.serial++);
             CHECK(sampled.width==output.width && sampled.height==output.height);
             size_t changed=0;for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]!=16 || sampled.rgba[i+1]!=32 || sampled.rgba[i+2]!=64)++changed;
@@ -530,13 +559,13 @@ int main(int argc, char** argv) {
             CHECK(changed>100 && changed<size_t(output.width)*output.height/2);
             CHECK(changed>previous_prompt_pixels*2);previous_prompt_pixels=changed;
         }
-        CHECK(SDL_SetWindowSize(window,1280,720));renderer.resize(1280,720);
-        for(uint64_t serial:{109u,110u}) {
+        resize_window(1280,720);renderer.resize(1280,720);
+        for(uint64_t serial:{131u,132u}) {
             work.serial=serial;auto until=std::chrono::steady_clock::now()+3s;
             while(!renderer.render(work)) {CHECK(std::chrono::steady_clock::now()<until);std::this_thread::sleep_for(1ms);}
         }
-        uint64_t prompt_complete=109;auto prompt_deadline=std::chrono::steady_clock::now()+3s;
-        while(prompt_complete<=110) {
+        uint64_t prompt_complete=131;auto prompt_deadline=std::chrono::steady_clock::now()+3s;
+        while(prompt_complete<=132) {
             CHECK(std::chrono::steady_clock::now()<prompt_deadline);
             for(auto serial:renderer.poll_completions()) {CHECK(serial==prompt_complete);++prompt_complete;}
             std::this_thread::sleep_for(1ms);
@@ -563,20 +592,20 @@ int main(int argc, char** argv) {
             uc::save_png(detail,executable_dir()/("native-inline-detail-"+std::to_string(serial)+".png"));
             return inside;
         };
-        inline_cell(111,uc::primary_prompt(assignments,{uc::Action::interact}),150);
-        const auto monochrome_mouse=renderer.capture(111);
-        inline_cell(112,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
+        inline_cell(133,uc::primary_prompt(assignments,{uc::Action::interact}),150);
+        const auto monochrome_mouse=renderer.capture(133);
+        inline_cell(134,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
         auto cleared_interact=assignments;cleared_interact[size_t(uc::Action::interact)].clear();
-        inline_cell(113,uc::primary_prompt(cleared_interact,{uc::Action::interact}),10);
+        inline_cell(135,uc::primary_prompt(cleared_interact,{uc::Action::interact}),10);
         renderer.set_prompt_style(uc::PromptStyle::sculpted);
-        inline_cell(114,uc::primary_prompt(assignments,{uc::Action::interact}),150);
-        const auto sculpted_left=renderer.capture(114);
+        inline_cell(136,uc::primary_prompt(assignments,{uc::Action::interact}),150);
+        const auto sculpted_left=renderer.capture(136);
         CHECK(sculpted_left.rgba!=monochrome_mouse.rgba);
         bool invalid_prompt_style=false;
         try{renderer.set_prompt_style(uc::PromptStyle(99));}catch(const std::invalid_argument&){invalid_prompt_style=true;}
         CHECK(invalid_prompt_style);
-        inline_cell(115,uc::primary_prompt(assignments,{uc::Action::fire}),150);
-        const auto sculpted_right=renderer.capture(115);
+        inline_cell(137,uc::primary_prompt(assignments,{uc::Action::fire}),150);
+        const auto sculpted_right=renderer.capture(137);
         auto active_pixels=[](const uc::RenderPixels& pixels) {
             // Weight antialiased cyan coverage; exact-color counts depend on subpixel placement.
             double count=0;for(size_t i=0;i<pixels.rgba.size();i+=4) {
@@ -594,29 +623,30 @@ int main(int argc, char** argv) {
                 const size_t i=(size_t(xy.second)*pixels->width+xy.first)*4;
                 CHECK(pixels->rgba[i]==16 && pixels->rgba[i+1]==32 && pixels->rgba[i+2]==64);
             }
-        inline_cell(116,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
-        inline_cell(117,uc::primary_prompt(assignments,{uc::Action::reload}),150);
-        const auto sculpted_key=renderer.capture(117);
+        inline_cell(138,uc::primary_prompt(assignments,{uc::Action::weapon_previous,uc::Action::weapon_next}),150);
+        inline_cell(139,uc::primary_prompt(assignments,{uc::Action::reload}),150);
+        const auto sculpted_key=renderer.capture(139);
         renderer.set_prompt_style(uc::PromptStyle::monochrome);
-        inline_cell(118,uc::primary_prompt(assignments,{uc::Action::reload}),150);
-        CHECK(renderer.capture(118).rgba!=sculpted_key.rgba);
+        inline_cell(140,uc::primary_prompt(assignments,{uc::Action::reload}),150);
+        CHECK(renderer.capture(140).rgba!=sculpted_key.rgba);
         renderer.set_prompt_style(uc::PromptStyle::sculpted);
-        work.serial=119;
+        work.serial=141;
         gx::PromptDraw main_glyph{uc::primary_prompt(assignments,{uc::Action::interact}),{300,200,324,200,324,226,300,226}};main_glyph.compact=true;
         auto shadow=main_glyph;for(auto& tint:shadow.tint)tint={0,0,0};
         for(size_t i=0;i<4;++i) {shadow.efb_corners[i*2]+=1;shadow.efb_corners[i*2+1]+=.75f;}
-        work.prompts={shadow};submit(work);sampled=renderer.capture(119);
+        work.prompts={shadow};submit(work);sampled=renderer.capture(141);
         CHECK(active_pixels(sampled)==0);
         size_t shadow_pixels=0;for(size_t i=0;i<sampled.rgba.size();i+=4)if(sampled.rgba[i]==0 && sampled.rgba[i+1]==0 && sampled.rgba[i+2]==0)++shadow_pixels;
         CHECK(shadow_pixels>150);
-        work.serial=120;work.prompts={shadow,main_glyph};submit(work);sampled=renderer.capture(120);
+        work.serial=142;work.prompts={shadow,main_glyph};submit(work);sampled=renderer.capture(142);
         auto white_pixels=[](const uc::RenderPixels& pixels) {size_t count=0;for(size_t i=0;i<pixels.rgba.size();i+=4)if(pixels.rgba[i]==255 && pixels.rgba[i+1]==255 && pixels.rgba[i+2]==255)++count;return count;};
         CHECK(white_pixels(sampled)<=white_pixels(sculpted_left)+2 && active_pixels(sampled)>20);
         uc::save_png(sampled,executable_dir()/"native-prompt-shadow.png");
         bool invalid_scale=false; try { renderer.set_render_scale(7); } catch(const std::invalid_argument&) { invalid_scale=true; }
         CHECK(invalid_scale);
         renderer.set_render_scale(0.5);
-        packet.serial = 121;packet.prompts=work.prompts;draw.indices[2] = 999;
+        std::this_thread::sleep_for(uc::kRebuildInterval);
+        packet.serial = 143;packet.prompts=work.prompts;draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -625,7 +655,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({121}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({143}));
         CHECK(renderer.validation_errors() == 0);
         uc::VulkanRenderer portrait;
         portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25);

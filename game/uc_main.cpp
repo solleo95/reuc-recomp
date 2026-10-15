@@ -319,6 +319,8 @@ static int real_main(int argc, char** argv) {
             // A test window must never take the focus (an unfocused window runs slower than a focused one, which would skew measurements), not even when clicked.
             SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOACTIVATE);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+            if(!SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))
+                throw std::runtime_error("cannot raise diagnostic window: "+std::to_string(GetLastError()));
         }
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
