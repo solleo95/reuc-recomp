@@ -43,6 +43,10 @@ inline void poll(Ctx& c) { if ((++c.poll_count & 0x7FFu) == 0) [[unlikely]] poll
 // ---- memory ----
 PPC_INLINE bool is_mmio(uint32_t ea) { return ea - 0xCC000000u < 0x02000000u; }
 PPC_INLINE uint8_t* hp(Ctx& c, uint32_t ea) { return c.mem + (ea & 0x3FFFFFFFu); }
+// The base register of a plain load/store is a literal at every call site, so these fold at compile time. r1 (stack), r2 and r13 (small data)
+// always address RAM: no MMIO test. The stack also never holds a texture, mesh array or display list, so a stack store skips the write barrier.
+PPC_INLINE bool ram_base(int a) { return a == 1 || a == 2 || a == 13; }
+PPC_INLINE bool stack_base(int a) { return a == 1; }
 
 PPC_INLINE uint32_t rd32(Ctx& c, uint32_t ea) {
     if (is_mmio(ea)) [[unlikely]] return mmio_read(ea, 4);
@@ -68,6 +72,15 @@ PPC_INLINE void wr8(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 1, v & 0xFF); return; }
     gx::note_write(ea); *hp(c, ea) = uint8_t(v);
 }
+PPC_INLINE uint32_t rd32_ram(Ctx& c, uint32_t ea) { uint32_t v; std::memcpy(&v, hp(c, ea), 4); return _byteswap_ulong(v); }
+PPC_INLINE uint32_t rd16_ram(Ctx& c, uint32_t ea) { uint16_t v; std::memcpy(&v, hp(c, ea), 2); return _byteswap_ushort(v); }
+PPC_INLINE uint32_t rd8_ram(Ctx& c, uint32_t ea) { return *hp(c, ea); }
+PPC_INLINE void wr32_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); if ((ea & 0xFFFu) > 0xFFCu) [[unlikely]] gx::note_write(ea + 3); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
+PPC_INLINE void wr16_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); if ((ea & 0xFFFu) == 0xFFFu) [[unlikely]] gx::note_write(ea + 1); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+PPC_INLINE void wr8_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); *hp(c, ea) = uint8_t(v); }
+PPC_INLINE void wr32_stack(Ctx& c, uint32_t ea, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
+PPC_INLINE void wr16_stack(Ctx& c, uint32_t ea, uint32_t v) { uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+PPC_INLINE void wr8_stack(Ctx& c, uint32_t ea, uint32_t v) { *hp(c, ea) = uint8_t(v); }
 PPC_INLINE float rdf32(Ctx& c, uint32_t ea) { uint32_t b = rd32(c, ea); float f; std::memcpy(&f, &b, 4); return f; }
 PPC_INLINE double rdf64(Ctx& c, uint32_t ea) {
     if (is_mmio(ea)) [[unlikely]] { uint64_t hi = mmio_read(ea, 4), lo = mmio_read(ea + 4, 4); uint64_t b = hi << 32 | lo; double d; std::memcpy(&d, &b, 8); return d; }
@@ -252,24 +265,24 @@ PPC_INLINE void op_twi(Ctx& c, int, int, int32_t) { (void)c; }
 // ---- loads and stores ----
 #define PPC_ID(x) (x)
 #define PPC_SX16(x) (uint32_t(int32_t(int16_t(x))))
-#define PPC_LOAD_FAMILY(nm, RD, CV) \
-    PPC_INLINE void op_##nm(Ctx& c, int t, int a, int32_t d) { c.r[t] = CV(RD(c, ea_d(c, a, d))); } \
+#define PPC_LOAD_FAMILY(nm, RD, RDR, CV) \
+    PPC_INLINE void op_##nm(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); c.r[t] = CV(ram_base(a) ? RDR(c, e) : RD(c, e)); } \
     PPC_INLINE void op_##nm##u(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); c.r[t] = CV(RD(c, e)); c.r[a] = e; } \
     PPC_INLINE void op_##nm##x(Ctx& c, int t, int a, int b) { c.r[t] = CV(RD(c, ea_x(c, a, b))); } \
     PPC_INLINE void op_##nm##ux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; c.r[t] = CV(RD(c, e)); c.r[a] = e; }
-PPC_LOAD_FAMILY(lwz, rd32, PPC_ID)
-PPC_LOAD_FAMILY(lbz, rd8, PPC_ID)
-PPC_LOAD_FAMILY(lhz, rd16, PPC_ID)
-PPC_LOAD_FAMILY(lha, rd16, PPC_SX16)
+PPC_LOAD_FAMILY(lwz, rd32, rd32_ram, PPC_ID)
+PPC_LOAD_FAMILY(lbz, rd8, rd8_ram, PPC_ID)
+PPC_LOAD_FAMILY(lhz, rd16, rd16_ram, PPC_ID)
+PPC_LOAD_FAMILY(lha, rd16, rd16_ram, PPC_SX16)
 
-#define PPC_STORE_FAMILY(nm, WR) \
-    PPC_INLINE void op_##nm(Ctx& c, int t, int a, int32_t d) { WR(c, ea_d(c, a, d), c.r[t]); } \
+#define PPC_STORE_FAMILY(nm, WR, WRR, WRS) \
+    PPC_INLINE void op_##nm(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (stack_base(a)) WRS(c, e, c.r[t]); else if (ram_base(a)) WRR(c, e, c.r[t]); else WR(c, e, c.r[t]); } \
     PPC_INLINE void op_##nm##u(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); WR(c, e, c.r[t]); c.r[a] = e; } \
     PPC_INLINE void op_##nm##x(Ctx& c, int t, int a, int b) { WR(c, ea_x(c, a, b), c.r[t]); } \
     PPC_INLINE void op_##nm##ux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; WR(c, e, c.r[t]); c.r[a] = e; }
-PPC_STORE_FAMILY(stw, wr32)
-PPC_STORE_FAMILY(stb, wr8)
-PPC_STORE_FAMILY(sth, wr16)
+PPC_STORE_FAMILY(stw, wr32, wr32_ram, wr32_stack)
+PPC_STORE_FAMILY(stb, wr8, wr8_ram, wr8_stack)
+PPC_STORE_FAMILY(sth, wr16, wr16_ram, wr16_stack)
 
 PPC_INLINE void op_lwbrx(Ctx& c, int t, int a, int b) { c.r[t] = _byteswap_ulong(rd32(c, ea_x(c, a, b))); }
 PPC_INLINE void op_lhbrx(Ctx& c, int t, int a, int b) { c.r[t] = _byteswap_ushort(uint16_t(rd16(c, ea_x(c, a, b)))); }
@@ -293,19 +306,19 @@ PPC_INLINE void op_dcbz_l(Ctx& c, int a, int b) { op_dcbz(c, a, b); }
 PPC_INLINE double rnd_s(double v) { return double(float(v)); }
 PPC_INLINE void fp_rc(Ctx& c, bool rc) { if (rc) c.cr[1] = uint8_t(c.fpscr >> 28); }
 
-PPC_INLINE void op_lfs(Ctx& c, int t, int a, int32_t d) { double v = rdf32(c, ea_d(c, a, d)); c.f[t] = v; c.ps1[t] = v; }
+PPC_INLINE void op_lfs(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); const uint32_t bits = ram_base(a) ? rd32_ram(c, e) : rd32(c, e); float f; std::memcpy(&f, &bits, 4); double v = f; c.f[t] = v; c.ps1[t] = v; }
 PPC_INLINE void op_lfsu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); double v = rdf32(c, e); c.f[t] = v; c.ps1[t] = v; c.r[a] = e; }
 PPC_INLINE void op_lfsx(Ctx& c, int t, int a, int b) { double v = rdf32(c, ea_x(c, a, b)); c.f[t] = v; c.ps1[t] = v; }
 PPC_INLINE void op_lfsux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; double v = rdf32(c, e); c.f[t] = v; c.ps1[t] = v; c.r[a] = e; }
-PPC_INLINE void op_lfd(Ctx& c, int t, int a, int32_t d) { c.f[t] = rdf64(c, ea_d(c, a, d)); }
+PPC_INLINE void op_lfd(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (ram_base(a)) { uint64_t v; std::memcpy(&v, hp(c, e), 8); v = _byteswap_uint64(v); std::memcpy(&c.f[t], &v, 8); } else c.f[t] = rdf64(c, e); }
 PPC_INLINE void op_lfdu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); c.f[t] = rdf64(c, e); c.r[a] = e; }
 PPC_INLINE void op_lfdx(Ctx& c, int t, int a, int b) { c.f[t] = rdf64(c, ea_x(c, a, b)); }
 PPC_INLINE void op_lfdux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; c.f[t] = rdf64(c, e); c.r[a] = e; }
-PPC_INLINE void op_stfs(Ctx& c, int t, int a, int32_t d) { wrf32(c, ea_d(c, a, d), float(c.f[t])); }
+PPC_INLINE void op_stfs(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); const float f = float(c.f[t]); uint32_t bits; std::memcpy(&bits, &f, 4); if (stack_base(a)) wr32_stack(c, e, bits); else if (ram_base(a)) wr32_ram(c, e, bits); else wr32(c, e, bits); }
 PPC_INLINE void op_stfsu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); wrf32(c, e, float(c.f[t])); c.r[a] = e; }
 PPC_INLINE void op_stfsx(Ctx& c, int t, int a, int b) { wrf32(c, ea_x(c, a, b), float(c.f[t])); }
 PPC_INLINE void op_stfsux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf32(c, e, float(c.f[t])); c.r[a] = e; }
-PPC_INLINE void op_stfd(Ctx& c, int t, int a, int32_t d) { wrf64(c, ea_d(c, a, d), c.f[t]); }
+PPC_INLINE void op_stfd(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (ram_base(a)) { uint64_t v; std::memcpy(&v, &c.f[t], 8); v = _byteswap_uint64(v); if (!stack_base(a)) { gx::note_write(e); if ((e & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(e + 7); } std::memcpy(hp(c, e), &v, 8); } else wrf64(c, e, c.f[t]); }
 PPC_INLINE void op_stfdu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); wrf64(c, e, c.f[t]); c.r[a] = e; }
 PPC_INLINE void op_stfdx(Ctx& c, int t, int a, int b) { wrf64(c, ea_x(c, a, b), c.f[t]); }
 PPC_INLINE void op_stfdux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf64(c, e, c.f[t]); c.r[a] = e; }

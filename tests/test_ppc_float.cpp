@@ -1,6 +1,7 @@
 #include "check.h"
 #include "ppc_fixture.h"
 #include <cmath>
+#include <initializer_list>
 using namespace ppc;
 
 static uint64_t bits(double d) { uint64_t b; std::memcpy(&b, &d, 8); return b; }
@@ -111,6 +112,23 @@ int main() {
     op_psq_l(c, 9, 3, 0, 0, 2);        CHECK(c.f[9] == 1.5 && c.ps1[9] == double(-0.1f));
     gx::page_epoch[0x6000 >> 12] = 0; c.r[3] = 0x80006000; op_psq_st(c, 8, 3, 0, 0, 2);
     CHECK(gx::page_epoch[0x6000 >> 12] == 7 && gx::page_epoch[0x7000 >> 12] != 7);   // inside one page: only that page
+    // r1 (stack) accesses skip the MMIO test and the write barrier, r2/r13 skip only the MMIO test, other bases keep both; values agree on every path
+    for (int base : {1, 2, 13, 3}) {
+        const uint32_t page = 0x80010000u + uint32_t(base) * 0x1000u;
+        gx::page_epoch[(page & 0x3FFFFFFFu) >> 12] = 0; gx::write_epoch = 9;
+        c.r[base] = page; c.r[5] = 0x11223344u; c.f[20] = 6.25;
+        op_stw(c, 5, base, 4);   CHECK(rd32(c, page + 4) == 0x11223344u);
+        op_stb(c, 5, base, 9);   CHECK(rd8(c, page + 9) == 0x44u);
+        op_sth(c, 5, base, 10);  CHECK(rd16(c, page + 10) == 0x3344u);
+        op_stfd(c, 20, base, 16); CHECK(rdf64(c, page + 16) == 6.25);
+        op_stfs(c, 20, base, 24); CHECK(rdf32(c, page + 24) == 6.25f);
+        op_lwz(c, 6, base, 4);   CHECK(c.r[6] == 0x11223344u);
+        op_lhz(c, 6, base, 10);  CHECK(c.r[6] == 0x3344u);
+        op_lbz(c, 6, base, 9);   CHECK(c.r[6] == 0x44u);
+        c.f[21] = 0; op_lfd(c, 21, base, 16); CHECK(c.f[21] == 6.25);
+        c.f[21] = 0; op_lfs(c, 21, base, 24); CHECK(c.f[21] == 6.25 && c.ps1[21] == 6.25);
+        CHECK(gx::page_epoch[(page & 0x3FFFFFFFu) >> 12] == (base == 1 ? 0u : 9u));
+    }
     // ps_cmpu0 / ps_cmpu1 write a CR field like fcmp
     op_ps_cmpu0(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
     op_ps_cmpu1(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
