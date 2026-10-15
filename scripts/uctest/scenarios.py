@@ -84,31 +84,90 @@ def perf(g, args):
 
 
 def fight(g, args):
-    """Skip to the heavy train fight: the bot plays at speed 8 until `--enemies` actors are in the scene, then the game runs at speed 1 with an idle
-    player (god mode) and the FPS is measured. With UC_CPU_SAMPLE_FLAG=<file> set for the run, the game's CPU sampler starts when this scenario
-    creates that file, so a profile covers only the fight."""
+    """Skip to the heavy train fight and measure it. The bot plays at speed 8; at the slowdown point the game drops to speed 1 with an idle god-mode
+    player and the FPS is measured for `--measure` seconds. The point is learned from the owner: press F5 when the fight is on screen (a global key
+    state read, so the game window keeps its non-focus and gets no input) and the scene fingerprint (game second, actors, draws, classes, scene ids,
+    capture) is saved to scripts/uctest/marks/fight.json. The wave of 30+ actors starts a clock; the saved point is the seconds since that start, so later runs
+    slow down by themselves at the same place of the wave whatever speed the bot played at; `--mark`
+    ignores the saved point and waits for F5 again (F5 always works and replaces the saved point). With UC_CPU_SAMPLE_FLAG=<file> set for the run,
+    the game's CPU sampler starts at the slowdown (the scenario creates that file). Tutorials are skipped; fight_trace.csv lists actors, living
+    enemies and draws per game second."""
+    import collections
+    import ctypes
+    import json
     import os
     import time
     from pathlib import Path
     from .autoplay import Autoplay
+    mark_path = Path(__file__).parent / "marks" / "fight.json"
+    mark = None
+    if not args.mark and mark_path.exists():
+        mark = json.loads(mark_path.read_text(encoding="utf-8"))
+    key_state = ctypes.windll.user32.GetAsyncKeyState
+    VK_F5 = 0x74
+    pressed_before = bool(key_state(VK_F5) & 0x8000)
+
+    def f5_pressed():   # a new press since the last look (the key being held when the scenario starts does not count)
+        nonlocal pressed_before
+        state = key_state(VK_F5)
+        down = bool(state & 0x8000)
+        fresh = (down and not pressed_before) or bool(state & 1)
+        pressed_before = down
+        return fresh
+
     g.set_speed(8)
     reach_gameplay(g, args.chapter)
     bot = Autoplay(g, g.run_dir / "autoplay.jsonl", speed=8, god=True)
     deadline = time.monotonic() + args.max_minutes * 60
+    listed = lambda f: len(f.get("enemies") or [])
+    alive = lambda f: sum(1 for e in f.get("enemies") or [] if e.get("hp", 1) > 0)   # dead zombies stay in the list until the wave ends
+    WAVE_ACTORS = 30   # the train wave lists 32 actors (living and dead) at once
+    trace_path, next_tick, wave_since = g.run_dir / "fight_trace.csv", 0, None
+    trace_path.write_text("game_second,listed,alive,draws\n")
+    if mark:
+        print(f"fight: slowdown point from {mark_path.name}: {mark['wave_offset']} game seconds after the {WAVE_ACTORS}-actor wave starts (F5 replaces it)", flush=True)
+    else:
+        print("fight: no saved slowdown point; the bot plays at speed 8, press F5 when the fight is on screen (no focus needed)", flush=True)
+    pressed = False
     with g.step("skip_to_fight"):
-        while len(g.frame.get("enemies") or []) < args.enemies:
+        while True:
+            if f5_pressed():
+                pressed = True
+                break
             if time.monotonic() > deadline:
-                g.fail(f"the scene never reached {args.enemies} actors", "fight")
+                g.fail("the slowdown point was not reached before the time limit", "fight")
             reason = bot.step()
             if reason:
-                g.fail(f"autoplay stopped before the fight: {reason}", "fight")
+                g.fail(f"autoplay stopped before the slowdown point: {reason}", "fight")
+            tick = g.frame.get("retraces", 0)
+            if tick >= next_tick:   # once per game second
+                next_tick = tick + 60
+                draws = len(g.draws())
+                with open(trace_path, "a") as out:
+                    out.write(f"{tick // 60},{listed(g.frame)},{alive(g.frame)},{draws}\n")
+                wave_since = (wave_since if wave_since is not None else tick // 60) if listed(g.frame) >= WAVE_ACTORS else None
+                if mark and wave_since is not None and tick // 60 - wave_since >= mark["wave_offset"]:
+                    break
+    frame = g.frame
+    classes = collections.Counter(hex(e["cls"]) for e in frame.get("enemies") or [] if e.get("cls"))
+    second = frame.get("retraces", 0) // 60
+    marked = {"how": "F5" if pressed else "saved point", "game_second": second, "wave_offset": None if wave_since is None else second - wave_since,
+              "listed": listed(frame), "alive": alive(frame), "draws": len(g.draws()), "kills": bot.kills, "scene_mode": frame.get("scene_mode"), "player_scene": (frame.get("player") or {}).get("scene"),
+              "classes": dict(classes)}
+    print(f"fight: slowdown at game second {marked['game_second']} ({marked['how']}): {marked['listed']} actors, {marked['alive']} alive, {marked['draws']} draws", flush=True)
+    if pressed and marked["wave_offset"] is None:
+        print(f"fight: F5 came before the {WAVE_ACTORS}-actor wave, nothing saved", flush=True)
+    elif pressed:
+        mark_path.parent.mkdir(parents=True, exist_ok=True)
+        mark_path.write_text(json.dumps(marked, indent=1) + "\n", encoding="utf-8")
+        print(f"fight: saved {mark_path}", flush=True)
     with g.step("normal_speed"):
         g.set_speed(1)
         g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
     flag = os.environ.get("UC_CPU_SAMPLE_FLAG")
     if flag:
         Path(flag).write_text("go")
-    result = {"actors": len(g.frame.get("enemies") or []), "capture": g.capture()}
+    result = {"marked": marked, "capture": g.capture()}
     with g.step("measure_fps"):
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
     return result

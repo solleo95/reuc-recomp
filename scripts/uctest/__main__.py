@@ -10,7 +10,7 @@ from .scenarios import SCENARIOS
 
 
 def run_once(name, args):
-    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, skip_tutorials=args.skip_tutorials, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
+    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, skip_tutorials=args.skip_tutorials or name == "fight", saves=resolve_saves(args.saves_from), game_args=args.game_arg)
     start = time.monotonic()
     report = {"scenario": name, "ok": False, "speed": args.speed, "god": args.god}
     try:
@@ -46,7 +46,7 @@ def main(argv=None):
     run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
     run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
-    run.add_argument("--enemies", type=int, default=25, help="fight: actors in the scene that end the x8 skip")
+    run.add_argument("--mark", action="store_true", help="fight: ignore the saved slowdown point and wait for F5 to set a new one")
     run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
     inspect = sub.add_parser("inspect", help="read a crash bundle (see uctest/dumpview.py)")
     inspect.add_argument("bundle", help="crash-*.txt report or its .dump folder")

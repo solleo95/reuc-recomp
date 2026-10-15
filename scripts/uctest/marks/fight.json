@@ -1,0 +1,15 @@
+{
+ "how": "F5",
+ "game_second": 152,
+ "listed": 32,
+ "alive": 4,
+ "draws": 83,
+ "kills": 30,
+ "scene_mode": 4294967295,
+ "player_scene": 2159667616,
+ "classes": {
+  "0x80408534": 4,
+  "0x803fba30": 28
+ },
+ "wave_offset": 32
+}
