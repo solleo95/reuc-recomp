@@ -8,3 +8,4 @@ project/hle.cfg
 build-trace/
 build-trace.log
 __pycache__/
+build-prof/

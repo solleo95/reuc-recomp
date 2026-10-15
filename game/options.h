@@ -18,6 +18,7 @@ struct Options {
     bool profile = false;
     bool capture_scene_passes = false;
     bool unlock_60fps = false;
+    uint32_t game_hz = 0;    // experimental: game step above 60 Hz from a wall-clock timer (61..480); 0 keeps the retrace-locked step
     bool input_probe = false;
     bool gx_gaps = false, audio_audit = false; // diagnostics: reports in <exe>/debug at exit
     std::filesystem::path test_control,save_root,config,capture_dir;

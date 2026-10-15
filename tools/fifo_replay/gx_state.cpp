@@ -18,7 +18,7 @@ void GxStream::color_write(uint32_t reg,uint32_t v) {
     else {color[0]=signed_color(v);color[3]=signed_color(v>>12);}
 }
 void GxStream::material(gx::DrawPacket& draw) const {
-    auto& m=draw.material;auto& u=draw.uniforms;u=colors_;
+    auto& m=draw.material;draw.uniforms=colors_;auto& u=draw.uniforms.edit();
     m.stages=((bp_[0]>>10)&15)+1;m.indirect_order=bp_[0x27];
     for(size_t i=0;i<4;++i)m.swaps[i]=uint8_t((bp_[0xF6+i*2]&15)|((bp_[0xF7+i*2]&15)<<4));
     for(size_t i=0;i<m.stages;++i) {
@@ -60,7 +60,7 @@ void GxStream::material(gx::DrawPacket& draw) const {
     int32_t upper=int32_t(top&2047)-int32_t((offset>>10)&1023)*2;
     int32_t width=int32_t((bottom>>12)&2047)-int32_t((top>>12)&2047)+1;
     int32_t height=int32_t(bottom&2047)-int32_t(top&2047)+1;
-    draw.state.scissor=std::array<int32_t,4>{left,upper,width,height};
+    draw.state.edit().scissor=std::array<int32_t,4>{left,upper,width,height};
 }
 void GxStream::check_texgen(gx::DrawPacket& draw) const {
     const auto count=xf_[0x103F];
@@ -69,7 +69,7 @@ void GxStream::check_texgen(gx::DrawPacket& draw) const {
         auto control=xf_[0x1040+slot],source=(control>>7)&31;
         if((control>>4)&7)throw std::runtime_error("unsupported nonregular texgen");
         if(!(source<=1 || (source>=5 && source<=12)))throw std::runtime_error("unsupported texgen source");
-        if(draw.state.descriptors[slot+1]!=gx::Mode::none)throw std::runtime_error("per-vertex texture matrix index unsupported");
+        if(draw.state->descriptors[slot+1]!=gx::Mode::none)throw std::runtime_error("per-vertex texture matrix index unsupported");
     }
 }
 }

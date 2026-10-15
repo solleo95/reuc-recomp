@@ -1,4 +1,5 @@
 #pragma once
+#include "gx_shared.h"
 #include "gx_transforms.h"
 #include "gx_textures.h"
 #include "gx_materials.h"
@@ -50,20 +51,24 @@ struct BlendState {
     uint8_t mode=0,source=1,destination=0,logic=3;
     bool color_write=true,alpha_write=true;
 };
+struct MeshBuffers { std::vector<Vertex> vertices; std::vector<uint32_t> indices; };   // immutable once cached; shared by every draw of the mesh
 struct DrawPacket {
     uint32_t callsite = 0;
     uint8_t primitive = 0, vat = 0;
-    State state;
+    Shared<State> state;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    Transforms transforms;
+    Shared<Transforms> transforms;
     std::shared_ptr<const TexturePixels> texture;
     std::array<std::shared_ptr<const TexturePixels>,7> texture_maps;
     TevMaterial material;
-    DrawUniform uniforms;
+    Shared<DrawUniform> uniforms;
     BlendState blend;
     std::array<uint8_t,8> texture_wrap{}; // SDK mode: S0..1,T2..3,mag4,mip5..6,min7
     std::optional<PromptDraw> native_prompt;
+    std::shared_ptr<const MeshBuffers> mesh;   // when set, the geometry lives here and `vertices`/`indices` stay empty
+    std::span<const Vertex> vertex_view() const { return mesh ? std::span<const Vertex>(mesh->vertices) : std::span<const Vertex>(vertices); }
+    std::span<const uint32_t> index_view() const { return mesh ? std::span<const uint32_t>(mesh->indices) : std::span<const uint32_t>(indices); }
 };
 
 // Owned by the guest scheduler baton; callers identify its current producer.
@@ -71,7 +76,8 @@ class Vertices {
 public:
     struct SourceRange { uint32_t address; size_t size; };
     explicit Vertices(Memory memory, bool collect_sources=false) : memory_(memory), collect_sources_(collect_sources) {}
-    void begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite);
+    void begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite) { begin(Shared<State>(state), primitive, vat, count, producer, callsite); }
+    void begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite);   // shares the block with the draw
     void write_attribute(uint32_t producer, std::span<const std::byte> bytes);
     DrawPacket take_draw();
     void finish() const;

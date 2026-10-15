@@ -47,8 +47,8 @@ int main() {
     draw.vertices[0].color[0]={0,0,0,128};prompt=uc::prompt_from_quad(draw,description);
     CHECK(prompt && prompt->tint[0]==(std::array<float,3>{0,0,0}));
     CHECK(prompt->tint[1]==(std::array<float,3>{1,1,1}) && prompt->alpha[0]==128.f/255);
-    draw.transforms.projection[3][3]=0;CHECK(!uc::prompt_from_quad(draw,description));
-    draw.transforms={};draw.vertices[0].position[0]=std::numeric_limits<float>::quiet_NaN();
+    draw.transforms.edit().projection[3][3]=0;CHECK(!uc::prompt_from_quad(draw,description));
+    draw.transforms=gx::Transforms{};draw.vertices[0].position[0]=std::numeric_limits<float>::quiet_NaN();
     CHECK(!uc::prompt_from_quad(draw,description));
     draw.vertices[0].position[0]=-.5f;draw.indices={0,1,2};CHECK(!uc::prompt_from_quad(draw,description));
     CHECK(ppc::rd32(c,pane+0x0C)==root);

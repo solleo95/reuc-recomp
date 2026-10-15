@@ -87,8 +87,8 @@ int main() {
         triangle();
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
         frame=packets.try_take(); CHECK(frame && frame->draws.size()==1);
-        CHECK(frame->draws[0].uniforms.fog[0]==0x03B240 && frame->draws[0].uniforms.fog[1]==0x401071 && frame->draws[0].uniforms.fog[2]==2);
-        CHECK(frame->draws[0].uniforms.fog[3]==0x43DCCC && frame->draws[0].uniforms.fog[4]==0x19141A);
+        CHECK(frame->draws[0].uniforms->fog[0]==0x03B240 && frame->draws[0].uniforms->fog[1]==0x401071 && frame->draws[0].uniforms->fog[2]==2);
+        CHECK(frame->draws[0].uniforms->fog[3]==0x43DCCC && frame->draws[0].uniforms->fog[4]==0x19141A);
         CHECK(packets.complete(frame->serial));
         // Orthographic fog: the SDK leaves both B words zero (BP 0x00) and B keeps its previous value.
         recorded([&]{ fog_call(0x0A,0,100,0,200); },{0xEE040000,0,0,0xF1500000,0xF219141A});
@@ -96,7 +96,7 @@ int main() {
         bp(0xF1000000);
         triangle();
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
-        frame=packets.try_take(); CHECK(frame && frame->draws.size()==1 && frame->draws[0].uniforms.fog[3]==0x43DCCC);
+        frame=packets.try_take(); CHECK(frame && frame->draws.size()==1 && frame->draws[0].uniforms->fog[3]==0x43DCCC);
         CHECK(packets.complete(frame->serial));
         // A fog call recorded into a display list applies at replay and persists as live state afterwards.
         ppc::wr32(c,0x80001000,0x10000); ppc::wr32(c,0x800015FC,0);
@@ -110,7 +110,7 @@ int main() {
         triangle();
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
         frame=packets.try_take(); CHECK(frame && frame->draws.size()==2);
-        CHECK((frame->draws[0].uniforms.fog[3]>>21)==0 && (frame->draws[1].uniforms.fog[3]>>21)==0 && frame->draws[1].uniforms.fog[4]==0x19141A);
+        CHECK((frame->draws[0].uniforms->fog[3]>>21)==0 && (frame->draws[1].uniforms->fog[3]>>21)==0 && frame->draws[1].uniforms->fog[4]==0x19141A);
         CHECK(packets.complete(frame->serial));
         // Indirect texturing: GXSetTevIndirect and GXSetIndTexMtx have no SDK shadow, the coordinate scale and order do.
         auto tev_indirect=[&] {
@@ -133,14 +133,14 @@ int main() {
         triangle();
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
         frame=packets.try_take(); CHECK(frame && frame->draws.size()==1);
-        CHECK(frame->draws[0].uniforms.indirect[3]==0x840200 && frame->draws[0].uniforms.indirect[4]==0x180700 && frame->draws[0].uniforms.indirect[5]==0x700000);
-        CHECK(frame->draws[0].uniforms.indirect[9]==0x540 && frame->draws[0].uniforms.indirect[10]==0x4307);
-        CHECK(frame->draws[0].uniforms.ind_cmd[2]==0x1E8759);
+        CHECK(frame->draws[0].uniforms->indirect[3]==0x840200 && frame->draws[0].uniforms->indirect[4]==0x180700 && frame->draws[0].uniforms->indirect[5]==0x700000);
+        CHECK(frame->draws[0].uniforms->indirect[9]==0x540 && frame->draws[0].uniforms->indirect[10]==0x4307);
+        CHECK(frame->draws[0].uniforms->ind_cmd[2]==0x1E8759);
         CHECK(packets.complete(frame->serial));
         bp(0x10000000u); bp(0x27000009u); // raw words: no effect on native state
         triangle();
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
-        frame=packets.try_take(); CHECK(frame && frame->draws.size()==1 && frame->draws[0].uniforms.indirect[9]==0x540);
+        frame=packets.try_take(); CHECK(frame && frame->draws.size()==1 && frame->draws[0].uniforms->indirect[9]==0x540);
         CHECK(packets.complete(frame->serial));
         // A native TEV asset selects map 1 solely as its indirect input.
         ppc::wr32(c,0x80009000,0x80009100); ppc::wr8(c,0x8000910C,1);
@@ -158,7 +158,7 @@ int main() {
         c.r[3]=0x80009000; hle_ResTevApply(c);
         triangle(); c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
         frame=packets.try_take(); CHECK(frame && frame->draws.size()==1);
-        CHECK(frame->draws[0].uniforms.indirect[9]==9);
+        CHECK(frame->draws[0].uniforms->indirect[9]==9);
         CHECK(frame->draws[0].texture_maps[0] && frame->draws[0].texture_maps[0]->levels[0].width==4);
         CHECK(packets.complete(frame->serial));
         // While VI output is black the display copy presents black, as the TV would show.

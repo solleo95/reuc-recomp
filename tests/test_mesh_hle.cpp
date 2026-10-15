@@ -12,6 +12,7 @@ void hle_GXBeginDisplayList(ppc::Ctx&);
 void hle_GXEndDisplayList(ppc::Ctx&);
 void hle_GXCallDisplayList(ppc::Ctx&);
 static void flush_recording(ppc::Ctx&) { for(uint32_t i=0;i<8;++i) uc::gx_fifo_write(4,0); }
+static std::vector<uint32_t> indices_of(const gx::DrawPacket& draw) { const auto view=draw.index_view(); return {view.begin(),view.end()}; }
 int main() {
     static const uc::FnEntry functions[]={{0x80284504,flush_recording}};
     uc::dispatch_init(functions,1,0x80284504,0x80284508);
@@ -51,11 +52,11 @@ int main() {
         ppc::wrf32(c,0x8000154C,640);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         auto packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
-        CHECK(packet->draws[0].vertices.size()==3 && packet->draws[0].vertices[0].position[0]==1 && packet->draws[0].vertices[2].position[0]==3);
-        CHECK((packet->draws[0].indices==std::vector<uint32_t>{0,1,2}));
-        CHECK(packet->draws[0].transforms.position_rows[0][3]==5);
-        CHECK(packet->draws[0].state.viewport && (*packet->draws[0].state.viewport)[2]==320);
-        CHECK(packet->draws[0].state.scissor && (*packet->draws[0].state.scissor==std::array<int32_t,4>{0,0,160,240}));
+        CHECK(packet->draws[0].vertex_view().size()==3 && packet->draws[0].vertex_view()[0].position[0]==1 && packet->draws[0].vertex_view()[2].position[0]==3);
+        CHECK((indices_of(packet->draws[0])==std::vector<uint32_t>{0,1,2}));
+        CHECK(packet->draws[0].transforms->position_rows[0][3]==5);
+        CHECK(packet->draws[0].state->viewport && (*packet->draws[0].state->viewport)[2]==320);
+        CHECK(packet->draws[0].state->scissor && (*packet->draws[0].state->scissor==std::array<int32_t,4>{0,0,160,240}));
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
 
         // Same asset retains fresh pose/viewport while geometry is reused.
@@ -66,8 +67,8 @@ int main() {
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
         CHECK(uc::gx_stats().geometry_hits==hits_before+1);
-        CHECK(packet->draws[0].transforms.position_rows[0][3]==25);
-        CHECK((*packet->draws[0].state.viewport)[2]==640);
+        CHECK(packet->draws[0].transforms->position_rows[0][3]==25);
+        CHECK((*packet->draws[0].state->viewport)[2]==640);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         ppc::wrf32(c,0x8000350C,5);
 
@@ -76,14 +77,14 @@ int main() {
         ppc::wrf32(c,0x80003000,99);
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
-        packet=packets.try_take(); CHECK(packet && packet->draws[0].vertices[0].position[0]==99);
+        packet=packets.try_take(); CHECK(packet && packet->draws[0].vertex_view()[0].position[0]==99);
         CHECK(uc::gx_stats().geometry_misses==misses_before+1);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         misses_before=uc::gx_stats().geometry_misses;
         ppc::wr8(c,0x80002531,2);
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
-        packet=packets.try_take(); CHECK(packet && packet->draws[0].vertices[0].position[0]==3);
+        packet=packets.try_take(); CHECK(packet && packet->draws[0].vertex_view()[0].position[0]==3);
         CHECK(uc::gx_stats().geometry_misses==misses_before+1);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         ppc::wr8(c,0x80002531,0);
@@ -107,7 +108,7 @@ int main() {
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet);
-        CHECK(packet->draws[0].uniforms.registers[1][0]==-1.f/255 && packet->draws[0].uniforms.konst[0][0]==13.f/255);
+        CHECK(packet->draws[0].uniforms->registers[1][0]==-1.f/255 && packet->draws[0].uniforms->konst[0][0]==13.f/255);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
 
         // Recorded native colors own values even if the source asset changes later.
@@ -122,7 +123,7 @@ int main() {
         c.r[3]=0x80007000; c.r[4]=recorded_size; hle_GXCallDisplayList(c);
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
-        packet=packets.try_take(); CHECK(packet && packet->draws[0].uniforms.konst[0][0]==99.f/255);
+        packet=packets.try_take(); CHECK(packet && packet->draws[0].uniforms->konst[0][0]==99.f/255);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
 
         // Adjacent triangle records share one native draw until a matrix binding changes.
@@ -137,10 +138,10 @@ int main() {
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==2);
-        CHECK(packet->draws[0].vertices.size()==7);
-        CHECK((packet->draws[0].indices==std::vector<uint32_t>{0,1,2,3,4,5,5,4,6}));
-        CHECK(packet->draws[0].transforms.position_rows[0][3]==5);
-        CHECK(packet->draws[1].vertices.size()==3 && packet->draws[1].transforms.position_rows[0][3]==15);
+        CHECK(packet->draws[0].vertex_view().size()==7);
+        CHECK((indices_of(packet->draws[0])==std::vector<uint32_t>{0,1,2,3,4,5,5,4,6}));
+        CHECK(packet->draws[0].transforms->position_rows[0][3]==5);
+        CHECK(packet->draws[1].vertex_view().size()==3 && packet->draws[1].transforms->position_rows[0][3]==15);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
 
         // Indexed texture matrix load (GX_LOAD_INDX_C, texmtx 30 at XF 0x78) applies to the draws after it.
@@ -154,7 +155,7 @@ int main() {
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==3);
-        CHECK(packet->draws[1].uniforms.tex_rows[0][3]==0 && packet->draws[2].uniforms.tex_rows[0][3]==0.25f);
+        CHECK(packet->draws[1].uniforms->tex_rows[0][3]==0 && packet->draws[2].uniforms->tex_rows[0][3]==0.25f);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
     sched.run(thread); CHECK(uc::gx_stats().draws==11);

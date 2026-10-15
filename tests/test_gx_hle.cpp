@@ -392,29 +392,29 @@ int main() {
         CHECK(packet->draws[0].vertices[1].position[0] == 1 && packet->draws[0].vertices[2].position[1] == 1);
         CHECK(packet->draws[0].callsite==0x80029000 && packet->draws[1].vertices[0].position[0]==2);
         CHECK(packet->draws[2].vertices[0].position[0]==4 && packet->draws[3].vertices[0].position[0]==3);
-        CHECK(packet->draws[0].transforms.current==0 && packet->draws[0].transforms.projection[1][1]==-1);
-        CHECK(packet->draws[4].transforms.current==6 && packet->draws[4].transforms.position_rows[6][3]==4);
-        CHECK(packet->draws[4].transforms.position_rows[9][3]==8);
-        CHECK(packet->draws[4].transforms.normal_rows[6][0]==1 && packet->draws[4].transforms.normal_rows[7][1]==1);
-        CHECK(packet->draws[5].transforms.current==9 && packet->draws[5].transforms.position_rows[9][3]==10);
+        CHECK(packet->draws[0].transforms->current==0 && packet->draws[0].transforms->projection[1][1]==-1);
+        CHECK(packet->draws[4].transforms->current==6 && packet->draws[4].transforms->position_rows[6][3]==4);
+        CHECK(packet->draws[4].transforms->position_rows[9][3]==8);
+        CHECK(packet->draws[4].transforms->normal_rows[6][0]==1 && packet->draws[4].transforms->normal_rows[7][1]==1);
+        CHECK(packet->draws[5].transforms->current==9 && packet->draws[5].transforms->position_rows[9][3]==10);
         CHECK(packet->draws[5].callsite == 0x80029D84);
         CHECK(packet->draws[0].texture && packet->draws[0].texture->levels[0].rgba[0]==32);
         CHECK(packet->draws[0].material.stages==2 && packet->draws[0].material.stage[0].color==0x8FFF8);
         CHECK(packet->draws[0].texture_wrap[0]==0x99);
         CHECK(packet->draws[4].texture_wrap[0]==0x99);
-        CHECK(packet->draws[0].uniforms.registers[2][0]==-256/255.f && packet->draws[0].uniforms.registers[2][2]==512/255.f);
-        CHECK(packet->draws[4].uniforms.registers[2][0]==128/255.f);
-        CHECK(packet->draws[4].uniforms.konst[1][0]==32/255.f);
-        CHECK(packet->draws[0].uniforms.pixel[3]==2 && packet->draws[4].uniforms.pixel[3]==1);
-        CHECK(packet->draws[4].uniforms.channels[0]==0x401 && packet->draws[5].uniforms.channels[0]==0x401);
-        CHECK(packet->draws[0].uniforms.lights[0].color[0]==128);
-        CHECK(packet->draws[4].uniforms.lights[0].color[0]==64 && packet->draws[5].uniforms.lights[0].color[0]==64);
-        CHECK(packet->draws[6].uniforms.konst[1][0]==32/255.f); // recording restores live colors
-        CHECK(packet->draws[7].uniforms.konst[1][0]==16/255.f);
-        CHECK(packet->draws[8].uniforms.konst[1][3]==64/255.f);
-        CHECK(packet->draws[9].uniforms.konst[1][0]==16/255.f); // playback commits; failure rolls back
-        CHECK(packet->draws[0].uniforms.tex_rows[0][0]==2 && packet->draws[0].uniforms.tex_rows[0][3]==0.25f);
-        CHECK(packet->draws[0].uniforms.pixel[0]==0x3F0000 && packet->draws[0].uniforms.pixel[1]==0x17 && packet->draws[0].uniforms.pixel[2]==0x100);
+        CHECK(packet->draws[0].uniforms->registers[2][0]==-256/255.f && packet->draws[0].uniforms->registers[2][2]==512/255.f);
+        CHECK(packet->draws[4].uniforms->registers[2][0]==128/255.f);
+        CHECK(packet->draws[4].uniforms->konst[1][0]==32/255.f);
+        CHECK(packet->draws[0].uniforms->pixel[3]==2 && packet->draws[4].uniforms->pixel[3]==1);
+        CHECK(packet->draws[4].uniforms->channels[0]==0x401 && packet->draws[5].uniforms->channels[0]==0x401);
+        CHECK(packet->draws[0].uniforms->lights[0].color[0]==128);
+        CHECK(packet->draws[4].uniforms->lights[0].color[0]==64 && packet->draws[5].uniforms->lights[0].color[0]==64);
+        CHECK(packet->draws[6].uniforms->konst[1][0]==32/255.f); // recording restores live colors
+        CHECK(packet->draws[7].uniforms->konst[1][0]==16/255.f);
+        CHECK(packet->draws[8].uniforms->konst[1][3]==64/255.f);
+        CHECK(packet->draws[9].uniforms->konst[1][0]==16/255.f); // playback commits; failure rolls back
+        CHECK(packet->draws[0].uniforms->tex_rows[0][0]==2 && packet->draws[0].uniforms->tex_rows[0][3]==0.25f);
+        CHECK(packet->draws[0].uniforms->pixel[0]==0x3F0000 && packet->draws[0].uniforms->pixel[1]==0x17 && packet->draws[0].uniforms->pixel[2]==0x100);
         CHECK(packet->draws[0].blend.mode==1 && packet->draws[0].blend.source==4 && packet->draws[0].blend.destination==5);
         CHECK(packet->draws[4].texture && packet->draws[4].texture->levels[0].rgba[0]==96);
         CHECK(packet->draws[5].texture && packet->draws[5].texture->levels[0].rgba[0]==128);

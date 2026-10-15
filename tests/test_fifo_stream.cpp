@@ -49,14 +49,14 @@ static void indexed_test() {
     d.cp[0xAC]=0x100;d.cp[0xBC]=48;
     d.frames[0]={Range{start,uint32_t(d.bytes.size()-start)},0,0,{{0,0x100,{5,48},2}}};
     auto packets=GxStream(d,0).packets();
-    CHECK(packets[0].draws[0].transforms.position_rows[2][2]==1);
+    CHECK(packets[0].draws[0].transforms->position_rows[2][2]==1);
     // Same FIFO next frame, but its matrix source changes at that frame's start.
     size_t matrix=d.bytes.size();
     for(float v:{2.f,0.f,0.f,0.f,0.f,2.f,0.f,0.f,0.f,0.f,2.f,0.f})word(d,std::bit_cast<uint32_t>(v));
     d.frames.push_back(d.frames[0]);d.frames[1].updates[0].data={matrix,48};
     auto both=GxStream(d,1).packets();
-    CHECK(both.size()==2 && both[0].draws[0].transforms.position_rows[2][2]==1);
-    CHECK(both[1].draws[0].transforms.position_rows[2][2]==2);
+    CHECK(both.size()==2 && both[0].draws[0].transforms->position_rows[2][2]==1);
+    CHECK(both[1].draws[0].transforms->position_rows[2][2]==2);
 }
 int main(int argc,char** argv) try {
     if(argc==2) {
@@ -71,8 +71,8 @@ int main(int argc,char** argv) try {
     CHECK(draw.vertices.size()==3 && draw.indices.size()==3);
     CHECK(draw.vertices[0].position[0]==-1 && draw.vertices[2].position[0]==1);
     CHECK(draw.vertices[0].color[0][1]==128);
-    CHECK(draw.transforms.projection[0][0]==2 && draw.transforms.projection[1][1]==-2);
-    CHECK(draw.transforms.position_rows[1][1]==1);
+    CHECK(draw.transforms->projection[0][0]==2 && draw.transforms->projection[1][1]==-2);
+    CHECK(draw.transforms->position_rows[1][1]==1);
     auto material=triangle();
     material.bp[0xC0]=0x123456;material.bp[0xC1]=0x654321;
     material.bp[0xF3]=0x3F0000;material.bp[0x40]=0x1B;material.bp[0x41]=0x418;
@@ -82,10 +82,10 @@ int main(int argc,char** argv) try {
     auto shading=GxStream(material,0).packets()[0].draws[0];
     CHECK(shading.material.stages==1 && shading.material.stage[0].color==0x123456);
     CHECK(shading.material.stage[0].alpha==0x654321);
-    CHECK(shading.uniforms.pixel[1]==0x1B && shading.uniforms.fog[0]==123);
-    CHECK(shading.uniforms.materials[0][1]==128/255.f);
-    CHECK((shading.uniforms.lights[0].color==std::array<float,4>{255,128,64,32}));
-    CHECK(shading.uniforms.registers[0][0]==1 && shading.uniforms.registers[0][1]==32/255.f);
+    CHECK(shading.uniforms->pixel[1]==0x1B && shading.uniforms->fog[0]==123);
+    CHECK(shading.uniforms->materials[0][1]==128/255.f);
+    CHECK((shading.uniforms->lights[0].color==std::array<float,4>{255,128,64,32}));
+    CHECK(shading.uniforms->registers[0][0]==1 && shading.uniforms->registers[0][1]==32/255.f);
     CHECK(shading.blend.color_write && shading.blend.alpha_write);
     auto projected=triangle();
     projected.xf_registers[0x3F]=1;projected.xf_registers[0x40]=6;
@@ -99,9 +99,9 @@ int main(int argc,char** argv) try {
     }
     auto generated=GxStream(projected,0).packets()[0].draws[0];
     // Texgen runs on the GPU as in the game: the draw carries the XF words and matrices, vertices keep raw attributes.
-    CHECK(generated.uniforms.tex_gens[0]==6 && generated.uniforms.tex_posts[0]==0);
-    CHECK((generated.uniforms.tex_rows[0]==std::array<float,4>{2,0,0,1}) && (generated.uniforms.tex_rows[2]==std::array<float,4>{0,0,0,2}));
-    CHECK((generated.uniforms.post_rows[0]==std::array<float,4>{1,0,0,4}));
+    CHECK(generated.uniforms->tex_gens[0]==6 && generated.uniforms->tex_posts[0]==0);
+    CHECK((generated.uniforms->tex_rows[0]==std::array<float,4>{2,0,0,1}) && (generated.uniforms->tex_rows[2]==std::array<float,4>{0,0,0,2}));
+    CHECK((generated.uniforms->post_rows[0]==std::array<float,4>{1,0,0,4}));
     auto normals=triangle();auto original_normals=normals.bytes;
     normals.cp[0x50]|=1<<11;normals.cp[0x70]|=4<<10;
     normals.bytes.resize(94);
@@ -116,12 +116,12 @@ int main(int argc,char** argv) try {
     normals.xf_registers[0x18]=60<<6;normals.xf_registers[0x12]=1;normals.xf_registers[0x50]=256;
     for(size_t i=0;i<3;++i)normals.xf[0x500+i*5]=std::bit_cast<uint32_t>(1.f);
     auto normal_generated=GxStream(normals,0).packets()[0].draws[0];
-    CHECK(normal_generated.uniforms.tex_gens[0]==0x86 && normal_generated.uniforms.tex_posts[0]==256);
-    CHECK((normal_generated.uniforms.post_rows[1]==std::array<float,4>{0,1,0,0}) && normal_generated.vertices[0].normal[1]==3);
+    CHECK(normal_generated.uniforms->tex_gens[0]==0x86 && normal_generated.uniforms->tex_posts[0]==256);
+    CHECK((normal_generated.uniforms->post_rows[1]==std::array<float,4>{0,1,0,0}) && normal_generated.vertices[0].normal[1]==3);
     auto viewport=triangle();
     for(auto [reg,value]:{std::pair{0x1A,320.f},{0x1B,-240.f},{0x1C,16777216.f},{0x1D,662.f},{0x1E,582.f},{0x1F,16777216.f}})
         viewport.xf_registers[reg]=std::bit_cast<uint32_t>(value);
-    auto vp=GxStream(viewport,0).packets()[0].draws[0].state.viewport;
+    auto vp=GxStream(viewport,0).packets()[0].draws[0].state->viewport;
     CHECK(vp && (*vp)[0]==0 && (*vp)[1]==0 && (*vp)[5]==1);
     auto textured=triangle();size_t texture_offset=textured.bytes.size();
     for(size_t i=0;i<16;++i) {byte(textured,255);byte(textured,128);}

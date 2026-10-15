@@ -33,7 +33,7 @@ int main() {
     state.formats[0][9].components = 2;
     auto draw = capture.take_draw();
     CHECK(draw.vertices.size() == 3 && draw.indices == std::vector<uint32_t>({0,1,2}));
-    CHECK(draw.state.formats[0][9].components == 3 && draw.callsite == 0x80029D84);
+    CHECK(draw.state->formats[0][9].components == 3 && draw.callsite == 0x80029D84);
     CHECK(draw.vertices[1].position[0] == 1 && draw.vertices[2].position[1] == 1);
     CHECK((draw.vertices[0].color[0] == std::array<uint8_t,4>({255,0,0,255})));
     CHECK(draw.vertices[2].texcoord[0][1] == 1);

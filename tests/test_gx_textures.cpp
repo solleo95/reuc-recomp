@@ -1,5 +1,6 @@
 #include "check.h"
 #include "gx_textures.h"
+#include "../runtime/gx_write_watch.h"
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -122,9 +123,18 @@ int main() {
     auto first=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
     CHECK(cache.snapshot(0x00001000,{1,1,gx::TextureFormat::i8},bytes(data))==first);
     CHECK(cache.decodes()==1);
+    // A store the barrier does not see is picked up by the periodic full comparison; one it sees is picked up at once.
     data[0]=34;
+    auto unseen=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
+    CHECK(unseen==first);
+    gx::note_write_range(0x80001000,32);
     auto second=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
     CHECK(second!=first && first->levels[0].rgba[0]==17 && second->levels[0].rgba[0]==34);
+    data[0]=51;
+    std::shared_ptr<const gx::TexturePixels> refreshed;
+    for (int use=0;use<300 && !refreshed;++use) { auto now=cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data)); if (now!=second) refreshed=now; }
+    CHECK(refreshed && refreshed->levels[0].rgba[0]==51);   // within 256 uses without any barrier hit
+    data[0]=34; gx::note_write_range(0x80001000,32);
     data.assign(32,0); palette.assign(2,255);
     auto indexed=cache.snapshot(0x80002000,{1,1,gx::TextureFormat::c8},bytes(data),{gx::PaletteFormat::ia8,bytes(palette)});
     palette[1]=68;

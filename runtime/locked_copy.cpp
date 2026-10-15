@@ -12,6 +12,7 @@ void copy(ppc::Ctx& c,bool load) {
     const gx::Memory memory{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x20000000),0x4000}};
     memory.read(source,bytes); memory.read(destination,bytes);
     std::memmove(c.mem+(destination&0x3FFFFFFF),c.mem+(source&0x3FFFFFFF),bytes);
+    gx::note_write_range(destination,bytes);
 }
 }
 void hle_LCLoadBlocks(ppc::Ctx& c) { copy(c,true); }

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <intrin.h>
+#include "gx_write_watch.h"
 
 #define PPC_INLINE __attribute__((always_inline)) inline
 
@@ -57,15 +58,15 @@ PPC_INLINE uint32_t rd8(Ctx& c, uint32_t ea) {
 }
 PPC_INLINE void wr32(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, v); return; }
-    v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4);
+    gx::note_write(ea); gx::note_write(ea + 3); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4);
 }
 PPC_INLINE void wr16(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 2, v & 0xFFFF); return; }
-    uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2);
+    gx::note_write(ea); gx::note_write(ea + 1); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2);
 }
 PPC_INLINE void wr8(Ctx& c, uint32_t ea, uint32_t v) {
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 1, v & 0xFF); return; }
-    *hp(c, ea) = uint8_t(v);
+    gx::note_write(ea); *hp(c, ea) = uint8_t(v);
 }
 PPC_INLINE float rdf32(Ctx& c, uint32_t ea) { uint32_t b = rd32(c, ea); float f; std::memcpy(&f, &b, 4); return f; }
 PPC_INLINE double rdf64(Ctx& c, uint32_t ea) {
@@ -76,7 +77,7 @@ PPC_INLINE void wrf32(Ctx& c, uint32_t ea, float v) { uint32_t b; std::memcpy(&b
 PPC_INLINE void wrf64(Ctx& c, uint32_t ea, double v) {
     uint64_t b; std::memcpy(&b, &v, 8);
     if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, uint32_t(b >> 32)); mmio_write(ea + 4, 4, uint32_t(b)); return; }
-    b = _byteswap_uint64(b); std::memcpy(hp(c, ea), &b, 8);
+    gx::note_write(ea); gx::note_write(ea + 7); b = _byteswap_uint64(b); std::memcpy(hp(c, ea), &b, 8);
 }
 
 PPC_INLINE uint32_t ea_d(Ctx& c, int a, int32_t d) { return (a ? c.r[a] : 0u) + uint32_t(d); }
@@ -285,7 +286,7 @@ PPC_INLINE void op_stwcx_(Ctx& c, int t, int a, int b) {
     c.reserve_addr = 0;
     c.cr[0] = uint8_t((ok ? 2 : 0) | c.xer_so);
 }
-PPC_INLINE void op_dcbz(Ctx& c, int a, int b) { uint32_t e = ea_x(c, a, b) & ~31u; std::memset(hp(c, e), 0, 32); }
+PPC_INLINE void op_dcbz(Ctx& c, int a, int b) { uint32_t e = ea_x(c, a, b) & ~31u; gx::note_write(e); std::memset(hp(c, e), 0, 32); }
 PPC_INLINE void op_dcbz_l(Ctx& c, int a, int b) { op_dcbz(c, a, b); }
 
 // ---- floating point ----

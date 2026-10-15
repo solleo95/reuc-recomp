@@ -50,6 +50,22 @@ int main() {
     packets.cancel();
     CHECK(blocked.wait_for(1s) == std::future_status::ready && blocked.get());
     CHECK(!packets.try_take() && !packets.complete(4));
+    // Packets that do not present are bounded by the queue window, not by the frames in flight.
+    gx::Packets window;
+    gx::FramePacket pass; pass.present = false;
+    for (size_t i = 0; i < gx::kMaxOutstandingPackets; ++i) CHECK(window.seal_batch(pass) == i + 1);
+    auto overflow = std::async(std::launch::async, [&] { return window.seal_batch(pass); });
+    CHECK(overflow.wait_for(20ms) == std::future_status::timeout);
+    auto head = window.try_take(); CHECK(head && window.complete(head->serial));
+    CHECK(overflow.wait_for(1s) == std::future_status::ready);
+    // A presenting packet also waits for the frame in flight limit while earlier passes keep flowing.
+    gx::Packets frames;
+    CHECK(frames.seal_batch({}) == 1 && frames.seal_batch({}) == 2);
+    auto third_frame = std::async(std::launch::async, [&] { return frames.seal_batch({}); });
+    CHECK(third_frame.wait_for(20ms) == std::future_status::timeout);
+    CHECK(frames.seal_batch(pass) == 3);
+    auto one = frames.try_take(); CHECK(one && one->serial == 1 && frames.complete(1));
+    CHECK(third_frame.wait_for(1s) == std::future_status::ready && third_frame.get() == 4);
     // Two producers publish complete, independent owned packets.
     gx::Packets concurrent;
     auto produce = [&](uint32_t identity) {

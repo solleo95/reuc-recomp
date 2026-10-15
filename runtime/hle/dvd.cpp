@@ -133,7 +133,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
         s.post_external([=, &s] {                           // runs on the baton holder, with interrupts enabled
             ppc::Ctx& ic = s.irq_ctx();
             if (g_cancelled.erase(fi)) return;               // DVDCancel already answered for this command block
-            if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
+            if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); gx::note_write_range(buf, len); std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
             ppc::wr32(ic, fi + layout::kCbState, n < 0 ? uint32_t(-1) : 0u);   // DVD_STATE_END or FATAL_ERROR
             if (cb) call_guest(ic, cb, {uint32_t(n < 0 ? -1 : int64_t(len)), fi});
         });

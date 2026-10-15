@@ -49,7 +49,12 @@ def controls(g, args):
 
 
 def perf(g, args):
-    result = train_gameplay(g, args)
+    g.set_speed(8)   # menus and loading at 8x; the measurement itself runs at speed 1
+    reach_gameplay(g, args.chapter)
+    with g.step("normal_speed"):
+        g.set_speed(1)
+        g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
+    result = {"capture": g.capture()}
     with g.step("measure_fps"):
         result.update(steps.measure_fps(g, args.measure or 15))
     return result

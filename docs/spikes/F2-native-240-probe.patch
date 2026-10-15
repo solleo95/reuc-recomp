@@ -1,0 +1,143 @@
+diff --git a/game/game_pacing.cpp b/game/game_pacing.cpp
+index b030efc..7f4334e 100644
+--- a/game/game_pacing.cpp
++++ b/game/game_pacing.cpp
+@@ -1,14 +1,88 @@
+ #include "game_pacing.h"
+ #include "dispatch.h"
+ #include "gx_vertices.h"
++#include "gx_packets.h"
++#include "hle/os.h"
++#include "clock.h"
++#define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <windows.h>
++#include <vector>
++#include <thread>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
+ #include <atomic>
++#include <algorithm>
+ #include <cmath>
++#include <cstring>
+ #include <stdexcept>
+ namespace {
+ constexpr uint32_t kClock=0x804D3318;
+ bool unlock_60fps; // Initialized before scheduler startup; guest baton owns later access.
+ std::atomic<uint64_t> calls{0},retraces{0},timestep_ns{0},threshold_two{0},adjusted{0};
+ }
++
++// SPIKE-240 (throwaway): UC_SPIKE_HZ=240 replaces the retrace wait of the game clock with a wall-clock deadline and a real dt.
++namespace spike {
++using Clock=std::chrono::steady_clock;
++const unsigned hz=[]{ const char* v=std::getenv("UC_SPIKE_HZ"); return v ? unsigned(std::atoi(v)) : 0u; }();
++Clock::time_point deadline{},last_boundary{},last_exit{},report{};
++uint64_t frames,busy_ns,wait_ns,seal0,late;
++double dt_sum;
++
++// SPIKE-240 sampler: RIP of the guest main thread every ~0.5 ms -> spike-samples.txt ("rva count"), resolved offline through a linker map.
++void start_sampler() {
++    static bool started=false; if(started) return; started=true;
++    HANDLE target=nullptr;
++    DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&target,0,FALSE,DUPLICATE_SAME_ACCESS);
++    std::thread([target] {
++        const auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
++        std::vector<uint32_t> hist(8u<<20); auto last=Clock::now(); // no allocation while the target is suspended (it may hold the heap lock)
++        for(;;) {
++            std::this_thread::sleep_for(std::chrono::microseconds(500));
++            if(SuspendThread(target)==DWORD(-1)) continue;
++            CONTEXT ctx{}; ctx.ContextFlags=CONTEXT_CONTROL;
++            if(GetThreadContext(target,&ctx)) { const uint64_t rva=ctx.Rip-base; if((rva>>3)<hist.size()) ++hist[rva>>3]; }
++            ResumeThread(target);
++            if(Clock::now()-last>=std::chrono::seconds(1)) {
++                last=Clock::now();
++                if(FILE* f=std::fopen("spike-samples.txt","w")) { for(size_t i=0;i<hist.size();++i) if(hist[i]) std::fprintf(f,"%llx %llu\n",(unsigned long long)(i<<3),(unsigned long long)hist[i]); std::fclose(f); }
++            }
++        }
++    }).detach();
++}
++void wait(ppc::Ctx&) {
++    start_sampler();
++    const auto period=std::chrono::nanoseconds(1000000000ll/hz);
++    const auto entered=Clock::now();
++    if(last_exit!=Clock::time_point{}) busy_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(entered-last_exit).count();
++    if(deadline==Clock::time_point{} || entered>deadline+8*period) deadline=entered; // resync after a long stall
++    else deadline+=period;
++    if(entered>deadline) ++late;
++    // Coarse wait through the scheduler (the baton is released), the last ~1.5 ms spin.
++    const auto coarse=deadline-std::chrono::microseconds(1500);
++    if(Clock::now()<coarse) uc::os_sched().sleep_ticks(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(coarse-Clock::now()).count())*uc::kTimebaseHz/1000000000ull/uc::clock_speed());
++    while(Clock::now()<deadline) {}
++    const auto now=Clock::now();
++    wait_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(now-entered).count();
++}
++float dt() {
++    const auto now=Clock::now();
++    double step=last_boundary==Clock::time_point{} ? 1.0/hz : std::chrono::duration<double>(now-last_boundary).count();
++    last_boundary=now;
++    step=step<1.0/1000 ? 1.0/1000 : step>1.0/20 ? 1.0/20 : step;
++    ++frames; dt_sum+=step;
++    last_exit=Clock::now();
++    if(report==Clock::time_point{}) report=now;
++    if(now-report>=std::chrono::seconds(1)) {
++        const auto seal=gx::seal_wait_ns();
++        std::fprintf(stderr,"[spike] hz %u frames %llu sim-seconds %.3f busy %.3f ms/frame (renderer-blocked %.3f) idle-wait %.3f ms/frame late %llu\n",hz,(unsigned long long)frames,dt_sum,busy_ns/1e6/std::max<uint64_t>(frames,1),(seal-seal0)/1e6/std::max<uint64_t>(frames,1),wait_ns/1e6/std::max<uint64_t>(frames,1),(unsigned long long)late);
++        frames=busy_ns=wait_ns=late=0; dt_sum=0; seal0=seal; report=now;
++    }
++    return float(step);
++}
++}
+ namespace uc {
+ void game_pacing_init(bool unlock) {
+     unlock_60fps=unlock; calls=retraces=timestep_ns=threshold_two=adjusted=0;
+@@ -29,12 +103,15 @@ void hle_GameFrameWait(ppc::Ctx& c) {
+         return int32_t(c.r[3])>=int32_t(change ? 1 : target);
+     };
+     const bool elapsed=ready();
++    const bool spiking=spike::hz && object==kClock; // SPIKE-240
++    if(spiking) { spike::wait(c); ppc::wr32(c,object+0x20,1); c.r[3]=1; change=false; }
+     // Original mode retains its mandatory wait; native60 avoids waiting twice after GPU work.
+-    if(!change || !elapsed) do {
++    else if(!change || !elapsed) do {
+         c.lr=0x801581F8; uc::call_indirect(c,0x8026E194);
+     } while(!ready());
+     c.lr=0x801581F8;
+     uc::call_indirect(c,0x80158208);
++    if(spiking) { const float step=spike::dt(); uint32_t bits; std::memcpy(&bits,&step,4); ppc::wr32(c,object+4,bits); ppc::wr32(c,object+8,bits); ppc::wr32(c,object+0x20,0); } // SPIKE-240
+     if(object==kClock) {
+         const float step=ppc::rdf32(c,object+8);
+         if(!std::isfinite(step) || step<0 || step>1) throw std::invalid_argument("invalid native game timestep");
+diff --git a/renderer/gx_packets.cpp b/renderer/gx_packets.cpp
+index 5769407..7739e20 100644
+--- a/renderer/gx_packets.cpp
++++ b/renderer/gx_packets.cpp
+@@ -1,10 +1,16 @@
+ #include "gx_packets.h"
++#include <atomic>
++#include <chrono>
+ #include <limits>
+ 
+ namespace gx {
++namespace { std::atomic<uint64_t> g_seal_wait_ns{0}; } // SPIKE-240
++uint64_t seal_wait_ns() { return g_seal_wait_ns.load(); }
+ uint64_t Packets::seal_batch(FramePacket packet) {
+     std::unique_lock lock(mutex_);
++    const auto wait_start = std::chrono::steady_clock::now(); // SPIKE-240
+     space_.wait(lock, [&] { return canceled_ || outstanding_.size() < 2; });
++    g_seal_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - wait_start).count(); // SPIKE-240
+     if (canceled_) throw Error(ErrorCode::canceled, 0, 0, 0);
+     if (next_serial_ == std::numeric_limits<uint64_t>::max()) throw Error(ErrorCode::sequence, 0, 0, 0);
+     uint64_t serial = next_serial_;
+diff --git a/renderer/gx_packets.h b/renderer/gx_packets.h
+index 81be064..0a4deec 100644
+--- a/renderer/gx_packets.h
++++ b/renderer/gx_packets.h
+@@ -25,6 +25,7 @@ struct FramePacket {
+     bool black_output = false; // VI blanked: present black, the EFB copy still happens
+ };
+ 
++uint64_t seal_wait_ns(); // SPIKE-240: total time guest threads were blocked in seal_batch
+ class Packets {
+ public:
+     uint64_t seal_batch(FramePacket packet);

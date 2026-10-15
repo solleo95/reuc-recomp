@@ -1,21 +1,44 @@
 #include "game_pacing.h"
+#include "cpu_sampler.h"
 #include "dispatch.h"
 #include "gx_vertices.h"
+#include "clock.h"
+#include "hle/os.h"
 #include <atomic>
+#include <chrono>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 namespace {
 constexpr uint32_t kClock=0x804D3318;
 bool unlock_60fps; // Initialized before scheduler startup; guest baton owns later access.
-std::atomic<uint64_t> calls{0},retraces{0},timestep_ns{0},threshold_two{0},adjusted{0};
+uint32_t game_hz;  // same ownership
+uint64_t deadline_ticks,last_boundary_ticks;
+// Experimental --game-hz: the game clock waits for a wall-clock (virtual clock) deadline instead of a VI retrace and gets the real elapsed time as its timestep.
+// shortcut: coarse scheduler sleep (1 ms granularity) plus a 2 ms spin; replace with a waitable timer if the spin shows up in CPU use.
+void timed_wait() {
+    const uint64_t period=uc::kTimebaseHz/game_hz,now=uc::now_ticks(),spin=uc::ms_to_ticks(2);
+    deadline_ticks=std::max(deadline_ticks+period,now);   // a late frame starts the next one at once instead of waiting for the next slot
+    if(deadline_ticks>now+spin) uc::os_sched().sleep_ticks(deadline_ticks-spin-now);
+    while(uc::now_ticks()<deadline_ticks) {}
+}
+float timed_step() {
+    const uint64_t now=uc::now_ticks();
+    const double step=last_boundary_ticks ? double(now-last_boundary_ticks)/uc::kTimebaseHz : 1.0/game_hz;
+    last_boundary_ticks=now;
+    return float(std::clamp(step,0.001,0.05));
+}
+std::atomic<uint64_t> calls{0},retraces{0},timestep_ns{0},threshold_two{0},adjusted{0},wait_ns{0};
 }
 namespace uc {
-void game_pacing_init(bool unlock) {
-    unlock_60fps=unlock; calls=retraces=timestep_ns=threshold_two=adjusted=0;
+void game_pacing_init(bool unlock,uint32_t hz) {
+    unlock_60fps=unlock; game_hz=hz; deadline_ticks=last_boundary_ticks=0; calls=retraces=timestep_ns=threshold_two=adjusted=wait_ns=0;
 }
-GamePacingStats game_pacing_stats() { return {calls.load(),retraces.load(),timestep_ns.load(),threshold_two.load(),adjusted.load()}; }
+GamePacingStats game_pacing_stats() { return {calls.load(),retraces.load(),timestep_ns.load(),threshold_two.load(),adjusted.load(),wait_ns.load()}; }
 }
 void hle_GameFrameWait(ppc::Ctx& c) {
+    uc::cpu_sampler_start_once();
     const auto object=c.r[3],stack=c.r[1];
     gx::Memory memory{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}};
     memory.read(object,0x30); memory.read(stack-32,40);
@@ -29,12 +52,27 @@ void hle_GameFrameWait(ppc::Ctx& c) {
         return int32_t(c.r[3])>=int32_t(change ? 1 : target);
     };
     const bool elapsed=ready();
+    const bool timed=game_hz && object==kClock;
+    if(timed) {
+        const auto wait_start=std::chrono::steady_clock::now();
+        timed_wait();
+        wait_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count());
+        ppc::wr32(c,object+0x20,1); c.r[3]=1; change=false;   // the tail below sees exactly one elapsed step
+    }
     // Original mode retains its mandatory wait; native60 avoids waiting twice after GPU work.
-    if(!change || !elapsed) do {
-        c.lr=0x801581F8; uc::call_indirect(c,0x8026E194);
-    } while(!ready());
+    else if(!change || !elapsed) {
+        const auto wait_start=std::chrono::steady_clock::now();
+        do {
+            c.lr=0x801581F8; uc::call_indirect(c,0x8026E194);
+        } while(!ready());
+        if(object==kClock) wait_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count());
+    }
     c.lr=0x801581F8;
     uc::call_indirect(c,0x80158208);
+    if(timed) {
+        const float step=timed_step(); uint32_t bits; std::memcpy(&bits,&step,4);
+        ppc::wr32(c,object+4,bits); ppc::wr32(c,object+8,bits); ppc::wr32(c,object+0x20,0);   // callback increments during the frame are ignored
+    }
     if(object==kClock) {
         const float step=ppc::rdf32(c,object+8);
         if(!std::isfinite(step) || step<0 || step>1) throw std::invalid_argument("invalid native game timestep");

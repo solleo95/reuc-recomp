@@ -30,7 +30,7 @@ int main() {
         auto take=[&](float wanted,size_t count=1) {
             c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
             auto packet=packets.try_take(); CHECK(packet && packet->draws.size()==count);
-            for(const auto& item:packet->draws) CHECK(item.uniforms.tex_rows[0][3]==wanted);
+            for(const auto& item:packet->draws) CHECK(item.uniforms->tex_rows[0][3]==wanted);
             CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         };
         load(.25f); begin(0x80003000); draw(); const auto inherited=end();
@@ -61,8 +61,8 @@ int main() {
         draw(); c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
         auto packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
         const auto& u=packet->draws[0].uniforms;
-        CHECK((u.tex_rows[2]==std::array<float,4>{9,10,11,12}) && u.tex_gens[0]==6 && u.tex_posts[0]==0x103);
-        CHECK((u.post_rows[0]==std::array<float,4>{1,2,3,4}) && (u.post_rows[2]==std::array<float,4>{9,10,11,12}));
+        CHECK((u->tex_rows[2]==std::array<float,4>{9,10,11,12}) && u->tex_gens[0]==6 && u->tex_posts[0]==0x103);
+        CHECK((u->post_rows[0]==std::array<float,4>{1,2,3,4}) && (u->post_rows[2]==std::array<float,4>{9,10,11,12}));
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
     sched.run(thread);

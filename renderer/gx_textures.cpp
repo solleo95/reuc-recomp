@@ -1,4 +1,5 @@
 #include "gx_textures.h"
+#include "../runtime/gx_write_watch.h"
 #include <algorithm>
 #include <array>
 
@@ -141,13 +142,18 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
     if (pixels.size() < required) throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
     pixels = pixels.first(required);
     address &= 0x3FFFFFFF;
+    if (watch_exhausted()) { watch_reset(); clear(); }
     const auto candidates = by_address_.equal_range(address);
     for (auto candidate = candidates.first; candidate != candidates.second; ++candidate) {
         const auto it = candidate->second;
         if (it->address == address && it->desc.width == desc.width && it->desc.height == desc.height &&
             it->desc.format == desc.format && it->desc.levels == desc.levels && it->format == palette.format &&
-            std::equal(it->encoded.begin(), it->encoded.end(), pixels.begin(), pixels.end()) &&
-            std::equal(it->palette.begin(), it->palette.end(), palette.bytes.begin(), palette.bytes.end())) {
+            same_bytes(it->palette, palette.bytes)) {
+            // The pixel bytes are compared only when a guest store touched their pages since the last comparison (gx_write_watch.h), and anyway every
+            // 256th use as a net for native writers that miss the barrier.
+            if (!written_since(address, required, it->stamp) && it->skips < 256) ++it->skips;
+            else if (same_bytes(it->encoded, pixels)) { it->stamp = watch_stamp(); it->skips = 0; }
+            else continue;
             auto result = it->pixels;
             entries_.splice(entries_.begin(), entries_, it);
             return result;
@@ -166,7 +172,7 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
             }
             resident_ -= entries_.back().bytes; entries_.pop_back();
         }
-        entries_.push_front({address, desc, palette.format, {pixels.begin(), pixels.end()}, {palette.bytes.begin(), palette.bytes.end()}, result, bytes});
+        entries_.push_front({address, desc, palette.format, {pixels.begin(), pixels.end()}, {palette.bytes.begin(), palette.bytes.end()}, result, bytes, watch_stamp(), 0});
         try {
             by_address_.emplace(address, entries_.begin());
         } catch (...) {

@@ -23,9 +23,13 @@ uc::Sched* scheduler;
 gx::Packets* packets;
 gx::Memory memory;
 gx::State state;
-gx::Transforms transforms,live_transforms;
+gx::Transforms transforms;
+// Blocks shared by consecutive draws; each path keeps its own so an interleaved path does not evict the other's.
+gx::Shared<gx::Transforms> live_transforms,import_transforms,mesh_transforms_block;
+gx::Shared<gx::State> live_state,import_state,mesh_state;
 gx::BlendState blend_state,live_blend;
-gx::DrawUniform color_uniforms,live_uniforms;
+gx::DrawUniform color_uniforms;
+gx::Shared<gx::DrawUniform> live_uniforms,import_uniforms,mesh_uniforms_block;
 gx::TevMaterial live_material;
 bool profile_mesh;
 uint32_t prompt_color_logs=0;
@@ -65,9 +69,9 @@ uint32_t texture_copy_format=6;
 using CopiedTextures=std::map<uint32_t,std::shared_ptr<const gx::TexturePixels>>;
 CopiedTextures copied_textures;
 struct CopiedTexture { gx::TextureCopy request; bool clear; CopyState clear_state; };
-using Imported=std::vector<std::variant<gx::DrawPacket,CopiedTexture>>;
+using Imported=std::deque<std::variant<gx::DrawPacket,CopiedTexture>>;
 std::unique_ptr<gx::Vertices> capture;
-struct MeshGeometry { std::vector<gx::Vertex> vertices; std::vector<uint32_t> indices; };
+struct MeshGeometry { std::shared_ptr<gx::MeshBuffers> buffers; };   // mutable only while the cache entry is built
 struct MeshPosition { uint16_t index; uint32_t row; };
 struct MeshNormal { uint16_t index; uint32_t row; };
 struct MeshTexture { uint16_t index; uint32_t id; uint32_t words; };
@@ -78,6 +82,7 @@ struct CachedMesh {
     std::vector<std::variant<MeshGeometry,MeshPosition,MeshNormal,MeshTexture>> operations;
     std::vector<Source> sources;
     size_t size=0;
+    mutable uint32_t stamp=0,skips=0;   // write-barrier stamp of the last byte comparison (gx_write_watch.h); hits since then
 };
 struct MeshCacheEntry { uintptr_t key; std::shared_ptr<const CachedMesh> mesh; };
 std::list<MeshCacheEntry> mesh_cache;
@@ -85,7 +90,7 @@ std::unordered_map<uintptr_t,std::list<MeshCacheEntry>::iterator> mesh_index;
 size_t mesh_cache_bytes=0;
 constexpr size_t mesh_cache_budget=32u<<20;
 std::atomic<uint64_t> geometry_hits{0},geometry_misses{0};
-std::vector<gx::DrawPacket> draws;
+std::deque<gx::DrawPacket,gx::PoolAllocator<gx::DrawPacket>> draws;
 struct RecordedDraw {
     gx::State state;
     uint32_t callsite;
@@ -101,6 +106,7 @@ struct RecordedDraw {
 };
 struct Resource {
     std::vector<std::byte> bytes;
+    mutable uint32_t stamp=0,skips=0;   // write-barrier stamp of the last byte comparison (gx_write_watch.h); uses since then
     struct ArrayBinding { size_t attribute; gx::Array array; };
     struct Child { uint32_t address, length; };
     struct Projection { gx::Projection matrix; };
@@ -120,8 +126,12 @@ struct Resource {
     struct NumChannels { uint32_t count; };
     struct ChannelControl { uint32_t index,control; };
     struct TextureTransform { uint32_t id; TextureMatrix matrix; };
-    std::vector<std::variant<RecordedDraw,ArrayBinding,Child,Projection,Position,IndexedPosition,IndexedNormal,BpRegister,Current,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl,TextureTransform>> geometry;
+    // A RecordedDraw is ~5 KB: held by pointer so growing the vector moves 8 bytes, not the draw.
+    using Item=std::variant<std::unique_ptr<RecordedDraw>,ArrayBinding,Child,Projection,Position,IndexedPosition,IndexedNormal,BpRegister,Current,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl,TextureTransform>;
+    std::vector<Item> geometry;
 };
+RecordedDraw* recorded_draw(Resource::Item& item) { auto* held=std::get_if<std::unique_ptr<RecordedDraw>>(&item); return held ? held->get() : nullptr; }
+const RecordedDraw* recorded_draw(const Resource::Item& item) { auto* held=std::get_if<std::unique_ptr<RecordedDraw>>(&item); return held ? held->get() : nullptr; }
 std::map<uint32_t,Resource> resources; // owned SDK recordings; no FIFO command decoding
 struct ListRecording {
     uint32_t address, capacity, sdk, owner;
@@ -264,7 +274,7 @@ void native_bp(uint32_t word) {
 }
 bool recording_primitive() {
     if (!recording || recording->native.geometry.empty()) return false;
-    auto* draw=std::get_if<RecordedDraw>(&recording->native.geometry.back());
+    auto* draw=recorded_draw(recording->native.geometry.back());
     return draw && draw->payload.size()<draw->expected;
 }
 gx::State snapshot(ppc::Ctx& ctx) {
@@ -309,7 +319,12 @@ gx::State snapshot(ppc::Ctx& ctx) {
 const Resource& checked_resource(uint32_t address,uint32_t length) {
     const auto bytes=memory.read(address,length);
     auto found=resources.find(address & 0x3FFFFFFF);
-    if (found==resources.end() || found->second.bytes.size()!=length || !std::equal(bytes.begin(),bytes.end(),found->second.bytes.begin())) {
+    // Compared against guest memory only when a store touched the pages since the last comparison, and anyway every 256th use.
+    const bool known=found!=resources.end() && found->second.bytes.size()==length;
+    const bool clean=known && found->second.skips<256 && !gx::written_since(address,length,found->second.stamp);
+    if (known && !clean && gx::same_bytes(bytes,found->second.bytes)) { found->second.stamp=gx::watch_stamp(); found->second.skips=0; }
+    else if (clean) ++found->second.skips;
+    else {
         std::fprintf(stderr,"[native-resource-missing] address %08X length %u prefix",address,length);
         for (auto byte:bytes.first(std::min(bytes.size(),size_t(256)))) std::fprintf(stderr," %02X",std::to_integer<unsigned>(byte));
         std::fprintf(stderr,"\n");
@@ -363,29 +378,31 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
     const auto& resource=checked_resource(address,length);
     path.push_back(physical);
     for (const auto& item : resource.geometry) {
-        if (const auto* source=std::get_if<RecordedDraw>(&item)) {
+        if (const auto* source=recorded_draw(item)) {
             // shortcut: decode attributes per call; cache native mesh revisions after profiling (TD-032).
             auto layout=source->state;
             layout.arrays=bindings.arrays;
             gx::Vertices vertices(memory);
-            vertices.begin(layout,source->primitive,source->vat,source->count,producer(),source->callsite);
+            vertices.begin(gx::share(import_state,layout),source->primitive,source->vat,source->count,producer(),source->callsite);
             vertices.write_attribute(producer(),source->payload);
-            auto draw=vertices.take_draw(); draw.transforms=transform_state;
+            auto draw=vertices.take_draw(); draw.transforms=gx::share(import_transforms,transform_state);
             draw.texture=snapshot_texture(textures[0],loaded,versions);
             const auto maps=texture_mask(source->material,source->uniforms);
             for(uint32_t map=1;map<8;++map) if(maps&(1u<<map)) {
                 draw.texture_maps[map-1]=snapshot_texture(textures[map],loaded,versions);
             }
-            draw.material=source->material; draw.uniforms=source->uniforms;
-            draw.uniforms.registers=colors.registers; draw.uniforms.konst=colors.konst;
-            draw.uniforms.lights=colors.lights; draw.uniforms.materials=colors.materials;
-            draw.uniforms.ambient=colors.ambient; draw.uniforms.channels=colors.channels;
-            draw.uniforms.pixel[3]=colors.pixel[3];
-            resolve_texture_matrices(draw.uniforms,source->texture_selectors,matrices);
+            draw.material=source->material;
+            auto uniforms=source->uniforms;
+            uniforms.registers=colors.registers; uniforms.konst=colors.konst;
+            uniforms.lights=colors.lights; uniforms.materials=colors.materials;
+            uniforms.ambient=colors.ambient; uniforms.channels=colors.channels;
+            uniforms.pixel[3]=colors.pixel[3];
+            resolve_texture_matrices(uniforms,source->texture_selectors,matrices);
+            draw.uniforms=gx::share(import_uniforms,uniforms);
             draw.texture_wrap=wraps(textures);
             draw.blend=blend;
             if(source->prompt)if(auto prompt=uc::prompt_from_quad(draw,*source->prompt)) {
-                if(profile_mesh && source->compact && prompt_color_logs++<12)std::fprintf(stderr,"[prompt-color] action %u pos %.2f %.2f rgba %u %u %u %u material %.2f %.2f %.2f channel %08X\n",unsigned(source->prompt->action),prompt->efb_corners[0],prompt->efb_corners[1],draw.vertices[0].color[0][0],draw.vertices[0].color[0][1],draw.vertices[0].color[0][2],draw.vertices[0].color[0][3],draw.uniforms.materials[0][0],draw.uniforms.materials[0][1],draw.uniforms.materials[0][2],draw.uniforms.channels[0]);
+                if(profile_mesh && source->compact && prompt_color_logs++<12)std::fprintf(stderr,"[prompt-color] action %u pos %.2f %.2f rgba %u %u %u %u material %.2f %.2f %.2f channel %08X\n",unsigned(source->prompt->action),prompt->efb_corners[0],prompt->efb_corners[1],draw.vertices[0].color[0][0],draw.vertices[0].color[0][1],draw.vertices[0].color[0][2],draw.vertices[0].color[0][3],draw.uniforms->materials[0][0],draw.uniforms->materials[0][1],draw.uniforms->materials[0][2],draw.uniforms->channels[0]);
                 prompt->compact=source->compact;draw.native_prompt=std::move(*prompt);++prompt_annotations;
             }
             imported.push_back(std::move(draw));
@@ -472,11 +489,11 @@ bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& des
         auto& geometry=recording->native.geometry;
         if(recording->overflow || checkpoint.list!=recording->address || geometry.size()<=checkpoint.recorded)return false;
         RecordedDraw* quad=nullptr;
-        for(size_t i=checkpoint.recorded;i<geometry.size();++i)if(auto* draw=std::get_if<RecordedDraw>(&geometry[i])) {
+        for(size_t i=checkpoint.recorded;i<geometry.size();++i)if(auto* draw=recorded_draw(geometry[i])) {
             if(quad)return false; // More than one primitive: not a single glyph/picture quad.
             quad=draw;
         }
-        if(!quad || quad!=std::get_if<RecordedDraw>(&geometry.back()) || quad->primitive!=0x80 || quad->count!=4)return false;
+        if(!quad || quad!=recorded_draw(geometry.back()) || quad->primitive!=0x80 || quad->count!=4)return false;
         quad->prompt=description;quad->compact=compact;return true;
     }
     if(checkpoint.list || draws.size()!=checkpoint.draw+1)return false;
@@ -494,12 +511,12 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     texgen_profile_count=0;
     scheduler = &sched; packets = queue;
     memory = {{reinterpret_cast<const std::byte*>(base), 24u << 20}, {reinterpret_cast<const std::byte*>(base + 0x10000000), 64u << 20}, {reinterpret_cast<const std::byte*>(base + 0x20000000), 0x4000}};
-    state = {}; transforms={}; live_transforms={}; draws.clear(); finishes.clear(); resources.clear(); recording.reset(); capture = std::make_unique<gx::Vertices>(memory);
+    state = {}; transforms={}; live_transforms=gx::Transforms{}; import_transforms=gx::Transforms{}; mesh_transforms_block=gx::Transforms{}; live_state=gx::State{}; import_state=gx::State{}; mesh_state=gx::State{}; import_uniforms=gx::DrawUniform{}; mesh_uniforms_block=gx::DrawUniform{}; draws.clear(); finishes.clear(); resources.clear(); recording.reset(); capture = std::make_unique<gx::Vertices>(memory);
     copy_state={}; copies=0;
     texture_copy_source={}; texture_copy_width=texture_copy_height=0; texture_copy_format=6; copied_textures.clear();
     texture_cache.clear(); texture_decodes=0;
     mesh_index.clear(); mesh_cache.clear(); mesh_cache_bytes=0; geometry_hits=0; geometry_misses=0;
-    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms={}; live_material={}; texture_matrices={}; indirect_stages={};
+    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms=gx::DrawUniform{}; live_material={}; texture_matrices={}; indirect_stages={};
     bound_textures={}; palettes.clear(); live_texture.reset(); live_texture_maps={};
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
@@ -510,7 +527,7 @@ void gx_fifo_write(int size, uint32_t value) {
         if (recording->overflow) return; // GXEndDisplayList reports this failed recording with length zero
         if (size_t(size) > recording->capacity - recording->bytes.size()) { recording->overflow=true; return; }
         if (recording_primitive()) {
-            auto& draw=std::get<RecordedDraw>(recording->native.geometry.back());
+            auto& draw=*recorded_draw(recording->native.geometry.back());
             if (size_t(size)>draw.expected-draw.payload.size()) throw gx::Error(gx::ErrorCode::truncated,draw.callsite,draw.expected-draw.payload.size(),size);
             for (int i=0;i<size;++i) draw.payload.push_back(std::byte(uint8_t(value>>((size-1-i)*8))));
         }
@@ -572,22 +589,24 @@ void hle_GXBegin(ppc::Ctx& c) {
             auto layout=snapshot(c);
             const size_t expected=gx::encoded_draw_size(layout,uint8_t(primitive),uint8_t(vat),uint16_t(count),callsite);
             const auto [material,uniforms]=material_snapshot(c);
-            recording->native.geometry.push_back(RecordedDraw{layout,callsite,uint8_t(primitive),uint8_t(vat),uint16_t(count),expected,{},material,uniforms,texture_selectors(sdk)});
+            auto recorded=std::make_unique<RecordedDraw>(RecordedDraw{layout,callsite,uint8_t(primitive),uint8_t(vat),uint16_t(count),expected,{},material,uniforms,texture_selectors(sdk)});
+            recorded->payload.reserve(expected);   // filled one write at a time by gx_fifo_write
+            recording->native.geometry.push_back(std::move(recorded));
         }
         return;
     }
     auto texture=snapshot_texture(bound_textures[0],palettes);
-    capture->begin(snapshot(c), uint8_t(c.r[3]), uint8_t(c.r[4]), uint16_t(c.r[5]), producer(), c.lr ? c.lr - 4 : 0x80284FD0);
+    capture->begin(gx::share(live_state,snapshot(c)), uint8_t(c.r[3]), uint8_t(c.r[4]), uint16_t(c.r[5]), producer(), c.lr ? c.lr - 4 : 0x80284FD0);
     live_texture=std::move(texture);
     const auto [material,uniforms]=material_snapshot(c);
-    live_material=material; live_uniforms=uniforms;
+    live_material=material; gx::share(live_uniforms,uniforms);
     live_texture_wrap=wraps(bound_textures);
     live_texture_maps={};
     const auto maps=texture_mask(material,uniforms);
     for(uint32_t map=1;map<8;++map) if(maps&(1u<<map)) {
         live_texture_maps[map-1]=snapshot_texture(bound_textures[map],palettes);
     }
-    live_transforms=transforms;
+    gx::share(live_transforms,transforms);
     live_blend=blend_state;
 }
 void hle_GXSetArray(ppc::Ctx& c) {
@@ -633,7 +652,7 @@ void hle_GXBeginDisplayList(ppc::Ctx& c) {
         list->texture_copy_width_shadow=texture_copy_width; list->texture_copy_height_shadow=texture_copy_height;
         list->texture_copy_format_shadow=texture_copy_format;
     }
-    list->bytes.reserve(std::min<size_t>(capacity,1024));
+    list->bytes.reserve(capacity);   // the SDK passes the exact buffer size; gx_fifo_write appends byte by byte
     ppc::wr8(c,sdk+0x5F8,1);
     recording=std::move(list);
 }
@@ -642,13 +661,13 @@ void hle_GXEndDisplayList(ppc::Ctx& c) {
     if (!recording) throw gx::Error(gx::ErrorCode::sequence,0x802885D8,1,0);
     if (recording->owner!=producer()) throw gx::Error(gx::ErrorCode::producer,recording->address,recording->owner,producer());
     if (!recording->overflow && recording_primitive()) {
-        const auto& draw=std::get<RecordedDraw>(recording->native.geometry.back());
+        const auto& draw=*recorded_draw(recording->native.geometry.back());
         throw gx::Error(gx::ErrorCode::truncated,draw.callsite,draw.expected,draw.payload.size());
     }
     uc::call_guest(c,0x80284504,{}); // verified GXFlush: dirty state followed by 32 NOP bytes
     auto list=std::move(recording);
     const uint32_t length=list->overflow ? 0 : uint32_t(list->bytes.size()) & ~31u;
-    if (length) std::memcpy(c.mem+(list->address & 0x3FFFFFFF),list->bytes.data(),length);
+    if (length) { std::memcpy(c.mem+(list->address & 0x3FFFFFFF),list->bytes.data(),length); gx::note_write_range(list->address,length); }
     if (length) {
         const uint32_t address=list->address & 0x3FFFFFFF;
         for (auto it=resources.begin();it!=resources.end();) {
@@ -656,12 +675,12 @@ void hle_GXEndDisplayList(ppc::Ctx& c) {
             else ++it;
         }
         list->native.bytes.assign(list->bytes.begin(),list->bytes.begin()+length);
-        resources.emplace(address,std::move(list->native));
+        resources.emplace(address,std::move(list->native)).first->second.stamp=gx::watch_stamp();
     }
     uc::gx_audit_recorded_resource(list->address,std::span<const std::byte>(list->bytes).first(length));
     if (list->restore) {
         const uint32_t kept=read32(list->sdk+8);
-        std::memcpy(c.mem+(list->sdk & 0x3FFFFFFF),list->shadow.data(),list->shadow.size());
+        std::memcpy(c.mem+(list->sdk & 0x3FFFFFFF),list->shadow.data(),list->shadow.size()); gx::note_write_range(list->sdk,list->shadow.size());
         ppc::wr32(c,list->sdk+8,kept);
         color_uniforms=list->color_shadow; texture_matrices=std::move(list->texture_shadow);
         texture_copy_source=list->texture_copy_source_shadow;
@@ -1062,21 +1081,33 @@ void hle_ResMeshSetup(ppc::Ctx& c) {
     for(size_t i=0;i<12;++i) if(parsed.arrays&(1u<<i)) state.arrays[i]={parsed.addresses[i],uint8_t(parsed.strides[i])};
 }
 namespace {
+uint32_t guest_address(const std::byte* host) {
+    if(host>=memory.mem1.data() && host<memory.mem1.data()+memory.mem1.size()) return uint32_t(host-memory.mem1.data());
+    return 0x10000000u+uint32_t(host-memory.mem2.data());
+}
 std::shared_ptr<const CachedMesh> native_mesh(std::span<const std::byte> bytes,const gx::State& layout) {
     const auto key=reinterpret_cast<uintptr_t>(bytes.data());
     auto found=mesh_index.find(key);
     if(found!=mesh_index.end()) {
         const auto& cached=*found->second->mesh;
-        bool valid=cached.layout.descriptors==layout.descriptors && cached.bytes.size()==bytes.size() && std::equal(bytes.begin(),bytes.end(),cached.bytes.begin());
+        // The mesh description and its source arrays are re-read only when a guest store touched their pages since the last comparison,
+        // and anyway every 256th hit (net for native writers that miss the barrier).
+        const uint32_t guest=guest_address(bytes.data());
+        bool clean=cached.skips<256 && cached.bytes.size()==bytes.size() && !gx::written_since(guest,bytes.size(),cached.stamp);
+        if(clean) for(const auto& source:cached.sources) if(gx::written_since(source.address,source.bytes.size(),cached.stamp)) { clean=false; break; }
+        bool valid=cached.layout.descriptors==layout.descriptors && (clean || gx::same_bytes(bytes,cached.bytes));
         for(size_t attr=0;valid && attr<21;++attr) if(layout.descriptors[attr]!=gx::Mode::none) {
             valid=cached.layout.formats[0][attr]==layout.formats[0][attr];
             if(attr>=9 && (layout.descriptors[attr]==gx::Mode::index8 || layout.descriptors[attr]==gx::Mode::index16)) valid&=cached.layout.arrays[attr-9]==layout.arrays[attr-9];
         }
-        if(valid) for(const auto& source:cached.sources) {
+        if(valid && !clean) for(const auto& source:cached.sources) {
             const auto current=memory.read(source.address,source.bytes.size());
-            if(!std::equal(current.begin(),current.end(),source.bytes.begin())) { valid=false; break; }
+            if(!gx::same_bytes(current,source.bytes)) { valid=false; break; }
         }
-        if(valid) { ++geometry_hits; mesh_cache.splice(mesh_cache.begin(),mesh_cache,found->second); return found->second->mesh; }
+        if(valid) {
+            if(clean) ++cached.skips; else { cached.stamp=gx::watch_stamp(); cached.skips=0; }
+            ++geometry_hits; mesh_cache.splice(mesh_cache.begin(),mesh_cache,found->second); return found->second->mesh;
+        }
     }
     ++geometry_misses;
     auto result=std::make_shared<CachedMesh>(); result->layout=layout;
@@ -1125,19 +1156,21 @@ std::shared_ptr<const CachedMesh> native_mesh(std::span<const std::byte> bytes,c
         }
         auto* previous=result->operations.empty() ? nullptr : std::get_if<MeshGeometry>(&result->operations.back());
         if(previous) {
-            if(draw.vertices.size()>size_t(INT32_MAX)-previous->vertices.size()) throw std::invalid_argument("native mesh batch exceeds vertex index limits");
-            const auto offset=uint32_t(previous->vertices.size());
-            previous->vertices.insert(previous->vertices.end(),draw.vertices.begin(),draw.vertices.end());
-            for(auto index:draw.indices) previous->indices.push_back(offset+index);
-        } else result->operations.push_back(MeshGeometry{std::move(draw.vertices),std::move(draw.indices)});
+            auto& merged=*previous->buffers;
+            if(draw.vertices.size()>size_t(INT32_MAX)-merged.vertices.size()) throw std::invalid_argument("native mesh batch exceeds vertex index limits");
+            const auto offset=uint32_t(merged.vertices.size());
+            merged.vertices.insert(merged.vertices.end(),draw.vertices.begin(),draw.vertices.end());
+            for(auto index:draw.indices) merged.indices.push_back(offset+index);
+        } else result->operations.push_back(MeshGeometry{std::make_shared<gx::MeshBuffers>(gx::MeshBuffers{std::move(draw.vertices),std::move(draw.indices)})});
     }
     for(const auto& range:sources) if(range) {
         const auto current=memory.read(range->address,range->size);
         result->sources.push_back({range->address,{current.begin(),current.end()}});
     }
+    result->stamp=gx::watch_stamp();
     result->size=sizeof(CachedMesh)+result->bytes.capacity()+result->operations.capacity()*sizeof(decltype(result->operations)::value_type)+result->sources.capacity()*sizeof(CachedMesh::Source);
     for(const auto& source:result->sources) result->size+=source.bytes.capacity();
-    for(const auto& operation:result->operations) if(const auto* geometry=std::get_if<MeshGeometry>(&operation)) result->size+=geometry->vertices.capacity()*sizeof(gx::Vertex)+geometry->indices.capacity()*sizeof(uint32_t);
+    for(const auto& operation:result->operations) if(const auto* geometry=std::get_if<MeshGeometry>(&operation)) result->size+=geometry->buffers->vertices.capacity()*sizeof(gx::Vertex)+geometry->buffers->indices.capacity()*sizeof(uint32_t);
     if(found!=mesh_index.end()) { mesh_cache_bytes-=found->second->mesh->size; mesh_cache.erase(found->second); mesh_index.erase(found); }
     if(result->size<=mesh_cache_budget) {
         while(mesh_cache_bytes>mesh_cache_budget-result->size) { mesh_cache_bytes-=mesh_cache.back().mesh->size; mesh_index.erase(mesh_cache.back().key); mesh_cache.pop_back(); }
@@ -1195,45 +1228,48 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
             std::fprintf(stderr,"[mesh-texture-dump] %s\n",path.string().c_str());
         } catch(const std::exception& error) { std::fprintf(stderr,"mesh texture dump failed: %s\n",error.what()); }
     }
-    std::vector<gx::DrawPacket> imported;
+    const size_t first_draw=draws.size();   // appended in place; removed again if the mesh fails midway
     auto mesh_transforms=transforms;
     auto mesh_uniforms=uniforms;
     auto mesh_matrices=texture_matrices;
     const auto selectors=texture_selectors(read32(c.r[2]-8968));
-    for(const auto& operation:cached->operations) {
-        if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
-            indexed_texture(mesh_matrices,layout,texture->index,texture->id,texture->words);
-            resolve_texture_matrices(mesh_uniforms,selectors,mesh_matrices);
-            continue;
+    try {
+        for(const auto& operation:cached->operations) {
+            if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
+                indexed_texture(mesh_matrices,layout,texture->index,texture->id,texture->words);
+                resolve_texture_matrices(mesh_uniforms,selectors,mesh_matrices);
+                continue;
+            }
+            if(const auto* position=std::get_if<MeshPosition>(&operation)) {
+                indexed_position(mesh_transforms,layout,position->index,position->row);
+            } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
+                indexed_normal(mesh_transforms,layout,normal->index,normal->row);
+            } else {
+                const auto& geometry=std::get<MeshGeometry>(operation);
+                auto& draw=draws.emplace_back();
+                draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=gx::share(mesh_state,layout);
+                draw.mesh=geometry.buffers;
+                draw.transforms=gx::share(mesh_transforms_block,mesh_transforms); draw.material=material; draw.uniforms=gx::share(mesh_uniforms_block,mesh_uniforms); draw.blend=blend_state; draw.texture=textures[0];
+                draw.texture_wrap=wraps(bound_textures);
+                std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
+            }
         }
-        if(const auto* position=std::get_if<MeshPosition>(&operation)) {
-            indexed_position(mesh_transforms,layout,position->index,position->row);
-        } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
-            indexed_normal(mesh_transforms,layout,normal->index,normal->row);
-        } else {
-            const auto& geometry=std::get<MeshGeometry>(operation);
-            gx::DrawPacket draw{0x80366E14,0x90,0,layout,geometry.vertices,geometry.indices};
-            draw.transforms=mesh_transforms; draw.material=material; draw.uniforms=mesh_uniforms; draw.blend=blend_state; draw.texture=textures[0];
-            draw.texture_wrap=wraps(bound_textures);
-            std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
-            imported.push_back(std::move(draw));
-        }
-    }
-    if(profile_this_mesh && !imported.empty()) {
+    } catch(...) { draws.erase(draws.begin()+std::ptrdiff_t(first_draw),draws.end()); throw; }
+    if(profile_this_mesh && draws.size()>first_draw) {
         std::array<uint8_t,4> low_color{255,255,255,255},high_color{};
-        for(const auto& draw:imported) for(const auto& vertex:draw.vertices) for(size_t channel=0;channel<4;++channel) {
+        for(size_t d=first_draw;d<draws.size();++d) for(const auto& vertex:draws[d].vertex_view()) for(size_t channel=0;channel<4;++channel) {
             low_color[channel]=std::min(low_color[channel],vertex.color[0][channel]); high_color[channel]=std::max(high_color[channel],vertex.color[0][channel]);
         }
         std::fprintf(stderr,"[mesh-color-range] object %08X rgba %u:%u %u:%u %u:%u %u:%u mode %u\n",c.r[3],low_color[0],high_color[0],low_color[1],high_color[1],low_color[2],high_color[2],low_color[3],high_color[3],unsigned(layout.descriptors[11]));
         for(size_t map=0;map<2;++map) {
             std::array<float,2> low{INFINITY,INFINITY},high{-INFINITY,-INFINITY};
-            for(const auto& draw:imported) for(const auto& vertex:draw.vertices) for(size_t axis=0;axis<2;++axis) {
+            for(size_t d=first_draw;d<draws.size();++d) for(const auto& vertex:draws[d].vertex_view()) for(size_t axis=0;axis<2;++axis) {
                 low[axis]=std::min(low[axis],vertex.texcoord[map][axis]); high[axis]=std::max(high[axis],vertex.texcoord[map][axis]);
             }
             std::fprintf(stderr,"[mesh-uv-range] map %zu UV %.6g:%.6g %.6g:%.6g wrap %u\n",map,low[0],high[0],low[1],high[1],bound_textures[map] ? bound_textures[map]->wrap : 0);
         }
     }
-    for(auto& draw:imported) { vertex_count+=draw.vertices.size(); ++draw_count; draws.push_back(std::move(draw)); }
+    for(size_t d=first_draw;d<draws.size();++d) { vertex_count+=draws[d].vertex_view().size(); ++draw_count; }
     transforms=mesh_transforms; texture_matrices=mesh_matrices;
 }
 namespace {

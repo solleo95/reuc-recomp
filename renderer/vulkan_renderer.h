@@ -33,6 +33,7 @@ public:
     void shutdown();
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
+    uint64_t gpu_busy_ns() const { return gpu_busy_ns_.load(); }   // summed GPU execution time of retired frame submissions
     uint64_t texture_creations() const { owner(); return texture_creations_; }
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
     VkDevice device = VK_NULL_HANDLE;
@@ -64,7 +65,7 @@ private:
         VkDescriptorPool texture_pool=VK_NULL_HANDLE;
         uint32_t descriptor_capacity=0;
         uint64_t serial = 0;
-        bool submitted = false, reported = false, initialized = false, copied = false;
+        bool submitted = false, reported = false, initialized = false, copied = false, timed = false;
     };
     struct PresentImage {
         VkImage image = VK_NULL_HANDLE;
@@ -126,7 +127,8 @@ private:
     VkImage depth_=VK_NULL_HANDLE;
     VkDeviceMemory depth_memory_=VK_NULL_HANDLE;
     VkImageView depth_view_=VK_NULL_HANDLE;
-    std::array<Slot, 2> slots_{};
+    static constexpr size_t kFrameSlots = 6;   // GPU submissions in flight; the guest's queue window is larger (gx::kMaxOutstandingPackets)
+    std::array<Slot, kFrameSlots> slots_{};
     std::vector<PresentImage> images_;
     struct RetiredSwapchain { VkSwapchainKHR chain; std::vector<PresentImage> images; };
     std::vector<RetiredSwapchain> retired_;   // swapchains replaced by a resize, freed once their queued presentations finished
@@ -137,7 +139,9 @@ private:
     bool resized_ = true;
     std::chrono::steady_clock::time_point last_rebuild_{};
     std::atomic<uint32_t> errors_{0};
-    std::atomic<uint64_t> presentations_{0};
+    std::atomic<uint64_t> presentations_{0}, gpu_busy_ns_{0};
+    VkQueryPool timing_pool_ = VK_NULL_HANDLE;   // two timestamps per slot
+    double timestamp_period_ = 0;
     uint64_t texture_creations_=0;
     uint64_t descriptor_pool_creations_=0;
 };

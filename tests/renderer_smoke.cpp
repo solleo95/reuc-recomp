@@ -72,12 +72,12 @@ int main(int argc, char** argv) {
         draw.vertices[0].position = {-8,-8,5}; draw.vertices[0].color[0] = {255,0,0,255};
         draw.vertices[1].position = {12,-8,5}; draw.vertices[1].color[0] = {0,255,0,255};
         draw.vertices[2].position = {0,8,5}; draw.vertices[2].color[0] = {0,0,255,255};
-        draw.state.descriptors[0]=gx::Mode::direct;
+        draw.state.edit().descriptors[0]=gx::Mode::direct;
         draw.vertices[1].position_matrix=3;
-        gx::set_position_matrix(draw.transforms,0,{{{0.2f,0,0,0},{0,0.2f,0,0},{0,0,-0.4f,0}}});
-        gx::set_position_matrix(draw.transforms,3,{{{0.2f,0,0,-0.8f},{0,0.2f,0,0},{0,0,-0.4f,0}}});
-        draw.transforms.current=9; // per-vertex indices override the unloaded current matrix
-        draw.transforms.projection=gx::make_projection({1,0,-1,0,-1.f/9,-10.f/9},0);
+        gx::set_position_matrix(draw.transforms.edit(),0,{{{0.2f,0,0,0},{0,0.2f,0,0},{0,0,-0.4f,0}}});
+        gx::set_position_matrix(draw.transforms.edit(),3,{{{0.2f,0,0,-0.8f},{0,0.2f,0,0},{0,0,-0.4f,0}}});
+        draw.transforms.edit().current=9; // per-vertex indices override the unloaded current matrix
+        draw.transforms.edit().projection=gx::make_projection({1,0,-1,0,-1.f/9,-10.f/9},0);
         auto render = [&](uint64_t serial) {
             packet.serial = serial;
             auto end = std::chrono::steady_clock::now() + 3s;
@@ -120,8 +120,8 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < pixels.rgba.size(); i += 4) capture.write(reinterpret_cast<const char*>(pixels.rgba.data() + i), 3);
         capture.close(); CHECK(capture.good());
         uc::save_png(pixels, executable_dir() / "renderer-smoke.png");
-        draw.transforms.position_rows[2]=draw.transforms.position_rows[5]={0,0,0,-0.5f};
-        draw.transforms.projection=gx::make_projection({0.5f,0,-0.5f,0,1,0},1);
+        draw.transforms.edit().position_rows[2]=draw.transforms.edit().position_rows[5]={0,0,0,-0.5f};
+        draw.transforms.edit().projection=gx::make_projection({0.5f,0,-0.5f,0,1,0},1);
         // Both GPU slots stay active; consumer completion order follows native submission serials.
         uint64_t expected = 4;
         const auto descriptor_creations=renderer.descriptor_pool_creations();
@@ -233,17 +233,17 @@ int main(int argc, char** argv) {
         CHECK(renderer.texture_creations()==before_copy_only);
         sampled=renderer.capture(36);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+3]==64);
-        work.serial=37; work.draws[0].uniforms.pixel[0]=0; submit(work);
+        work.serial=37; work.draws[0].uniforms.edit().pixel[0]=0; submit(work);
         sampled=renderer.capture(37); CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32);
-        work.serial=38; work.draws[0].uniforms.pixel={0x3F0000,0,256|123,2}; submit(work);
+        work.serial=38; work.draws[0].uniforms.edit().pixel={0x3F0000,0,256|123,2}; submit(work);
         sampled=renderer.capture(38); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+3]==123);
-        work.draws[0].uniforms.pixel={0x3F0000,31,0,2};
-        auto hidden=work.draws[0]; hidden.material.stages=0; hidden.texture.reset(); hidden.uniforms.pixel[1]=17;
+        work.draws[0].uniforms.edit().pixel={0x3F0000,31,0,2};
+        auto hidden=work.draws[0]; hidden.material.stages=0; hidden.texture.reset(); hidden.uniforms.edit().pixel[1]=17;
         for(auto& vertex:hidden.vertices) vertex.color[0]={0,255,0,255};
         work.draws.push_back(hidden); work.serial=39; submit(work);
         sampled=renderer.capture(39); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+3]==64);
         work.draws.resize(1); work.serial=40;
-        work.draws[0].blend={1,4,5,3,true,true}; work.draws[0].uniforms.pixel={0x3F0000,0,256|123,2};
+        work.draws[0].blend={1,4,5,3,true,true}; work.draws[0].uniforms.edit().pixel={0x3F0000,0,256|123,2};
         submit(work); sampled=renderer.capture(40);
         CHECK(sampled.rgba[center]>=75 && sampled.rgba[center]<=77 && sampled.rgba[center+1]>=23 && sampled.rgba[center+1]<=25 && sampled.rgba[center+3]==123);
         work=packet; work.serial=41;
@@ -260,7 +260,7 @@ int main(int argc, char** argv) {
         auto new_copy=std::make_shared<gx::TexturePixels>(*old_copy);
         work=packet; work.serial=42; work.present=false; work.clear_color={0,255,0,255};
         auto quad=work.draws[0]; quad.material.stages=0; quad.primitive=0x90;
-        quad.transforms={}; quad.state.descriptors[0]=gx::Mode::none;
+        quad.transforms=gx::Transforms{}; quad.state.edit().descriptors[0]=gx::Mode::none;
         quad.vertices.resize(4); quad.indices={0,1,2,0,2,3};
         for(auto& vertex:quad.vertices) vertex.color[0]={255,0,0,255};
         quad.vertices[0].position={-1,-1,0}; quad.vertices[1].position={1,-1,0};
@@ -290,8 +290,8 @@ int main(int argc, char** argv) {
         work.serial=50; submit(work); CHECK(released.expired());
         work=packet; work.serial=51;
         work.draws[0]=quad; // A full-screen red quad, limited by native viewport and scissor.
-        work.draws[0].state.viewport=std::array<float,6>{0,0,320,480,0,1};
-        work.draws[0].state.scissor=std::array<int32_t,4>{0,0,160,480};
+        work.draws[0].state.edit().viewport=std::array<float,6>{0,0,320,480,0,1};
+        work.draws[0].state.edit().scissor=std::array<int32_t,4>{0,0,160,480};
         submit(work); sampled=renderer.capture(51);
         const auto inside=(size_t(sampled.height/2)*sampled.width+sampled.width/8)*4;
         const auto clipped=(size_t(sampled.height/2)*sampled.width+sampled.width*3/8)*4;
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
         CHECK(sampled.rgba[clipped]==16 && sampled.rgba[clipped+1]==32);
         bool rejected = false;
         work=packet; work.serial=52; work.draws[0]=quad;
-        work.draws[0].state.viewport=std::array<float,6>{0,0,640,360,0,1};
+        work.draws[0].state.edit().viewport=std::array<float,6>{0,0,640,360,0,1};
         work.display_source=std::array<uint32_t,4>{0,0,640,360};
         submit(work); sampled=renderer.capture(52);
         const auto bottom=(size_t(sampled.height*7/8)*sampled.width+sampled.width/2)*4;
@@ -338,25 +338,25 @@ int main(int argc, char** argv) {
         CHECK(sampled.rgba[right]==255 && sampled.rgba[right+1]==0);
         work=packet; work.serial=60; work.draws[0]=quad; work.draws[0].texture=wrapped;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.1f,0.5f}; }
-        work.draws[0].uniforms.tex_rows[0]={1,0,0.75f,0}; // AB11 uses both homogeneous components
+        work.draws[0].uniforms.edit().tex_rows[0]={1,0,0.75f,0}; // AB11 uses both homogeneous components
         submit(work); sampled=renderer.capture(60);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
         work=packet; work.serial=61; work.draws[0]=quad;
-        work.draws[0].uniforms.channels={2,1,0,1};
-        work.draws[0].uniforms.materials[0]={1,1,1,1};
-        work.draws[0].uniforms.ambient[0]={9/255.f,9/255.f,9/255.f,1};
+        work.draws[0].uniforms.edit().channels={2,1,0,1};
+        work.draws[0].uniforms.edit().materials[0]={1,1,1,1};
+        work.draws[0].uniforms.edit().ambient[0]={9/255.f,9/255.f,9/255.f,1};
         submit(work); sampled=renderer.capture(61);
         std::fprintf(stderr,"native ambient pixel %u %u %u %u\n",sampled.rgba[center],sampled.rgba[center+1],sampled.rgba[center+2],sampled.rgba[center+3]);
         CHECK(sampled.rgba[center]==8 && sampled.rgba[center+1]==8 && sampled.rgba[center+2]==8); // 255*9 >> 8
-        work.serial=62; work.draws[0].uniforms.channels[0]=6;
-        work.draws[0].uniforms.lights[0].color={128,128,128,255};
-        work.draws[0].uniforms.lights[0].position={0,0,1,0};
+        work.serial=62; work.draws[0].uniforms.edit().channels[0]=6;
+        work.draws[0].uniforms.edit().lights[0].color={128,128,128,255};
+        work.draws[0].uniforms.edit().lights[0].position={0,0,1,0};
         submit(work); sampled=renderer.capture(62);
         CHECK(sampled.rgba[center]==137 && sampled.rgba[center+1]==137);
-        work=packet; work.serial=63; work.draws[0]=quad; work.draws[0].state.cull=3;
+        work=packet; work.serial=63; work.draws[0]=quad; work.draws[0].state.edit().cull=3;
         submit(work); sampled=renderer.capture(63);
         CHECK(sampled.rgba[center]==16 && sampled.rgba[center+1]==32 && sampled.rgba[center+2]==64);
-        work=packet; work.serial=64; work.draws[0]=quad; work.draws[0].uniforms.pixel[3]=0;
+        work=packet; work.serial=64; work.draws[0]=quad; work.draws[0].uniforms.edit().pixel[3]=0;
         submit(work); sampled=renderer.capture(64);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
         work=packet; work.serial=65; work.draws[0]=quad; work.draws[0].texture=wrapped;
@@ -403,7 +403,7 @@ int main(int argc, char** argv) {
         renderer.set_render_scale(1);
         work=packet; work.serial=85; work.clear_after_copy=false; work.draws.assign(8,quad);
         for(size_t i=0;i<work.draws.size();++i) {
-            work.draws[i].state.scissor=std::array<int32_t,4>{int32_t(i*80),0,80,480};
+            work.draws[i].state.edit().scissor=std::array<int32_t,4>{int32_t(i*80),0,80,480};
             for(auto& vertex:work.draws[i].vertices) vertex.color[0]=i&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
         }
         submit(work);
@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
         work.serial=90; submit(work); high_resolution=renderer.capture(90,true);
         CHECK(high_resolution.width==7680 && high_resolution.height==5760); // Manual internal resolution survives output resize.
         renderer.set_render_scale(1.25);
-        work.serial=91; work.draws[0].state.viewport=std::array<float,6>{0,0,640,360,0,1}; work.display_source={0,0,640,360};
+        work.serial=91; work.draws[0].state.edit().viewport=std::array<float,6>{0,0,640,360,0,1}; work.display_source={0,0,640,360};
         submit(work); sampled=renderer.capture(91);
         CHECK(sampled.width==1280 && sampled.height==720);
         CHECK(sampled.rgba[(size_t(sampled.height-1)*sampled.width+sampled.width/2)*4]==255);
@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
         auto alpha_copy=std::make_shared<gx::TexturePixels>(); alpha_copy->gpu_only=true;
         alpha_copy->channels=gx::TextureChannels::alpha_intensity; alpha_copy->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
         work=packet; work.serial=92; work.present=false; work.draws[0]=quad;
-        work.draws[0].uniforms.pixel[2]=256|77;
+        work.draws[0].uniforms.edit().pixel[2]=256|77;
         for(auto& vertex:work.draws[0].vertices)vertex.color[0]={17,33,65,255};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},alpha_copy}; submit(work);
         work=packet; work.serial=93; work.draws[0]=quad; work.draws[0].material=packet.draws[0].material;
@@ -641,11 +641,11 @@ int main(int argc, char** argv) {
         // GX fog: orthographic linear fog offset by C=-1 saturates to the BP fog colour.
         work.serial=3; work.texture_copy.reset(); work.draws[0]=quad;
         for(auto& vertex:work.draws[0].vertices) vertex.color[0]={20,200,20,255};
-        work.draws[0].uniforms.fog={0,0,0,(2u<<21)|(1u<<20)|(1u<<19)|(127u<<11),0xFF0000}; // C=-1: fog 1 at any depth
+        work.draws[0].uniforms.edit().fog={0,0,0,(2u<<21)|(1u<<20)|(1u<<19)|(127u<<11),0xFF0000}; // C=-1: fog 1 at any depth
         submit(work,&portrait); sampled=portrait.capture(3);
         center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
-        work.serial=4; work.draws[0].uniforms.fog[3]=0; submit(work,&portrait); sampled=portrait.capture(4);
+        work.serial=4; work.draws[0].uniforms.edit().fog[3]=0; submit(work,&portrait); sampled=portrait.capture(4);
         CHECK(sampled.rgba[center]==20 && sampled.rgba[center+1]==200); // fsel 0 leaves the TEV colour
         // GX indirect texturing: static matrix 0 (ma~1, scale 2^-7) turns an alpha offset of 127 into ~1 texel in S.
         auto two_texels=std::make_shared<gx::TexturePixels>(); two_texels->levels={{2,1,{255,0,0,255,0,0,255,255}}};
@@ -654,33 +654,33 @@ int main(int argc, char** argv) {
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={0.25f,0.5f}; }
         work.draws[0].material.stages=1; work.draws[0].material.swaps={0xE4,0xE4,0xE4,0xE4};
         work.draws[0].material.stage[0]={0x8FFF8,0x8FF80,0x40,0,0x210};
-        work.draws[0].uniforms.indirect={0x8003FF,0x800000,0,0,0,0,0,0,0,1,0,0};
-        work.draws[0].uniforms.ind_cmd[0]=0x210;
+        work.draws[0].uniforms.edit().indirect={0x8003FF,0x800000,0,0,0,0,0,0,0,1,0,0};
+        work.draws[0].uniforms.edit().ind_cmd[0]=0x210;
         submit(work,&portrait); sampled=portrait.capture(5);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
-        work.serial=6; work.draws[0].material.stage[0].indirect=0; work.draws[0].uniforms.ind_cmd[0]=0;
+        work.serial=6; work.draws[0].material.stage[0].indirect=0; work.draws[0].uniforms.edit().ind_cmd[0]=0;
         submit(work,&portrait); sampled=portrait.capture(6);
         CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0); // without the indirect stage the left texel stays
         // Texgen STQ from the position (ABC1): left S/Q 0.8/1, right 0.6/3.
         work.serial=7;
-        work.draws[0].uniforms.tex_gens[0]=6;
-        work.draws[0].uniforms.tex_rows[0]={-0.1f,0,0,0.7f}; work.draws[0].uniforms.tex_rows[1]={0.5f,0,0,1}; work.draws[0].uniforms.tex_rows[2]={1,0,0,2};
+        work.draws[0].uniforms.edit().tex_gens[0]=6;
+        work.draws[0].uniforms.edit().tex_rows[0]={-0.1f,0,0,0.7f}; work.draws[0].uniforms.edit().tex_rows[1]={0.5f,0,0,1}; work.draws[0].uniforms.edit().tex_rows[2]={1,0,0,2};
         submit(work,&portrait);sampled=portrait.capture(7);
         const auto projected_sample=(size_t(sampled.height/2)*sampled.width+sampled.width*2/5)*4;
         // Divide interpolated ST by interpolated Q; dividing at vertices would select blue.
         CHECK(sampled.rgba[projected_sample]==255 && sampled.rgba[projected_sample+2]==0);
         // Texgen ST from the untransformed normal (1,0,0), normalized (S=0.707) before post S'=1.25-S: right texel. Without normalizing S'=0.25.
         work.serial=8;
-        work.draws[0].uniforms.tex_gens[0]=(1u<<7)|4; work.draws[0].uniforms.tex_posts[0]=256;
-        work.draws[0].uniforms.tex_rows[0]={1,0,0,0}; work.draws[0].uniforms.tex_rows[1]={0,1,0,0}; work.draws[0].uniforms.tex_rows[2]={0,0,1,0};
-        work.draws[0].uniforms.post_rows[0]={-1,0,0,1.25f}; work.draws[0].uniforms.post_rows[1]={0,0,0,0.5f}; work.draws[0].uniforms.post_rows[2]={0,0,0,1};
+        work.draws[0].uniforms.edit().tex_gens[0]=(1u<<7)|4; work.draws[0].uniforms.edit().tex_posts[0]=256;
+        work.draws[0].uniforms.edit().tex_rows[0]={1,0,0,0}; work.draws[0].uniforms.edit().tex_rows[1]={0,1,0,0}; work.draws[0].uniforms.edit().tex_rows[2]={0,0,1,0};
+        work.draws[0].uniforms.edit().post_rows[0]={-1,0,0,1.25f}; work.draws[0].uniforms.edit().post_rows[1]={0,0,0,0.5f}; work.draws[0].uniforms.edit().post_rows[2]={0,0,0,1};
         for(auto& vertex:work.draws[0].vertices) vertex.normal={1,0,0};
         submit(work,&portrait);sampled=portrait.capture(8);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
         // Integer TEV: input A uses only the low 8 bits of an s10 register, 1.5 (382) reads as 126.
         work.serial=9; work.draws[0].uniforms=gx::DrawUniform{};
         work.draws[0].material.stages=1; work.draws[0].material.stage[0]={0x82FFF,0x8FF80,0x380,0,0};
-        work.draws[0].uniforms.registers[1]={1.5f,1.5f,1.5f,1};
+        work.draws[0].uniforms.edit().registers[1]={1.5f,1.5f,1.5f,1};
         submit(work,&portrait);sampled=portrait.capture(9);
         CHECK(sampled.rgba[center]==126 && sampled.rgba[center+1]==126);
         // Blanked VI output: the presented frame is black although the EFB holds the same draw.

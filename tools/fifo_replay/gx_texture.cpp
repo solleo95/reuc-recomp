@@ -89,7 +89,7 @@ void GxStream::bind_textures(gx::DrawPacket& draw) {
                 else {
                     if(deferred_.size()>=1024)throw std::runtime_error("unresolved texture budget exceeded");
                     auto target=std::make_shared<gx::TexturePixels>();pixels=target;
-                    deferred_.push_back({address,desc,palette.format,{palette.bytes.begin(),palette.bytes.end()},target,draw.callsite,uint32_t(frame_),draw.state.cull});
+                    deferred_.push_back({address,desc,palette.format,{palette.bytes.begin(),palette.bytes.end()},target,draw.callsite,uint32_t(frame_),draw.state->cull});
                     std::ostringstream state;state<<" slot "<<slot<<" genmode "<<std::hex<<bp_[0]<<" iref "<<bp_[0x27];
                     for(size_t i=0;i<draw.material.stages;++i) {
                         const auto& stage=draw.material.stage[i];state<<" stage"<<i<<"="<<stage.color<<":"<<stage.alpha<<":"<<stage.order<<":"<<stage.indirect;

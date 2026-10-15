@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -9,6 +10,8 @@
 #include <unordered_map>
 
 namespace gx {
+// Byte-wise equality as one memcmp; std::equal over vector/span iterators compares element by element.
+inline bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b) { return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0); }
 enum class TextureFormat : uint8_t { i4 = 0, i8 = 1, ia4 = 2, ia8 = 3, rgb565 = 4, rgb5a3 = 5, rgba8 = 6, c4 = 8, c8 = 9, c14x2 = 10, cmpr = 14 };
 enum class PaletteFormat : uint8_t { ia8, rgb565, rgb5a3 };
 struct PaletteView { PaletteFormat format = PaletteFormat::ia8; std::span<const std::byte> bytes; };
@@ -51,6 +54,7 @@ private:
         std::vector<std::byte> encoded, palette;
         std::shared_ptr<const TexturePixels> pixels;
         size_t bytes;
+        uint32_t stamp = 0, skips = 0;   // write-barrier stamp of the last byte comparison; uses since then
     };
     std::list<Entry> entries_;
     std::unordered_multimap<uint32_t, std::list<Entry>::iterator> by_address_;

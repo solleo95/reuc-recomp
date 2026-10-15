@@ -35,6 +35,7 @@
 #include "render_scale.h"
 #include "window_mode.h"
 #include "frame_limit.h"
+#include "cpu_sampler.h"
 #include "audio_output.h"
 #include "ax_audio.h"
 #include "audio_gap_audit.h"
@@ -182,7 +183,7 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
@@ -195,7 +196,7 @@ static int real_main(int argc, char** argv) {
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
     uc::intro_init(options.skip_intro);
-    uc::game_pacing_init(options.unlock_60fps);
+    uc::game_pacing_init(options.unlock_60fps,options.game_hz);
     if (options.gx_audit) {
 #ifdef UC_TRACE
         uc::gx_audit_enable();
@@ -341,11 +342,13 @@ static int real_main(int argc, char** argv) {
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
     uint64_t last_retraces = 0;
     uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,render_ns=0;
-    uint64_t profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
+    uint64_t loop_wait_ns=0,profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
     std::unique_ptr<const gx::FramePacket> pending;
     uc::FrameLimit frame_limit;
+    std::chrono::steady_clock::time_point last_present_at{};
+    std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
     uint64_t audit_capture_serial=0;
     uint64_t debug_capture_serial=0;
     uint64_t scene_capture_serial=0;
@@ -360,7 +363,8 @@ static int real_main(int argc, char** argv) {
     auto next_control=start;
     // Takes the next guest frame, renders it and retires finished ones. Called from the loop and, while Windows runs its modal
     // move/resize loop inside SDL_PollEvent, from the event watch below, so the guest keeps running while the window is dragged.
-    auto render_pending = [&] {
+    auto render_pending = [&]() -> bool {
+        bool progressed = false;
         if (!pending) pending = packets.try_take();
         // Keep the captured slot alive until its fence completes and readback finishes.
         if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
@@ -370,6 +374,7 @@ static int real_main(int argc, char** argv) {
             const auto render_elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
             render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6;
             if (rendered) {
+            progressed = true;
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
                 scene_capture_serial=pending->serial; ++scene_capture_pass;
@@ -380,13 +385,13 @@ static int real_main(int argc, char** argv) {
                 }
                 if(!pending->draws.empty()) {
                     const auto& draw=pending->draws.back();
-                    std::fprintf(stderr,"[scene-pass-last] callsite %08X vertices %zu stages %u blend %u:%u:%u depth %u\n",draw.callsite,draw.vertices.size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination,draw.uniforms.pixel[1]);
+                    std::fprintf(stderr,"[scene-pass-last] callsite %08X vertices %zu stages %u blend %u:%u:%u depth %u\n",draw.callsite,draw.vertex_view().size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination,draw.uniforms->pixel[1]);
                     for(uint32_t i=0;i<draw.material.stages;++i) {
                         const auto& stage=draw.material.stage[i];
                         std::fprintf(stderr,"[scene-pass-stage] %u color %06X alpha %06X order %03X konst %03X\n",i,stage.color,stage.alpha,stage.order,stage.konst);
                     }
                     for(uint32_t i=0;i<4;++i) {
-                        const auto& r=draw.uniforms.registers[i]; const auto& k=draw.uniforms.konst[i];
+                        const auto& r=draw.uniforms->registers[i]; const auto& k=draw.uniforms->konst[i];
                         std::fprintf(stderr,"[scene-pass-color] %u reg %.6g:%.6g:%.6g:%.6g konst %.6g:%.6g:%.6g:%.6g\n",i,r[0],r[1],r[2],r[3],k[0],k[1],k[2],k[3]);
                     }
                 }
@@ -397,7 +402,11 @@ static int real_main(int argc, char** argv) {
                 if (draw_projection.empty()) draw_projection = uc::projection_json(uc::scene_projection(*pending));
                 if (pending->present) { test_server->draws_ready(uc::test_draws_json(draw_stats), draw_projection.empty() ? "[]" : draw_projection); draws_wanted=false; draws_pass=0; draw_stats.clear(); draw_projection.clear(); }
             }
-            if (pending->present) frame_limit.presented(std::chrono::steady_clock::now());
+            if (pending->present) {
+                const auto presented_at=std::chrono::steady_clock::now();
+                if (last_present_at!=std::chrono::steady_clock::time_point{} && present_intervals.size()<present_intervals.capacity()) present_intervals.push_back(std::chrono::duration<double,std::milli>(presented_at-last_present_at).count());
+                last_present_at=presented_at; frame_limit.presented(presented_at);
+            }
             if (pending->present && debug_capture_requested) {
                 debug_capture_serial=pending->serial;
                 debug_capture_requested=false;
@@ -448,6 +457,7 @@ static int real_main(int argc, char** argv) {
                 audit_capture_serial=0;
             }
         }
+        return progressed;
     };
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
@@ -527,6 +537,7 @@ static int real_main(int argc, char** argv) {
         return true;
     };
     if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
+    uc::cpu_sampler_start_once("main");
     while (!close && !runner.done.load()) {
         ++profile_loops;
         if (!options.headless) {
@@ -545,6 +556,7 @@ static int real_main(int argc, char** argv) {
             }
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();
+            for (int drained = 0; drained < 64 && !close && render_pending(); ++drained) {}   // a game frame is ~23 packets: do not pay a wait per packet
         }
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
@@ -553,10 +565,17 @@ static int real_main(int argc, char** argv) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes));
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
+                if(!present_intervals.empty()) {
+                    std::sort(present_intervals.begin(),present_intervals.end());
+                    double sum=0; for(double v:present_intervals) sum+=v;
+                    std::fprintf(stderr,"[frametime] n %zu avg %.2f p50 %.2f p99 %.2f max %.2f ms\n",present_intervals.size(),sum/present_intervals.size(),present_intervals[present_intervals.size()/2],present_intervals[std::min(present_intervals.size()-1,present_intervals.size()*99/100)],present_intervals.back());
+                    present_intervals.clear();
+                }
                 const auto gfx=uc::gx_stats(); const auto sound=uc::audio_stats();
                 std::fprintf(stderr,"[descriptor-pools] created %llu\n",(unsigned long long)renderer.descriptor_pool_creations());
                 const auto pacing=uc::game_pacing_stats();
-                std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted);
+                std::fprintf(stderr,"[guest-blocked] renderer wait %.2f ms total (window %.2f, packets %llu),main loop waited %.2f ms this second, GPU busy %.2f ms total, frame latency avg %.2f max %.2f ms over %llu frames\n",gx::seal_wait_ns()/1e6,gx::seal_window_wait_ns()/1e6,(unsigned long long)gx::seal_count(),loop_wait_ns/1e6,renderer.gpu_busy_ns()/1e6,gx::frame_latency().total_ns/1e6/std::max<uint64_t>(gx::frame_latency().frames,1),gx::frame_latency().max_ns/1e6,(unsigned long long)gx::frame_latency().frames); loop_wait_ns=0;
+                std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu wait %.2f ms\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted,pacing.wait_ns/1e6);
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
@@ -569,11 +588,14 @@ static int real_main(int argc, char** argv) {
             else if (++stalled >= 10) { result = 4; close = true; }
             if (result) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
         }
+        if(!options.headless && !pending && packets.wait_ready(std::chrono::nanoseconds(0))) continue;   // more work is queued
+        const auto wait_start=std::chrono::steady_clock::now();
         if(options.headless) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         else if(!renderer.wait_for_pending(1000000)) {
             if(!pending) packets.wait_ready(std::chrono::milliseconds(1));
             else std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        loop_wait_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count();
     }
     runner.stop();
     if(test_pipes) { if(!test_released) test_server->release_all(); test_pipes->send("{\"type\":\"exit\",\"code\":"+std::to_string(result)+"}",false); }

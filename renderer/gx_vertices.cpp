@@ -148,9 +148,9 @@ size_t encoded_draw_size(const State& state,uint8_t primitive,uint8_t vat,uint16
     return encoded_vertex_size(state,vat,callsite)*count;
 }
 
-void Vertices::begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite) {
+void Vertices::begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite) {
     if (active_ || ready_) throw Error(ErrorCode::sequence, callsite, 0, count);
-    const size_t vertex_size=encoded_draw_size(state,primitive,vat,count,callsite)/count;
+    const size_t vertex_size=encoded_draw_size(*state,primitive,vat,count,callsite)/count;
     draw_ = {callsite, primitive, vat, state, {}, {}};
     draw_.vertices.reserve(count);
     vertex_size_ = vertex_size; count_ = count; producer_ = producer;
@@ -162,10 +162,10 @@ void Vertices::begin(const State& state, uint8_t primitive, uint8_t vat, uint16_
 Vertex Vertices::decode(std::span<const std::byte> data) {
     Vertex vertex;
     size_t cursor = 0;
-    for (size_t a = 0; a < draw_.state.descriptors.size(); ++a) {
-        Mode mode = draw_.state.descriptors[a];
+    for (size_t a = 0; a < draw_.state->descriptors.size(); ++a) {
+        Mode mode = draw_.state->descriptors[a];
         if (mode == Mode::none) continue;
-        const Format& fmt = draw_.state.formats[draw_.vat][a];
+        const Format& fmt = draw_.state->formats[draw_.vat][a];
         size_t groups = fmt.normal_index3 ? 3 : 1;
         for (size_t group = 0; group < groups; ++group) {
             size_t size = data_size(a, fmt) / groups;
@@ -174,7 +174,7 @@ Vertex Vertices::decode(std::span<const std::byte> data) {
             else {
                 size_t index_size = mode == Mode::index8 ? 1 : 2;
                 uint32_t index = be(data.subspan(cursor, index_size)); cursor += index_size;
-                const Array& array = draw_.state.arrays[a - 9];
+                const Array& array = draw_.state->arrays[a - 9];
                 uint64_t address = uint64_t(array.address) + uint64_t(index) * array.stride;
                 if (!array.address || !array.stride || address > std::numeric_limits<uint32_t>::max())
                     throw Error(ErrorCode::array_bounds, array.address, size, array.stride);

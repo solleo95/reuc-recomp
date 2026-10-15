@@ -144,8 +144,11 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     uniform_stride_=(sizeof(gx::DrawUniform)+alignment-1)/alignment*alignment;
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; pool_info.queueFamilyIndex = family_;
     vk_check(vkCreateCommandPool(device, &pool_info, nullptr, &pool_), "command pool");
-    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool = pool_; allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount = 2;
-    VkCommandBuffer commands[2]; vk_check(vkAllocateCommandBuffers(device, &allocation, commands), "command buffers");
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool = pool_; allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount = uint32_t(slots_.size());
+    VkCommandBuffer commands[kFrameSlots]; vk_check(vkAllocateCommandBuffers(device, &allocation, commands), "command buffers");
+    VkQueryPoolCreateInfo timing{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO}; timing.queryType = VK_QUERY_TYPE_TIMESTAMP; timing.queryCount = uint32_t(slots_.size() * 2);
+    vk_check(vkCreateQueryPool(device, &timing, nullptr, &timing_pool_), "timing query pool");
+    timestamp_period_ = limits.limits.timestampPeriod;
     for (size_t i = 0; i < slots_.size(); ++i) {
         slots_[i].command = commands[i];
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -294,7 +297,7 @@ void VulkanRenderer::retire_textures(Slot& slot) {
 VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pass) {
     auto blend=draw.blend;
     if(alpha_pass) blend={0,1,0,3,false,true};
-    else if(draw.uniforms.pixel[2]&256) blend.alpha_write=false;
+    else if(draw.uniforms->pixel[2]&256) blend.alpha_write=false;
     if (blend.mode>3 || blend.source>7 || blend.destination>7 || blend.logic>15) throw std::invalid_argument("invalid native blend state");
     if (blend.mode==2 && !logic_ops_) throw std::runtime_error("native GX logic operation requires GPU logicOp support");
     PipelineKey key{};
@@ -302,17 +305,17 @@ VkPipeline VulkanRenderer::pipeline_for(const gx::DrawPacket& draw,bool alpha_pa
     case 0x80: case 0x90: case 0x98: case 0xA0: key[69]=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
     case 0xA8: case 0xB0: key[69]=VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
     default:
-        std::fprintf(stderr,"[unsupported-primitive] type %02X callsite %08X vertices %zu indices %zu\n",draw.primitive,draw.callsite,draw.vertices.size(),draw.indices.size());
+        std::fprintf(stderr,"[unsupported-primitive] type %02X callsite %08X vertices %zu indices %zu\n",draw.primitive,draw.callsite,draw.vertex_view().size(),draw.index_view().size());
         throw std::invalid_argument("unsupported native draw topology");
     }
-    if(draw.state.cull>3) throw std::invalid_argument("invalid native cull mode");
+    if(draw.state->cull>3) throw std::invalid_argument("invalid native cull mode");
     key[0]=blend.mode|(blend.source<<2)|(blend.destination<<5)|(blend.logic<<8)|(uint32_t(blend.color_write)<<12)|(uint32_t(blend.alpha_write)<<13);
-    key[0]|=uint32_t(draw.state.cull)<<14;
+    key[0]|=uint32_t(draw.state->cull)<<14;
     const auto& material=draw.material;
     if (material.stages>16) throw std::invalid_argument("native TEV stage count exceeds16");
     key[1]=material.stages;
     key[67]=alpha_pass;
-    key[68]=draw.uniforms.pixel[1]&31;
+    key[68]=draw.uniforms->pixel[1]&31;
     if(alpha_pass) {
         if((key[68]&17)==17) key[68]=5; // compare equal to the first pass's depth
         else key[68]&=~16u;
@@ -416,6 +419,10 @@ void VulkanRenderer::collect() {
         if (status == VK_NOT_READY) continue;
         vk_check(status, "frame fence status");
         completed_.push_back(slot.serial); slot.reported = true;
+        uint64_t stamps[2];
+        if (slot.timed && vkGetQueryPoolResults(device, timing_pool_, uint32_t((&slot - slots_.data()) * 2), 2, sizeof stamps, stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && stamps[1] >= stamps[0])
+            gpu_busy_ns_ += uint64_t(double(stamps[1] - stamps[0]) * timestamp_period_);
+        slot.timed = false;
     }
 }
 std::vector<uint64_t> VulkanRenderer::poll_completions() {
@@ -584,6 +591,12 @@ void VulkanRenderer::rebuild() {
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));
     create.presentMode = VK_PRESENT_MODE_FIFO_KHR; create.clipped = VK_TRUE;
+    if (const char* wanted = std::getenv("UC_PRESENT_MODE")) {   // diagnostics: fifo (default, vsync), mailbox or immediate when the surface offers it
+        const VkPresentModeKHR mode = std::string_view(wanted) == "immediate" ? VK_PRESENT_MODE_IMMEDIATE_KHR : std::string_view(wanted) == "mailbox" ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+        uint32_t mode_count = 0; vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, surface_, &mode_count, nullptr);
+        std::vector<VkPresentModeKHR> modes(mode_count); vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, surface_, &mode_count, modes.data());
+        if (std::find(modes.begin(), modes.end(), mode) != modes.end()) create.presentMode = mode;
+    }
     create.oldSwapchain = old_swapchain_;
     vk_check(vkCreateSwapchainKHR(device, &create, nullptr, &swapchain_), "swapchain");
     old_swapchain_ = VK_NULL_HANDLE;   // retired by the call above; reap_retired() frees it when its presentations are done
@@ -679,19 +692,20 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     size_t vertex_count = 0, index_count = 0;
     for (const auto& draw : packet.draws) {
-        if(draw.state.viewport) {
-            const auto& v=*draw.state.viewport;
+        if(draw.state->viewport) {
+            const auto& v=*draw.state->viewport;
             for(auto value:v) if(!std::isfinite(value)) throw std::invalid_argument("nonfinite native draw viewport");
             if(std::abs(v[0])>2048 || std::abs(v[1])>2048 || v[2]<=0 || v[3]<=0 || v[2]>1024 || v[3]>1024 || v[4]<0 || v[4]>1 || v[5]<0 || v[5]>1) throw std::invalid_argument("invalid native draw viewport");
         }
-        if(draw.state.scissor && ((*draw.state.scissor)[2]<0 || (*draw.state.scissor)[3]<0)) throw std::invalid_argument("negative native draw scissor extent");
+        if(draw.state->scissor && ((*draw.state->scissor)[2]<0 || (*draw.state->scissor)[3]<0)) throw std::invalid_argument("negative native draw scissor extent");
         pipeline_for(draw);
         // shortcut: indirect texturing/depth/material parity remains TD-036.
         const size_t group=(draw.primitive==0xA8 || draw.primitive==0xB0) ? 2 : 3;
-        if (draw.indices.size() % group != 0) throw std::invalid_argument("index count does not match native draw topology");
-        for (uint32_t index : draw.indices) if (index >= draw.vertices.size()) throw std::invalid_argument("draw index exceeds owned vertices");
-        if (draw.vertices.size() > size_t(INT32_MAX) - vertex_count || draw.indices.size() > size_t(UINT32_MAX) - index_count) throw std::invalid_argument("frame exceeds indexed draw limits");
-        vertex_count += draw.vertices.size(); index_count += draw.indices.size();
+        const auto vertices = draw.vertex_view(); const auto indices = draw.index_view();
+        if (indices.size() % group != 0) throw std::invalid_argument("index count does not match native draw topology");
+        for (uint32_t index : indices) if (index >= vertices.size()) throw std::invalid_argument("draw index exceeds owned vertices");
+        if (vertices.size() > size_t(INT32_MAX) - vertex_count || indices.size() > size_t(UINT32_MAX) - index_count) throw std::invalid_argument("frame exceeds indexed draw limits");
+        vertex_count += vertices.size(); index_count += indices.size();
     }
     if (vertex_count && index_count) {
         if (slot.vertices.size < VkDeviceSize(vertex_count) * sizeof(gx::GpuVertex)) {
@@ -702,10 +716,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         }
         size_t vertex_offset = 0, index_offset = 0;
         for (const auto& draw : packet.draws) {
-            for (size_t i=0;i<draw.vertices.size();++i)
-                static_cast<gx::GpuVertex*>(slot.vertices.mapped)[vertex_offset+i]=gx::gpu_vertex(draw.vertices[i],draw.transforms,draw.state.descriptors[0]!=gx::Mode::none,draw.callsite);
-            if (!draw.indices.empty()) std::memcpy(static_cast<uint32_t*>(slot.indices.mapped) + index_offset, draw.indices.data(), draw.indices.size() * sizeof(uint32_t));
-            vertex_offset += draw.vertices.size(); index_offset += draw.indices.size();
+            const auto vertices = draw.vertex_view(); const auto indices = draw.index_view();
+            for (size_t i=0;i<vertices.size();++i)
+                static_cast<gx::GpuVertex*>(slot.vertices.mapped)[vertex_offset+i]=gx::gpu_vertex(vertices[i],draw.transforms,draw.state->descriptors[0]!=gx::Mode::none,draw.callsite);
+            if (!indices.empty()) std::memcpy(static_cast<uint32_t*>(slot.indices.mapped) + index_offset, indices.data(), indices.size() * sizeof(uint32_t));
+            vertex_offset += vertices.size(); index_offset += indices.size();
         }
     }
     if (!packet.draws.empty()) {
@@ -746,7 +761,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 }
                 image[map]={VK_NULL_HANDLE,slot.textures[found->second].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
-            std::memcpy(static_cast<std::byte*>(slot.uniforms.mapped)+i*uniform_stride_,&packet.draws[i].uniforms,sizeof(gx::DrawUniform));
+            std::memcpy(static_cast<std::byte*>(slot.uniforms.mapped)+i*uniform_stride_,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
             VkDescriptorBufferInfo uniform{slot.uniforms.buffer,i*uniform_stride_,sizeof(gx::DrawUniform)};
             std::array<VkDescriptorImageInfo,8> samplers{};
             for(size_t map=0;map<8;++map) {
@@ -783,6 +798,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     vk_check(vkResetCommandBuffer(slot.command, 0), "reset command buffer");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk_check(vkBeginCommandBuffer(slot.command, &begin), "begin frame");
+    const uint32_t first_query = uint32_t((&slot - slots_.data()) * 2);
+    vkCmdResetQueryPool(slot.command, timing_pool_, first_query, 2);
+    vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query);
+    slot.timed = true;
     for (const auto& texture : slot.textures) {
         if (texture.initialized) continue;
         barrier(slot.command,texture.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_2_NONE,0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,texture.mip_levels);
@@ -816,12 +835,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         uint32_t first_index = 0; int32_t first_vertex = 0;
         size_t texture_index=0;
         for (const auto& draw : packet.draws) {
-            const auto v=draw.state.viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
+            const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
             const auto area=uc::efb_viewport(v,efb_extent_.width,efb_extent_.height);
             VkViewport draw_viewport{area.x,area.y,area.width,area.height,v[4],v[5]};
             auto draw_scissor=scissor;
-            if(draw.state.scissor) {
-                const auto& s=*draw.state.scissor;
+            if(draw.state->scissor) {
+                const auto& s=*draw.state->scissor;
                 const auto x=std::clamp<int64_t>(int64_t(s[0])*efb_extent_.width/640,0,efb_extent_.width);
                 const auto y=std::clamp<int64_t>(int64_t(s[1])*efb_extent_.height/480,0,efb_extent_.height);
                 const auto right=std::clamp<int64_t>((int64_t(s[0])+s[2])*efb_extent_.width/640,x,efb_extent_.width);
@@ -831,15 +850,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             vkCmdSetViewport(slot.command,0,1,&draw_viewport); vkCmdSetScissor(slot.command,0,1,&draw_scissor);
             vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_for(draw));
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[texture_index++],0,nullptr);
-            vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT,0,uint32_t(sizeof(gx::Projection)),draw.transforms.projection.data());
-            vkCmdDrawIndexed(slot.command, uint32_t(draw.indices.size()), 1, first_index, first_vertex, 0);
-            const auto depth=draw.uniforms.pixel[1]&31;
-            if((draw.uniforms.pixel[2]&256) && draw.blend.alpha_write && !(depth&1 && ((depth>>1)&7)==0)) {
+            vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT,0,uint32_t(sizeof(gx::Projection)),draw.transforms->projection.data());
+            vkCmdDrawIndexed(slot.command, uint32_t(draw.index_view().size()), 1, first_index, first_vertex, 0);
+            const auto depth=draw.uniforms->pixel[1]&31;
+            if((draw.uniforms->pixel[2]&256) && draw.blend.alpha_write && !(depth&1 && ((depth>>1)&7)==0)) {
                 // GX destination alpha replaces stored alpha after RGB blending.
                 vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_for(draw,true));
-                vkCmdDrawIndexed(slot.command,uint32_t(draw.indices.size()),1,first_index,first_vertex,0);
+                vkCmdDrawIndexed(slot.command,uint32_t(draw.index_view().size()),1,first_index,first_vertex,0);
             }
-            first_index += uint32_t(draw.indices.size()); first_vertex += int32_t(draw.vertices.size());
+            first_index += uint32_t(draw.index_view().size()); first_vertex += int32_t(draw.vertex_view().size());
         }
     }
     vkCmdEndRendering(slot.command);
@@ -911,6 +930,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         vkCmdBlitImage(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
         barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
     }
+    vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query + 1);
     vk_check(vkEndCommandBuffer(slot.command), "end frame"); vk_check(vkResetFences(device, 1, &slot.fence), "reset frame fence");
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}; wait.semaphore = slot.acquired; wait.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}; signal.semaphore = present_image ? present_image->ready : VK_NULL_HANDLE; signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -960,6 +980,7 @@ void VulkanRenderer::shutdown() {
             if (slot.acquired) vkDestroySemaphore(device, slot.acquired, nullptr);
             slot = {};
         }
+        if (timing_pool_) vkDestroyQueryPool(device, timing_pool_, nullptr);
         if (pool_) vkDestroyCommandPool(device, pool_, nullptr);
         vkDestroyDevice(device, nullptr); device = VK_NULL_HANDLE;
         layout_ = VK_NULL_HANDLE; pool_ = VK_NULL_HANDLE;

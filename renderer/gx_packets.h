@@ -1,4 +1,5 @@
 #pragma once
+#include "block_pool.h"
 #include "gx_vertices.h"
 #include <condition_variable>
 #include <chrono>
@@ -14,7 +15,7 @@ struct TextureCopy {
 };
 struct FramePacket {
     uint64_t serial = 0;
-    std::vector<DrawPacket> draws;
+    std::deque<DrawPacket, PoolAllocator<DrawPacket>> draws;   // a DrawPacket is ~6 KB: a deque never relocates them while a batch grows
     bool present = true;
     bool clear_after_copy = true;
     std::array<uint8_t,4> clear_color{16,32,64,255};
@@ -25,6 +26,14 @@ struct FramePacket {
     bool black_output = false; // VI blanked: present black, the EFB copy still happens
 };
 
+// A game frame is ~23 packets in the train (one per EFB copy) and the renderer drains them in bursts: the packet window must cover
+// a few frames (64 stalled the guest by ~4 ms per frame, 256 does not), while kMaxFramesInFlight bounds the added input latency.
+constexpr size_t kMaxOutstandingPackets = 256, kMaxFramesInFlight = 2;
+uint64_t seal_wait_ns(); // total time producers waited for a free packet slot, i.e. for the renderer
+uint64_t seal_window_wait_ns(); // part of seal_wait_ns spent waiting for the packet window (the rest: frames in flight)
+uint64_t seal_count();
+struct FrameLatency { uint64_t frames, total_ns, max_ns; };   // sealed -> GPU complete, presenting packets only
+FrameLatency frame_latency();
 class Packets {
 public:
     uint64_t seal_batch(FramePacket packet);
@@ -38,6 +47,7 @@ private:
     std::condition_variable ready_;
     std::deque<std::unique_ptr<const FramePacket>> queued_;
     std::map<uint64_t, bool> outstanding_;
+    std::map<uint64_t, std::chrono::steady_clock::time_point> frames_in_flight_;   // unfinished presenting packets and when they were sealed
     uint64_t next_serial_ = 1;
     bool canceled_ = false;
 };
