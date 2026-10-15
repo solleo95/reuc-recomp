@@ -30,7 +30,8 @@ int main() {
         CHECK(fast > base * 3.0 && fast < base * 5.5);
         uc::set_clock_speed(1); CHECK(uc::now_ticks() >= d);   // speed_change_is_monotonic
         bool rejected = false; try { uc::set_clock_speed(0); } catch (const std::invalid_argument&) { rejected = true; } CHECK(rejected);
-        rejected = false; try { uc::set_clock_speed(9); } catch (const std::invalid_argument&) { rejected = true; } CHECK(rejected);
+        uc::set_clock_speed(16); CHECK(uc::clock_speed() == 16); uc::set_clock_speed(32); CHECK(uc::clock_speed() == 32); uc::set_clock_speed(1);
+        rejected = false; try { uc::set_clock_speed(33); } catch (const std::invalid_argument&) { rejected = true; } CHECK(rejected);
     }
     return 0;
 }

@@ -34,6 +34,11 @@ uint32_t guest_function_for_host(const void* pc) {
     auto it = std::lower_bound(g_by_host.begin(), g_by_host.end(), std::pair<uintptr_t, uint32_t>{begin, 0});
     return it != g_by_host.end() && it->first == begin ? it->second : 0;
 }
+std::vector<uint32_t> function_addresses() {
+    std::vector<uint32_t> result;
+    for (size_t i = 0; i < g_dense.size(); ++i) if (g_dense[i]) result.push_back(g_begin + uint32_t(i) * 4);
+    return result;
+}
 bool has_function(uint32_t a) { return !(a & 3) && a - g_begin < g_bytes && g_dense[(a - g_begin) >> 2] != nullptr; }
 void call_indirect(ppc::Ctx& c, uint32_t a) {
     if (has_function(a)) { g_dense[(a - g_begin) >> 2](c); return; }

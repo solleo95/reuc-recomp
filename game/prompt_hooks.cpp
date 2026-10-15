@@ -1,6 +1,7 @@
 #include "prompt_hooks.h"
 #include "prompt_bridge.h"
 #include "game_input.h"
+#include "test_state.h"
 #include <algorithm>
 #include <exception>
 #include <set>
@@ -26,6 +27,7 @@ void prompt_hooks_init(const Bindings& bindings,bool trace) {
 }
 PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),exceptions_(std::uncaught_exceptions()) {
     if(!initialized || !c.mem)return;
+    if(entry==0x8024F280) {object_=c.r[3];gate_=test_state_skip_tutorial(c);return;}   // original tutorial opener, r3 = tutorial object
     if(entry==0x8038AD94) {registry.unregister_layout(c.r[3]);return;}
     if(entry==0x80389B20) {registry.unregister_pane(c.r[3]);return;}
     if(entry==0x8038AEB0) {
@@ -70,6 +72,7 @@ PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),excepti
     }
 }
 PromptScope::~PromptScope() noexcept(false) {
+    if(entry_==0x8024F280) {test_state_unskip_tutorial(c_,object_,gate_);return;}   // also while unwinding: the gate byte belongs to the game
     if(std::uncaught_exceptions()!=exceptions_)return;
     if(entry_==0x8038AEB0 && object_ && c_.r[3])registry.register_layout(memory(c_),object_,name_);
     if(!description_ || gx_prompt_attach(checkpoint_,*description_,compact_))return;

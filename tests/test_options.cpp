@@ -63,12 +63,18 @@ int main() {
     auto server=parse(std::array<std::string_view,7>{"--test-server","run_1-a","--speed","4","--capture-dir","S:/A B/shots","--skip-intro"});
     CHECK(std::holds_alternative<uc::Options>(server));
     CHECK(std::get<uc::Options>(server).test_server=="run_1-a" && std::get<uc::Options>(server).speed==4 && std::get<uc::Options>(server).capture_dir=="S:/A B/shots");
-    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,4>{"--test-server","a","--speed","9"})));
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,4>{"--test-server","a","--speed","32"})).speed==32);
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,4>{"--test-server","a","--speed","33"})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,4>{"--test-server","a","--speed","0"})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--speed","2"})));
     CHECK(!std::get<uc::Options>(defaults).god);
     CHECK(std::get<uc::Options>(parse(std::array<std::string_view,3>{"--test-server","a","--god"})).god);
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--god"})));   // a cheat needs the test server
+    CHECK(!std::get<uc::Options>(defaults).no_vulkan_layers);   // layers (OBS, RTSS, overlays) stay on by default
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--no-vulkan-layers"})).no_vulkan_layers);
+    CHECK(!std::get<uc::Options>(defaults).skip_tutorials);
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,3>{"--test-server","a","--skip-tutorials"})).skip_tutorials);
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--skip-tutorials"})));   // test mode only
     for(auto bad:{"bad/name","","a b","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","\\\\x"}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--test-server",bad})));
     auto command=uc::parse_test_command("1 -0.5 0.25 2048 1");
     CHECK(command && command->sequence==1 && command->held==2048 && command->capture);

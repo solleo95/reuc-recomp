@@ -21,7 +21,10 @@ struct TestFrameState {
 struct TestAction { std::string name; bool accepted; uint64_t frame; };
 void test_state_set_god(bool);                                  // --god: keep health and ammo at their maxima (cheat, marked in the report)
 void test_state_apply_god(ppc::Ctx&, const InputProbeSnapshot&);  // guest thread, once per KPAD sample; no-op unless god is set
-void test_state_enable(bool);                                   // before guest threads start
+void test_state_set_skip_tutorials(bool);                       // --skip-tutorials: the original tutorial opener becomes a no-op
+int test_state_skip_tutorial(ppc::Ctx&);                        // guest thread, at entry of the opener (r3 = tutorial object): its previous gate byte, or -1 when not applied
+void test_state_unskip_tutorial(ppc::Ctx&, uint32_t object, int gate); // at exit of the opener: gives the gate byte back (no-op for -1)
+void test_state_enable(bool);                                // before guest threads start
 void test_state_publish(const InputProbeSnapshot&, uint8_t context); // guest thread, once per KPAD sample
 TestFrameState test_state_latest();                             // any thread
 void test_state_action(const char* name, bool accepted);        // guest thread

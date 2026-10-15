@@ -25,7 +25,8 @@ int main() {
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":2,"y":0,"buttons":0}})")).empty());     // out of range
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":0,"y":0,"buttons":1}})")).empty());     // button outside 0x1C10
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","hold_frames":601,"kpad":{"x":0,"y":0,"buttons":0}})")).empty());
-    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"speed","factor":9})")).empty());
+    CHECK(ok(parse_test_request(R"({"id":9,"cmd":"speed","factor":32})")).factor==32);
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"speed","factor":33})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"state","extra":1})")).empty());                          // unknown field
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","key":{"code":0,"down":true}})")).empty());       // key code 1..511
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":0,"y":0,"buttons":0},"key":{"code":4,"down":true}})")).empty()); // two devices

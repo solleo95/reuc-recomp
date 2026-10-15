@@ -13,6 +13,7 @@ public:
 private:
     ppc::Ctx& c_;
     uint32_t entry_,object_=0;
+    int gate_=-1;
     int exceptions_;
     std::string name_;
     std::optional<PromptDescription> description_;
@@ -21,7 +22,7 @@ private:
 };
 struct NoPromptScope {};
 template<uint32_t entry> auto prompt_scope(ppc::Ctx& c) {
-    if constexpr(entry==0x8038AEB0 || entry==0x8038AD94 || entry==0x80389B20 || entry==0x80394038 || entry==0x803B7CF0)
+    if constexpr(entry==0x8038AEB0 || entry==0x8038AD94 || entry==0x80389B20 || entry==0x80394038 || entry==0x803B7CF0 || entry==0x8024F280)
         return PromptScope(c,entry);
     else return NoPromptScope{};
 }

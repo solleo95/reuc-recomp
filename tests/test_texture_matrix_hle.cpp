@@ -49,10 +49,13 @@ int main() {
         ppc::wr32(c,0x80001080,60u<<6);
         begin(0x80007000); draw(); const auto identity=end();
         ppc::wr32(c,0x80001080,0); load(.25f); play(0x80007000,identity); take(0);
-        ppc::wrf32(c,0x80002028,std::numeric_limits<float>::quiet_NaN());
-        c.r[3]=0x80002000; c.r[4]=0; c.r[5]=0; rejected=false;
-        try { hle_GXLoadTexMtxImm(c); } catch(const gx::Error&) { rejected=true; }
-        CHECK(rejected); draw(); take(.25f);
+        // A non-finite word is guest data (an animation that went wrong): loaded as the hardware does, the coordinates it feeds come out non-finite.
+        ppc::wrf32(c,0x80002028,std::numeric_limits<float>::quiet_NaN());   // word 10 = row 2, column 2
+        c.r[3]=0x80002000; c.r[4]=0; c.r[5]=0; hle_GXLoadTexMtxImm(c);
+        draw(); c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto nan_packet=packets.try_take(); CHECK(nan_packet && nan_packet->draws.size()==1);
+        CHECK(std::isnan(nan_packet->draws[0].uniforms->tex_rows[2][2]));
+        CHECK(packets.complete(nan_packet->serial)); uc::gx_completed(nan_packet->serial);
         // A 3x4 load keeps its third row; post matrices (ids 64+) and the raw texgen words reach the draw.
         for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80002000+i*4,float(i+1));
         c.r[3]=0x80002000; c.r[4]=30; c.r[5]=0; hle_GXLoadTexMtxImm(c);

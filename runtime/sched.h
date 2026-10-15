@@ -76,6 +76,7 @@ public:
     void set_deadlock_timeout_ms(int ms) { deadlock_ms_ = ms; }
     const Thread* running() const { return running_; }
     std::string dump_threads() const;           // baton holder or after join_hosts only
+    std::string dump_contexts() const;          // crash bundle: every live thread with its registers (threads.txt of the bundle); same restriction
     void set_switch_hook(std::function<void(Thread*)> h) { switch_hook_ = std::move(h); }
 
     void thread_main(Thread* t);                 // host thread entry (internal)

@@ -3,7 +3,7 @@
 namespace uc {
 constexpr uint64_t kTimebaseHz = 60750000ull;   // bus clock 243 MHz / 4
 uint64_t now_ticks();
-void set_clock_speed(uint32_t factor);   // test mode: 1..8, virtual time = base + real elapsed * factor
+void set_clock_speed(uint32_t factor);   // test mode: 1..32, virtual time = base + real elapsed * factor
 uint32_t clock_speed();
 uint64_t ms_to_ticks(uint64_t ms);
 uint64_t ticks_to_ms(uint64_t ticks);

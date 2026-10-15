@@ -1,6 +1,6 @@
 """Scripted bot: plays as far as it can from the game's own state (enemy heads from guest memory), logging every decision.
 
-One `step()` = one decision from the latest frame. All timing uses game time (retraces), so it works at speed 1..8.
+One `step()` = one decision from the latest frame. All timing uses game time (retraces), so it works at speed 1..32 (no faster than 8 in practice, see docs/testing/test-server.md).
 """
 import json
 import time
@@ -205,6 +205,7 @@ class Autoplay:
                 reason = self.step()
         except StepFailed as error:
             artifacts = error.artifacts
+            self.event("step_failed", message=str(error))
             reason = self.stop("crashed" if getattr(self.g, "exited", True) else "harness_error")
         report = {"reason": reason, "frames": self.frames, "kills": self.kills, "deaths": self.deaths, "shots": self.shots,
                   "furthest_screen": self.furthest, "god": self.god, "speed": self.speed}

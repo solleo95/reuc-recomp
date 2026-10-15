@@ -93,7 +93,7 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
             only(root, {"id", "cmd"});
             r.kind = name == "capture" ? TestRequestKind::capture : name == "state" ? TestRequestKind::state : name == "draws" ? TestRequestKind::draws : TestRequestKind::quit;
         } else if (name == "speed") {
-            only(root, {"id", "cmd", "factor"}); r.kind = TestRequestKind::speed; r.factor = uint32_t(number(root, "factor", 1, 8, true));
+            only(root, {"id", "cmd", "factor"}); r.kind = TestRequestKind::speed; r.factor = uint32_t(number(root, "factor", 1, 32, true));
         } else if (name == "peek") {   // read-only guest memory window for diagnostics and reverse engineering
             only(root, {"id", "cmd", "addr", "size"}); r.kind = TestRequestKind::peek;
             r.addr = uint32_t(number(root, "addr", 0, 4294967295.0, true)); r.size = uint32_t(number(root, "size", 1, 262144, true));

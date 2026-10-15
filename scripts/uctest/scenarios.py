@@ -32,6 +32,29 @@ def train_gameplay(g, args):
     return {"capture": g.capture()}
 
 
+def no_tutorials(g, args):
+    """With --skip-tutorials no tutorial page may open: 20 s of game time from the mission start, then the player must be controllable.
+    Without the flag this fails at the first tutorial page, which shows the check can see one."""
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    for target in route(args.chapter):
+        with g.step(target):
+            steps.select(g, target)
+    with g.step("watch"):
+        t0, controllable = g.frame["retraces"], 0
+        while g.frame["retraces"] - t0 < 1200:
+            f = g.frame
+            if f.get("tutorial_loaded") and f.get("tutorial") not in (0, 0x100000):
+                g.fail(f"a tutorial page opened (state {f['tutorial']:08X})", "no tutorial")
+            if steps.screen_of(f) == "mission":
+                g.press("A", steps.PRESS_FRAMES, wait=False)   # mission intro pages are not tutorials
+            controllable += f.get("context") == "gameplay" and f["player"]["valid"]
+            g.advance(6)
+        if not controllable:
+            g.fail("gameplay was never reached", "gameplay")
+    return {"capture": g.capture(), "controllable_samples": controllable}
+
+
 def controls(g, args):
     reach_gameplay(g, args.chapter)   # the player is attacked from the first second: act before the chapter is lost
     result = {}
@@ -69,6 +92,10 @@ def autoplay(g, args):
         report = bot.run(args.max_minutes)
     if report["reason"] in ("crashed", "harness_error"):
         g.fail(f"autoplay stopped: {report['reason']}", capture=False)
+    if report["reason"] == "chapter_done":   # the chapter-select page has only just appeared: the game must live on in the menu (the page builds its layouts after the signature shows)
+        with g.step("menu_after_chapter"):
+            g.advance(3000)
+        report["menu_capture"] = g.capture()
     return {"autoplay": report}
 
 
@@ -125,4 +152,4 @@ def resize(g, args):
     return {"idle": idle, "storm": storm, "after": after}
 
 
-SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "controls": controls, "perf": perf, "autoplay": autoplay, "resize": resize}
+SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "autoplay": autoplay, "resize": resize}

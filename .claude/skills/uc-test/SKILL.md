@@ -9,6 +9,8 @@ Build first (`build.bat --no-install` stages `dist`). Then from `scripts/`:
 - `python -m uctest run controls` — fire/reload/grenade/knife/pause must be accepted.
 - `python -m uctest run perf --measure 15` — menus at 8x, FPS measured at speed 1 in gameplay.
 - `python -m uctest run autoplay [--god] [--speed 8] [--max-minutes 10]` — bot plays the train chapter (aims at enemy heads read from game memory, skips tutorials, continues after death); `--god` keeps health/ammo full so it plays on until the next crash. A `crashed` report names the crash report file.
+- `--skip-tutorials` (any scenario) — tutorial pages never open; `python -m uctest run no_tutorials --skip-tutorials` checks it.
+- `python -m uctest inspect <crash-*.txt> threads|stack|mem|f32|nan|posmtx|gx` reads the crash bundle (guest memory, registers) offline.
 - `--save-as NAME` keeps a run's saves as a checkpoint; `--from NAME|<saves dir> --chapter N` starts there (chapter 2 gameplay in ~10 s).
 - `--repeat N` for reliability. Speed 8 reaches gameplay in ~4 s, speed 1 in ~18 s.
 Reading results: exit 0 = all passed. Autoplay: `autoplay.jsonl` (decisions) and `report.json` → `result.autoplay.reason` (`stuck`, `time_limit`, `crashed`, `harness_error`). On failure open `failure.json` in the run directory (awaited condition, last frame, capture, log tail, crash report); `report.json` has step timings and `counters.press_retries`.

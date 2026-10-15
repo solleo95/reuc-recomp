@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -247,6 +248,23 @@ std::string Sched::dump_threads() const {
         char b[160];
         std::snprintf(b, sizeof b, "  thread %d (OSThread %08X) priority %d %s wait key %08X\n", t->id, t->guest_addr, t->priority, names[int(t->state)], t->wait_key);
         s += b;
+    }
+    return s;
+}
+
+std::string Sched::dump_contexts() const {
+    std::string s;
+    static const char* names[] = {"suspended", "ready", "running", "waiting", "dead"};
+    char b[96];
+    for (const auto& t : threads_) {
+        if (t->state == Thread::State::Dead) continue;
+        std::snprintf(b, sizeof b, "thread %d osthread %08X state %s priority %d waitkey %08X current %d\n", t->id, t->guest_addr, names[int(t->state)], t->priority, t->wait_key, t.get() == running_);
+        s += b;
+        const ppc::Ctx& c = t->ctx;
+        for (unsigned i = 0; i < 32; ++i) { std::snprintf(b, sizeof b, "r%u=%08X%c", i, c.r[i], i % 8 == 7 ? '\n' : ' '); s += b; }
+        uint32_t cr = 0; for (unsigned i = 0; i < 8; ++i) cr = cr << 4 | (c.cr[i] & 15);
+        std::snprintf(b, sizeof b, "lr=%08X ctr=%08X cr=%08X msr=%08X\n", c.lr, c.ctr, cr, c.msr); s += b;
+        for (unsigned i = 0; i < 32; ++i) { uint64_t bits; std::memcpy(&bits, &c.f[i], 8); std::snprintf(b, sizeof b, "f%u=%016llX%c", i, (unsigned long long)bits, i % 4 == 3 ? '\n' : ' '); s += b; }
     }
     return s;
 }

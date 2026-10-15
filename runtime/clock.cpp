@@ -31,7 +31,7 @@ uint64_t now_ticks() {
     }
 }
 void set_clock_speed(uint32_t factor) {
-    if (factor < 1 || factor > 8) throw std::invalid_argument("clock speed must be 1..8");
+    if (factor < 1 || factor > 32) throw std::invalid_argument("clock speed must be 1..32");
     std::lock_guard lock(writer);
     const uint64_t current = now_ticks(), real = real_ticks();
     version.fetch_add(1, std::memory_order_acq_rel);

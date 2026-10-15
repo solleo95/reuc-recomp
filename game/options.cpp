@@ -13,6 +13,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--log-sleep") options.log_sleep = true;
         else if (arg == "--gx-audit") options.gx_audit = true;
         else if (arg == "--skip-intro") options.skip_intro = true;
+        else if (arg == "--no-vulkan-layers") options.no_vulkan_layers = true;
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
@@ -20,6 +21,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--gx-gaps") options.gx_gaps = true;
         else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--god") options.god = true;
+        else if (arg == "--skip-tutorials") options.skip_tutorials = true;
         else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
@@ -53,7 +55,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             uint32_t number = 0;
             auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && number == 0)) return "invalid value for " + std::string(arg);
-            if (arg == "--speed") { if (number > 8) return "invalid value for --speed"; options.speed = number; }
+            if (arg == "--speed") { if (number > 32) return "invalid value for --speed"; options.speed = number; }
             else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }
@@ -62,6 +64,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
     }
     if (options.speed != 1 && options.test_server.empty()) return "--speed requires --test-server";
     if (options.god && options.test_server.empty()) return "--god requires --test-server";
+    if (options.skip_tutorials && options.test_server.empty()) return "--skip-tutorials requires --test-server";
     return options;
 }
 }

@@ -232,7 +232,25 @@ static void test_cancel() {   // OSCancelThread: a waiting or never-started thre
     CHECK(joined() == "w1,m-done");
 }
 
+static void test_dump_contexts() {   // crash bundle: every live thread with its registers, the running one marked
+    Sched s(nullptr);
+    Thread* m = s.create(0x80123400, 16, [&](ppc::Ctx& mc) {
+        Thread* t = s.create(0x80567800, 10, [&](ppc::Ctx& c) { c.r[5] = 0xDEADBEEF; c.lr = 0x80001000; c.f[3] = 1.0; c.cr[0] = 8; c.cr[7] = 2; s.block_on(0x2000); });
+        s.resume(t);                                   // more urgent than main: runs until it blocks
+        mc.r[1] = 0x8070B398;
+        const std::string text = s.dump_contexts();
+        CHECK(text.find("thread 1 osthread 80123400 state running priority 16 waitkey 00000000 current 1") != std::string::npos);
+        CHECK(text.find("thread 2 osthread 80567800 state waiting priority 10 waitkey 00002000 current 0") != std::string::npos);
+        CHECK(text.find("r1=8070B398") != std::string::npos && text.find("r5=DEADBEEF") != std::string::npos);
+        CHECK(text.find("lr=80001000") != std::string::npos && text.find("cr=80000002") != std::string::npos);
+        CHECK(text.find("f3=3FF0000000000000") != std::string::npos);
+        s.wake_one(0x2000);
+    });
+    s.run(m);
+}
+
 int main() {
+    test_dump_contexts();
     test_priorities_and_join(); test_round_robin(); test_wake_order(); test_wake_preempts();
     test_busy_wait_sees_events(); test_events_wait_for_interrupts(); test_external_wakes_idle();
     test_deadlock_report(); test_irq_block_is_fatal(); test_exit_and_join_values();

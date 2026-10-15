@@ -9,7 +9,7 @@
 #include <mutex>
 namespace uc {
 namespace {
-std::atomic<bool> enabled{false}, god{false};
+std::atomic<bool> enabled{false}, god{false}, skip_tutorials{false};
 std::mutex lock;
 TestFrameState latest;
 std::deque<TestAction> actions;
@@ -23,6 +23,19 @@ void test_state_apply_god(ppc::Ctx& c, const InputProbeSnapshot& s) {
     if (s.scene_valid && s.scene_address) ppc::wr32(c, s.scene_address + 0x6C00, 0);
     if (s.players[0].valid) { if (ppc::rd32(c, s.players[0].address + 0x4D4) < 99) ppc::wr32(c, s.players[0].address + 0x4D4, 99); }
     ppc::wr32(c, 0x8056F338, 9);
+}
+void test_state_set_skip_tutorials(bool on) { skip_tutorials = on; }
+// The opener 8024F280 returns 0 at once when the object's byte +4 is 0; the scenario script at 801092A0 then polls the busy getter
+// 8024F558 (state +48 != 00100000), so the state is set to "closed" to let it continue. The gate byte is only zero during the call.
+int test_state_skip_tutorial(ppc::Ctx& c) {
+    if (!skip_tutorials.load(std::memory_order_relaxed) || !c.r[3]) return -1;
+    const int gate = ppc::rd8(c, c.r[3] + 4);
+    ppc::wr8(c, c.r[3] + 4, 0);
+    ppc::wr32(c, c.r[3] + 0x48, 0x00100000);
+    return gate;
+}
+void test_state_unskip_tutorial(ppc::Ctx& c, uint32_t object, int gate) {
+    if (gate >= 0) ppc::wr8(c, object + 4, uint8_t(gate));
 }
 void test_state_publish(const InputProbeSnapshot& s, uint8_t context) {
     if (!enabled.load(std::memory_order_relaxed)) return;

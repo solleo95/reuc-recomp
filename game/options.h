@@ -15,6 +15,7 @@ struct Options {
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
+    bool no_vulkan_layers = false;   // sets VK_LOADER_LAYERS_DISABLE=~implicit~: OBS/RTSS/ReShade/Steam layers stay out of the process (stable timing in tests)
     bool profile = false;
     bool capture_scene_passes = false;
     bool unlock_60fps = false;
@@ -24,7 +25,8 @@ struct Options {
     std::filesystem::path test_control,save_root,config,capture_dir;
     std::string test_server; // agent test server pipe name [A-Za-z0-9_-]{1,32}
     bool god = false;        // test-mode cheat: health and ammo stay at their maxima, needs test_server
-    uint32_t speed = 1;      // test-mode virtual clock factor 1..8, needs test_server
+    bool skip_tutorials = false;   // test-mode: tutorial pages never open, needs test_server
+    uint32_t speed = 1;     // test-mode virtual clock factor 1..32, needs test_server
 };
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});
 }

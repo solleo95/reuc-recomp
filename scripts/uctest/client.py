@@ -38,11 +38,12 @@ class StepFailed(Exception):
 class Game:
     BUTTONS = {"A": 0x0800, "B": 0x0400, "minus": 0x0010, "plus": 0x1000}
 
-    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, saves=None, game_args=()):
+    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=()):
         self.exe = (ROOT / exe).resolve()
         self.run_dir = Path(run_dir) if run_dir else ROOT / "build" / "autotest" / str(time.time_ns())
         self.name = re.sub(r"[^A-Za-z0-9_-]", "_", self.run_dir.name)[-32:] or "run"
         self.speed, self.skip_intro, self.seconds, self.launch, self.god = speed, skip_intro, seconds, launch, god
+        self.skip_tutorials = skip_tutorials
         self.transport_factory, self.saves, self.game_args = transport_factory, saves, list(game_args)
         self.process = None
         self.transport = None
@@ -96,8 +97,11 @@ class Game:
         if self.skip_intro:
             args.append("--skip-intro")
         args.extend(self.game_args)
+        args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
         if self.god:
             args.append("--god")
+        if self.skip_tutorials:
+            args.append("--skip-tutorials")
         log = open(self.run_dir / "run.log", "wb")
         self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, creationflags=0)
         log.close()

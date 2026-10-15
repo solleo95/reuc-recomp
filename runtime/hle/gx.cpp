@@ -6,6 +6,7 @@
 #include <atomic>
 #include <bit>
 #include <cstring>
+#include <cstdio>
 #include <map>
 
 #include <variant>
@@ -226,6 +227,10 @@ gx::PositionMatrix position_matrix(uint32_t address) {
     memory.read(address,48);
     gx::PositionMatrix result{};
     for (size_t r=0;r<3;++r) for (size_t col=0;col<4;++col) result[r][col]=std::bit_cast<float>(read32(address+uint32_t(r*16+col*4)));
+    static unsigned reported=0;   // guest thread only
+    if (reported<8 && std::any_of(result.begin(),result.end(),[](const auto& row){ return !std::isfinite(row[0]) || !std::isfinite(row[1]) || !std::isfinite(row[2]) || !std::isfinite(row[3]); })) {
+        ++reported; std::fprintf(stderr,"[gx] guest loaded a non-finite position matrix from %08X (the hardware drops the vertices it transforms)\n",address);
+    }
     return result;
 }
 void indexed_position(gx::Transforms& target,const gx::State& bindings,uint16_t index,uint32_t row) {
@@ -251,7 +256,7 @@ void indexed_texture(TextureMatrices& target,const gx::State& bindings,uint16_t 
     if(!array.address || !array.stride || source>UINT32_MAX) throw gx::Error(gx::ErrorCode::array_bounds,array.address,words*4,array.stride);
     memory.read(uint32_t(source),words*4);
     TextureMatrix matrix{{{},{},{0,0,1,0}}};
-    for(uint32_t i=0;i<words;++i) { const auto value=std::bit_cast<float>(read32(uint32_t(source)+i*4)); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,uint32_t(source),0,i); matrix[i/4][i%4]=value; }
+    for(uint32_t i=0;i<words;++i) matrix[i/4][i%4]=std::bit_cast<float>(read32(uint32_t(source)+i*4));
     target[id]=matrix;
 }
 bool apply_bp(gx::DrawUniform& target,uint32_t reg,uint32_t data) {
@@ -572,6 +577,15 @@ void gx_completed(uint64_t serial) {
         if (callback) call_guest(irq, callback, {});
         sched->wake_all(base - 25336);
     });
+}
+std::string gx_state_summary() {   // crash bundle gx.txt: bound arrays (12 = position matrices, 13 = normal matrices), "recorded" while a display list is being built
+    std::string text; char line[96];
+    const auto add = [&](const char* kind, const gx::State& s) {
+        for (size_t i = 0; i < s.arrays.size(); ++i) if (s.arrays[i].address) { std::snprintf(line, sizeof line, "%s array %zu address %08X stride %u\n", kind, i, s.arrays[i].address, unsigned(s.arrays[i].stride)); text += line; }
+    };
+    add("live", state);
+    if (recording) add("recorded", recording->input_state);
+    return text;
 }
 GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load(),geometry_hits.load(),geometry_misses.load(),prompt_annotations.load(),prompt_present.load(),prompt_fallback.load()}; }
 }
@@ -1519,7 +1533,7 @@ void hle_GXLoadTexMtxImm(ppc::Ctx& c) {
     const auto count=type ? 8u : 12u;
     memory.read(pointer,count*4);
     TextureMatrix matrix{{{},{},{0,0,1,0}}}; // a 2x4 load leaves Q to the identity row
-    for(size_t i=0;i<count;++i) { const auto value=std::bit_cast<float>(read32(pointer+uint32_t(i*4))); if(!std::isfinite(value)) throw gx::Error(gx::ErrorCode::layout,pointer,0,i); matrix[i/4][i%4]=value; }
+    for(size_t i=0;i<count;++i) matrix[i/4][i%4]=std::bit_cast<float>(read32(pointer+uint32_t(i*4)));   // non-finite words are guest data, loaded as the hardware does
     texture_matrices[id]=matrix;
     const auto address=id>=64 ? 0x500+(id-64)*4 : id*4;
     uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,(count-1)<<16|address);

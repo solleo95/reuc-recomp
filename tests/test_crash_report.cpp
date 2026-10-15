@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -65,6 +66,23 @@ int main() {
     CHECK(uc::crash_report_write("winner", nullptr));
     loser.join();
     CHECK(loser_returned.load() >= stats_end.load());
+
+    // The bundle hook runs after the report with <report stem>.dump next to it; the report names the folder; a throwing hook loses nothing.
+    for (const bool throws : {false, true}) {
+        const auto bundle_dir = std::filesystem::temp_directory_path() / (throws ? "uc-crash-bundle-throws" : "uc-crash-bundle");
+        std::filesystem::remove_all(bundle_dir);
+        uc::crash_report_init(bundle_dir, [] { return std::string("state"); });
+        std::filesystem::path got;
+        uc::crash_report_set_bundle([&](const std::filesystem::path& p) {
+            got = p; std::filesystem::create_directories(p);
+            if (throws) throw std::runtime_error("disk full");
+        });
+        CHECK(uc::crash_report_write("with bundle", nullptr));
+        CHECK(got.extension() == ".dump" && got.parent_path() == bundle_dir && std::filesystem::is_directory(got));
+        std::string report;
+        for (const auto& entry : std::filesystem::directory_iterator(bundle_dir)) if (entry.is_regular_file()) { std::ifstream in(entry.path()); std::stringstream s; s << in.rdbuf(); report = s.str(); CHECK(got.stem() == entry.path().stem()); }
+        CHECK(report.find("bundle: " + got.string()) != std::string::npos);
+    }
 
     // Host threads reserve stack for the handler so a stack overflow can still be reported.
     ULONG guarantee = 0;

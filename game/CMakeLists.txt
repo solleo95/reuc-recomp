@@ -11,6 +11,9 @@ target_link_libraries(uc_intro PUBLIC uc_runtime)
 add_library(uc_game_pacing STATIC game_pacing.cpp cpu_sampler.cpp)
 target_include_directories(uc_game_pacing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_pacing PUBLIC uc_runtime)
+add_library(uc_crash_bundle STATIC crash_bundle.cpp)
+target_include_directories(uc_crash_bundle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_crash_bundle PUBLIC uc_runtime)
 add_library(uc_input_probe STATIC input_probe.cpp entry_probe.cpp audio_startup.cpp)
 target_include_directories(uc_input_probe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_input_probe PUBLIC uc_runtime)
@@ -53,7 +56,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(uc_smoke PRIVATE uc_game uc_common test_support)
   install(TARGETS uc_smoke RUNTIME DESTINATION tools)
   add_executable(uc uc_main.cpp audio_output.cpp compile_screen.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server winmm)
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm)
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.vert.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.frag.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.uber.spv $<TARGET_FILE_DIR:uc>/data/shaders

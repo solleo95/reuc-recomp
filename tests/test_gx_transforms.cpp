@@ -36,8 +36,6 @@ int main() {
     CHECK((uploaded.object_normal==std::array<float,3>{1,2,3})); // texgen reads the untransformed normal
     CHECK(uploaded.color1==vertex.color[1]);
     rejects([&]{gx::set_normal_matrix(transforms,62,{});});
-    auto invalid_normal=gx::NormalMatrix{}; invalid_normal[0][0]=std::numeric_limits<float>::quiet_NaN();
-    rejects([&]{gx::set_normal_matrix(transforms,0,invalid_normal);});
     const gx::PositionMatrix translated{{{1,0,0,4},{0,2,0,5},{0,0,3,6}}};
     gx::set_position_matrix(transforms,3,translated);
     transforms.current=3;
@@ -61,8 +59,17 @@ int main() {
     CHECK((uploaded.normal==std::array<float,3>{2,-1,6}));
     transforms.current=33;
     CHECK((gx::gpu_vertex(vertex,transforms,false,0).normal==std::array<float,3>{2,-1,6}));
-    auto invalid=translated; invalid[0][0]=std::numeric_limits<float>::infinity();
-    rejects([&]{gx::set_position_matrix(transforms,0,invalid);});
+    // Non-finite entries are guest data (an animation that went wrong): the hardware loads them and the vertices they transform come out non-finite,
+    // which the rasterizer drops. Only a row outside the 64-row register file is an error.
+    auto invalid=translated; invalid[0][3]=std::numeric_limits<float>::quiet_NaN(); invalid[1][0]=std::numeric_limits<float>::infinity();
+    gx::set_position_matrix(transforms,12,invalid);
+    CHECK(std::isnan(transforms.position_rows[12][3]) && std::isinf(transforms.position_rows[13][0]) && transforms.loaded_rows[12]);
+    gx::set_normal_matrix(transforms,5,{{{std::numeric_limits<float>::quiet_NaN(),0,0},{0,1,0},{0,0,1}}});
+    CHECK(std::isnan(transforms.normal_rows[5][0]) && transforms.loaded_normal_rows[5]);
+    vertex.position_matrix=12; vertex.position={1,1,1};
+    const auto dropped=gx::gpu_vertex(vertex,transforms,true,0);   // no exception; the position carries the NaN
+    CHECK(std::isnan(dropped.position_rows[0][3]));
+    rejects([&]{gx::set_position_matrix(transforms,62,translated);});
     CHECK(transforms.position_rows[0][0]==1);
 
     const auto ortho=gx::make_projection({1,0,1,0,1,0},1);

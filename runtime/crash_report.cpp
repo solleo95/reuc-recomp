@@ -14,6 +14,7 @@ namespace uc {
 namespace {
 std::filesystem::path g_directory;
 std::function<std::string()> g_stats;
+std::function<void(const std::filesystem::path&)> g_bundle;
 std::atomic<bool> g_written{false};
 std::atomic<bool> g_done{false};
 // Stack of the most recent C++ throw on this thread: fatal() reports run after the catch unwound it.
@@ -48,11 +49,14 @@ void write_frame(std::FILE* out, void* pc) {
 void crash_report_init(std::filesystem::path directory, std::function<std::string()> stats) {
     g_directory = std::move(directory);
     g_stats = std::move(stats);
+    g_bundle = nullptr;
     g_written = false;
     g_done = false;
     static bool installed = false;
     if (!installed) { AddVectoredExceptionHandler(1, record_throw); installed = true; }
 }
+
+void crash_report_set_bundle(std::function<void(const std::filesystem::path&)> bundle) { g_bundle = std::move(bundle); }
 
 void crash_guard_thread() {
     ULONG size = 64 * 1024;
@@ -94,8 +98,14 @@ bool crash_report_write(std::string_view reason, const _CONTEXT* context) noexce
         try { std::fprintf(out, "\nruntime state:\n%s\n", g_stats().c_str()); }
         catch (...) { std::fprintf(out, "\nruntime state unavailable\n"); }
     }
+    auto bundle = g_directory / name; bundle.replace_extension(".dump");
+    if (g_bundle) std::fprintf(out, "\nbundle: %ls\n", bundle.c_str());
     std::fclose(out);
     std::fprintf(stderr, "crash report: %ls\n", (g_directory / name).c_str());
+    if (g_bundle) {
+        try { g_bundle(bundle); std::fprintf(stderr, "crash bundle: %ls\n", bundle.c_str()); }
+        catch (...) { std::fprintf(stderr, "crash bundle failed\n"); }   // the report is already on disk
+    }
     return true;
     } catch (...) { return false; }
 }

@@ -20,14 +20,10 @@ Projection make_projection(const std::array<float,6>& p,uint32_t type) {
 }
 void set_position_matrix(Transforms& transforms,uint32_t row,const PositionMatrix& matrix) {
     if (row>61) throw Error(ErrorCode::layout,0x8028882C,61,row);
-    for (const auto& values : matrix) for (float value : values)
-        if (!std::isfinite(value)) throw Error(ErrorCode::layout,0x8028882C,12,0);
     for (size_t i=0;i<3;++i) { transforms.position_rows[row+i]=matrix[i]; transforms.loaded_rows.set(row+i); }
 }
 void set_normal_matrix(Transforms& transforms,uint32_t row,const NormalMatrix& matrix) {
     if (row>61) throw Error(ErrorCode::layout,0x802888A8,61,row);
-    for (const auto& values : matrix) for (float value : values)
-        if (!std::isfinite(value)) throw Error(ErrorCode::layout,0x802888A8,9,0);
     for (size_t i=0;i<3;++i) { transforms.normal_rows[row+i]=matrix[i]; transforms.loaded_normal_rows.set(row+i); }
 }
 GpuMeshVertex mesh_vertex(const Vertex& vertex) {

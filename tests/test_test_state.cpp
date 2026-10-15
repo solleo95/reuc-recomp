@@ -41,5 +41,19 @@ int main() {
         CHECK(ppc::rd32(c,0x80010000+0x4D4)==3);
         uc::test_state_set_god(false);
     }
+    // --skip-tutorials: entry of the original tutorial opener (r3 = tutorial object) gets the "disabled" gate byte and the closed state.
+    {
+        Fix fixture; auto& c=fixture.c;
+        const uint32_t obj=0x804B5CC8+0x234C;
+        c.r[3]=obj; ppc::wr8(c,obj+4,1); ppc::wr8(c,obj+5,1); ppc::wr32(c,obj+0x48,0);
+        CHECK(uc::test_state_skip_tutorial(c)==-1 && ppc::rd8(c,obj+4)==1 && ppc::rd32(c,obj+0x48)==0);   // off by default: nothing written (-1 = not applied)
+        uc::test_state_set_skip_tutorials(true);
+        const int gate=uc::test_state_skip_tutorial(c);
+        CHECK(gate==1 && ppc::rd8(c,obj+4)==0 && ppc::rd8(c,obj+5)==1 && ppc::rd32(c,obj+0x48)==0x00100000);
+        uc::test_state_unskip_tutorial(c,obj,gate);   // at exit of the opener the gate byte is the game's again; the state stays closed
+        CHECK(ppc::rd8(c,obj+4)==1 && ppc::rd32(c,obj+0x48)==0x00100000);
+        c.r[3]=0; ppc::wr8(c,obj+4,1); CHECK(uc::test_state_skip_tutorial(c)==-1 && ppc::rd8(c,obj+4)==1);   // null object: nothing written
+        uc::test_state_set_skip_tutorials(false);
+    }
     return 0;
 }

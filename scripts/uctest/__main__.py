@@ -10,7 +10,7 @@ from .scenarios import SCENARIOS
 
 
 def run_once(name, args):
-    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
+    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, skip_tutorials=args.skip_tutorials, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
     start = time.monotonic()
     report = {"scenario": name, "ok": False, "speed": args.speed, "god": args.god}
     try:
@@ -36,17 +36,25 @@ def main(argv=None):
     sub.add_parser("list")
     run = sub.add_parser("run")
     run.add_argument("scenario", choices=sorted(SCENARIOS))
-    run.add_argument("--speed", type=int, default=1, choices=range(1, 9))
+    run.add_argument("--speed", type=int, default=1, choices=range(1, 33), metavar="1..32")
     run.add_argument("--measure", type=float, default=0, help="seconds of FPS measurement (perf)")
     run.add_argument("--exe", help="game executable to launch instead of dist/uc.exe (e.g. an instrumented build staged next to dist/data)")
     run.add_argument("--repeat", type=int, default=1)
     run.add_argument("--god", action="store_true", help="cheat: health and ammo stay at their maxima (marked in the report)")
+    run.add_argument("--skip-tutorials", action="store_true", help="tutorial pages never open (the game's own tutorial opener is turned into a no-op)")
     run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
     run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
     run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
     run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
+    inspect = sub.add_parser("inspect", help="read a crash bundle (see uctest/dumpview.py)")
+    inspect.add_argument("bundle", help="crash-*.txt report or its .dump folder")
+    inspect.add_argument("what", choices=["threads", "stack", "mem", "f32", "nan", "posmtx", "gx"])
+    inspect.add_argument("arguments", nargs="*")
     args = parser.parse_args(argv)
+    if args.command == "inspect":
+        from . import dumpview
+        return dumpview.command(dumpview.Bundle(args.bundle), args.what, args.arguments)
     if args.command == "list":
         print("\n".join(sorted(SCENARIOS)))
         return 0

@@ -5,6 +5,7 @@
 #include "dvdfs.h"
 #include "fatal.h"
 #include "crash_report.h"
+#include "crash_bundle.h"
 #include "gx_gap_audit.h"
 #include "dispatch.h"
 #include "game_decl.h"
@@ -188,7 +189,7 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
@@ -200,6 +201,7 @@ static int real_main(int argc, char** argv) {
     if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control and --test-server require Vulkan and an isolated --save-root");
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
+    if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
     uc::intro_init(options.skip_intro);
     uc::game_pacing_init(options.unlock_60fps,options.game_hz);
     if (options.gx_audit) {
@@ -238,6 +240,11 @@ static int real_main(int argc, char** argv) {
         } catch (...) {}
         return state;
     });
+    uc::crash_report_set_bundle([](const fs::path& dir) {   // guest memory, thread registers, GX arrays and function table: `python -m uctest inspect <report>` reads them back
+        std::string threads;
+        try { threads = uc::os_sched().dump_contexts(); } catch (...) { threads = "unavailable\n"; }   // only the baton holder may read it safely
+        uc::write_crash_bundle(dir, threads, uc::gx_state_summary());
+    });
     for (const char* n : {"identified_sdk.txt", "symbols.txt", "gx_symbols.txt"}) {   // installed next to the exe, or the project folder of a build tree
         for (const fs::path& d : {exe_dir() / "data", exe_dir() / ".." / ".." / "project"}) if (fs::exists(d / n)) { uc::symbols_load((d / n).string()); break; }
     }
@@ -269,6 +276,7 @@ static int real_main(int argc, char** argv) {
     uc::set_clock_speed(options.speed);
     uc::test_state_enable(server_mode);
     uc::test_state_set_god(options.god);
+    uc::test_state_set_skip_tutorials(options.skip_tutorials);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
     sched.irq_ctx().r[1] = 0x817EFF00;
     uc::vi_hle_init(sched, uc::kViPeriodNtsc, [] { g_fifo_snapshot.store(g_fifo.bytes, std::memory_order_relaxed); });
@@ -318,7 +326,8 @@ static int real_main(int argc, char** argv) {
             const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(properties,SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
             if(!hwnd) throw std::runtime_error("diagnostic window handle unavailable");
             // A test window must never take the focus (an unfocused window runs slower than a focused one, which would skew measurements), not even when clicked.
-            SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOACTIVATE);
+            // WS_EX_NOACTIVATE alone hides the taskbar button; WS_EX_APPWINDOW keeps it.
+            SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOACTIVATE|WS_EX_APPWINDOW);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
             if(!SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))
                 throw std::runtime_error("cannot raise diagnostic window: "+std::to_string(GetLastError()));
@@ -588,6 +597,7 @@ static int real_main(int argc, char** argv) {
                 std::fprintf(stderr,"[descriptor-pools] created %llu\n",(unsigned long long)renderer.descriptor_pool_creations());
                 const auto pacing=uc::game_pacing_stats();
                 std::fprintf(stderr,"[window] input focus %u\n",window ? unsigned((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0) : 0u);
+                { const auto depth=packets.depth(); std::fprintf(stderr,"[packets] queued %zu outstanding %zu presenting in flight %zu\n",depth.queued,depth.outstanding,depth.frames_in_flight); }   // outstanding must stay near the guest lead (tens), never creep to kMaxOutstandingPackets
                 std::fprintf(stderr,"[guest-blocked] renderer wait %.2f ms total (window %.2f, packets %llu),main loop waited %.2f ms this second, GPU busy %.2f ms total, frame latency avg %.2f max %.2f ms over %llu frames\n",gx::seal_wait_ns()/1e6,gx::seal_window_wait_ns()/1e6,(unsigned long long)gx::seal_count(),loop_wait_ns/1e6,renderer.gpu_busy_ns()/1e6,gx::frame_latency().total_ns/1e6/std::max<uint64_t>(gx::frame_latency().frames,1),gx::frame_latency().max_ns/1e6,(unsigned long long)gx::frame_latency().frames); loop_wait_ns=0;
                 std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu wait %.2f ms\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted,pacing.wait_ns/1e6);
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }
@@ -597,7 +607,6 @@ static int real_main(int argc, char** argv) {
             }
             next_watch = now + std::chrono::seconds(1);
             uint64_t retraces = uc::vi_stats().retraces;
-                { const auto depth=packets.depth(); std::fprintf(stderr,"[packets] queued %zu outstanding %zu presenting in flight %zu\n",depth.queued,depth.outstanding,depth.frames_in_flight); }   // outstanding must stay near the guest lead (tens), never creep to kMaxOutstandingPackets
             if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
             else if (retraces != last_retraces) { last_retraces = retraces; stalled = 0; }
             else if (++stalled >= 10) { result = 4; close = true; }
