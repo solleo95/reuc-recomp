@@ -9,3 +9,5 @@ build-trace/
 build-trace.log
 __pycache__/
 build-prof/
+project/pgo/
+build-pgo-gen/

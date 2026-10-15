@@ -316,6 +316,8 @@ static int real_main(int argc, char** argv) {
             const auto properties=SDL_GetWindowProperties(window.get());
             const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(properties,SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
             if(!hwnd) throw std::runtime_error("diagnostic window handle unavailable");
+            // A test window must never take the focus (an unfocused window runs slower than a focused one, which would skew measurements), not even when clicked.
+            SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOACTIVATE);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
         }
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
@@ -578,6 +580,7 @@ static int real_main(int argc, char** argv) {
                 const auto gfx=uc::gx_stats(); const auto sound=uc::audio_stats();
                 std::fprintf(stderr,"[descriptor-pools] created %llu\n",(unsigned long long)renderer.descriptor_pool_creations());
                 const auto pacing=uc::game_pacing_stats();
+                std::fprintf(stderr,"[window] input focus %u\n",window ? unsigned((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0) : 0u);
                 std::fprintf(stderr,"[guest-blocked] renderer wait %.2f ms total (window %.2f, packets %llu),main loop waited %.2f ms this second, GPU busy %.2f ms total, frame latency avg %.2f max %.2f ms over %llu frames\n",gx::seal_wait_ns()/1e6,gx::seal_window_wait_ns()/1e6,(unsigned long long)gx::seal_count(),loop_wait_ns/1e6,renderer.gpu_busy_ns()/1e6,gx::frame_latency().total_ns/1e6/std::max<uint64_t>(gx::frame_latency().frames,1),gx::frame_latency().max_ns/1e6,(unsigned long long)gx::frame_latency().frames); loop_wait_ns=0;
                 std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu wait %.2f ms\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted,pacing.wait_ns/1e6);
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }

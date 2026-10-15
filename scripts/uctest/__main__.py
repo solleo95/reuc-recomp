@@ -10,7 +10,7 @@ from .scenarios import SCENARIOS
 
 
 def run_once(name, args):
-    g = Game(speed=args.speed, god=args.god, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
+    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, saves=resolve_saves(args.saves_from), game_args=args.game_arg)
     start = time.monotonic()
     report = {"scenario": name, "ok": False, "speed": args.speed, "god": args.god}
     try:
@@ -38,6 +38,7 @@ def main(argv=None):
     run.add_argument("scenario", choices=sorted(SCENARIOS))
     run.add_argument("--speed", type=int, default=1, choices=range(1, 9))
     run.add_argument("--measure", type=float, default=0, help="seconds of FPS measurement (perf)")
+    run.add_argument("--exe", help="game executable to launch instead of dist/uc.exe (e.g. an instrumented build staged next to dist/data)")
     run.add_argument("--repeat", type=int, default=1)
     run.add_argument("--god", action="store_true", help="cheat: health and ammo stay at their maxima (marked in the report)")
     run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
