@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     std::string dol_path, out_dir, cache_key;
     std::vector<std::string> cfg_paths;   // --cfg may be given several times; the files are merged in order
     size_t shard = 150;
-    bool verbose = false;
+    bool verbose = false, cr_opt = true;
     for (int i = 1; i < argc; ++i) {
         auto arg = [&](const char* name) { return !std::strcmp(argv[i], name) && i + 1 < argc; };
         if (arg("--dol")) dol_path = argv[++i];
@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
         else if (arg("--shard")) shard = std::strtoull(argv[++i], nullptr, 10);
         else if (arg("--cache-key")) cache_key = argv[++i];
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
+        else if (!std::strcmp(argv[i], "--no-cr-opt")) cr_opt = false;
         else { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>]... [--shard N]\n"); return 2; }
     }
     if (dol_path.empty() || out_dir.empty() || shard == 0) { std::fprintf(stderr, "usage: translator --dol <file> --out <dir> [--cfg <file>]... [--shard N]\n"); return 2; }
@@ -49,6 +50,7 @@ int main(int argc, char** argv) {
     if (!dol.ok) { std::fprintf(stderr, "invalid DOL: %s\n", dol.error.c_str()); return 1; }
 
     uc::Program p;
+    p.cr_opt = cr_opt;
     std::string err;
     for (const auto& cp : cfg_paths)
         if (!uc::load_config(cp, p.cfg, err)) { std::fprintf(stderr, "config error in %s: %s\n", cp.c_str(), err.c_str()); return 1; }
@@ -101,6 +103,7 @@ int main(int argc, char** argv) {
                 st.functions, st.instructions, st.invalid, st.traps_midfunc, st.unresolved_bctr, st.indirect_tail);
     std::printf("secondary-entries %zu  fallthrough-tails %zu  OE-traps %zu  unsupported %zu  jump-tables %zu  files %zu\n",
                 st.secondary_entries, st.fallthrough_tail, st.oe_traps, st.unsupported, p.an.jump_tables.size(), out.files.size());
+    std::printf("cr-dead-compares %zu  cr-fused-branches %zu  cr-dropped-records %zu\n", st.cr_dead_compares, st.cr_fused_branches, st.cr_dropped_records);
     if (verbose) for (uint32_t a : p.an.unresolved_bctr) std::printf("unresolved-switch-bctr %08X\n", a);
     return 0;
 }

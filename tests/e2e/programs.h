@@ -134,6 +134,47 @@ inline std::vector<uint8_t> outside_dol() {
     return make_dol(a.w);
 }
 
+// Condition-register writes the translator may drop or fold into the branch must not change what the program computes: every branch below
+// reads a CR field that is still live, or one that is dead after the branch (r3 collects the paths that run: 1 + 10 + 5).
+inline std::vector<uint8_t> crflow_dol() {
+    Asm a;
+    a.emit(li(3, 0)); a.emit(li(4, 5));
+    a.emit(cmpwi(4, 5)); size_t s1 = a.emit(0);                       // bne: not taken, cr0 overwritten before any other read
+    a.emit(addi(3, 3, 1));
+    a.patch_bc(s1, 4, 2, a.here());
+    a.emit(cmpwi(4, 7)); size_t s2 = a.emit(0);                       // bne: taken
+    a.emit(addi(3, 3, 100));
+    a.patch_bc(s2, 4, 2, a.here());
+    a.emit(cmpwi(4, 3)); size_t g1 = a.emit(0);                       // bgt: taken; the compare stays because blt reads cr0 again
+    a.emit(addi(3, 3, 1000));
+    a.patch_bc(g1, 12, 1, a.here());
+    size_t l1 = a.emit(0);                                            // blt: not taken
+    a.emit(addi(3, 3, 10));
+    a.patch_bc(l1, 12, 0, a.here());
+    a.emit(cmpwi(4, 100));                                            // never read: replaced below
+    a.emit(cmpwi(4, 5)); size_t e1 = a.emit(0);                       // beq: taken
+    a.emit(addi(3, 3, 10000));
+    a.patch_bc(e1, 12, 2, a.here());
+    a.emit(cmpwi(4, 5)); size_t c1 = a.emit(0);                       // cr0 read after a call that leaves it alone
+    size_t e2 = a.emit(0);                                            // beq: taken
+    a.emit(addi(3, 3, 100000));
+    a.patch_bc(e2, 12, 2, a.here());
+    a.emit(cmpwi_cr(2, 4, 5)); size_t c2 = a.emit(0);                 // cr2 survives the call too
+    size_t e3 = a.emit(0);                                            // beq cr2: taken
+    a.emit(addi(3, 3, 200000));
+    a.patch_bc(e3, 12, 10, a.here());
+    a.emit(li(6, -1)); a.emit(add_rc(7, 6, 6)); size_t r1 = a.emit(0);   // blt reads the record form's cr0: taken
+    a.emit(addi(3, 3, 1000000));
+    a.patch_bc(r1, 12, 0, a.here());
+    a.emit(add_rc(7, 6, 6)); a.emit(cmpwi(4, 5)); size_t x = a.emit(0);   // the record form's cr0 is overwritten unread; bne: not taken
+    a.emit(addi(3, 3, 5));
+    a.patch_bc(x, 4, 2, a.here());
+    a.emit(blr);
+    uint32_t callee = a.here(); a.emit(addi(5, 5, 1)); a.emit(blr);
+    a.patch_bl(c1, callee); a.patch_bl(c2, callee);
+    return make_dol(a.w);
+}
+
 template <uint32_t Expect> bool r3_is(ppc::Ctx& c) { return c.r[3] == Expect; }
 
 inline const std::vector<Program>& all() {
@@ -153,6 +194,7 @@ inline const std::vector<Program>& all() {
         {"secondary", secondary_dol, nullptr, r3_is<6>},
         {"fallthrough", fallthrough_dol, nullptr, r3_is<83>},
         {"outside", outside_dol, nullptr, [](ppc::Ctx&) { return false; }},
+        {"crflow", crflow_dol, nullptr, r3_is<16>},
     };
     return v;
 }

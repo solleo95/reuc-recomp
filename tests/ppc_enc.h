@@ -14,6 +14,8 @@ inline uint32_t lis(int t, int i) { return addis(t, 0, i); }
 inline uint32_t ori(int a, int s, int k) { return D(24, s, a, k); }
 inline uint32_t cmplwi(int a, int k) { return D(10, 0, a, k); }
 inline uint32_t cmpwi(int a, int i) { return D(11, 0, a, i); }
+inline uint32_t cmpwi_cr(int cr, int a, int i) { return D(11, cr << 2, a, i); }
+inline uint32_t add_rc(int t, int a, int b) { return X(31, t, a, b, 266, 1); }
 inline uint32_t lwz(int t, int d, int a) { return D(32, t, a, d); }
 inline uint32_t stw(int s, int d, int a) { return D(36, s, a, d); }
 inline uint32_t stwu(int s, int d, int a) { return D(37, s, a, d); }

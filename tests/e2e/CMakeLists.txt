@@ -1,7 +1,7 @@
 add_executable(gen_e2e_dols gen_e2e_dols.cpp)
 target_include_directories(gen_e2e_dols PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/runtime)
 
-set(E2E_PROGRAMS loop calls jt0 jt1 jt2 jt9 indirect float ps datawords badbctr illegal_exec secondary fallthrough outside)
+set(E2E_PROGRAMS loop calls jt0 jt1 jt2 jt9 indirect float ps datawords badbctr illegal_exec secondary fallthrough outside crflow)
 foreach(p ${E2E_PROGRAMS})
   set(gen ${CMAKE_CURRENT_BINARY_DIR}/gen_${p})
   add_custom_command(
@@ -21,6 +21,8 @@ endforeach()
 set_tests_properties(e2e_badbctr PROPERTIES PASS_REGULAR_EXPRESSION "guest trap at 80003FFC")
 set_tests_properties(e2e_illegal_exec PROPERTIES PASS_REGULAR_EXPRESSION "guest trap at 80003104.*illegal or data word 14000000")
 set_tests_properties(e2e_outside PROPERTIES PASS_REGULAR_EXPRESSION "guest trap at 80003100.*not inside any translated function")
+
+add_test(NAME translator_drops_dead_cr COMMAND ${CMAKE_COMMAND} -DGEN=${CMAKE_CURRENT_BINARY_DIR}/gen_crflow -P ${CMAKE_CURRENT_SOURCE_DIR}/check_cr_opt.cmake)
 
 add_test(NAME translator_deterministic
   COMMAND ${CMAKE_COMMAND} -DTRANSLATOR=$<TARGET_FILE:translator> -DDOL=${CMAKE_CURRENT_BINARY_DIR}/gen_jt1/jt1.dol
