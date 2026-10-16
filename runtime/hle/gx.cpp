@@ -153,6 +153,12 @@ std::atomic<uint64_t> draw_count{0}, vertex_count{0}, submitted{0}, completed{0}
 std::atomic<uint64_t> copies{0};
 std::atomic<uint64_t> texture_decodes{0};
 uint32_t read32(uint32_t address) {
+    // MEM1 through its cached/uncached mirrors (aliases 0, 8, 12) is nearly every SDK-state read: skip the generic bounds machinery.
+    const uint32_t physical = address & 0x3FFFFFFF;
+    if (((0x1101u >> (address >> 28)) & 1) && size_t(physical) + 4 <= memory.mem1.size()) {
+        uint32_t raw; std::memcpy(&raw, memory.mem1.data() + physical, 4);
+        return _byteswap_ulong(raw);
+    }
     auto bytes = memory.read(address, 4);
     uint32_t value = 0;
     for (auto byte : bytes) value = value << 8 | std::to_integer<uint8_t>(byte);
@@ -174,12 +180,14 @@ void resolve_texture_matrices(gx::DrawUniform& uniforms,const TextureSelectors& 
         for(size_t row=0;row<3;++row) { uniforms.tex_rows[i*3+row]=rows[row]; uniforms.post_rows[i*3+row]=post_rows[row]; }
     }
 }
-std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
+struct MaterialSnapshot { gx::TevMaterial material; gx::DrawUniform uniforms; };
+MaterialSnapshot material_snapshot(ppc::Ctx& c) {
     const auto sdk=read32(c.r[2]-8968);
     memory.read(sdk,0x600);
     const auto selectors=texture_selectors(sdk);
-    gx::TevMaterial material; material.stages=((read32(sdk+0x254)>>10)&15)+1;
-    auto uniforms=color_uniforms;
+    MaterialSnapshot result{gx::TevMaterial{},color_uniforms};
+    auto& material=result.material; auto& uniforms=result.uniforms;
+    material.stages=((read32(sdk+0x254)>>10)&15)+1;
     uniforms.pixel[1]=read32(sdk+0x228)&31;
     uniforms.pixel[2]=read32(sdk+0x224)&511;
     uniforms.pixel[3]=(read32(sdk+0x254)>>4)&3;
@@ -210,7 +218,7 @@ std::pair<gx::TevMaterial,gx::DrawUniform> material_snapshot(ppc::Ctx& c) {
         }
     }
     resolve_texture_matrices(uniforms,selectors,texture_matrices);
-    return {material,uniforms};
+    return result;
 }
 uint32_t texture_mask(const gx::TevMaterial& material,const gx::DrawUniform& uniforms) {
     uint32_t mask=1;
@@ -727,7 +735,7 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     auto textures=bound_textures;
     auto loaded=palettes;
     auto blend=blend_state;
-    auto colors=material_snapshot(c).second;
+    auto colors=material_snapshot(c).uniforms;
     auto matrices=texture_matrices;
     auto versions=copied_textures;
     std::vector<uint32_t> path;
@@ -1204,7 +1212,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     scheduler->safe_point(); // Service audio/VI between complete native mesh calls.
     const auto bytes=mesh_resource(c,36,0);
     const auto layout=snapshot(c);
-    const auto [material,uniforms]=material_snapshot(c);
+    auto [material,uniforms]=material_snapshot(c);
     const auto misses_before=geometry_misses.load();
     const auto cached=native_mesh(bytes,layout);
     std::array<std::shared_ptr<const gx::TexturePixels>,8> textures{};
@@ -1245,27 +1253,25 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         } catch(const std::exception& error) { std::fprintf(stderr,"mesh texture dump failed: %s\n",error.what()); }
     }
     const size_t first_draw=draws.size();   // appended in place; removed again if the mesh fails midway
-    auto mesh_transforms=transforms;
-    auto mesh_uniforms=uniforms;
-    auto mesh_matrices=texture_matrices;
+    // Edited in place: a failure below ends the guest thread, so the half-updated state is never observed.
     const auto selectors=texture_selectors(read32(c.r[2]-8968));
     try {
         for(const auto& operation:cached->operations) {
             if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
-                indexed_texture(mesh_matrices,layout,texture->index,texture->id,texture->words);
-                resolve_texture_matrices(mesh_uniforms,selectors,mesh_matrices);
+                indexed_texture(texture_matrices,layout,texture->index,texture->id,texture->words);
+                resolve_texture_matrices(uniforms,selectors,texture_matrices);
                 continue;
             }
             if(const auto* position=std::get_if<MeshPosition>(&operation)) {
-                indexed_position(mesh_transforms,layout,position->index,position->row);
+                indexed_position(transforms,layout,position->index,position->row);
             } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
-                indexed_normal(mesh_transforms,layout,normal->index,normal->row);
+                indexed_normal(transforms,layout,normal->index,normal->row);
             } else {
                 const auto& geometry=std::get<MeshGeometry>(operation);
                 auto& draw=draws.emplace_back();
                 draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=gx::share(mesh_state,layout);
                 draw.mesh=geometry.buffers;
-                draw.transforms=gx::share(mesh_transforms_block,mesh_transforms); draw.material=material; draw.uniforms=gx::share(mesh_uniforms_block,mesh_uniforms); draw.blend=blend_state; draw.texture=textures[0];
+                draw.transforms=gx::share(mesh_transforms_block,transforms); draw.material=material; draw.uniforms=gx::share(mesh_uniforms_block,uniforms); draw.blend=blend_state; draw.texture=textures[0];
                 draw.texture_wrap=wraps(bound_textures);
                 std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
             }
@@ -1286,7 +1292,6 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
         }
     }
     for(size_t d=first_draw;d<draws.size();++d) { vertex_count+=draws[d].vertex_view().size(); ++draw_count; }
-    transforms=mesh_transforms; texture_matrices=mesh_matrices;
 }
 namespace {
 void native_tev_color(ppc::Ctx& c,bool signed_color,bool konst) {
@@ -1405,7 +1410,9 @@ void hle_ResChannelApply(ppc::Ctx& c) {
     matrix_boundary(0x80376148);
     if(recording) throw std::invalid_argument("recorded native channel resource requires implementation");
     const auto data=read32(c.r[3]),sdk=read32(c.r[2]-8968);
-    std::vector<std::pair<uint32_t,uint32_t>> updates;
+    struct { std::array<std::pair<uint32_t,uint32_t>,16> items; size_t size=0;
+        void emplace_back(uint32_t address,uint32_t value) { items[size++]={address,value}; }   // at most 13 updates
+        auto begin() const { return items.begin(); } auto end() const { return items.begin()+size; } } updates;
     if(data) {
         memory.read(data,40); memory.read(sdk,0x600); memory.read(c.r[8],4);
         const auto count=ppc::rd8(c,0x806A0041);
