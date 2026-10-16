@@ -1,6 +1,6 @@
 """Records the optimizer profile: python scripts/pgo.py [--minutes 0.7]
 
-Builds an instrumented uc.exe in build-pgo-gen (UC_PGO_GENERATE), runs the autoplay scenario at 8x through the test harness with LLVM_PROFILE_FILE
+Builds an instrumented uc.exe in build-pgo-gen (UC_PGO_GENERATE), runs the autoplay (8x), controls and fight scenarios through the test harness with LLVM_PROFILE_FILE
 set, and merges the raw profiles into project/pgo/uc.profdata. Normal builds then use that file automatically (see CMakeLists.txt). Takes one full build."""
 import argparse, glob, os, shutil, subprocess, sys
 from pathlib import Path
@@ -13,7 +13,7 @@ OUT = ROOT / "project" / "pgo" / "uc.profdata"
 
 def sh(command, **kwargs):
     print(">", command, flush=True)
-    subprocess.run(["cmd", "/c", command], check=True, cwd=ROOT, **kwargs)
+    subprocess.run('cmd /s /c "' + command + '"', check=True, cwd=ROOT, **kwargs)   # /s keeps the quotes of a path with spaces intact
 
 
 def main():
@@ -28,7 +28,10 @@ def main():
     PROFILES.mkdir(parents=True)
     env = dict(os.environ, LLVM_PROFILE_FILE=str(PROFILES / "uc-%p.profraw"))
     harness = [sys.executable, "-m", "uctest", "run"]
-    for scenario in (["autoplay", "--god", "--speed", "8", "--max-minutes", str(args.minutes)], ["controls", "--speed", "8"]):
+    # The fight scenario trains the heavy 30-enemy scene (2D HUD layout code, animation) that the plain autoplay passes in a few seconds; it needs
+    # the slowdown point saved by an F5 press (scripts/uctest/marks/fight.json).
+    for scenario in (["autoplay", "--god", "--speed", "8", "--max-minutes", str(args.minutes)], ["controls", "--speed", "8"],
+                     ["fight", "--god", "--measure", "8", "--max-minutes", "4"]):
         subprocess.run(harness + scenario + ["--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
     raw = glob.glob(str(PROFILES / "*.profraw"))
     if not raw:
