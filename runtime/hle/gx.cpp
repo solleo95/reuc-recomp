@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstring>
 #include <cstdio>
+#include <chrono>
 #include <map>
 
 #include <variant>
@@ -152,6 +153,24 @@ std::map<uint64_t, uint32_t> finishes; // serial -> submitting thread's SDA base
 std::atomic<uint64_t> draw_count{0}, vertex_count{0}, submitted{0}, completed{0}, outside_bytes{0};
 std::atomic<uint64_t> copies{0};
 std::atomic<uint64_t> texture_decodes{0};
+
+// --profile only: wall time inside the two native draw entry points, printed once per second as "[gxtime]" (per-call figures compare builds
+// far more precisely than a whole-fight FPS, which varies several percent between runs).
+struct CallTimer {
+    static inline uint64_t ns[2]={}, calls[2]={}, last=0;
+    int id; bool on; std::chrono::steady_clock::time_point start;
+    explicit CallTimer(int i):id(i),on(profile_mesh) { if(on) start=std::chrono::steady_clock::now(); }
+    ~CallTimer() {
+        if(!on) return;
+        const auto now=std::chrono::steady_clock::now();
+        ns[id]+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now-start).count()); ++calls[id];
+        const uint64_t t=uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+        if(t-last>=1000) {
+            if(last) std::fprintf(stderr,"[gxtime] list %.1f ms %llu calls %.2f us/call mesh %.1f ms %llu calls %.3f us/call\n",ns[0]/1e6,(unsigned long long)calls[0],calls[0]?ns[0]/1e3/calls[0]:0.0,ns[1]/1e6,(unsigned long long)calls[1],calls[1]?ns[1]/1e3/calls[1]:0.0);
+            last=t; ns[0]=ns[1]=calls[0]=calls[1]=0;
+        }
+    }
+};
 uint32_t read32(uint32_t address) {
     // MEM1 through its cached/uncached mirrors (aliases 0, 8, 12) is nearly every SDK-state read: skip the generic bounds machinery.
     const uint32_t physical = address & 0x3FFFFFFF;
@@ -715,6 +734,7 @@ void hle_GXEndDisplayList(ppc::Ctx& c) {
 }
 
 void hle_GXCallDisplayList(ppc::Ctx& c) {
+    CallTimer timer(0);
     uc::gx_audit_enter(0x80288684,c);
     const uint32_t address=c.r[3],length=c.r[4],sdk=read32(c.r[2]-8968);
     if (capture->active() || recording_primitive()) throw gx::Error(gx::ErrorCode::sequence,0x80288684,0,1);
@@ -1206,6 +1226,7 @@ std::shared_ptr<const CachedMesh> native_mesh(std::span<const std::byte> bytes,c
 }
 }
 void hle_ResMeshDraw(ppc::Ctx& c) {
+    CallTimer timer(1);
     uc::gx_audit_enter(0x80366E14,c);
     matrix_boundary(0x80366E14);
     if(recording) throw std::invalid_argument("recorded native mesh draw requires implementation");
