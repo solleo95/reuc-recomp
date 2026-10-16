@@ -205,9 +205,14 @@ static int real_main(int argc, char** argv) {
     const auto& game = options.game;
     if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
     uc::intro_init(options.skip_intro);
-    uint32_t step_hz=options.game_hz;   // the launcher's frame rate limit above 60 is the timer-driven game step (see Options::fps_limit)
-    if(!step_hz && options.unlock_60fps && options.fps_limit && (*options.fps_limit==0 || *options.fps_limit>60)) step_hz=*options.fps_limit ? std::min(*options.fps_limit,480u) : 480u;
-    uc::game_pacing_init(options.unlock_60fps,step_hz);
+    uint32_t step_hz=options.game_hz;   // --game-hz wins; otherwise the frame rate limit chooses the game update rate (see Options::fps_limit)
+    bool unlock_60=options.unlock_60fps;
+    if(!step_hz && options.fps_limit) {
+        const uint32_t limit=*options.fps_limit;
+        if(limit==0 || limit>60) step_hz=limit ? std::min(limit,480u) : 480u;   // timer-driven step at the limit (unlimited: the 480 Hz ceiling)
+        else unlock_60=limit>30;                                                // 31..60: the retrace-locked 60 Hz update; 30 or less: the original 30 Hz
+    }
+    uc::game_pacing_init(unlock_60,step_hz);
     if (options.gx_audit) {
 #ifdef UC_TRACE
         uc::gx_audit_enable();

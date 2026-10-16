@@ -28,8 +28,9 @@ struct Options {
     bool capture_scene_passes = false;
     bool unlock_60fps = false;
     // Frame rate limit (launcher "Frame rate limit", config graphics.fps_limit, --fps-limit): 0 = unlimited, otherwise 20..1000 frames per second.
-    // It caps how often finished frames are presented and, with "60 FPS game update" (unlock_60fps), above 60 it is also the game step rate (the
-    // timer-driven step of game_hz, at most 480). Unset keeps the previous behaviour: presentation capped at 240, step from unlock_60fps / game_hz.
+    // It caps how often finished frames are presented and it chooses the game update rate: above 60 (or unlimited) the timer-driven step of game_hz
+    // (at most 480), 31..60 the retrace-locked 60 Hz update, 30 or less the original 30 Hz. --game-hz still wins. Unset keeps the previous behaviour:
+    // presentation capped at 240, step from unlock_60fps / game_hz.
     std::optional<uint32_t> fps_limit;
     uint32_t game_hz = 0;    // experimental: game step above 60 Hz from a wall-clock timer (61..480); 0 keeps the retrace-locked step
     bool input_probe = false;

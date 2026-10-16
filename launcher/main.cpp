@@ -132,7 +132,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.unlock_60fps==b.unlock_60fps && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style;
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -154,7 +154,9 @@ int run(int argc,wchar_t** argv) {
     const auto system_language=uc::launcher::system_language();
     std::string language="system",saved_language="system";
     active_language=system_language;
+    bool failed=false;uc::Options failed_options;uc::Bindings failed_bindings;std::string failed_language;   // the last state an automatic save was refused for
     auto reload=[&] {
+        failed=false;
         try {auto loaded=uc::load_config(config_path);auto settings=uc::options_from_config(loaded);
             auto locale=uc::launcher::config_language(loaded);
             editor=uc::BindingEditor(loaded.input);document=std::move(loaded);options=saved_options=settings;
@@ -167,12 +169,12 @@ int run(int argc,wchar_t** argv) {
     if(!monitor || monitor->w<=0 || monitor->h<=0)throw std::runtime_error("monitor mode unavailable");
     std::map<std::string,ImVec2> positions;
     auto track=[&](const std::string& name) {if(!smoke.empty()) {auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();positions[name]={(a.x+b.x)/2,(a.y+b.y)/2};
-        if((name=="save" || name=="launch" || name=="browse") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher footer clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
+        if((name=="launch" || name=="browse") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher footer clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
     }};
     auto button=[&](const char* label,const std::string& id,ImVec2 size=ImVec2{0,0}) {ImGui::PushID(id.c_str());bool clicked=ImGui::Button(label,size);track(id);ImGui::PopID();return clicked;};
-    auto save=[&] {
-        try {auto next=document;next.input=editor.bindings();uc::store_options(next,options);uc::launcher::store_language(next,language);uc::save_config(config_path,next);
-            document=std::move(next);saved_options=options;saved_language=language;error.clear();return true;
+    auto save=[&](const uc::Options& chosen) {
+        try {auto next=document;next.input=editor.bindings();uc::store_options(next,chosen);uc::launcher::store_language(next,language);uc::save_config(config_path,next);
+            document=std::move(next);saved_options=chosen;saved_language=language;error.clear();failed=false;return true;
         } catch(const std::exception& e) {error=e.what();return false;}
     };
     bool done=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
@@ -193,25 +195,25 @@ int run(int argc,wchar_t** argv) {
         if(!smoke.empty()) {
             auto& io=ImGui::GetIO();io.AddFocusEvent(true);
             io.AddMousePosEvent(-100,-100);
-            std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{38,"save"},{48,"save"},
-                {80,"controls"},{84,"style"},{88,"style3"},{92,"save"},{98,"style"},{102,"style2"},{106,"save"},{110,"general"},
+            std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{48,"clear1"},
+                {80,"controls"},{84,"style"},{88,"style3"},{98,"style"},{102,"style2"},{110,"general"},
                 {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
-                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"save"},
-                {424,"controls"},{430,"replace2"},{438,"save"}};
+                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},
+                {434,"controls"},{440,"replace2"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
                 unsigned first=114+unsigned(i)*18;
-                clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);clicks[first+8]="save";
+                clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);
             }
             if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";}
-            else {clicks[56]="reload";clicks[62]="defaults";clicks[66]="save";clicks[70]="launch";}
+            else {clicks[56]="reload";clicks[62]="defaults";clicks[70]="launch";}
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
                 const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
                 if(frame==when || frame==when+1)io.AddMouseButtonEvent(0,frame==when);
             }
             if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,41},true);}
-            if(frame==434) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
+            if(frame==444) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
             if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=!other.properties.value("smoke_external_edit",false);uc::save_config(config_path,other);}
         }
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -333,7 +335,6 @@ int run(int argc,wchar_t** argv) {
         ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},ImGuiChildFlags_None);
         if(page==0) {
             toggle("##skip-game",tr("skip"),options.skip_intro);
-            ImGui::Dummy({0,20*unit});toggle("##unlock",tr("unlock"),options.unlock_60fps);
             ImGui::Dummy({0,25*unit});ImGui::TextWrapped("%s",tr("alt"));
         } else if(page==1) {
             const float column_gap=88*unit;
@@ -368,7 +369,7 @@ int run(int argc,wchar_t** argv) {
             ImGui::PopFont();ImGui::Dummy({0,10*unit});
             ImGui::TextUnformatted(tr("fps_limit"));push_font(ui.sans,22);
             const uint32_t limits[]={30,60,90,120,144,165,240,360,0};   // 0 = unlimited
-            const uint32_t current_limit=options.fps_limit.value_or(60);   // unset behaves like 60: "60 FPS game update" steps at 60, presentation is never the bound
+            const uint32_t current_limit=options.fps_limit.value_or(options.unlock_60fps ? 60 : 30);   // no limit chosen yet: what the removed "60 FPS game update" toggle of the config said
             const auto limit_label=[&](uint32_t value) {return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited"));};
             const auto current_label=limit_label(current_limit);
             const bool limit_open=combo("##fps",current_label.c_str(),ImGuiComboFlags_HeightLarge);track("fps");
@@ -458,9 +459,8 @@ int run(int argc,wchar_t** argv) {
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",error.c_str());
             if(button(tr("reload_config"),"reload")) {reload();game_path=utf8(options.game);}
         }
-        const bool dirty=editor.bindings()!=document.input || !same_options(options,saved_options) || language!=saved_language;
         const auto foot=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
-        const float path_width=width*.55f,launch_x=foot.x+width*.605f,save_x=foot.x+width*.835f;
+        const float path_width=width*.55f,launch_x=foot.x+width*.605f;
         std::error_code path_error;const bool game_found=fs::is_regular_file(options.game/L"DATA"/L"sys"/L"main.dol",path_error);
         if(page!=2) {
         ImGui::BeginGroup();ImGui::TextUnformatted(tr("folder"));
@@ -486,23 +486,27 @@ int run(int argc,wchar_t** argv) {
             ImGui::Dummy({22*unit,0});ImGui::SameLine(0,9*unit);
         }
         ImGui::TextWrapped("%s",tr(game_found ? "found" : "missing"));ImGui::PopStyleColor();ImGui::PopTextWrapPos();
-        if(dirty) {push_font(ui.sans,20);ImGui::TextDisabled("%s",tr("dirty"));ImGui::PopFont();}
         ImGui::EndGroup();
-        } else if(dirty)ImGui::TextDisabled("%s",tr("dirty"));
+        }
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
         const bool running=uc::game_running(process);ImGui::BeginDisabled(running || !game_found);
         ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
         push_font(ui.serif,26);
-        if(button(tr(running ? "running" : "play"),"launch",{width*.215f,74*unit}) && save()) {
+        if(button(tr(running ? "running" : "play"),"launch",{width*.395f,74*unit}) && save(options)) {
             try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic);}
             catch(const std::exception& e) {error=e.what();}
         }
         ImGui::PopFont();ImGui::PopStyleColor(3);ImGui::EndDisabled();
-        ImGui::SetCursorScreenPos({save_x,button_y});
-        if(button(tr("save"),"save",{width*.165f,74*unit}))save();
         ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
+        // Every change is saved at once. An unfinished game folder is not saved (the last good one stays); a refused save is not retried until something changes.
+        if(!blocked && !editor.capturing()) {
+            auto chosen=options;if(!game_found)chosen.game=saved_options.game;
+            const bool changed=editor.bindings()!=document.input || !same_options(chosen,saved_options) || language!=saved_language;
+            const bool same_as_failed=failed && editor.bindings()==failed_bindings && same_options(chosen,failed_options) && language==failed_language;
+            if(changed && !same_as_failed && !save(chosen)) {failed=true;failed_options=chosen;failed_bindings=editor.bindings();failed_language=language;}
+        }
         ImGui::End();ImGui::Render();
         if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
@@ -529,11 +533,14 @@ int run(int argc,wchar_t** argv) {
                 const auto saved=uc::options_from_config(uc::load_config(config_path));
                 if(saved.render_scale!=1.5 || saved.window_mode!=uc::WindowMode::borderless)throw std::runtime_error("window/scale popup select/save failed");
             }
-            if(frame==442) {
+            if(frame==428) {
+                if(uc::options_from_config(uc::load_config(config_path)).fps_limit!=144u || options.fps_limit!=144u)throw std::runtime_error("frame rate limit select/save UI failed");
+            }
+            if(frame==452) {
                 if(uc::load_config(config_path).input[size_t(uc::Action::weapon_previous)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,26},{}}})throw std::runtime_error("grid replacement/save failed");
                 ui.capture(smoke/L"grid-replaced.bmp");
             }
-            if(frame>=446) {
+            if(frame>=456) {
                 if(smoke_exe.empty())done=true;
                 else {
                     if(!process)throw std::runtime_error("launch button failed: "+error);
