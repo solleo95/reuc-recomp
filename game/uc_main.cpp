@@ -189,7 +189,7 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
@@ -354,7 +354,7 @@ static int real_main(int argc, char** argv) {
     bool test_released = false, draws_wanted = false; uint32_t draws_pass = 0; std::vector<uc::TestDrawStat> draw_stats; std::string draw_projection;
     double last_render_ms = 0;
     std::optional<uc::AudioOutput> audio;
-    if (!options.headless) audio.emplace();
+    if (!options.headless) audio.emplace(options.mute);
     uc::audio_gap_audit_enable(options.audio_audit);
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
     gx::Packets packets;

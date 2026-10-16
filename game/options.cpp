@@ -13,6 +13,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--log-sleep") options.log_sleep = true;
         else if (arg == "--gx-audit") options.gx_audit = true;
         else if (arg == "--skip-intro") options.skip_intro = true;
+        else if (arg == "--mute") options.mute = true;
         else if (arg == "--no-vulkan-layers") options.no_vulkan_layers = true;
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;

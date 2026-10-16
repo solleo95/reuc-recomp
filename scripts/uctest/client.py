@@ -97,6 +97,7 @@ class Game:
         if self.skip_intro:
             args.append("--skip-intro")
         args.extend(self.game_args)
+        args.append("--mute")   # tests run silent: the owner is usually at the machine
         args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
         if self.god:
             args.append("--god")

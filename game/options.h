@@ -15,6 +15,7 @@ struct Options {
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
+    bool mute = false;   // audio runs as usual but the output gain is 0 (test runs)
     bool no_vulkan_layers = false;   // sets VK_LOADER_LAYERS_DISABLE=~implicit~: OBS/RTSS/ReShade/Steam layers stay out of the process (stable timing in tests)
     bool profile = false;
     bool capture_scene_passes = false;
