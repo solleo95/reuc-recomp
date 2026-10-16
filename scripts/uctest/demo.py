@@ -102,7 +102,7 @@ def profile(args):
     from .client import SAVE_SOURCE
     shutil.copytree(SAVE_SOURCE, run_dir / "saves")
     flag = run_dir / "sample.flag"
-    env = dict(os.environ, UC_CPU_SAMPLE="guest", UC_CPU_SAMPLE_FLAG=str(flag), UC_CPU_SAMPLE_RETRACE=str(window["from"]))
+    env = dict(os.environ, UC_CPU_SAMPLE="guest", UC_CPU_SAMPLE_FLAG=str(flag), UC_CPU_SAMPLE_RETRACE=str(getattr(args, "from_retrace", 0) or window["from"]))
     samples = exe.parent / "cpu-samples.txt"
     samples.unlink(missing_ok=True)
     with open(run_dir / "run.log", "wb") as log:

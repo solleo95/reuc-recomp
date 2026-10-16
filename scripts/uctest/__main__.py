@@ -62,6 +62,7 @@ def main(argv=None):
     demo.add_argument("--exe", help="build to use (default dist/uc.exe)")
     demo.add_argument("--measure", type=int, default=20, help="seconds of idle fight after the slowdown point that the demo measures")
     demo.add_argument("--max-minutes", type=float, default=10)
+    demo.add_argument("--from-retrace", type=int, default=0, help="profile: start the CPU sampler at this retrace instead of the start of the measured window (more samples)")
     demo.add_argument("--trace", action="store_true", help="record: also hash guest memory at every retrace so `demo check` can compare the replay with the recording (slows the recording run about 5x)")
     inspect = sub.add_parser("inspect", help="read a crash bundle (see uctest/dumpview.py)")
     inspect.add_argument("bundle", help="crash-*.txt report or its .dump folder")
