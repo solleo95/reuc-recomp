@@ -38,4 +38,6 @@ private:
 };
 
 MmioBus& mmio_bus();
+// Stores to the GX FIFO port (0xCC008000) are the hottest MMIO access (every immediate-mode vertex word): they skip the range search of the bus.
+void mmio_set_gx_fifo(MmioDevice* device);
 }  // namespace uc

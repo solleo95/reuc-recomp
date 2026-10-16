@@ -98,6 +98,7 @@ void map_hardware() {   // register blocks of the Wii/GameCube as seen at 0xCC00
     map_regs(0xCC006000, 0x40, "DI", 0xCD006000);     map_regs(0xCC006400, 0x100, "SI", 0xCD006400);  map_regs(0xCC006800, 0x80, "EXI", 0xCD006800);
     map_regs(0xCC006C00, 0x20, "AI", 0xCD006C00);     map_regs(0xCD000000, 0x100, "IPC"); map_regs(0xCD800000, 0x1000, "HW");
     uc::mmio_bus().map(0xCC008000, 0x100, &g_fifo, "GX FIFO");
+    uc::mmio_set_gx_fifo(&g_fifo);
 }
 
 std::atomic<uint64_t> g_fifo_snapshot{0};
@@ -307,6 +308,8 @@ static int real_main(int argc, char** argv) {
             last = now; last_draws = draws; last_cycles = cycles;
         }
         if (options.stop_retrace && retraces >= options.stop_retrace) det_stop = true;
+        static const char* sample_flag = std::getenv("UC_CPU_SAMPLE_FLAG"); static const char* sample_from = std::getenv("UC_CPU_SAMPLE_RETRACE");
+        if (sample_flag && sample_from && retraces == std::strtoull(sample_from, nullptr, 10)) { if (std::FILE* f = std::fopen(sample_flag, "w")) std::fclose(f); }   // starts the CPU sampler (cpu_sampler.cpp) at this retrace
     });
 
     // The start code runs on the SDK's DefaultThread: __OSThreadInit (802611B8) stores this OSThread in the current-thread word and fills it in.

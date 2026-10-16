@@ -48,10 +48,17 @@ public:
 private:
     enum class Tag:uint8_t { sample=1,actions,host,generation };
     void demo_put(Tag,const void*,size_t);
-    bool demo_get(Tag,void*,size_t);   // false once the demo is exhausted
+    // Playing: the i-th consume() returns the i-th recorded sample and the i-th consume_actions() the i-th recorded action frame, whatever order the
+    // guest's reads interleave in (a build that schedules guest threads differently still gets the same input at the same frame); using_host_input()
+    // and generation() hold the values recorded after the sample just returned.
+    struct DemoActions { uint64_t held,pressed,released,generation; std::vector<ActionEvent> events; };
+    struct DemoSample { InputSample sample; uint8_t host; uint64_t generation; };
     std::FILE* demo_out_=nullptr;
-    std::vector<uint8_t> demo_in_;
-    size_t demo_at_=0;
+    std::vector<DemoSample> demo_samples_;
+    std::vector<DemoActions> demo_actions_;
+    size_t demo_sample_at_=0,demo_action_at_=0;
+    uint8_t demo_host_=1;
+    uint64_t demo_generation_=0;
     bool replaying_=false;
     void cancel_host(); // Requires mutex_.
     std::mutex mutex_;

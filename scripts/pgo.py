@@ -33,6 +33,9 @@ def main():
     for scenario in (["autoplay", "--god", "--speed", "8", "--max-minutes", str(args.minutes)], ["controls", "--speed", "8"],
                      ["fight", "--god", "--measure", "8", "--max-minutes", "4"]):
         subprocess.run(harness + scenario + ["--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
+    demo = ROOT / "build" / "demos" / "fight2.demo"
+    if demo.exists():   # the deterministic fight (python -m uctest demo record fight2) trains the same heavy scene in every refresh
+        subprocess.run([sys.executable, "-m", "uctest", "demo", "replay", "fight2", "--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
     raw = glob.glob(str(PROFILES / "*.profraw"))
     if not raw:
         sys.exit("no raw profiles were written")

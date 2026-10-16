@@ -51,13 +51,13 @@ def main(argv=None):
     bench = sub.add_parser("bench", help="compare game builds on the heavy fight: cycles per frame at one scene weight, alternating runs, 95%% CI (see uctest/bench.py)")
     bench.add_argument("--demo", help="replay this recorded demo (python -m uctest demo record NAME) instead of playing the fight live: identical guest work in every run")
     bench.add_argument("exes", nargs="+", help="uc.exe builds to compare, each staged next to the data folders; the first is the baseline")
-    bench.add_argument("--runs", type=int, default=3, help="rounds; every round runs each build once (with --demo 4-5 narrows the interval; a round of a demo run takes about a minute per build)")
+    bench.add_argument("--runs", type=int, default=0, help="rounds; every round runs each build once (default 1 with --demo: one pair screens differences above ~5%%, 3 rounds in alternating order resolve ~2%%; 3 without --demo)")
     bench.add_argument("--measure", type=int, default=20, help="seconds of the fight that count")
     bench.add_argument("--max-minutes", type=float, default=10)
     bench.add_argument("--guest-cpu", type=int, default=4, help="logical CPU the guest threads are pinned to (its SMT sibling cpu^1 is kept free); -1 leaves placement to Windows")
     bench.add_argument("--game-arg", action="append", default=[])
     demo = sub.add_parser("demo", help="record / check a deterministic demo of the heavy fight (see uctest/demo.py)")
-    demo.add_argument("action", choices=["record", "check"])
+    demo.add_argument("action", choices=["record", "check", "profile", "replay"])
     demo.add_argument("name")
     demo.add_argument("--exe", help="build to use (default dist/uc.exe)")
     demo.add_argument("--measure", type=int, default=20, help="seconds of idle fight after the slowdown point that the demo measures")
@@ -74,7 +74,9 @@ def main(argv=None):
     if args.command == "demo":
         from . import demo as demo_module
         args.exe = args.exe or str(demo_module.ROOT / "dist" / "uc.exe")
-        return demo_module.record(args, run_once) if args.action == "record" else demo_module.check(args)
+        return {"record": lambda: demo_module.record(args, run_once), "check": lambda: demo_module.check(args), "profile": lambda: demo_module.profile(args), "replay": lambda: demo_module.replay(args)}[args.action]()
+    if args.command == "bench" and not args.runs:
+        args.runs = 1 if args.demo else 3
     if args.command == "bench" and args.demo:
         from . import demo as demo_module
         return demo_module.bench(args)

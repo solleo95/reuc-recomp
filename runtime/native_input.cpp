@@ -33,21 +33,38 @@ void NativeInput::demo_play(const std::filesystem::path& path) {
     std::lock_guard lock(mutex_);
     std::FILE* file=_wfopen(path.c_str(),L"rb");
     if(!file)throw std::runtime_error("cannot open the input demo");
-    uint8_t chunk[65536]; size_t got;
-    while((got=std::fread(chunk,1,sizeof chunk,file))>0)demo_in_.insert(demo_in_.end(),chunk,chunk+got);
+    std::vector<uint8_t> data; uint8_t chunk[65536]; size_t got;
+    while((got=std::fread(chunk,1,sizeof chunk,file))>0)data.insert(data.end(),chunk,chunk+got);
     std::fclose(file);
-    demo_at_=0; replaying_=true;
+    const auto need=[&](size_t at,size_t size) { if(at+size>data.size())throw std::runtime_error("the input demo is truncated"); };
+    uint8_t host=1; uint64_t generation=0; bool seen=false;
+    for(size_t at=0;at<data.size();) {
+        const Tag tag=Tag(data[at++]);
+        switch(tag) {
+        case Tag::sample: { need(at,sizeof(InputSample)); DemoSample item{}; std::memcpy(&item.sample,&data[at],sizeof(InputSample)); at+=sizeof(InputSample); item.host=host; item.generation=generation; demo_samples_.push_back(item); seen=true; break; }
+        case Tag::host: need(at,1); host=data[at++]; if(seen)demo_samples_.back().host=host; else demo_host_=host; break;
+        case Tag::generation: need(at,8); std::memcpy(&generation,&data[at],8); at+=8; if(seen)demo_samples_.back().generation=generation; else demo_generation_=generation; break;
+        case Tag::actions: {
+            need(at,40); uint64_t head[5]; std::memcpy(head,&data[at],40); at+=40;
+            DemoActions frame{head[0],head[1],head[2],head[3],{}};
+            for(uint64_t i=0;i<head[4];++i) {
+                need(at,1+11+1+8); at+=1;   // one tag byte precedes each part
+                const uint8_t* event=&data[at]; at+=11; at+=1;
+                float direction[2]; std::memcpy(direction,&data[at],8); at+=8;
+                if(i<256)frame.events.push_back({Action(event[0]),event[1]!=0,direction[0],direction[1],event[2]!=0});
+            }
+            demo_actions_.push_back(std::move(frame)); break;
+        }
+        default: throw std::runtime_error("the input demo has an unknown record");
+        }
+    }
+    replaying_=true;
 }
 void NativeInput::demo_put(Tag tag,const void* data,size_t size) {
     const uint8_t byte=uint8_t(tag);
     std::fwrite(&byte,1,1,demo_out_); std::fwrite(data,1,size,demo_out_);
 }
-bool NativeInput::demo_get(Tag tag,void* data,size_t size) {
-    if(demo_at_+1+size>demo_in_.size())return false;
-    if(demo_in_[demo_at_]!=uint8_t(tag))throw std::runtime_error("input demo diverged from the run: record "+std::to_string(demo_in_[demo_at_])+" at offset "+std::to_string(demo_at_)+" where the guest asked for "+std::to_string(int(tag)));
-    std::memcpy(data,demo_in_.data()+demo_at_+1,size); demo_at_+=1+size;
-    return true;
-}
+
 void NativeInput::bindings(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
     auto game=bindings,service=bindings;
@@ -88,14 +105,11 @@ void NativeInput::cancel_host() {
 ActionFrame NativeInput::consume_actions() {
     std::lock_guard lock(mutex_);
     if(replaying_) {
-        ActionFrame result; uint64_t head[5];
-        if(!demo_get(Tag::actions,head,sizeof head))return result;
-        result.held=head[0]; result.pressed=head[1]; result.released=head[2]; result.generation=head[3]; result.count=size_t(head[4]);
-        for(size_t i=0;i<result.count && i<result.events.size();++i) {
-            uint8_t event[2+8+1]; float direction[2];
-            demo_get(Tag::actions,event,sizeof event); demo_get(Tag::actions,direction,sizeof direction);
-            result.events[i]={Action(event[0]),event[1]!=0,direction[0],direction[1],event[2]!=0};
-        }
+        ActionFrame result;
+        if(demo_action_at_>=demo_actions_.size()) { result.generation=demo_generation_; return result; }
+        const auto& frame=demo_actions_[demo_action_at_++];
+        result.held=frame.held; result.pressed=frame.pressed; result.released=frame.released; result.generation=frame.generation; result.count=frame.events.size();
+        std::copy(frame.events.begin(),frame.events.end(),result.events.begin());
         return result;
     }
     if(host_sequence_==sequence_)consumed_sequence_=sequence_;
@@ -139,7 +153,12 @@ bool NativeInput::aim(float x,float y) {
 }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
-    if(replaying_) { InputSample sample; if(!demo_get(Tag::sample,&sample,sizeof sample)) { sample={}; sample.valid=true; } return sample; }
+    if(replaying_) {
+        if(demo_sample_at_>=demo_samples_.size()) { InputSample idle; idle.valid=true; return idle; }   // the demo is over: an idle pad
+        const auto& item=demo_samples_[demo_sample_at_++];
+        demo_host_=item.host; demo_generation_=item.generation;
+        return item.sample;
+    }
     auto result=state_;
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
@@ -162,14 +181,14 @@ bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t 
 bool NativeInput::using_host_input() {
     std::lock_guard lock(mutex_);
     uint8_t flag=!legacy_test_input_;
-    if(replaying_) { if(!demo_get(Tag::host,&flag,1))flag=1; }
+    if(replaying_)flag=demo_host_;
     else if(demo_out_)demo_put(Tag::host,&flag,1);
     return flag!=0;
 }
 uint64_t NativeInput::generation() {
     std::lock_guard lock(mutex_);
     uint64_t value=generation_;
-    if(replaying_) { if(!demo_get(Tag::generation,&value,8))value=0; }
+    if(replaying_)value=demo_generation_;
     else if(demo_out_)demo_put(Tag::generation,&value,8);
     return value;
 }

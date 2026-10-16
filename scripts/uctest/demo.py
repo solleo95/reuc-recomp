@@ -50,12 +50,19 @@ def record(args, run_once):
     return 0
 
 
+GUEST_CPU = 4   # logical CPU the guest threads are pinned to in replays (its SMT sibling stays free): a process landing on another core or CCD ran up to 5% faster or slower
+
+
 def replay_args(exe, demo, stop, saves, extra=()):
+    pin = ["--guest-cpu", str(GUEST_CPU)] if GUEST_CPU >= 0 and "--guest-cpu" not in extra else []
     return [str(exe), "--test-server", "demo", "--save-root", str(saves), "--width", "1280", "--height", "720", "--god", "--skip-tutorials",
-            "--skip-intro", "--deterministic", "--demo-play", str(demo), "--stop-retrace", str(stop), "--mute", "--no-vulkan-layers", "--profile", *extra]
+            "--skip-intro", "--deterministic", "--demo-play", str(demo), "--stop-retrace", str(stop), "--mute", "--no-vulkan-layers", "--profile", *pin, *extra]
 
 
-def replay_once(exe, name, run_dir):
+def replay_once(spec, name, run_dir):
+    exe, *extra = spec.split("|")   # "dist/uc.exe|--early-draw-done": per-build game arguments after the path
+    if not Path(exe).is_absolute() and not Path(exe).exists():
+        exe = str(ROOT / exe)   # relative paths are meant from the repository root
     from .client import SAVE_SOURCE
     demo, meta = paths(name)
     window = json.loads(meta.read_text())
@@ -65,7 +72,7 @@ def replay_once(exe, name, run_dir):
     shutil.copytree(SAVE_SOURCE, saves)
     log_path = run_dir / "run.log"
     with open(log_path, "wb") as log:
-        subprocess.run(replay_args(Path(exe).resolve(), demo, window["to"], saves), stdout=log, stderr=log, cwd=Path(exe).resolve().parent, timeout=1800)
+        subprocess.run(replay_args(Path(exe).resolve(), demo, window["to"], saves, extra), stdout=log, stderr=log, cwd=Path(exe).resolve().parent, timeout=1800)
     rows = []
     for line in log_path.read_text(errors="replace").splitlines():
         m = DETBENCH.match(line)
@@ -74,11 +81,44 @@ def replay_once(exe, name, run_dir):
     return rows, window
 
 
+def replay(args):
+    """Replay the demo once (profile-guided optimization training: scripts/pgo.py)."""
+    run_dir = ROOT / "build" / "autotest" / f"demo-replay-{int(time.time() * 1000)}"
+    run_dir.mkdir(parents=True)
+    rows, window = replay_once(args.exe, args.name, run_dir)
+    print(f"replay: {len(rows)} game seconds measured, {sum(r[3] for r in rows) / 1000:.2f} s wall ({run_dir})")
+    return 0
+
+
+def profile(args):
+    """Replay the demo with the CPU sampler of a profile build (build-prof/game/uc.exe copied next to dist data) running over the measured window;
+    resolve the samples with scripts/resolve_cpu_samples.py <cpu-samples.txt> <exe>."""
+    import os
+    demo, meta = paths(args.name)
+    window = json.loads(meta.read_text())
+    exe = Path(args.exe).resolve()
+    run_dir = ROOT / "build" / "autotest" / f"demo-profile-{int(time.time() * 1000)}"
+    run_dir.mkdir(parents=True)
+    from .client import SAVE_SOURCE
+    shutil.copytree(SAVE_SOURCE, run_dir / "saves")
+    flag = run_dir / "sample.flag"
+    env = dict(os.environ, UC_CPU_SAMPLE="guest", UC_CPU_SAMPLE_FLAG=str(flag), UC_CPU_SAMPLE_RETRACE=str(window["from"]))
+    samples = exe.parent / "cpu-samples.txt"
+    samples.unlink(missing_ok=True)
+    with open(run_dir / "run.log", "wb") as log:
+        subprocess.run(replay_args(exe, demo, window["to"], run_dir / "saves"), stdout=log, stderr=log, cwd=exe.parent, env=env, timeout=1800)
+    kept = run_dir / "cpu-samples.txt"
+    if samples.exists():
+        shutil.copy(samples, kept)
+    print(f"profile: samples {kept if kept.exists() else 'MISSING'} (resolve: python scripts/resolve_cpu_samples.py {kept} <exe with pdb> 45)")
+    return 0 if kept.exists() else 1
+
+
 def bench(args):
     DEMOS.mkdir(parents=True, exist_ok=True)
     results = {exe: [] for exe in args.exes}
     for round_ in range(args.runs):
-        for exe in args.exes:
+        for exe in (args.exes if round_ % 2 == 0 else args.exes[::-1]):   # A B, then B A: a slow drift of the machine hits both builds alike over two rounds
             run_dir = ROOT / "build" / "autotest" / f"demo-{int(time.time() * 1000)}"
             run_dir.mkdir(parents=True)
             rows, window = replay_once(exe, args.demo, run_dir)
@@ -88,7 +128,7 @@ def bench(args):
                 return 1
             wall, cycles, draws = sum(r[3] for r in rows), sum(r[2] for r in rows), sum(r[1] for r in rows)
             results[exe].append((wall, cycles, draws))
-            print(f"bench: round {round_ + 1}/{args.runs} {Path(exe).name}: {wall / 1000:.2f} s wall for {len(rows)} game seconds ({len(rows) * 60 / (wall / 1000):.1f} frames/s), "
+            print(f"bench: round {round_ + 1}/{args.runs} {exe.split('|', 1)[0].rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}{'|' + exe.split('|', 1)[1] if '|' in exe else ''}: {wall / 1000:.2f} s wall for {len(rows)} game seconds ({len(rows) * 60 / (wall / 1000):.1f} frames/s), "
                   f"{cycles:.0f} Mcycles, {draws} draws", flush=True)
     names = list(args.exes)
     lines = []
@@ -99,10 +139,11 @@ def bench(args):
     for exe in names[1:]:
         diffs = [100 * (b[0] / a[0] - 1) for a, b in zip(results[names[0]], results[exe])]
         mean = statistics.fmean(diffs)
-        half = t95(len(diffs) - 1) * statistics.stdev(diffs) / len(diffs) ** 0.5 if len(diffs) > 1 else float("inf")
+        # one pair is the normal case (run-to-run sd is 1-2.6%): judge it against a 5% noise floor (the machine drifts); with more rounds use the paired interval
+        half = t95(len(diffs) - 1) * statistics.stdev(diffs) / len(diffs) ** 0.5 if len(diffs) > 1 else 5.0
         verdict = "no difference" if abs(mean) <= half else ("FASTER" if mean < 0 else "SLOWER")
         best = 100 * (min(r[0] for r in results[exe]) / min(r[0] for r in results[names[0]]) - 1)   # a pause of the machine only ever makes a run slower: the best run is the steadiest figure
-        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, 95% CI [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired runs -> {verdict}; best run vs best run {best:+.1f}%")
+        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {"95% CI" if len(diffs) > 1 else "noise floor"} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%")
     print("\n".join(lines))
     return 0
 
