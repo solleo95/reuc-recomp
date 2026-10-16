@@ -9,16 +9,19 @@ namespace gx {
 // The default heap hands such blocks back to the OS and faults fresh pages in every frame. Free blocks are capped; the rest go back to the heap.
 template<size_t Size>
 struct BlockPool {
+    struct State { std::mutex mutex; std::vector<void*> blocks; };
+    // Never destroyed: blocks are also returned by destructors of globals (and by the render thread) while the process exits.
+    static State& state() { static State* state = new State; return *state; }
     static void* get() {
-        { std::lock_guard lock(mutex); if (!blocks.empty()) { void* block = blocks.back(); blocks.pop_back(); return block; } }
+        auto& pool = state();
+        { std::lock_guard lock(pool.mutex); if (!pool.blocks.empty()) { void* block = pool.blocks.back(); pool.blocks.pop_back(); return block; } }
         return ::operator new(Size);
     }
     static void put(void* block) {
-        { std::lock_guard lock(mutex); if (blocks.size() < 4096) { blocks.push_back(block); return; } }
+        auto& pool = state();
+        { std::lock_guard lock(pool.mutex); if (pool.blocks.size() < 4096) { pool.blocks.push_back(block); return; } }
         ::operator delete(block);
     }
-    static inline std::mutex mutex;
-    static inline std::vector<void*> blocks;
 };
 template<class T>
 struct PoolAllocator {
