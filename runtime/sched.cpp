@@ -302,7 +302,9 @@ void Sched::idle_wait() {
         until = std::chrono::steady_clock::now() + std::chrono::milliseconds(t > now ? ticks_to_ms(t - now) / clock_speed() + 1 : 0);
         timed = true;
     }
+    const uint64_t idle_start = steady_ns();
     bool woke = ext_cv_.wait_until(lk, until, [&] { return !ext_q_.empty() || shutdown_; });
+    idle_ns_ += steady_ns() - idle_start;
     if (!woke && !timed) {
         lk.unlock();
         fail("deadlock: all guest threads are blocked and no event is pending\n" + dump_threads());
