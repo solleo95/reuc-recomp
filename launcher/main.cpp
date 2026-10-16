@@ -132,7 +132,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.unlock_60fps==b.unlock_60fps && a.prompt_style==b.prompt_style;
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.unlock_60fps==b.unlock_60fps && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -367,8 +367,16 @@ int run(int argc,wchar_t** argv) {
             }
             ImGui::PopFont();ImGui::Dummy({0,10*unit});
             ImGui::TextUnformatted(tr("fps_limit"));push_font(ui.sans,22);
-            ImGui::BeginDisabled();if(combo("##fps","240"))ImGui::EndCombo();ImGui::EndDisabled();
-            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("fps"));
+            const uint32_t limits[]={30,60,90,120,144,165,240,360,0};   // 0 = unlimited
+            const uint32_t current_limit=options.fps_limit.value_or(60);   // unset behaves like 60: "60 FPS game update" steps at 60, presentation is never the bound
+            const auto limit_label=[&](uint32_t value) {return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited"));};
+            const auto current_label=limit_label(current_limit);
+            const bool limit_open=combo("##fps",current_label.c_str(),ImGuiComboFlags_HeightLarge);track("fps");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("fps"));
+            if(limit_open) {
+                for(const uint32_t value:limits) {if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value))options.fps_limit=value;track("fps"+std::to_string(value));}
+                ImGui::EndCombo();
+            }
             ImGui::PopFont();ImGui::PopItemWidth();ImGui::EndChild();
             ImGui::SameLine(0,column_gap);
             ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_None);ImGui::PushItemWidth(-1);

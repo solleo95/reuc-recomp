@@ -15,13 +15,21 @@ int main() {
     CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).prompt_style==uc::PromptStyle::sculpted);
     options.prompt_style=uc::PromptStyle::monochrome;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["prompt_style"]=="monochrome");
+    CHECK(!uc::options_from_config(document).fps_limit);   // absent: the previous behaviour
+    options.fps_limit=165;uc::store_options(document,options);
+    CHECK(document.properties["graphics"]["fps_limit"]==165 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fps_limit==165u);
+    options.fps_limit=0;uc::store_options(document,options);   // unlimited is stored, not dropped
+    CHECK(document.properties["graphics"]["fps_limit"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fps_limit==0u);
+    options.fps_limit.reset();uc::store_options(document,options);
+    CHECK(!document.properties["graphics"].contains("fps_limit"));
     const auto before=uc::serialize_config(document);
     options.prompt_style=uc::PromptStyle(99);
     bool invalid_style=false;try{uc::store_options(document,options);}catch(const std::invalid_argument&){invalid_style=true;}
     CHECK(invalid_style && uc::serialize_config(document)==before);
     for(auto text:{R"({"skip_intro":1})",R"({"game":null})",R"({"game":"a\u0000b"})",R"({"graphics":{"render_scale":8}})",
         R"({"graphics":{"render_scale":-1}})",R"({"graphics":{"width":-1}})",R"({"graphics":{"window_mode":"bad"}})",
-        R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})"}) {
+        R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})",R"({"graphics":{"fps_limit":-1}})",R"({"graphics":{"fps_limit":10}})",
+        R"({"graphics":{"fps_limit":2000}})",R"({"graphics":{"fps_limit":"fast"}})",R"({"graphics":{"fps_limit":144.5}})"}) {
         bool caught=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){caught=true;}CHECK(caught);
     }
     return 0;

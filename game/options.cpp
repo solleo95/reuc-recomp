@@ -30,7 +30,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--god") options.god = true;
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -65,10 +65,11 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             }
             uint32_t number = 0;
             auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && number == 0)) return "invalid value for " + std::string(arg);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (arg != "--seconds" && arg != "--fps-limit" && number == 0)) return "invalid value for " + std::string(arg);
             if (arg == "--speed") { if (number > 32) return "invalid value for --speed"; options.speed = number; }
             else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
+            else if (arg == "--fps-limit") { if (number != 0 && (number < 20 || number > 1000)) return "invalid value for --fps-limit"; options.fps_limit = number; }
             else if (arg == "--det-frames") options.det_frames = number;
             else if (arg == "--stop-retrace") options.stop_retrace = number;
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }

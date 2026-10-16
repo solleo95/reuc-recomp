@@ -32,6 +32,12 @@ Options options_from_config(const ConfigDocument& document) {
         }
         if(graphics.contains("width"))options.width=extent(graphics["width"]);
         if(graphics.contains("height"))options.height=extent(graphics["height"]);
+        if(graphics.contains("fps_limit")) {
+            if(!graphics["fps_limit"].is_number_unsigned())invalid("fps_limit must be a non-negative integer");
+            const auto limit=graphics["fps_limit"].get<uint64_t>();
+            if(limit!=0 && (limit<20 || limit>1000))invalid("fps_limit must be 0 (unlimited) or 20..1000");
+            options.fps_limit=uint32_t(limit);
+        }
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
         if(graphics.contains("prompt_style")) {
             if(!graphics["prompt_style"].is_string())invalid("prompt_style must be a string");
@@ -63,6 +69,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["render_scale"]=options.render_scale;
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;
+    if(options.fps_limit)graphics["fps_limit"]=*options.fps_limit;
+    else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";
     graphics["window_mode"]=options.window_mode==WindowMode::windowed ? "windowed" : options.window_mode==WindowMode::borderless ? "borderless" : "exclusive";
     options_from_config(replacement);

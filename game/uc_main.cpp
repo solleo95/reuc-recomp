@@ -205,7 +205,9 @@ static int real_main(int argc, char** argv) {
     const auto& game = options.game;
     if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
     uc::intro_init(options.skip_intro);
-    uc::game_pacing_init(options.unlock_60fps,options.game_hz);
+    uint32_t step_hz=options.game_hz;   // the launcher's frame rate limit above 60 is the timer-driven game step (see Options::fps_limit)
+    if(!step_hz && options.unlock_60fps && options.fps_limit && (*options.fps_limit==0 || *options.fps_limit>60)) step_hz=*options.fps_limit ? std::min(*options.fps_limit,480u) : 480u;
+    uc::game_pacing_init(options.unlock_60fps,step_hz);
     if (options.gx_audit) {
 #ifdef UC_TRACE
         uc::gx_audit_enable();
@@ -403,7 +405,7 @@ static int real_main(int argc, char** argv) {
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
     std::unique_ptr<const gx::FramePacket> pending;
-    uc::FrameLimit frame_limit;
+    uc::FrameLimit frame_limit(options.fps_limit);
     std::chrono::steady_clock::time_point last_present_at{};
     std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
     uint64_t audit_capture_serial=0;

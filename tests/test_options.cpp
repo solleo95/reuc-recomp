@@ -40,6 +40,9 @@ int main() {
     CHECK(std::get<uc::Options>(unlock).unlock_60fps);
     CHECK(std::get<uc::Options>(defaults).game_hz==0 && std::get<uc::Options>(parse(std::array<std::string_view,2>{"--game-hz","120"})).game_hz==120);
     for (auto invalid : {"60","481","0","abc"}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--game-hz",invalid})));
+    CHECK(!std::get<uc::Options>(defaults).fps_limit && std::get<uc::Options>(parse(std::array<std::string_view,2>{"--fps-limit","144"})).fps_limit==144u);
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--fps-limit","0"})).fps_limit==0u);   // 0 = unlimited
+    for (auto invalid : {"19","1001","abc","-5"}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--fps-limit",invalid})));
     auto result = parse(std::array<std::string_view, 9>{"--width", "3840", "--height", "2160", "--seconds", "20", "--headless", "--validation", "--gx-audit"});
     auto& options = std::get<uc::Options>(result);
     CHECK(options.width == 3840 && options.height == 2160 && options.seconds == 20 && options.headless && options.validation && options.gx_audit);
