@@ -13,7 +13,14 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--log-sleep") options.log_sleep = true;
         else if (arg == "--gx-audit") options.gx_audit = true;
         else if (arg == "--skip-intro") options.skip_intro = true;
+        else if (arg == "--guest-cpu") {
+            if (++i >= arguments.size()) return "missing value for --guest-cpu";
+            int cpu = -1; auto parsed = std::from_chars(arguments[i].data(), arguments[i].data() + arguments[i].size(), cpu);
+            if (parsed.ec != std::errc{} || parsed.ptr != arguments[i].data() + arguments[i].size() || cpu < 0 || cpu > 62) return "invalid value for --guest-cpu";
+            options.guest_cpu = cpu;
+        }
         else if (arg == "--mute") options.mute = true;
+        else if (arg == "--deterministic") options.deterministic = true;
         else if (arg == "--no-vulkan-layers") options.no_vulkan_layers = true;
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
@@ -23,7 +30,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--god") options.god = true;
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz") {
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -37,10 +44,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 if(value.size()>32 || !std::all_of(value.begin(),value.end(),[](char c){return std::isalnum(static_cast<unsigned char>(c)) || c=='_' || c=='-';}))return "invalid value for --test-server";
                 options.test_server=std::string(value); continue;
             }
-            if(arg=="--game" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--capture-dir") {
+            if(arg=="--game" || arg=="--det-out" || arg=="--demo-record" || arg=="--demo-play" || arg=="--test-control" || arg=="--save-root" || arg=="--config" || arg=="--capture-dir") {
                 if(value.find('\0')!=std::string_view::npos)return "invalid path for "+std::string(arg);
                 auto path=std::filesystem::path(std::u8string(value.begin(),value.end()));
                 if(arg=="--game")options.game=std::move(path);
+                else if(arg=="--det-out")options.det_out=std::move(path);
+                else if(arg=="--demo-record")options.demo_record=std::move(path);
+                else if(arg=="--demo-play")options.demo_play=std::move(path);
                 else if(arg=="--test-control")options.test_control=std::move(path);
                 else if(arg=="--save-root")options.save_root=std::move(path);
                 else if(arg=="--capture-dir")options.capture_dir=std::move(path);
@@ -59,10 +69,14 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (arg == "--speed") { if (number > 32) return "invalid value for --speed"; options.speed = number; }
             else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
+            else if (arg == "--det-frames") options.det_frames = number;
+            else if (arg == "--stop-retrace") options.stop_retrace = number;
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }
             else options.seconds = number;
         } else return "unknown option " + std::string(arg);
     }
+    if (!options.demo_play.empty() && !options.demo_record.empty()) return "--demo-play and --demo-record exclude each other";
+    if (!options.demo_play.empty() && !options.deterministic && options.det_out.empty()) return "--demo-play requires --deterministic";
     if (options.speed != 1 && options.test_server.empty()) return "--speed requires --test-server";
     if (options.god && options.test_server.empty()) return "--god requires --test-server";
     if (options.skip_tutorials && options.test_server.empty()) return "--skip-tutorials requires --test-server";

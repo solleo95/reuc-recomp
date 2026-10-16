@@ -40,6 +40,7 @@
 #include "cpu_sampler.h"
 #include "audio_output.h"
 #include "ax_audio.h"
+#include "det_trace.h"
 #include "audio_gap_audit.h"
 #include "vulkan_renderer.h"
 #include <algorithm>
@@ -189,7 +190,7 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
@@ -269,6 +270,22 @@ static int real_main(int argc, char** argv) {
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
     uc::Sched sched(boot.mem);
+    std::unique_ptr<uc::DetTrace> det_trace;
+    const bool deterministic = options.deterministic || !options.det_out.empty();
+    if (deterministic) {
+        uc::set_deterministic_clock(true);
+        sched.set_deterministic(true);
+    }
+    if (!options.det_out.empty()) det_trace = std::make_unique<uc::DetTrace>(options.det_out, boot.mem, options.det_frames);
+    std::atomic<bool> det_stop{false};
+    if (options.guest_cpu >= 0) {
+        DWORD_PTR process_mask = 0, system_mask = 0;
+        if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
+            const DWORD_PTR own = DWORD_PTR(1) << options.guest_cpu, sibling = DWORD_PTR(1) << (options.guest_cpu ^ 1);
+            if ((process_mask & own) && !SetProcessAffinityMask(GetCurrentProcess(), process_mask & ~sibling)) std::fprintf(stderr, "cannot free the SMT sibling of CPU %d\n", options.guest_cpu);
+            sched.pin_guest_threads(options.guest_cpu);
+        }
+    }
     uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
@@ -279,7 +296,18 @@ static int real_main(int argc, char** argv) {
     uc::test_state_set_skip_tutorials(options.skip_tutorials);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
     sched.irq_ctx().r[1] = 0x817EFF00;
-    uc::vi_hle_init(sched, uc::kViPeriodNtsc, [] { g_fifo_snapshot.store(g_fifo.bytes, std::memory_order_relaxed); });
+    uc::vi_hle_init(sched, uc::kViPeriodNtsc, [&] {
+        g_fifo_snapshot.store(g_fifo.bytes, std::memory_order_relaxed);
+        const uint64_t retraces = uc::vi_stats().retraces;
+        if (det_trace) det_trace->on_retrace(retraces);
+        if (deterministic && retraces % 60 == 0) {   // identical work per game second: the wall time and guest cycles between marks are what builds are compared on
+            static auto last = std::chrono::steady_clock::now(); static uint64_t last_draws = 0, last_cycles = 0;
+            const auto now = std::chrono::steady_clock::now(); const uint64_t draws = uc::gx_stats().draws, cycles = sched.guest_cycles();
+            std::fprintf(stderr, "[detbench] retrace %llu draws %llu guest_mcycles %.2f wall_ms %.2f\n", (unsigned long long)retraces, (unsigned long long)(draws - last_draws), (cycles - last_cycles) / 1e6, std::chrono::duration<double, std::milli>(now - last).count());
+            last = now; last_draws = draws; last_cycles = cycles;
+        }
+        if (options.stop_retrace && retraces >= options.stop_retrace) det_stop = true;
+    });
 
     // The start code runs on the SDK's DefaultThread: __OSThreadInit (802611B8) stores this OSThread in the current-thread word and fills it in.
     const uint32_t kMainThread = 0x805F88D8;
@@ -293,6 +321,8 @@ static int real_main(int argc, char** argv) {
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
     uc::VulkanRenderer renderer;
     uc::NativeInput input;
+    if (!options.demo_record.empty()) input.demo_record(options.demo_record);
+    if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
     uc::HostInput host_input;
     if (!options.headless) {
@@ -583,6 +613,7 @@ static int real_main(int argc, char** argv) {
         }
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
+        if ((det_trace && det_trace->done()) || det_stop) close = true;
         if (now >= next_watch) {
             if ((options.gx_audit || options.profile) && !options.headless) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
@@ -605,6 +636,7 @@ static int real_main(int argc, char** argv) {
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
+                { static uint64_t last_cycles=0,last_bench_presents=0; const auto cycles=sched.guest_cycles(); std::fprintf(stderr,"[bench] presents %llu draws %llu guest_mcycles %.2f\n",(unsigned long long)(presents-last_bench_presents),(unsigned long long)(gfx.draws-last_profile_draws),(cycles-last_cycles)/1e6); last_cycles=cycles; last_bench_presents=presents; }
                 profile_loops=profile_retries=0; last_profile_draws=gfx.draws; last_profile_copies=gfx.copies; last_audio_frames=sound.frames;
             }
             next_watch = now + std::chrono::seconds(1);

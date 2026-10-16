@@ -168,8 +168,10 @@ def fight(g, args):
     if flag:
         Path(flag).write_text("go")
     result = {"marked": marked, "capture": g.capture()}
+    window_from = g.frame.get("retraces", 0)
     with g.step("measure_fps"):
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
+    result["demo_window"] = {"from": window_from, "to": g.frame.get("retraces", 0)}   # retrace range a demo replay measures (uctest demo / bench --demo)
     return result
 
 

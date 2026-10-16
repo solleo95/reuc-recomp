@@ -127,6 +127,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
     ppc::wr32(c, fi + layout::kCbState, 1);                 // DVD_STATE_BUSY
     Sched& s = os_sched();
     uint8_t* mem = c.mem;
+    s.async_begin();   // deterministic mode: the idle scheduler waits for this read's completion event
     enqueue([=, &s] {
         auto data = std::make_shared<std::vector<uint8_t>>();
         int64_t n = read_padded(e, *data, len, off);

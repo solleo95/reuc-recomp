@@ -1,7 +1,10 @@
 #pragma once
 #include "ppc_rt.h"
 #include "input_bindings.h"
+#include <cstdio>
+#include <filesystem>
 #include <mutex>
+#include <vector>
 
 namespace uc {
 constexpr uint32_t kButtonA=0x0800,kButtonB=0x0400;
@@ -37,7 +40,19 @@ public:
     uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
+    // Demo (determinism): every value the guest reads from this object (consume, consume_actions, using_host_input, generation) is appended to one
+    // ordered file while recording and returned from that file while playing, so a deterministic run needs neither the harness nor a window.
+    void demo_record(const std::filesystem::path&);
+    void demo_play(const std::filesystem::path&);
+    ~NativeInput();
 private:
+    enum class Tag:uint8_t { sample=1,actions,host,generation };
+    void demo_put(Tag,const void*,size_t);
+    bool demo_get(Tag,void*,size_t);   // false once the demo is exhausted
+    std::FILE* demo_out_=nullptr;
+    std::vector<uint8_t> demo_in_;
+    size_t demo_at_=0;
+    bool replaying_=false;
     void cancel_host(); // Requires mutex_.
     std::mutex mutex_;
     BindingResolver actions_,services_;

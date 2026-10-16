@@ -119,11 +119,23 @@ private:
     // --profile: thread switches, how long the woken thread took to start running, and the time each guest thread held the baton.
     std::atomic<uint64_t> switches_{0}, wake_ns_{0}, notified_ns_{0}, run_started_ns_{0};
     std::atomic<uint64_t> run_ns_[32] = {};
+    std::atomic<uint64_t> run_cycles_[32] = {}, cycle_started_{0};   // CPU cycles a guest thread ran while holding the baton (QueryThreadCycleTime: no waits, no preemption)
+    static uint64_t thread_cycles();
+    bool det_ = false, ext_allowed_ = true;
+    std::atomic<int> async_pending_{0};
+    int pin_cpu_ = -1;   // >= 0: every guest host thread runs on this logical CPU (benchmarks: steadier timing than letting Windows move the thread between cores and CCDs)
     std::atomic<uint32_t> entry_[32] = {};
     static uint64_t steady_ns();
 public:
     struct SwitchStats { uint64_t switches, wake_ns; };
     SwitchStats switch_stats() const { return {switches_.load(), wake_ns_.load()}; }
+    void pin_guest_threads(int cpu) { pin_cpu_ = cpu; }
+    // Deterministic mode (see clock.h): events from other threads (DVD reads, GPU completions) are delivered only while every guest thread is idle,
+    // and an idle scheduler waits for the announced ones instead of moving virtual time on. async_begin() announces one.
+    void set_deterministic(bool on) { det_ = on; ext_allowed_ = !on; }
+    bool deterministic() const { return det_; }
+    void async_begin() { ++async_pending_; }
+    uint64_t guest_cycles() const { uint64_t sum = 0; for (const auto& c : run_cycles_) sum += c.load(); return sum; }
     uint64_t thread_run_ns(int id) const { return id > 0 && id < 32 ? run_ns_[id].load() : 0; }
     uint32_t thread_entry(int id) const { return id > 0 && id < 32 ? entry_[id].load() : 0; }
 };

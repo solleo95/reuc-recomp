@@ -17,9 +17,20 @@ uint64_t real_ticks() {
 std::atomic<uint32_t> version{0}, speed{1};
 std::atomic<uint64_t> real_base{0}, virtual_base{0};
 std::mutex writer;
+std::atomic<bool> det_mode{false};
+std::atomic<uint64_t> det_ticks{0};
+thread_local bool guest_thread = false;
+constexpr uint64_t kDetStep = 60;   // about 1 microsecond of guest time per time read
 }  // namespace
 
+void set_deterministic_clock(bool on) { det_ticks = 0; det_mode = on; }
+bool deterministic_clock() { return det_mode.load(std::memory_order_relaxed); }
+void det_clock_advance_to(uint64_t tick) { uint64_t cur = det_ticks.load(); while (cur < tick && !det_ticks.compare_exchange_weak(cur, tick)) {} }
+void mark_guest_thread() { guest_thread = true; }
+bool is_guest_thread() { return guest_thread; }
+
 uint64_t now_ticks() {
+    if (det_mode.load(std::memory_order_relaxed)) return guest_thread ? det_ticks.fetch_add(kDetStep) + kDetStep : det_ticks.load();
     for (;;) {
         const uint32_t v = version.load(std::memory_order_acquire);
         if (v & 1) continue;

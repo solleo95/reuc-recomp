@@ -16,6 +16,7 @@ struct Tramp { Sched* s; Thread* t; };
 DWORD WINAPI tramp(LPVOID p) {
     std::unique_ptr<Tramp> tp(static_cast<Tramp*>(p));
     uc::crash_guard_thread();
+    uc::mark_guest_thread();
     tp->s->thread_main(tp->t);
     return 0;
 }
@@ -205,14 +206,20 @@ void Sched::exit_current(uint32_t value) {
 void Sched::post_at(uint64_t tick, Event fn) { timed_.emplace(tick, std::move(fn)); }
 
 void Sched::post_external(Event fn) {
-    { std::lock_guard<std::mutex> lk(ext_m_); if (shutdown_) return; ext_q_.push_back(std::move(fn)); }
+    if (det_ && is_guest_thread()) { timed_.emplace(0, std::move(fn)); return; }   // the baton holder's own event: due at once, in posting order
+    {
+        std::lock_guard<std::mutex> lk(ext_m_);
+        if (shutdown_) return;
+        if (det_ && async_pending_ > 0) --async_pending_;   // the announced result of another thread has arrived
+        ext_q_.push_back(std::move(fn));
+    }
     ext_cv_.notify_all();
 }
 
 void Sched::deliver_events() {
     if (in_irq_ || !ee_) return;
     std::vector<Event> ext;
-    { std::lock_guard<std::mutex> lk(ext_m_); ext.swap(ext_q_); }
+    if (ext_allowed_) { std::lock_guard<std::mutex> lk(ext_m_); ext.swap(ext_q_); }
     for (auto& e : ext) timed_.emplace(0, std::move(e));
     while (!timed_.empty() && timed_.begin()->first <= now_ticks()) {
         if (shutdown_) throw ThreadExit{};
@@ -278,6 +285,16 @@ void Sched::fail(const std::string& msg) {
 void Sched::idle_wait() {
     std::unique_lock<std::mutex> lk(ext_m_);
     if (!ext_q_.empty() || shutdown_) return;
+    if (det_) {
+        if (async_pending_ > 0) {   // a DVD read or a GPU frame is on its way: its arrival, not the host speed, decides what happens next
+            if (!ext_cv_.wait_for(lk, std::chrono::milliseconds(deadlock_ms_), [&] { return !ext_q_.empty() || shutdown_; })) { lk.unlock(); fail("deterministic mode: an announced asynchronous result never arrived\n" + dump_threads()); }
+            return;
+        }
+        if (!timed_.empty()) { det_clock_advance_to(timed_.begin()->first); return; }   // idle: time jumps to the next event
+        lk.unlock();
+        fail("deadlock: all guest threads are blocked and no event is pending\n" + dump_threads());
+        return;
+    }
     auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlock_ms_);
     bool timed = false;
     if (!timed_.empty()) {   // the idle loop of the real OS runs with interrupts on, whatever state the blocked threads had
@@ -300,12 +317,16 @@ void Sched::reschedule(Thread* self) {
             throw ThreadExit{};
         }
         deliver_events();
+        ext_allowed_ = !det_;
         if (Thread* n = pick_ready()) { handoff(self, n); return; }
         if (main_done_) { if (self->state == Thread::State::Dead) return; throw ThreadExit{}; }
         ee_ = true;   // idle
+        ext_allowed_ = true;
         idle_wait();
     }
 }
+
+uint64_t Sched::thread_cycles() { ULONG64 cycles = 0; QueryThreadCycleTime(GetCurrentThread(), &cycles); return cycles; }
 
 uint64_t Sched::steady_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 
@@ -313,6 +334,7 @@ void Sched::handoff(Thread* self, Thread* next) {
     if (next == self) { self->state = Thread::State::Running; ee_ = self->ee; return; }
     const uint64_t now = steady_ns();
     if (self->id < 32 && run_started_ns_) run_ns_[self->id] += now - run_started_ns_;
+    if (self->id < 32 && cycle_started_) run_cycles_[self->id] += thread_cycles() - cycle_started_;
     ++switches_; notified_ns_ = now;
     next->state = Thread::State::Running;
     ee_ = next->ee;
@@ -327,13 +349,14 @@ void Sched::handoff(Thread* self, Thread* next) {
     std::unique_lock<std::mutex> lk(baton_m_);
     self->cv.wait(lk, [&] { return running_ == self || shutdown_ || self->cancelled; });
     if (shutdown_ || self->cancelled || running_ != self) throw ThreadExit{};
-    run_started_ns_ = steady_ns(); wake_ns_ += run_started_ns_ - notified_ns_;
+    run_started_ns_ = steady_ns(); cycle_started_ = thread_cycles(); wake_ns_ += run_started_ns_ - notified_ns_;
 }
 
 void Sched::start_host(Thread* t) {
     t->started = true;
     HANDLE h = CreateThread(nullptr, host_stack_, tramp, new Tramp{this, t}, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
     if (!h) fatal("cannot create a host thread for guest thread %d", t->id);
+    if (pin_cpu_ >= 0) SetThreadAffinityMask(h, DWORD_PTR(1) << pin_cpu_);
     handles_.push_back(h);
 }
 
@@ -342,7 +365,7 @@ void Sched::thread_main(Thread* t) {
         std::unique_lock<std::mutex> lk(baton_m_);
         t->cv.wait(lk, [&] { return running_ == t || shutdown_ || t->cancelled; });
         if (shutdown_ || t->cancelled || running_ != t) return;
-        run_started_ns_ = steady_ns(); wake_ns_ += run_started_ns_ - notified_ns_;
+        run_started_ns_ = steady_ns(); cycle_started_ = thread_cycles(); wake_ns_ += run_started_ns_ - notified_ns_;
     }
     try {
         t->body(t->ctx);

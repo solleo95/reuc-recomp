@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <chrono>
 #include <map>
+#include <mutex>
+#include <set>
 
 #include <variant>
 #include <algorithm>
@@ -149,6 +151,8 @@ struct ListRecording {
     gx::State input_state;
 };
 std::unique_ptr<ListRecording> recording;
+std::mutex det_finish_m;
+std::set<uint64_t> det_finishes, det_early;   // deterministic mode: announced draw-done serials; serials the GPU completed before the guest announced them
 std::map<uint64_t, uint32_t> finishes; // serial -> submitting thread's SDA base; guest baton only
 std::atomic<uint64_t> draw_count{0}, vertex_count{0}, submitted{0}, completed{0}, outside_bytes{0};
 std::atomic<uint64_t> copies{0};
@@ -493,6 +497,19 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
         throw;
     }
 }
+void post_finish(uc::Sched* sched, uint64_t serial) {
+    sched->post_external([sched, serial] {
+        auto found = finishes.find(serial);
+        if (found == finishes.end()) return;
+        uint32_t base = found->second; finishes.erase(found); ++completed;
+        ppc::Ctx& irq = sched->irq_ctx();
+        memory.read(base - 25328, 1);
+        ppc::wr8(irq, base - 25328, 1);
+        uint32_t callback = read32(base - 25324);
+        if (callback) uc::call_guest(irq, callback, {});
+        sched->wake_all(base - 25336);
+    });
+}
 void request_finish(ppc::Ctx& ctx) {
     if (recording) throw gx::Error(gx::ErrorCode::sequence,0x802848AC,0,1);
     capture->finish();
@@ -503,6 +520,11 @@ void request_finish(ppc::Ctx& ctx) {
     if (packets) {
         const uint64_t serial=submit_batch(false,false);
         finishes.emplace(serial,ctx.r[13]); ++submitted;
+        if(sched.deterministic()) {
+            bool early;
+            { std::lock_guard lock(det_finish_m); early=det_early.erase(serial)>0; if(!early) { det_finishes.insert(serial); sched.async_begin(); } }
+            if(early) post_finish(&sched,serial);
+        }
     }
     // Headless is runtime-only diagnostics: it submits no work and cannot signal a graphics fence.
     sched.set_interrupts(interrupts);
@@ -594,17 +616,11 @@ void gx_fifo_write(int size, uint32_t value) {
 void gx_completed(uint64_t serial) {
     Sched* sched = scheduler;
     if (!sched) return;
-    sched->post_external([sched, serial] {
-        auto found = finishes.find(serial);
-        if (found == finishes.end()) return;
-        uint32_t base = found->second; finishes.erase(found); ++completed;
-        ppc::Ctx& irq = sched->irq_ctx();
-        memory.read(base - 25328, 1);
-        ppc::wr8(irq, base - 25328, 1);
-        uint32_t callback = read32(base - 25324);
-        if (callback) call_guest(irq, callback, {});
-        sched->wake_all(base - 25336);
-    });
+    if (sched->deterministic()) {   // only the draw-done requests the guest announced are delivered (and only while it is idle)
+        std::lock_guard lock(det_finish_m);
+        if (!det_finishes.erase(serial)) { det_early.insert(serial); return; }
+    }
+    post_finish(sched, serial);
 }
 std::string gx_state_summary() {   // crash bundle gx.txt: bound arrays (12 = position matrices, 13 = normal matrices), "recorded" while a display list is being built
     std::string text; char line[96];

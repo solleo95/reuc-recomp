@@ -48,6 +48,21 @@ def main(argv=None):
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
     run.add_argument("--mark", action="store_true", help="fight: ignore the saved slowdown point and wait for F5 to set a new one")
     run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
+    bench = sub.add_parser("bench", help="compare game builds on the heavy fight: cycles per frame at one scene weight, alternating runs, 95%% CI (see uctest/bench.py)")
+    bench.add_argument("--demo", help="replay this recorded demo (python -m uctest demo record NAME) instead of playing the fight live: identical guest work in every run")
+    bench.add_argument("exes", nargs="+", help="uc.exe builds to compare, each staged next to the data folders; the first is the baseline")
+    bench.add_argument("--runs", type=int, default=3, help="rounds; every round runs each build once (with --demo 4-5 narrows the interval; a round of a demo run takes about a minute per build)")
+    bench.add_argument("--measure", type=int, default=20, help="seconds of the fight that count")
+    bench.add_argument("--max-minutes", type=float, default=10)
+    bench.add_argument("--guest-cpu", type=int, default=4, help="logical CPU the guest threads are pinned to (its SMT sibling cpu^1 is kept free); -1 leaves placement to Windows")
+    bench.add_argument("--game-arg", action="append", default=[])
+    demo = sub.add_parser("demo", help="record / check a deterministic demo of the heavy fight (see uctest/demo.py)")
+    demo.add_argument("action", choices=["record", "check"])
+    demo.add_argument("name")
+    demo.add_argument("--exe", help="build to use (default dist/uc.exe)")
+    demo.add_argument("--measure", type=int, default=20, help="seconds of idle fight after the slowdown point that the demo measures")
+    demo.add_argument("--max-minutes", type=float, default=10)
+    demo.add_argument("--trace", action="store_true", help="record: also hash guest memory at every retrace so `demo check` can compare the replay with the recording (slows the recording run about 5x)")
     inspect = sub.add_parser("inspect", help="read a crash bundle (see uctest/dumpview.py)")
     inspect.add_argument("bundle", help="crash-*.txt report or its .dump folder")
     inspect.add_argument("what", choices=["threads", "stack", "mem", "f32", "nan", "posmtx", "gx"])
@@ -56,6 +71,16 @@ def main(argv=None):
     if args.command == "inspect":
         from . import dumpview
         return dumpview.command(dumpview.Bundle(args.bundle), args.what, args.arguments)
+    if args.command == "demo":
+        from . import demo as demo_module
+        args.exe = args.exe or str(demo_module.ROOT / "dist" / "uc.exe")
+        return demo_module.record(args, run_once) if args.action == "record" else demo_module.check(args)
+    if args.command == "bench" and args.demo:
+        from . import demo as demo_module
+        return demo_module.bench(args)
+    if args.command == "bench":
+        from . import bench as bench_module
+        return bench_module.command(args, run_once)
     if args.command == "list":
         print("\n".join(sorted(SCENARIOS)))
         return 0

@@ -15,6 +15,12 @@ struct Options {
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
+    int guest_cpu = -1;   // benchmarks: pin the guest threads to this logical CPU and keep its SMT sibling (cpu ^ 1) free of every other thread
+    std::filesystem::path det_out;   // determinism check: deterministic clock and scheduling, guest memory hashes per retrace into this file
+    uint32_t det_frames = 600;
+    bool deterministic = false;   // virtual clock and idle-only events without the hash trace (det_out implies it)
+    std::filesystem::path demo_record, demo_play;   // every input the guest reads, recorded / played back (needs --deterministic to be repeatable)
+    uint32_t stop_retrace = 0;    // deterministic runs: exit when the retrace counter reaches this
     bool mute = false;   // audio runs as usual but the output gain is 0 (test runs)
     bool no_vulkan_layers = false;   // sets VK_LOADER_LAYERS_DISABLE=~implicit~: OBS/RTSS/ReShade/Steam layers stay out of the process (stable timing in tests)
     bool profile = false;

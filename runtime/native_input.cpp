@@ -6,6 +6,8 @@
 #include <cstring>
 #include <cstdio>
 #include <chrono>
+#include <stdexcept>
+#include <string>
 
 namespace {
 uc::NativeInput* input; // set before guest execution; cleared after all guest threads join
@@ -21,6 +23,31 @@ namespace uc {
 void input_hle_set_probe(InputProbe probe) { input_probe=probe; }
 void input_hle_set_map(InputMap map) { input_map=map; }
 NativeInput::NativeInput() { bindings(default_bindings()); }
+NativeInput::~NativeInput() { if(demo_out_)std::fclose(demo_out_); }
+void NativeInput::demo_record(const std::filesystem::path& path) {
+    std::lock_guard lock(mutex_);
+    demo_out_=_wfopen(path.c_str(),L"wb");
+    if(!demo_out_)throw std::runtime_error("cannot create the input demo");
+}
+void NativeInput::demo_play(const std::filesystem::path& path) {
+    std::lock_guard lock(mutex_);
+    std::FILE* file=_wfopen(path.c_str(),L"rb");
+    if(!file)throw std::runtime_error("cannot open the input demo");
+    uint8_t chunk[65536]; size_t got;
+    while((got=std::fread(chunk,1,sizeof chunk,file))>0)demo_in_.insert(demo_in_.end(),chunk,chunk+got);
+    std::fclose(file);
+    demo_at_=0; replaying_=true;
+}
+void NativeInput::demo_put(Tag tag,const void* data,size_t size) {
+    const uint8_t byte=uint8_t(tag);
+    std::fwrite(&byte,1,1,demo_out_); std::fwrite(data,1,size,demo_out_);
+}
+bool NativeInput::demo_get(Tag tag,void* data,size_t size) {
+    if(demo_at_+1+size>demo_in_.size())return false;
+    if(demo_in_[demo_at_]!=uint8_t(tag))throw std::runtime_error("input demo diverged from the run: record "+std::to_string(demo_in_[demo_at_])+" at offset "+std::to_string(demo_at_)+" where the guest asked for "+std::to_string(int(tag)));
+    std::memcpy(data,demo_in_.data()+demo_at_+1,size); demo_at_+=1+size;
+    return true;
+}
 void NativeInput::bindings(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
     auto game=bindings,service=bindings;
@@ -60,8 +87,28 @@ void NativeInput::cancel_host() {
 }
 ActionFrame NativeInput::consume_actions() {
     std::lock_guard lock(mutex_);
+    if(replaying_) {
+        ActionFrame result; uint64_t head[5];
+        if(!demo_get(Tag::actions,head,sizeof head))return result;
+        result.held=head[0]; result.pressed=head[1]; result.released=head[2]; result.generation=head[3]; result.count=size_t(head[4]);
+        for(size_t i=0;i<result.count && i<result.events.size();++i) {
+            uint8_t event[2+8+1]; float direction[2];
+            demo_get(Tag::actions,event,sizeof event); demo_get(Tag::actions,direction,sizeof direction);
+            result.events[i]={Action(event[0]),event[1]!=0,direction[0],direction[1],event[2]!=0};
+        }
+        return result;
+    }
     if(host_sequence_==sequence_)consumed_sequence_=sequence_;
-    auto result=actions_.consume(); result.generation=generation_; return result;
+    auto result=actions_.consume(); result.generation=generation_;
+    if(demo_out_) {
+        const uint64_t head[5]={result.held,result.pressed,result.released,result.generation,result.count};
+        demo_put(Tag::actions,head,sizeof head);
+        for(size_t i=0;i<result.count;++i) {
+            const auto& e=result.events[i]; const uint8_t event[11]={uint8_t(e.action),uint8_t(e.down),uint8_t(e.pulse),0,0,0,0,0,0,0,0}; const float direction[2]={e.direction_x,e.direction_y};
+            demo_put(Tag::actions,event,sizeof event); demo_put(Tag::actions,direction,sizeof direction);
+        }
+    }
+    return result;
 }
 ActionFrame NativeInput::consume_service_actions() { std::lock_guard lock(mutex_); return services_.consume(); }
 void NativeInput::focus(bool focused) {
@@ -92,11 +139,13 @@ bool NativeInput::aim(float x,float y) {
 }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
+    if(replaying_) { InputSample sample; if(!demo_get(Tag::sample,&sample,sizeof sample)) { sample={}; sample.valid=true; } return sample; }
     auto result=state_;
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
     state_.pressed=state_.released=0;
     if(host_sequence_!=sequence_)consumed_sequence_=sequence_;
+    if(demo_out_)demo_put(Tag::sample,&result,sizeof result);
     return result;
 }
 bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t held) {
@@ -110,8 +159,20 @@ bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t 
     state_.pressed|=held&~state_.held; state_.released|=state_.held&~held;
     state_.held=held; sequence_=sequence; return true;
 }
-bool NativeInput::using_host_input() { std::lock_guard lock(mutex_); return !legacy_test_input_; }
-uint64_t NativeInput::generation() { std::lock_guard lock(mutex_); return generation_; }
+bool NativeInput::using_host_input() {
+    std::lock_guard lock(mutex_);
+    uint8_t flag=!legacy_test_input_;
+    if(replaying_) { if(!demo_get(Tag::host,&flag,1))flag=1; }
+    else if(demo_out_)demo_put(Tag::host,&flag,1);
+    return flag!=0;
+}
+uint64_t NativeInput::generation() {
+    std::lock_guard lock(mutex_);
+    uint64_t value=generation_;
+    if(replaying_) { if(!demo_get(Tag::generation,&value,8))value=0; }
+    else if(demo_out_)demo_put(Tag::generation,&value,8);
+    return value;
+}
 bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint32_t width,uint32_t height) {
     if(!sequence || !std::isfinite(event.x) || !std::isfinite(event.y))return false;
     if(event.kind!=HostEventKind::motion && (event.x!=0 || event.y!=0))return false;
