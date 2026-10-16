@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <string>
 
 namespace uc {
 // Determinism check (`--det-out <file> [--det-frames N]`): at every VI retrace the guest memory (MEM1 24 MiB, MEM2 64 MiB) is hashed in 64 KiB
@@ -18,6 +19,7 @@ public:
     bool done() const { return done_.load(); }
 private:
     std::FILE* file_;
+    std::wstring dump_path_;
     const uint8_t* mem_;
     uint32_t frames_, written_ = 0;
     std::atomic<bool> done_{false};

@@ -28,12 +28,15 @@ SDK_INLINE PS ld(Ctx& c, uint32_t ea) {   // psq_l ..., 0, 0
 }
 SDK_INLINE PS ld1(Ctx& c, uint32_t ea) { return {f32_at(c, ea), 1.0}; }           // psq_l ..., 1, 0: one element, ps1 = 1.0
 SDK_INLINE PS ls(Ctx& c, uint32_t ea) { const double v = f32_at(c, ea); return {v, v}; }   // lfs
-SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
+SDK_INLINE void st_unwatched(Ctx& c, uint32_t ea, PS v) {
     const float x = float(v.p0), y = float(v.p1);
     uint32_t lo, hi; std::memcpy(&lo, &x, 4); std::memcpy(&hi, &y, 4);
     const uint64_t pair = uint64_t(_byteswap_ulong(lo)) | uint64_t(_byteswap_ulong(hi)) << 32;
-    gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
     std::memcpy(ppc::hp(c, ea), &pair, 8);
+}
+SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
+    gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
+    st_unwatched(c,ea,v);
 }
 SDK_INLINE void st1(Ctx& c, uint32_t ea, PS v) { const float x = float(v.p0); uint32_t bits; std::memcpy(&bits, &x, 4); ppc::wr32_ram(c, ea, bits); }
 
@@ -54,6 +57,12 @@ PS merge11(PS a, PS b) { return {a.p1, b.p1}; }
 PS neg(PS a) { return {-a.p0, -a.p1}; }
 PS frsp(double v) { const double r = rs(v); return {r, r}; }
 void ret1(Ctx& c, PS v) { c.f[1] = v.p0; c.ps1[1] = v.p1; }
+// The stack frames of the translated bodies are dead after the return, but the game reads stale stack slots (uninitialised locals), so the natives that
+// replace functions with a frame write the same bytes the instruction sequence would (no write barrier: nothing on the stack feeds the GPU).
+SDK_INLINE bool in_ram(uint32_t ea, uint32_t size) { return (ea >= 0x80000000u && ea + size <= 0x81800000u) || (ea >= 0x90000000u && ea + size <= 0x94000000u); }
+SDK_INLINE void put32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
+SDK_INLINE void put_f32(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); put32(p, b); }   // stfs / one half of psq_st
+SDK_INLINE void put_f64(uint8_t* p, double v) { uint64_t b; std::memcpy(&b, &v, 8); b = _byteswap_uint64(b); std::memcpy(p, &b, 8); }   // stfd
 }  // namespace
 
 // void PSMTXIdentity(Mtx m)                          r3
@@ -82,21 +91,23 @@ void hle_PSMTXConcat(ppc::Ctx& c) {
     PS r12 = muls0(b0, a0.p0), r13 = muls0(b1, a0.p0), r14 = muls0(b0, a2.p0), r15 = muls0(b1, a2.p0);
     r12 = madds1(b2, a0, r12); r14 = madds1(b2, a2, r14); r13 = madds1(b3, a0, r13); r15 = madds1(b3, a2, r15);
     r12 = madds0(b4, a1, r12); r13 = madds0(b5, a1, r13); r14 = madds0(b4, a3, r14); r15 = madds0(b5, a3, r15);
-    st(c, ab + 0, r12);
+    // No guest safe point between these stores: one barrier covers the complete matrix.
+    gx::note_write_range(ab,48);
+    st_unwatched(c, ab + 0, r12);
     PS r2 = muls0(b0, a4.p0);
     r13 = madds1(kk, a1, r13);
     PS r0 = muls0(b1, a4.p0);
-    st(c, ab + 16, r14);
+    st_unwatched(c, ab + 16, r14);
     r15 = madds1(kk, a3, r15);
-    st(c, ab + 8, r13);
+    st_unwatched(c, ab + 8, r13);
     r2 = madds1(b2, a4, r2);
     r0 = madds1(b3, a4, r0);
     r2 = madds0(b4, a5, r2);
-    st(c, ab + 24, r15);
+    st_unwatched(c, ab + 24, r15);
     r0 = madds0(b5, a5, r0);
-    st(c, ab + 32, r2);
+    st_unwatched(c, ab + 32, r2);
     r0 = madds1(kk, a5, r0);
-    st(c, ab + 40, r0);
+    st_unwatched(c, ab + 40, r0);
 }
 
 // void PSMTXTransApply(Mtx src, Mtx dst, f32 x, f32 y, f32 z)   r3, r4, f1..f3
@@ -287,16 +298,32 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
     const V3 pvec = vcross(dir, e2);
     const double det = vdot(e1, pvec);
     c.r[3] = 0;
+    // The frame of the translated body (-144): back chain, link register, f30/f31 and r27..r31 saved, then the vector temporaries as far as the
+    // run gets. The restore of f30/f31 through psq_l leaves ps1 rounded to a single.
+    const uint32_t entry = c.r[1];
+    uint8_t* const fr = in_ram(entry - 144, 152) ? ppc::hp(c, entry - 144) : nullptr;
+    auto temp = [fr](uint32_t at, const V3& v) { if (fr) { put_f32(fr + at, v.xy.p0); put_f32(fr + at + 4, v.xy.p1); put_f32(fr + at + 8, v.z); } };
+    if (fr) {
+        put32(fr, entry); put32(fr + 148, c.lr);
+        put_f64(fr + 128, c.f[31]); put_f32(fr + 136, c.f[31]); put_f32(fr + 140, c.ps1[31]);
+        put_f64(fr + 112, c.f[30]); put_f32(fr + 120, c.f[30]); put_f32(fr + 124, c.ps1[30]);
+        for (int i = 27; i <= 31; ++i) put32(fr + 92 + 4 * (i - 27), c.r[i]);
+    }
+    c.ps1[31] = double(float(c.ps1[31])); c.ps1[30] = double(float(c.ps1[30]));
+    temp(68, e1); temp(56, e2); temp(44, dir); temp(32, pvec);
     if (det < eps) return;
     const V3 tvec = vsub(p0, v0);
+    temp(20, tvec);
     const double u = vdot(tvec, pvec);
     if (u < zero || u > det) return;
     const V3 qvec = vcross(tvec, e1);
+    temp(8, qvec);
     const double v = vdot(dir, qvec);
     if (v < zero || rs(u + v) > det) return;
     const double t = rs(vdot(e2, qvec) * rs(one / det));
     if (t < zero || t > one) return;
     const V3 hit = {muls0(dir.xy, t), muls0(PS{dir.z, 1.0}, t).p0};
+    temp(44, hit);   // PSVECScale(dir, dir, t) in place
     const PS xy = add(p0.xy, hit.xy);
     st(c, out + 0, xy);
     st1(c, out + 8, add(PS{p0.z, 1.0}, PS{hit.z, 1.0}));
@@ -308,9 +335,7 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
 // buffer at r3 (vtable, then __construct_array with an empty element constructor, then this init on 33 records of 108 bytes); it returns r3.
 // Both stay on the original per-store path when the record is not entirely in RAM. tests/test_sdk_math_hle.cpp runs the translated instructions.
 namespace {
-SDK_INLINE bool in_ram(uint32_t ea, uint32_t size) { return (ea >= 0x80000000u && ea + size <= 0x81800000u) || (ea >= 0x90000000u && ea + size <= 0x94000000u); }
 SDK_INLINE uint32_t through_double(uint32_t bits) { float f; std::memcpy(&f, &bits, 4); const float g = float(double(f)); uint32_t r; std::memcpy(&r, &g, 4); return r; }   // lfs then stfs
-SDK_INLINE void put32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
 SDK_INLINE void bounds_record(uint8_t* p, uint32_t low, uint32_t high) {
     for (int i = 0; i < 6; ++i) put32(p + 4 * i, low);
     put32(p + 24, high); put32(p + 28, 0); put32(p + 36, 0);
@@ -328,16 +353,26 @@ void hle_BoundsRecordInit(ppc::Ctx& c) {
 void hle_HitBufferConstruct(ppc::Ctx& c) {
     const uint32_t low = through_double(ppc::rd32_ram(c, c.r[2] - 26752)), high = through_double(ppc::rd32_ram(c, c.r[2] - 26748)), ea = c.r[3];
     const uint32_t vtable = uint32_t(int32_t(-32705) << 16) + 7256, size = 3576;
+    // Dead frames of the translated bodies: this constructor's (-32: back chain, link register, r29..r31) and __construct_array's (80289B34, -48:
+    // r28..r31, its arguments and the element counter, which ends at 32), 88 bytes below the caller's stack pointer in all.
+    if (const uint32_t entry = c.r[1]; in_ram(entry - 80, 88)) {
+        uint8_t* const f = ppc::hp(c, entry - 80);
+        put32(f, entry - 32); put32(f + 8, ea + 8); put32(f + 12, 108); put32(f + 16, 32); put32(f + 20, 0x80131688u); put32(f + 24, 32);
+        put32(f + 32, c.r[28]); put32(f + 36, ea); put32(f + 40, c.r[30]); put32(f + 44, c.r[31]); put32(f + 52, 0x80046330u);
+        put32(f + 48, entry); put32(f + 68, c.r[29]); put32(f + 72, c.r[30]); put32(f + 76, c.r[31]); put32(f + 84, c.lr);
+    }
+    // Keep the translated constructor's backward-branch polls: they set later safe-point timing and the deterministic clock reads.
+    for (uint32_t i = 0; i < 32; ++i) ppc::poll(c);
     if (in_ram(ea, size)) {
         gx::note_write_range(ea, size);
         uint8_t* p = ppc::hp(c, ea);
         put32(p, vtable); put32(p + 4, 0);
-        for (uint32_t i = 0; i < 32; ++i) bounds_record(p + 8 + 108 * i, low, high);
+        for (uint32_t i = 0; i < 32; ++i) { bounds_record(p + 8 + 108 * i, low, high); if (i < 31) ppc::poll(c); }
         bounds_record(p + 3464, low, high);
         put32(p + 3572, 0);
     } else {
         ppc::wr32(c, ea, vtable); ppc::wr32(c, ea + 4, 0);
-        for (uint32_t i = 0; i < 32; ++i) bounds_record_slow(c, ea + 8 + 108 * i, low, high);
+        for (uint32_t i = 0; i < 32; ++i) { bounds_record_slow(c, ea + 8 + 108 * i, low, high); if (i < 31) ppc::poll(c); }
         bounds_record_slow(c, ea + 3464, low, high);
         ppc::wr32(c, ea + 3572, 0);
     }

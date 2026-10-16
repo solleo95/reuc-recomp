@@ -164,7 +164,8 @@ int main() {
         uc::gx_fifo_write(1,0x61); uc::gx_fifo_write(4,0x410004A0);
         ctx.r[3]=9; ctx.r[4]=0x80003000; ctx.r[5]=0x0102030C; hle_GXSetArray(ctx);
         ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; hle_GXBegin(ctx);
-        for (int i=0;i<12;++i) uc::gx_fifo_write(4,uint32_t(i));
+        // Mixed FIFO widths must retain the same big-endian primitive payload.
+        for (uint32_t i=0;i<12;++i) { uc::gx_fifo_write(2,i>>16); uc::gx_fifo_write(1,i>>8); uc::gx_fifo_write(1,i); }
         ppc::wr32(ctx,0x80001014,0x1234); ppc::wr32(ctx,0x80001008,23);
         hle_GXEndDisplayList(ctx);
         CHECK(ctx.r[3]==96 && ppc::rd8(ctx,0x800015F8)==0);

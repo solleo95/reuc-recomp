@@ -4,8 +4,24 @@
 #include <future>
 #include <thread>
 using namespace std::chrono_literals;
+static_assert(gx::PoolAllocator<gx::DrawPacket>::pooled,"Draw nodes must stay pooled when DrawPacket changes size");
 
 int main() {
+    gx::PoolAllocator<gx::DrawPacket> allocator;
+    auto* node=allocator.allocate(1);
+    std::thread recycle([&]{allocator.deallocate(node,1);});
+    recycle.join();
+    auto* reused=allocator.allocate(1);
+    CHECK(reused==node);
+    allocator.deallocate(reused,1);
+    gx::Shared<gx::DrawUniform> uniforms;
+    uniforms.edit().pixel[0]=17;
+    auto edited=std::async(std::launch::async,[view=uniforms]() mutable {
+        view.edit().pixel[0]=29;
+        return view;
+    }).get();
+    CHECK(uniforms->pixel[0]==17 && edited->pixel[0]==29);
+    CHECK(gx::Shared<gx::DrawUniform>{}->pixel[0]==gx::DrawUniform{}.pixel[0]);
     gx::Packets waking;
     auto waiting=std::async(std::launch::async,[&]{return waking.wait_ready(1s);});
     CHECK(waiting.wait_for(20ms)==std::future_status::timeout);

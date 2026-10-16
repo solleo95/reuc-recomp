@@ -13,13 +13,16 @@ if not defined KEY goto :hash_failed
 if not exist "%GEN%\game_sources.cmake" goto :translate
 findstr /x /l /c:"# translation-input: %KEY%" "%GEN%\game_sources.cmake" >nul 2>&1
 if not errorlevel 1 goto :cached
+rem the translator keeps every earlier generation (~50 MB each); only the one in game_sources.cmake is used
 :translate
 "%TRANSLATOR%" --dol "%GAME_DOL%" --cfg "%CFG%" --cfg "%HLECFG%" --out "%GEN%" --shard 150 --cache-key "%KEY%" > "%BUILD%\translate.log" 2>&1
 if errorlevel 1 goto :translate_failed
 type "%BUILD%\translate.log"
+python -I "%ROOT%\tools\prune_generations.py" "%GEN%"
 exit /b 0
 :cached
 echo generated\ is up to date
+python -I "%ROOT%\tools\prune_generations.py" "%GEN%"
 exit /b 0
 :hle_failed
 echo ERROR: hle.cfg generation failed

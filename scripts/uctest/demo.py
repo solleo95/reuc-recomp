@@ -131,7 +131,7 @@ def bench(args):
                 return 1
             wall, cycles, draws = sum(r[3] for r in rows), sum(r[2] for r in rows), sum(r[1] for r in rows)
             results[exe].append((wall, cycles, draws))
-            print(f"bench: round {round_ + 1}/{args.runs} {exe.split('|', 1)[0].rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}{'|' + exe.split('|', 1)[1] if '|' in exe else ''}: {wall / 1000:.2f} s wall for {len(rows)} game seconds ({len(rows) * 60 / (wall / 1000):.1f} frames/s), "
+            print(f"bench: round {round_ + 1}/{args.runs} {exe.split('|', 1)[0].rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}{'|' + exe.split('|', 1)[1] if '|' in exe else ''}: {wall / 1000:.2f} s wall for {len(rows)} game seconds ({len(rows) * 60 / (wall / 1000):.1f} retraces/s), "
                   f"{cycles:.0f} Mcycles, {draws} draws", flush=True)
     names = list(args.exes)
     lines = []
@@ -144,7 +144,7 @@ def bench(args):
         mean = statistics.fmean(diffs)
         # one pair is the normal case (run-to-run sd is 1-2.6%): judge it against a 5% noise floor (the machine drifts); with more rounds use the paired interval
         half = t95(len(diffs) - 1) * statistics.stdev(diffs) / len(diffs) ** 0.5 if len(diffs) > 1 else 5.0
-        verdict = "no difference" if abs(mean) <= half else ("FASTER" if mean < 0 else "SLOWER")
+        verdict = "INCONCLUSIVE" if abs(mean) <= half else ("FASTER" if mean < 0 else "SLOWER")
         best = 100 * (min(r[0] for r in results[exe]) / min(r[0] for r in results[names[0]]) - 1)   # a pause of the machine only ever makes a run slower: the best run is the steadiest figure
         lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {"95% CI" if len(diffs) > 1 else "noise floor"} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%")
     print("\n".join(lines))

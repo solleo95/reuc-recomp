@@ -13,7 +13,11 @@ from pathlib import Path
 from .transport import PipeTransport
 
 ROOT = Path(__file__).resolve().parents[2]
-SAVE_SOURCE = Path(r"S:\Games\Umbrella Chronicles\saves")
+LIVE_SAVES = Path(r"S:\Games\Umbrella Chronicles\saves")
+# Tests start from a pinned snapshot, not the live saves: the owner plays on those, and a mid-chapter checkpoint or another progress state changes the
+# intro, the loading and the menu flow (and with it every recorded demo). UC_SAVE_SOURCE overrides; without a snapshot the live saves are copied.
+PINNED_SAVES = Path(__file__).resolve().parents[2] / "build" / "autotest" / "saves-pinned"
+SAVE_SOURCE = Path(os.environ["UC_SAVE_SOURCE"]) if os.environ.get("UC_SAVE_SOURCE") else (PINNED_SAVES if PINNED_SAVES.is_dir() else LIVE_SAVES)
 CHECKPOINTS = ROOT / "build" / "autotest" / "checkpoints"
 
 

@@ -2,6 +2,7 @@
 // sequences. The reference functions below are those sequences (register numbers and order as translated from the game's main.dol).
 #include "check.h"
 #include "ppc_fixture.h"
+#include "gx_write_watch.h"
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -112,6 +113,9 @@ void fill_region(Fix& f, const std::vector<uint32_t>& words) {
     for (size_t i = 0; i < words.size(); ++i) wr32(f.c, kBase + uint32_t(i) * 4, words[i]);
 }
 std::vector<uint8_t> region(Fix& f) { return {f.c.mem + (kBase & 0x3FFFFFFF), f.c.mem + (kBase & 0x3FFFFFFF) + kRegion}; }
+// The dead stack frames count too: the game reads stale stack slots, so the natives must leave the same bytes there (the window below and just above sp).
+void fill_stack(Fix& f, uint32_t sp) { for (uint32_t a = sp - 0x100; a < sp + 0x20; a += 4) wr32(f.c, a, 0xDEAD0000u + (a & 0xFFFFu)); }
+void append_stack(std::vector<uint8_t>& memory, Fix& f, uint32_t sp) { const uint8_t* at = f.c.mem + ((sp - 0x100) & 0x3FFFFFFF); memory.insert(memory.end(), at, at + 0x120); }
 uint64_t bits(double d) { uint64_t b; std::memcpy(&b, &d, 8); return b; }
 
 // Equal bits, except that any two NaNs match: which operand's payload survives x86 NaN propagation is the compiler's choice and never meaningful.
@@ -163,7 +167,7 @@ void compare(const char* name, void (*hle)(Ctx&), void (*ref)(Ctx&), bool return
 // The translated instructions of the game's segment/triangle test (800460A0), calling the reference op sequences of the routines it uses.
 void ref_SegmentTriangleHit(Ctx& c) {
     const uint32_t entry_sp = c.r[1];
-    op_stwu(c, 1, 1, -144); op_stfd(c, 31, 1, 128); op_psq_st(c, 31, 1, 136, 0, 0); op_stfd(c, 30, 1, 112); op_psq_st(c, 30, 1, 120, 0, 0);
+    op_stwu(c, 1, 1, -144); op_mfspr(c, 0, 8); op_stw(c, 0, 1, 148); op_stfd(c, 31, 1, 128); op_psq_st(c, 31, 1, 136, 0, 0); op_stfd(c, 30, 1, 112); op_psq_st(c, 30, 1, 120, 0, 0);
     op_addi(c, 11, 1, 112);
     for (int i = 27; i <= 31; ++i) wr32(c, c.r[11] - 4 * (32 - i), c.r[i]);                  // _savegpr_27
     op_or(c, 6, 30, 6, false); op_or(c, 3, 27, 3, false); op_or(c, 4, 28, 4, false); op_or(c, 5, 29, 5, false); op_or(c, 7, 3, 7, false);
@@ -226,12 +230,15 @@ TriResult run_tri(Fix& f, void (*fn)(Ctx&), const std::vector<uint32_t>& words, 
     Ctx& c = f.c;
     fill_region(f, words);
     wr32(c, kSda - 32296, k[0]); wr32(c, kSda - 32304, k[1]); wr32(c, kSda - 32300, k[2]);
-    c.r[2] = kSda; c.r[1] = kBase + 0x1000;
+    c.r[2] = kSda; c.r[1] = kBase + 0x1000; c.lr = 0x80046000u;
+    for (int i = 27; i <= 31; ++i) c.r[i] = 0xBBBB0000u + i;
+    fill_stack(f, c.r[1]);
     for (int i = 0; i < 6; ++i) c.r[3 + i] = arg[i];
     for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
     c.f[1] = 5.0; c.gqr[0] = 0;
     fn(c);
-    return {region(f), c.r[3]};
+    auto memory = region(f); append_stack(memory, f, kBase + 0x1000);
+    return {memory, c.r[3]};
 }
 uint32_t float_bits(double v) { const float x = float(v); uint32_t b; std::memcpy(&b, &x, 4); return b; }
 void compare_segment_triangle(int iterations = 20000) {
@@ -272,12 +279,29 @@ void ref_BoundsRecordInit(Ctx& c) {
     op_lfs(c, 1, 2, -26752); op_addi(c, 0, 0, 0); op_lfs(c, 0, 2, -26748); op_stfs(c, 1, 3, 0); op_stfs(c, 1, 3, 4); op_stfs(c, 1, 3, 8);
     op_stfs(c, 1, 3, 12); op_stfs(c, 1, 3, 16); op_stfs(c, 1, 3, 20); op_stfs(c, 0, 3, 24); op_stw(c, 0, 3, 28); op_stw(c, 0, 3, 36);
 }
+// fn_80289B34 (__construct_array, frame -48) for the case of this caller: the element constructor (80131684) is an empty function, and the count
+// (r7 = 32) equals the element counter at the end, so the destructor branch is not taken.
+void ref_ConstructArray(Ctx& c) {
+    op_stwu(c, 1, 1, -48); op_mfspr(c, 0, 8); op_stw(c, 0, 1, 52); op_addi(c, 0, 0, 0); op_stw(c, 31, 1, 44); op_or(c, 3, 31, 3, false); op_stw(c, 30, 1, 40);
+    op_or(c, 7, 30, 7, false); op_stw(c, 29, 1, 36); op_or(c, 6, 29, 6, false); op_stw(c, 28, 1, 32); op_or(c, 4, 28, 4, false);
+    op_stw(c, 3, 1, 8); op_stw(c, 6, 1, 12); op_stw(c, 7, 1, 16); op_stw(c, 5, 1, 20); op_stw(c, 0, 1, 24);
+    for (;;) {
+        op_lwz(c, 4, 1, 24); op_cmpl(c, 0, 4, 30);
+        if (crbit(c, 0) == false) break;
+        ppc::poll(c);
+        op_or(c, 28, 12, 28, false); op_or(c, 31, 3, 31, false); op_addi(c, 4, 0, 1);   // the element constructor call (empty) goes here
+        op_lwz(c, 3, 1, 24); op_add(c, 31, 31, 29, false); op_addi(c, 0, 3, 1); op_stw(c, 0, 1, 24);
+    }
+    op_lwz(c, 0, 1, 16); op_cmpl(c, 0, 4, 0);
+    CHECK(crbit(c, 0) == false);
+    op_lwz(c, 0, 1, 52); op_lwz(c, 31, 1, 44); op_lwz(c, 30, 1, 40); op_lwz(c, 29, 1, 36); op_lwz(c, 28, 1, 32); op_mtspr(c, 0, 8); op_addi(c, 1, 1, 48);
+}
 void ref_HitBufferConstruct(Ctx& c) {
     const uint32_t entry_sp = c.r[1];
     op_stwu(c, 1, 1, -32); op_mfspr(c, 0, 8); op_addis(c, 6, 0, -32705); op_addis(c, 4, 0, -32749); op_stw(c, 0, 1, 36); op_addis(c, 5, 0, -32749);
     op_addi(c, 6, 6, 7256); op_addi(c, 4, 4, 5764); op_stw(c, 31, 1, 28); op_addi(c, 5, 5, 5768); op_addi(c, 7, 0, 32); op_stw(c, 30, 1, 24);
     op_stw(c, 29, 1, 20); op_or(c, 3, 29, 3, false); op_stw(c, 6, 3, 0); op_addi(c, 6, 0, 108); op_addi(c, 3, 3, 8);
-    /* fn_80289B34: construct 32 elements with an empty constructor */
+    c.lr = 0x80046330u; ref_ConstructArray(c);   // fn_80289B34: construct 32 elements with an empty constructor
     op_addi(c, 3, 29, 3464);
     /* fn_80131684: empty */
     op_addi(c, 0, 0, 0); op_addi(c, 31, 0, 0); op_stw(c, 0, 29, 4); op_addi(c, 30, 0, 0);
@@ -285,11 +309,12 @@ void ref_HitBufferConstruct(Ctx& c) {
         op_add(c, 3, 29, 30, false); op_addi(c, 3, 3, 8);
         ref_BoundsRecordInit(c);
         op_addi(c, 31, 31, 1); op_addi(c, 30, 30, 108); op_cmpli(c, 0, 31, 32u);
+        if (crbit(c, 0) == true) ppc::poll(c);
     } while (crbit(c, 0) == true);
     op_addi(c, 3, 29, 3464);
     ref_BoundsRecordInit(c);
     op_addi(c, 0, 0, 0); op_or(c, 29, 3, 29, false); op_stw(c, 0, 29, 3572);
-    op_lwz(c, 31, 1, 28); op_lwz(c, 30, 1, 24); op_lwz(c, 29, 1, 20);
+    op_lwz(c, 31, 1, 28); op_lwz(c, 30, 1, 24); op_lwz(c, 29, 1, 20); op_lwz(c, 0, 1, 36); op_mtspr(c, 0, 8);
     c.r[1] = entry_sp;
 }
 
@@ -304,20 +329,22 @@ void compare_hit_buffer(int iterations = 3000) {
             void (*ref)(Ctx&) = which ? ref_BoundsRecordInit : ref_HitBufferConstruct;
             void (*hle)(Ctx&) = which ? hle_BoundsRecordInit : hle_HitBufferConstruct;
             Fix a, b;
-            auto go = [&](Fix& f, void (*fn)(Ctx&)) {
+            auto go = [&](Fix& f, void (*fn)(Ctx&)) {   // BoundsRecordInit has no frame: its stack window just stays as filled
                 Ctx& c = f.c;
                 for (size_t i = 0; i < words.size(); ++i) wr32(c, kBase + uint32_t(i) * 4, words[i]);
                 wr32(c, kSda - 26752, constants[0]); wr32(c, kSda - 26748, constants[1]);
-                c.r[2] = kSda; c.r[1] = kBase + 0x3000; c.r[3] = this_ptr; c.r[29] = 0xAAAA0029; c.r[30] = 0xAAAA0030; c.r[31] = 0xAAAA0031;
+                c.r[2] = kSda; c.r[1] = kBase + 0x3000; c.r[3] = this_ptr; c.lr = 0x80012345u; fill_stack(f, c.r[1]); c.r[28] = 0xAAAA0028; c.r[29] = 0xAAAA0029; c.r[30] = 0xAAAA0030; c.r[31] = 0xAAAA0031;
+                c.poll_count = uint32_t(n);
                 for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
                 fn(c);
                 std::vector<uint8_t> memory(f.c.mem + (kBase & 0x3FFFFFFF), f.c.mem + (kBase & 0x3FFFFFFF) + 0x1000);
-                return std::make_tuple(memory, c.r[3], c.r[29], c.r[30], c.r[31], bits(c.f[1]), bits(c.f[0]), bits(c.ps1[1]));
+                append_stack(memory, f, kBase + 0x3000);
+                return std::make_tuple(memory, c.r[3], c.r[29], c.r[30], c.r[31], bits(c.f[1]), bits(c.f[0]), bits(c.ps1[1]), c.poll_count);
             };
             const auto want = go(a, ref);
             const auto have = go(b, hle);
             const bool same = same_memory(std::get<0>(want), std::get<0>(have)) && std::get<1>(want) == std::get<1>(have) && std::get<2>(want) == std::get<2>(have)
-                && std::get<3>(want) == std::get<3>(have) && std::get<4>(want) == std::get<4>(have) && (which == 0 || (std::get<5>(want) == std::get<5>(have) && std::get<6>(want) == std::get<6>(have) && std::get<7>(want) == std::get<7>(have)));
+                && std::get<3>(want) == std::get<3>(have) && std::get<4>(want) == std::get<4>(have) && std::get<8>(want) == std::get<8>(have) && (which == 0 || (std::get<5>(want) == std::get<5>(have) && std::get<6>(want) == std::get<6>(have) && std::get<7>(want) == std::get<7>(have)));
             if (!same && ++mismatches <= 3) std::printf("%s differs at iteration %d\n", which ? "BoundsRecordInit" : "HitBufferConstruct", n);
         }
     }
@@ -327,6 +354,15 @@ void compare_hit_buffer(int iterations = 3000) {
 }  // namespace
 
 int main() {
+    {
+        Fix fix;
+        fix.c.r[3]=0x80010000; fix.c.r[4]=0x80010100; fix.c.r[5]=0x80010FF0;
+        const auto stamp=gx::watch_stamp();
+        hle_PSMTXConcat(fix.c);
+        CHECK(gx::written_since(0x80010FF0,16,stamp));
+        CHECK(gx::written_since(0x80011000,32,stamp));
+        CHECK(!gx::written_since(0x80012000,4,stamp));
+    }
     compare("PSMTXIdentity", hle_PSMTXIdentity, ref_PSMTXIdentity, false);
     compare("PSMTXCopy", hle_PSMTXCopy, ref_PSMTXCopy, false);
     compare("PSMTXConcat", hle_PSMTXConcat, ref_PSMTXConcat, false);

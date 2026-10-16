@@ -1,4 +1,5 @@
 #pragma once
+#include "block_pool.h"
 #include <cstring>
 #include <memory>
 #include <type_traits>
@@ -11,15 +12,15 @@ template<class T>
 class Shared {
 public:
     Shared() : block_(default_block()) {}
-    Shared(const T& value) : block_(std::make_shared<const T>(value)) {}
+    Shared(const T& value) : block_(std::allocate_shared<const T>(PoolAllocator<T>{},value)) {}
     Shared(std::shared_ptr<const T> block) : block_(std::move(block)) {}
-    Shared& operator=(const T& value) { block_ = std::make_shared<const T>(value); return *this; }
+    Shared& operator=(const T& value) { block_ = std::allocate_shared<const T>(PoolAllocator<T>{},value); return *this; }
     const T* operator->() const { return block_.get(); }
     const T& operator*() const { return *block_; }
     operator const T&() const { return *block_; }
     const std::shared_ptr<const T>& block() const { return block_; }
     T& edit() {
-        if (block_.use_count() != 1 || block_ == default_block()) block_ = std::make_shared<const T>(*block_);
+        if (block_.use_count() != 1 || block_ == default_block()) block_ = std::allocate_shared<const T>(PoolAllocator<T>{},*block_);
         return const_cast<T&>(*block_);   // sole owner of a block that was created non-const above
     }
 private:

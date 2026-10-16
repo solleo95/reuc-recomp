@@ -2,220 +2,239 @@
 #include "ppc_rt.h"
 #include "gx_write_watch.h"
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace {
 using ppc::Ctx;
 inline bool in_ram(uint32_t ea, uint32_t size) { return (ea >= 0x80000000u && ea + size <= 0x81800000u) || (ea >= 0x90000000u && ea + size <= 0x94000000u); }
 inline bool float_gqr0(const Ctx& c) { return ((c.gqr[0] >> 16) & 7) < 4 && (c.gqr[0] & 7) < 4; }
 inline double rs(double v) { return ppc::rnd_s(v); }
+// UC_LEAF_OFF=80137BC4,8003EDD0 runs those functions through their translated instruction sequence again (bisecting a suspected mismatch without a rebuild).
+std::vector<uint32_t> parse_leaf_off() { std::vector<uint32_t> out; if (const char* env = std::getenv("UC_LEAF_OFF")) { for (const char* p = env; *p;) { char* end; const unsigned long v = std::strtoul(p, &end, 16); if (end == p) { ++p; continue; } out.push_back(uint32_t(v)); p = end; } } return out; }
+const std::vector<uint32_t> g_leaf_off = parse_leaf_off();
+const std::vector<uint32_t> g_leaf_verify = [] { std::vector<uint32_t> out; if (const char* env = std::getenv("UC_LEAF_VERIFY")) { for (const char* p = env; *p;) { char* end; const unsigned long v = std::strtoul(p, &end, 16); if (end == p) { ++p; continue; } out.push_back(uint32_t(v)); p = end; } } return out; }();
+// UC_LEAF_VERIFY=8029C4AC runs the native version and then the translated sequence on a copy of the registers and reports any difference (functions whose only memory effects are dead stack words or idempotent stores).
+inline bool leaf_verify(uint32_t address) { if (g_leaf_verify.empty()) return false; for (uint32_t a : g_leaf_verify) if (a == address) return true; return false; }
+void verify_compare(const char* name, const Ctx& want, const Ctx& have) {
+    for (int i = 0; i < 32; ++i) { if (want.r[i] != have.r[i]) std::fprintf(stderr, "[leaf-verify] %s r%d: translated %08X native %08X (r3 %08X r4 %08X r1 %08X)\n", name, i, want.r[i], have.r[i], want.r[3], want.r[4], want.r[1]); uint64_t x, y; std::memcpy(&x, &want.f[i], 8); std::memcpy(&y, &have.f[i], 8); if (x != y && !(want.f[i] != want.f[i] && have.f[i] != have.f[i])) std::fprintf(stderr, "[leaf-verify] %s f%d: translated %016llX native %016llX\n", name, i, (unsigned long long)x, (unsigned long long)y); std::memcpy(&x, &want.ps1[i], 8); std::memcpy(&y, &have.ps1[i], 8); if (x != y && !(want.ps1[i] != want.ps1[i] && have.ps1[i] != have.ps1[i])) std::fprintf(stderr, "[leaf-verify] %s ps1 of f%d: translated %016llX native %016llX\n", name, i, (unsigned long long)x, (unsigned long long)y); }
+    for (int i = 0; i < 8; ++i) if (want.cr[i] != have.cr[i]) std::fprintf(stderr, "[leaf-verify] %s cr%d: translated %X native %X\n", name, i, want.cr[i], have.cr[i]);
+    if (want.xer_ca != have.xer_ca || want.xer_so != have.xer_so || want.xer_ov != have.xer_ov || want.lr != have.lr || want.ctr != have.ctr) std::fprintf(stderr, "[leaf-verify] %s xer/lr/ctr differ\n", name);
+}
+inline bool leaf_off(uint32_t address) { if (g_leaf_off.empty()) return false; for (uint32_t a : g_leaf_off) if (a == address) return true; return false; }
 inline uint32_t ld32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return _byteswap_ulong(v); }
 inline void st32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
+inline uint32_t ld16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return _byteswap_ushort(v); }
+inline void st16(uint8_t* p, uint32_t v) { const uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(p, &h, 2); }
 inline double ldf(const uint8_t* p) { const uint32_t b = ld32(p); float f; std::memcpy(&f, &b, 4); return f; }
 inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }
 inline double ldd(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); v = _byteswap_uint64(v); double d; std::memcpy(&d, &v, 8); return d; }
 inline void std_(uint8_t* p, double d) { uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
 }  // namespace
 
+namespace {
+void slow_Leaf_80137BC4(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_stwu(c, 1, 1, -320);
+    ppc::op_stfd(c, 31, 1, 304);
+    ppc::op_psq_st(c, 31, 1, 312, 0, 0);
+    ppc::op_stfd(c, 30, 1, 288);
+    ppc::op_psq_st(c, 30, 1, 296, 0, 0);
+    ppc::op_stfd(c, 29, 1, 272);
+    ppc::op_psq_st(c, 29, 1, 280, 0, 0);
+    ppc::op_stfd(c, 28, 1, 256);
+    ppc::op_psq_st(c, 28, 1, 264, 0, 0);
+    ppc::op_stfd(c, 27, 1, 240);
+    ppc::op_psq_st(c, 27, 1, 248, 0, 0);
+    ppc::op_stfd(c, 26, 1, 224);
+    ppc::op_psq_st(c, 26, 1, 232, 0, 0);
+    ppc::op_stfd(c, 25, 1, 208);
+    ppc::op_psq_st(c, 25, 1, 216, 0, 0);
+    ppc::op_stfd(c, 24, 1, 192);
+    ppc::op_psq_st(c, 24, 1, 200, 0, 0);
+    ppc::op_stfd(c, 23, 1, 176);
+    ppc::op_psq_st(c, 23, 1, 184, 0, 0);
+    ppc::op_stfd(c, 22, 1, 160);
+    ppc::op_psq_st(c, 22, 1, 168, 0, 0);
+    ppc::op_stfd(c, 21, 1, 144);
+    ppc::op_psq_st(c, 21, 1, 152, 0, 0);
+    ppc::op_stfd(c, 20, 1, 128);
+    ppc::op_psq_st(c, 20, 1, 136, 0, 0);
+    ppc::op_stfd(c, 19, 1, 112);
+    ppc::op_psq_st(c, 19, 1, 120, 0, 0);
+    ppc::op_stfd(c, 18, 1, 96);
+    ppc::op_psq_st(c, 18, 1, 104, 0, 0);
+    ppc::op_stfd(c, 17, 1, 80);
+    ppc::op_psq_st(c, 17, 1, 88, 0, 0);
+    ppc::op_stfd(c, 16, 1, 64);
+    ppc::op_psq_st(c, 16, 1, 72, 0, 0);
+    ppc::op_stfd(c, 15, 1, 48);
+    ppc::op_psq_st(c, 15, 1, 56, 0, 0);
+    ppc::op_stfd(c, 14, 1, 32);
+    ppc::op_psq_st(c, 14, 1, 40, 0, 0);
+    ppc::op_lfs(c, 2, 3, 4);
+    ppc::op_lfs(c, 28, 4, 20);
+    ppc::op_lfs(c, 24, 4, 16);
+    ppc::op_lfs(c, 0, 3, 20);
+    ppc::op_fmuls(c, 10, 2, 28, false);
+    ppc::op_lfs(c, 13, 4, 24);
+    ppc::op_fmuls(c, 11, 2, 24, false);
+    ppc::op_lfs(c, 9, 4, 28);
+    ppc::op_fmuls(c, 1, 0, 24, false);
+    ppc::op_lfs(c, 15, 3, 36);
+    ppc::op_lfs(c, 14, 3, 0);
+    ppc::op_fmuls(c, 7, 2, 13, false);
+    ppc::op_lfs(c, 29, 4, 4);
+    ppc::op_fmuls(c, 6, 2, 9, false);
+    ppc::op_lfs(c, 25, 4, 0);
+    ppc::op_fmuls(c, 3, 0, 28, false);
+    ppc::op_lfs(c, 20, 3, 16);
+    ppc::op_lfs(c, 8, 4, 12);
+    ppc::op_fmuls(c, 2, 0, 9, false);
+    ppc::op_fmuls(c, 4, 0, 13, false);
+    ppc::op_lfs(c, 12, 4, 8);
+    ppc::op_fmadds(c, 17, 14, 10, 29, false);
+    ppc::op_lfs(c, 5, 3, 32);
+    ppc::op_fmuls(c, 0, 15, 24, false);
+    ppc::op_fmadds(c, 19, 14, 11, 25, false);
+    ppc::op_fmadds(c, 10, 14, 7, 12, false);
+    ppc::op_lfs(c, 18, 3, 8);
+    ppc::op_lfs(c, 30, 4, 36);
+    ppc::op_fmadds(c, 6, 14, 6, 8, false);
+    ppc::op_fmadds(c, 16, 20, 1, 25, false);
+    ppc::op_fmadds(c, 14, 20, 4, 12, false);
+    ppc::op_fmadds(c, 23, 5, 0, 25, false);
+    ppc::op_lfs(c, 26, 4, 32);
+    ppc::op_fmadds(c, 21, 18, 17, 30, false);
+    ppc::op_lfs(c, 11, 4, 40);
+    ppc::op_lfs(c, 1, 3, 24);
+    ppc::op_fmadds(c, 3, 20, 3, 29, false);
+    ppc::op_fmadds(c, 2, 20, 2, 8, false);
+    ppc::op_lfs(c, 7, 4, 44);
+    ppc::op_fmadds(c, 22, 18, 19, 26, false);
+    ppc::op_lfs(c, 4, 3, 40);
+    ppc::op_fmadds(c, 20, 18, 10, 11, false);
+    ppc::op_fmadds(c, 19, 18, 6, 7, false);
+    ppc::op_fmadds(c, 18, 1, 16, 26, false);
+    ppc::op_lfs(c, 0, 3, 12);
+    ppc::op_lfs(c, 31, 4, 52);
+    ppc::op_fmadds(c, 16, 1, 3, 30, false);
+    ppc::op_fmadds(c, 14, 1, 14, 11, false);
+    ppc::op_fmadds(c, 2, 1, 2, 7, false);
+    ppc::op_fmadds(c, 21, 0, 21, 31, false);
+    ppc::op_lfs(c, 27, 4, 48);
+    ppc::op_fmadds(c, 1, 4, 23, 26, false);
+    ppc::op_lfs(c, 10, 4, 56);
+    ppc::op_fmadds(c, 23, 0, 22, 27, false);
+    ppc::op_lfs(c, 6, 4, 60);
+    ppc::op_stfs(c, 21, 1, 8);
+    ppc::op_fmadds(c, 22, 0, 20, 10, false);
+    ppc::op_lfs(c, 17, 3, 28);
+    ppc::op_fmadds(c, 21, 0, 19, 6, false);
+    ppc::op_lfs(c, 3, 3, 44);
+    ppc::op_fmadds(c, 20, 17, 18, 27, false);
+    ppc::op_fmadds(c, 19, 17, 16, 31, false);
+    ppc::op_fmadds(c, 18, 17, 14, 10, false);
+    ppc::op_fmadds(c, 17, 17, 2, 6, false);
+    ppc::op_fmadds(c, 16, 3, 1, 27, false);
+    ppc::op_lfs(c, 0, 3, 52);
+    ppc::op_fmuls(c, 2, 15, 28, false);
+    ppc::op_fmuls(c, 1, 15, 13, false);
+    ppc::op_stfs(c, 23, 3, 0);
+    ppc::op_fmuls(c, 15, 15, 9, false);
+    ppc::op_lfs(c, 14, 3, 48);
+    ppc::op_fmuls(c, 13, 0, 13, false);
+    ppc::op_fmadds(c, 23, 5, 1, 12, false);
+    ppc::op_stfd(c, 15, 1, 16);
+    ppc::op_fmuls(c, 24, 0, 24, false);
+    ppc::op_fmuls(c, 28, 0, 28, false);
+    ppc::op_lfs(c, 15, 3, 56);
+    ppc::op_stfd(c, 13, 1, 24);
+    ppc::op_fmuls(c, 9, 0, 9, false);
+    ppc::op_lfd(c, 1, 1, 16);
+    ppc::op_fmadds(c, 0, 5, 2, 29, false);
+    ppc::op_fmadds(c, 2, 5, 1, 8, false);
+    ppc::op_lfs(c, 1, 1, 8);
+    ppc::op_lfd(c, 5, 1, 24);
+    ppc::op_stfs(c, 1, 3, 4);
+    ppc::op_fmadds(c, 1, 14, 24, 25, false);
+    ppc::op_fmadds(c, 12, 14, 5, 12, false);
+    ppc::op_fmadds(c, 5, 14, 9, 8, false);
+    ppc::op_lfs(c, 13, 3, 60);
+    ppc::op_fmadds(c, 24, 14, 28, 29, false);
+    ppc::op_stfs(c, 22, 3, 8);
+    ppc::op_fmadds(c, 14, 4, 0, 30, false);
+    ppc::op_fmadds(c, 0, 15, 5, 7, false);
+    ppc::op_fmadds(c, 8, 4, 2, 7, false);
+    ppc::op_stfs(c, 21, 3, 12);
+    ppc::op_fmadds(c, 9, 4, 23, 11, false);
+    ppc::op_fmadds(c, 4, 15, 1, 26, false);
+    ppc::op_stfs(c, 20, 3, 16);
+    ppc::op_fmadds(c, 2, 15, 24, 30, false);
+    ppc::op_fmadds(c, 1, 15, 12, 11, false);
+    ppc::op_stfs(c, 19, 3, 20);
+    ppc::op_fmadds(c, 5, 3, 14, 31, false);
+    ppc::op_fmadds(c, 7, 3, 9, 10, false);
+    ppc::op_stfs(c, 18, 3, 24);
+    ppc::op_fmadds(c, 3, 3, 8, 6, false);
+    ppc::op_fmadds(c, 4, 13, 4, 27, false);
+    ppc::op_stfs(c, 17, 3, 28);
+    ppc::op_fmadds(c, 2, 13, 2, 31, false);
+    ppc::op_fmadds(c, 1, 13, 1, 10, false);
+    ppc::op_stfs(c, 16, 3, 32);
+    ppc::op_fmadds(c, 0, 13, 0, 6, false);
+    ppc::op_stfs(c, 5, 3, 36);
+    ppc::op_stfs(c, 7, 3, 40);
+    ppc::op_stfs(c, 3, 3, 44);
+    ppc::op_stfs(c, 4, 3, 48);
+    ppc::op_stfs(c, 2, 3, 52);
+    ppc::op_stfs(c, 1, 3, 56);
+    ppc::op_stfs(c, 0, 3, 60);
+    ppc::op_psq_l(c, 31, 1, 312, 0, 0);
+    ppc::op_lfd(c, 31, 1, 304);
+    ppc::op_psq_l(c, 30, 1, 296, 0, 0);
+    ppc::op_lfd(c, 30, 1, 288);
+    ppc::op_psq_l(c, 29, 1, 280, 0, 0);
+    ppc::op_lfd(c, 29, 1, 272);
+    ppc::op_psq_l(c, 28, 1, 264, 0, 0);
+    ppc::op_lfd(c, 28, 1, 256);
+    ppc::op_psq_l(c, 27, 1, 248, 0, 0);
+    ppc::op_lfd(c, 27, 1, 240);
+    ppc::op_psq_l(c, 26, 1, 232, 0, 0);
+    ppc::op_lfd(c, 26, 1, 224);
+    ppc::op_psq_l(c, 25, 1, 216, 0, 0);
+    ppc::op_lfd(c, 25, 1, 208);
+    ppc::op_psq_l(c, 24, 1, 200, 0, 0);
+    ppc::op_lfd(c, 24, 1, 192);
+    ppc::op_psq_l(c, 23, 1, 184, 0, 0);
+    ppc::op_lfd(c, 23, 1, 176);
+    ppc::op_psq_l(c, 22, 1, 168, 0, 0);
+    ppc::op_lfd(c, 22, 1, 160);
+    ppc::op_psq_l(c, 21, 1, 152, 0, 0);
+    ppc::op_lfd(c, 21, 1, 144);
+    ppc::op_psq_l(c, 20, 1, 136, 0, 0);
+    ppc::op_lfd(c, 20, 1, 128);
+    ppc::op_psq_l(c, 19, 1, 120, 0, 0);
+    ppc::op_lfd(c, 19, 1, 112);
+    ppc::op_psq_l(c, 18, 1, 104, 0, 0);
+    ppc::op_lfd(c, 18, 1, 96);
+    ppc::op_psq_l(c, 17, 1, 88, 0, 0);
+    ppc::op_lfd(c, 17, 1, 80);
+    ppc::op_psq_l(c, 16, 1, 72, 0, 0);
+    ppc::op_lfd(c, 16, 1, 64);
+    ppc::op_psq_l(c, 15, 1, 56, 0, 0);
+    ppc::op_lfd(c, 15, 1, 48);
+    ppc::op_psq_l(c, 14, 1, 40, 0, 0);
+    ppc::op_lfd(c, 14, 1, 32);
+    ppc::op_addi(c, 1, 1, 320);
+}
+}  // namespace
 void hle_Leaf_80137BC4(ppc::Ctx& c) {   // fn_80137BC4
-    if (!(in_ram(c.r[3] + uint32_t(0), 64) && in_ram(c.r[4] + uint32_t(0), 64) && float_gqr0(c))) {   // the original instruction sequence
-        ppc::op_stwu(c, 1, 1, -320);
-        ppc::op_stfd(c, 31, 1, 304);
-        ppc::op_psq_st(c, 31, 1, 312, 0, 0);
-        ppc::op_stfd(c, 30, 1, 288);
-        ppc::op_psq_st(c, 30, 1, 296, 0, 0);
-        ppc::op_stfd(c, 29, 1, 272);
-        ppc::op_psq_st(c, 29, 1, 280, 0, 0);
-        ppc::op_stfd(c, 28, 1, 256);
-        ppc::op_psq_st(c, 28, 1, 264, 0, 0);
-        ppc::op_stfd(c, 27, 1, 240);
-        ppc::op_psq_st(c, 27, 1, 248, 0, 0);
-        ppc::op_stfd(c, 26, 1, 224);
-        ppc::op_psq_st(c, 26, 1, 232, 0, 0);
-        ppc::op_stfd(c, 25, 1, 208);
-        ppc::op_psq_st(c, 25, 1, 216, 0, 0);
-        ppc::op_stfd(c, 24, 1, 192);
-        ppc::op_psq_st(c, 24, 1, 200, 0, 0);
-        ppc::op_stfd(c, 23, 1, 176);
-        ppc::op_psq_st(c, 23, 1, 184, 0, 0);
-        ppc::op_stfd(c, 22, 1, 160);
-        ppc::op_psq_st(c, 22, 1, 168, 0, 0);
-        ppc::op_stfd(c, 21, 1, 144);
-        ppc::op_psq_st(c, 21, 1, 152, 0, 0);
-        ppc::op_stfd(c, 20, 1, 128);
-        ppc::op_psq_st(c, 20, 1, 136, 0, 0);
-        ppc::op_stfd(c, 19, 1, 112);
-        ppc::op_psq_st(c, 19, 1, 120, 0, 0);
-        ppc::op_stfd(c, 18, 1, 96);
-        ppc::op_psq_st(c, 18, 1, 104, 0, 0);
-        ppc::op_stfd(c, 17, 1, 80);
-        ppc::op_psq_st(c, 17, 1, 88, 0, 0);
-        ppc::op_stfd(c, 16, 1, 64);
-        ppc::op_psq_st(c, 16, 1, 72, 0, 0);
-        ppc::op_stfd(c, 15, 1, 48);
-        ppc::op_psq_st(c, 15, 1, 56, 0, 0);
-        ppc::op_stfd(c, 14, 1, 32);
-        ppc::op_psq_st(c, 14, 1, 40, 0, 0);
-        ppc::op_lfs(c, 2, 3, 4);
-        ppc::op_lfs(c, 28, 4, 20);
-        ppc::op_lfs(c, 24, 4, 16);
-        ppc::op_lfs(c, 0, 3, 20);
-        ppc::op_fmuls(c, 10, 2, 28, false);
-        ppc::op_lfs(c, 13, 4, 24);
-        ppc::op_fmuls(c, 11, 2, 24, false);
-        ppc::op_lfs(c, 9, 4, 28);
-        ppc::op_fmuls(c, 1, 0, 24, false);
-        ppc::op_lfs(c, 15, 3, 36);
-        ppc::op_lfs(c, 14, 3, 0);
-        ppc::op_fmuls(c, 7, 2, 13, false);
-        ppc::op_lfs(c, 29, 4, 4);
-        ppc::op_fmuls(c, 6, 2, 9, false);
-        ppc::op_lfs(c, 25, 4, 0);
-        ppc::op_fmuls(c, 3, 0, 28, false);
-        ppc::op_lfs(c, 20, 3, 16);
-        ppc::op_lfs(c, 8, 4, 12);
-        ppc::op_fmuls(c, 2, 0, 9, false);
-        ppc::op_fmuls(c, 4, 0, 13, false);
-        ppc::op_lfs(c, 12, 4, 8);
-        ppc::op_fmadds(c, 17, 14, 10, 29, false);
-        ppc::op_lfs(c, 5, 3, 32);
-        ppc::op_fmuls(c, 0, 15, 24, false);
-        ppc::op_fmadds(c, 19, 14, 11, 25, false);
-        ppc::op_fmadds(c, 10, 14, 7, 12, false);
-        ppc::op_lfs(c, 18, 3, 8);
-        ppc::op_lfs(c, 30, 4, 36);
-        ppc::op_fmadds(c, 6, 14, 6, 8, false);
-        ppc::op_fmadds(c, 16, 20, 1, 25, false);
-        ppc::op_fmadds(c, 14, 20, 4, 12, false);
-        ppc::op_fmadds(c, 23, 5, 0, 25, false);
-        ppc::op_lfs(c, 26, 4, 32);
-        ppc::op_fmadds(c, 21, 18, 17, 30, false);
-        ppc::op_lfs(c, 11, 4, 40);
-        ppc::op_lfs(c, 1, 3, 24);
-        ppc::op_fmadds(c, 3, 20, 3, 29, false);
-        ppc::op_fmadds(c, 2, 20, 2, 8, false);
-        ppc::op_lfs(c, 7, 4, 44);
-        ppc::op_fmadds(c, 22, 18, 19, 26, false);
-        ppc::op_lfs(c, 4, 3, 40);
-        ppc::op_fmadds(c, 20, 18, 10, 11, false);
-        ppc::op_fmadds(c, 19, 18, 6, 7, false);
-        ppc::op_fmadds(c, 18, 1, 16, 26, false);
-        ppc::op_lfs(c, 0, 3, 12);
-        ppc::op_lfs(c, 31, 4, 52);
-        ppc::op_fmadds(c, 16, 1, 3, 30, false);
-        ppc::op_fmadds(c, 14, 1, 14, 11, false);
-        ppc::op_fmadds(c, 2, 1, 2, 7, false);
-        ppc::op_fmadds(c, 21, 0, 21, 31, false);
-        ppc::op_lfs(c, 27, 4, 48);
-        ppc::op_fmadds(c, 1, 4, 23, 26, false);
-        ppc::op_lfs(c, 10, 4, 56);
-        ppc::op_fmadds(c, 23, 0, 22, 27, false);
-        ppc::op_lfs(c, 6, 4, 60);
-        ppc::op_stfs(c, 21, 1, 8);
-        ppc::op_fmadds(c, 22, 0, 20, 10, false);
-        ppc::op_lfs(c, 17, 3, 28);
-        ppc::op_fmadds(c, 21, 0, 19, 6, false);
-        ppc::op_lfs(c, 3, 3, 44);
-        ppc::op_fmadds(c, 20, 17, 18, 27, false);
-        ppc::op_fmadds(c, 19, 17, 16, 31, false);
-        ppc::op_fmadds(c, 18, 17, 14, 10, false);
-        ppc::op_fmadds(c, 17, 17, 2, 6, false);
-        ppc::op_fmadds(c, 16, 3, 1, 27, false);
-        ppc::op_lfs(c, 0, 3, 52);
-        ppc::op_fmuls(c, 2, 15, 28, false);
-        ppc::op_fmuls(c, 1, 15, 13, false);
-        ppc::op_stfs(c, 23, 3, 0);
-        ppc::op_fmuls(c, 15, 15, 9, false);
-        ppc::op_lfs(c, 14, 3, 48);
-        ppc::op_fmuls(c, 13, 0, 13, false);
-        ppc::op_fmadds(c, 23, 5, 1, 12, false);
-        ppc::op_stfd(c, 15, 1, 16);
-        ppc::op_fmuls(c, 24, 0, 24, false);
-        ppc::op_fmuls(c, 28, 0, 28, false);
-        ppc::op_lfs(c, 15, 3, 56);
-        ppc::op_stfd(c, 13, 1, 24);
-        ppc::op_fmuls(c, 9, 0, 9, false);
-        ppc::op_lfd(c, 1, 1, 16);
-        ppc::op_fmadds(c, 0, 5, 2, 29, false);
-        ppc::op_fmadds(c, 2, 5, 1, 8, false);
-        ppc::op_lfs(c, 1, 1, 8);
-        ppc::op_lfd(c, 5, 1, 24);
-        ppc::op_stfs(c, 1, 3, 4);
-        ppc::op_fmadds(c, 1, 14, 24, 25, false);
-        ppc::op_fmadds(c, 12, 14, 5, 12, false);
-        ppc::op_fmadds(c, 5, 14, 9, 8, false);
-        ppc::op_lfs(c, 13, 3, 60);
-        ppc::op_fmadds(c, 24, 14, 28, 29, false);
-        ppc::op_stfs(c, 22, 3, 8);
-        ppc::op_fmadds(c, 14, 4, 0, 30, false);
-        ppc::op_fmadds(c, 0, 15, 5, 7, false);
-        ppc::op_fmadds(c, 8, 4, 2, 7, false);
-        ppc::op_stfs(c, 21, 3, 12);
-        ppc::op_fmadds(c, 9, 4, 23, 11, false);
-        ppc::op_fmadds(c, 4, 15, 1, 26, false);
-        ppc::op_stfs(c, 20, 3, 16);
-        ppc::op_fmadds(c, 2, 15, 24, 30, false);
-        ppc::op_fmadds(c, 1, 15, 12, 11, false);
-        ppc::op_stfs(c, 19, 3, 20);
-        ppc::op_fmadds(c, 5, 3, 14, 31, false);
-        ppc::op_fmadds(c, 7, 3, 9, 10, false);
-        ppc::op_stfs(c, 18, 3, 24);
-        ppc::op_fmadds(c, 3, 3, 8, 6, false);
-        ppc::op_fmadds(c, 4, 13, 4, 27, false);
-        ppc::op_stfs(c, 17, 3, 28);
-        ppc::op_fmadds(c, 2, 13, 2, 31, false);
-        ppc::op_fmadds(c, 1, 13, 1, 10, false);
-        ppc::op_stfs(c, 16, 3, 32);
-        ppc::op_fmadds(c, 0, 13, 0, 6, false);
-        ppc::op_stfs(c, 5, 3, 36);
-        ppc::op_stfs(c, 7, 3, 40);
-        ppc::op_stfs(c, 3, 3, 44);
-        ppc::op_stfs(c, 4, 3, 48);
-        ppc::op_stfs(c, 2, 3, 52);
-        ppc::op_stfs(c, 1, 3, 56);
-        ppc::op_stfs(c, 0, 3, 60);
-        ppc::op_psq_l(c, 31, 1, 312, 0, 0);
-        ppc::op_lfd(c, 31, 1, 304);
-        ppc::op_psq_l(c, 30, 1, 296, 0, 0);
-        ppc::op_lfd(c, 30, 1, 288);
-        ppc::op_psq_l(c, 29, 1, 280, 0, 0);
-        ppc::op_lfd(c, 29, 1, 272);
-        ppc::op_psq_l(c, 28, 1, 264, 0, 0);
-        ppc::op_lfd(c, 28, 1, 256);
-        ppc::op_psq_l(c, 27, 1, 248, 0, 0);
-        ppc::op_lfd(c, 27, 1, 240);
-        ppc::op_psq_l(c, 26, 1, 232, 0, 0);
-        ppc::op_lfd(c, 26, 1, 224);
-        ppc::op_psq_l(c, 25, 1, 216, 0, 0);
-        ppc::op_lfd(c, 25, 1, 208);
-        ppc::op_psq_l(c, 24, 1, 200, 0, 0);
-        ppc::op_lfd(c, 24, 1, 192);
-        ppc::op_psq_l(c, 23, 1, 184, 0, 0);
-        ppc::op_lfd(c, 23, 1, 176);
-        ppc::op_psq_l(c, 22, 1, 168, 0, 0);
-        ppc::op_lfd(c, 22, 1, 160);
-        ppc::op_psq_l(c, 21, 1, 152, 0, 0);
-        ppc::op_lfd(c, 21, 1, 144);
-        ppc::op_psq_l(c, 20, 1, 136, 0, 0);
-        ppc::op_lfd(c, 20, 1, 128);
-        ppc::op_psq_l(c, 19, 1, 120, 0, 0);
-        ppc::op_lfd(c, 19, 1, 112);
-        ppc::op_psq_l(c, 18, 1, 104, 0, 0);
-        ppc::op_lfd(c, 18, 1, 96);
-        ppc::op_psq_l(c, 17, 1, 88, 0, 0);
-        ppc::op_lfd(c, 17, 1, 80);
-        ppc::op_psq_l(c, 16, 1, 72, 0, 0);
-        ppc::op_lfd(c, 16, 1, 64);
-        ppc::op_psq_l(c, 15, 1, 56, 0, 0);
-        ppc::op_lfd(c, 15, 1, 48);
-        ppc::op_psq_l(c, 14, 1, 40, 0, 0);
-        ppc::op_lfd(c, 14, 1, 32);
-        ppc::op_addi(c, 1, 1, 320);
-        return;
-    }
+    if (leaf_off(0x80137BC4) || !(in_ram(c.r[3] + uint32_t(0), 64) && in_ram(c.r[4] + uint32_t(0), 64) && in_ram(c.r[1] - uint32_t(320), 320) && float_gqr0(c))) { slow_Leaf_80137BC4(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
-    uint8_t sp[352] = {};   // the stack frame: spills and the link-register slot are dead after the return
+    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(320));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 64);
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
@@ -481,22 +500,24 @@ void hle_Leaf_80137BC4(ppc::Ctx& c) {   // fn_80137BC4
     c.f[13] = f13; c.ps1[13] = p13;
 }
 
+namespace {
+void slow_Leaf_80139368(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 0, 4, 0);
+    ppc::op_lfs(c, 2, 4, 4);
+    ppc::op_fneg(c, 3, 0, false);
+    ppc::op_lfs(c, 1, 4, 8);
+    ppc::op_lfs(c, 0, 4, 12);
+    ppc::op_fneg(c, 2, 2, false);
+    ppc::op_fneg(c, 1, 1, false);
+    ppc::op_fneg(c, 0, 0, false);
+    ppc::op_stfs(c, 3, 3, 0);
+    ppc::op_stfs(c, 2, 3, 4);
+    ppc::op_stfs(c, 1, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_80139368(ppc::Ctx& c) {   // fn_80139368
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lfs(c, 0, 4, 0);
-        ppc::op_lfs(c, 2, 4, 4);
-        ppc::op_fneg(c, 3, 0, false);
-        ppc::op_lfs(c, 1, 4, 8);
-        ppc::op_lfs(c, 0, 4, 12);
-        ppc::op_fneg(c, 2, 2, false);
-        ppc::op_fneg(c, 1, 1, false);
-        ppc::op_fneg(c, 0, 0, false);
-        ppc::op_stfs(c, 3, 3, 0);
-        ppc::op_stfs(c, 2, 3, 4);
-        ppc::op_stfs(c, 1, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x80139368) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_80139368(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
@@ -520,34 +541,36 @@ void hle_Leaf_80139368(ppc::Ctx& c) {   // fn_80139368
     c.f[3] = f3;
 }
 
+namespace {
+void slow_Leaf_801394B8(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lwz(c, 8, 4, 0);
+    ppc::op_lwz(c, 7, 4, 4);
+    ppc::op_stw(c, 8, 3, 0);
+    ppc::op_lwz(c, 6, 4, 8);
+    ppc::op_lwz(c, 0, 4, 12);
+    ppc::op_lfs(c, 0, 5, 0);
+    ppc::op_lfs(c, 1, 3, 0);
+    ppc::op_stw(c, 6, 3, 8);
+    ppc::op_fadds(c, 5, 1, 0, false);
+    ppc::op_lfs(c, 0, 5, 4);
+    ppc::op_stw(c, 7, 3, 4);
+    ppc::op_lfs(c, 3, 3, 8);
+    ppc::op_lfs(c, 1, 3, 4);
+    ppc::op_lfs(c, 2, 5, 8);
+    ppc::op_fadds(c, 4, 1, 0, false);
+    ppc::op_stw(c, 0, 3, 12);
+    ppc::op_fadds(c, 2, 3, 2, false);
+    ppc::op_lfs(c, 0, 5, 12);
+    ppc::op_lfs(c, 1, 3, 12);
+    ppc::op_stfs(c, 5, 3, 0);
+    ppc::op_fadds(c, 0, 1, 0, false);
+    ppc::op_stfs(c, 4, 3, 4);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_801394B8(ppc::Ctx& c) {   // fn_801394B8
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16) && in_ram(c.r[5] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lwz(c, 8, 4, 0);
-        ppc::op_lwz(c, 7, 4, 4);
-        ppc::op_stw(c, 8, 3, 0);
-        ppc::op_lwz(c, 6, 4, 8);
-        ppc::op_lwz(c, 0, 4, 12);
-        ppc::op_lfs(c, 0, 5, 0);
-        ppc::op_lfs(c, 1, 3, 0);
-        ppc::op_stw(c, 6, 3, 8);
-        ppc::op_fadds(c, 5, 1, 0, false);
-        ppc::op_lfs(c, 0, 5, 4);
-        ppc::op_stw(c, 7, 3, 4);
-        ppc::op_lfs(c, 3, 3, 8);
-        ppc::op_lfs(c, 1, 3, 4);
-        ppc::op_lfs(c, 2, 5, 8);
-        ppc::op_fadds(c, 4, 1, 0, false);
-        ppc::op_stw(c, 0, 3, 12);
-        ppc::op_fadds(c, 2, 3, 2, false);
-        ppc::op_lfs(c, 0, 5, 12);
-        ppc::op_lfs(c, 1, 3, 12);
-        ppc::op_stfs(c, 5, 3, 0);
-        ppc::op_fadds(c, 0, 1, 0, false);
-        ppc::op_stfs(c, 4, 3, 4);
-        ppc::op_stfs(c, 2, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x801394B8) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16) && in_ram(c.r[5] + uint32_t(0), 16))) { slow_Leaf_801394B8(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
@@ -591,34 +614,36 @@ void hle_Leaf_801394B8(ppc::Ctx& c) {   // fn_801394B8
     c.f[5] = f5; c.ps1[5] = p5;
 }
 
+namespace {
+void slow_Leaf_8013951C(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lwz(c, 8, 4, 0);
+    ppc::op_lwz(c, 7, 4, 4);
+    ppc::op_stw(c, 8, 3, 0);
+    ppc::op_lwz(c, 6, 4, 8);
+    ppc::op_lwz(c, 0, 4, 12);
+    ppc::op_lfs(c, 0, 5, 0);
+    ppc::op_lfs(c, 1, 3, 0);
+    ppc::op_stw(c, 6, 3, 8);
+    ppc::op_fsubs(c, 5, 1, 0, false);
+    ppc::op_lfs(c, 0, 5, 4);
+    ppc::op_stw(c, 7, 3, 4);
+    ppc::op_lfs(c, 3, 3, 8);
+    ppc::op_lfs(c, 1, 3, 4);
+    ppc::op_lfs(c, 2, 5, 8);
+    ppc::op_fsubs(c, 4, 1, 0, false);
+    ppc::op_stw(c, 0, 3, 12);
+    ppc::op_fsubs(c, 2, 3, 2, false);
+    ppc::op_lfs(c, 0, 5, 12);
+    ppc::op_lfs(c, 1, 3, 12);
+    ppc::op_stfs(c, 5, 3, 0);
+    ppc::op_fsubs(c, 0, 1, 0, false);
+    ppc::op_stfs(c, 4, 3, 4);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_8013951C(ppc::Ctx& c) {   // fn_8013951C
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16) && in_ram(c.r[5] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lwz(c, 8, 4, 0);
-        ppc::op_lwz(c, 7, 4, 4);
-        ppc::op_stw(c, 8, 3, 0);
-        ppc::op_lwz(c, 6, 4, 8);
-        ppc::op_lwz(c, 0, 4, 12);
-        ppc::op_lfs(c, 0, 5, 0);
-        ppc::op_lfs(c, 1, 3, 0);
-        ppc::op_stw(c, 6, 3, 8);
-        ppc::op_fsubs(c, 5, 1, 0, false);
-        ppc::op_lfs(c, 0, 5, 4);
-        ppc::op_stw(c, 7, 3, 4);
-        ppc::op_lfs(c, 3, 3, 8);
-        ppc::op_lfs(c, 1, 3, 4);
-        ppc::op_lfs(c, 2, 5, 8);
-        ppc::op_fsubs(c, 4, 1, 0, false);
-        ppc::op_stw(c, 0, 3, 12);
-        ppc::op_fsubs(c, 2, 3, 2, false);
-        ppc::op_lfs(c, 0, 5, 12);
-        ppc::op_lfs(c, 1, 3, 12);
-        ppc::op_stfs(c, 5, 3, 0);
-        ppc::op_fsubs(c, 0, 1, 0, false);
-        ppc::op_stfs(c, 4, 3, 4);
-        ppc::op_stfs(c, 2, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x8013951C) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16) && in_ram(c.r[5] + uint32_t(0), 16))) { slow_Leaf_8013951C(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
@@ -662,18 +687,20 @@ void hle_Leaf_8013951C(ppc::Ctx& c) {   // fn_8013951C
     c.f[5] = f5; c.ps1[5] = p5;
 }
 
+namespace {
+void slow_Leaf_8013939C(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lwz(c, 7, 4, 0);
+    ppc::op_lwz(c, 6, 4, 4);
+    ppc::op_lwz(c, 5, 4, 8);
+    ppc::op_lwz(c, 0, 4, 12);
+    ppc::op_stw(c, 7, 3, 0);
+    ppc::op_stw(c, 6, 3, 4);
+    ppc::op_stw(c, 5, 3, 8);
+    ppc::op_stw(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_8013939C(ppc::Ctx& c) {   // fn_8013939C
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lwz(c, 7, 4, 0);
-        ppc::op_lwz(c, 6, 4, 4);
-        ppc::op_lwz(c, 5, 4, 8);
-        ppc::op_lwz(c, 0, 4, 12);
-        ppc::op_stw(c, 7, 3, 0);
-        ppc::op_stw(c, 6, 3, 4);
-        ppc::op_stw(c, 5, 3, 8);
-        ppc::op_stw(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x8013939C) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_8013939C(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
@@ -693,26 +720,28 @@ void hle_Leaf_8013939C(ppc::Ctx& c) {   // fn_8013939C
     c.r[7] = r7;
 }
 
+namespace {
+void slow_Leaf_801393C0(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 3, 3, 0);
+    ppc::op_lfs(c, 2, 4, 0);
+    ppc::op_lfs(c, 1, 3, 4);
+    ppc::op_fadds(c, 5, 3, 2, false);
+    ppc::op_lfs(c, 0, 4, 4);
+    ppc::op_lfs(c, 3, 3, 8);
+    ppc::op_fadds(c, 4, 1, 0, false);
+    ppc::op_lfs(c, 2, 4, 8);
+    ppc::op_lfs(c, 1, 3, 12);
+    ppc::op_lfs(c, 0, 4, 12);
+    ppc::op_fadds(c, 2, 3, 2, false);
+    ppc::op_stfs(c, 5, 3, 0);
+    ppc::op_fadds(c, 0, 1, 0, false);
+    ppc::op_stfs(c, 4, 3, 4);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_801393C0(ppc::Ctx& c) {   // fn_801393C0
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lfs(c, 3, 3, 0);
-        ppc::op_lfs(c, 2, 4, 0);
-        ppc::op_lfs(c, 1, 3, 4);
-        ppc::op_fadds(c, 5, 3, 2, false);
-        ppc::op_lfs(c, 0, 4, 4);
-        ppc::op_lfs(c, 3, 3, 8);
-        ppc::op_fadds(c, 4, 1, 0, false);
-        ppc::op_lfs(c, 2, 4, 8);
-        ppc::op_lfs(c, 1, 3, 12);
-        ppc::op_lfs(c, 0, 4, 12);
-        ppc::op_fadds(c, 2, 3, 2, false);
-        ppc::op_stfs(c, 5, 3, 0);
-        ppc::op_fadds(c, 0, 1, 0, false);
-        ppc::op_stfs(c, 4, 3, 4);
-        ppc::op_stfs(c, 2, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x801393C0) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_801393C0(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
@@ -742,22 +771,24 @@ void hle_Leaf_801393C0(ppc::Ctx& c) {   // fn_801393C0
     c.f[5] = f5; c.ps1[5] = p5;
 }
 
+namespace {
+void slow_Leaf_80139448(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 0, 3, 0);
+    ppc::op_lfs(c, 3, 3, 4);
+    ppc::op_fmuls(c, 4, 0, 1, false);
+    ppc::op_lfs(c, 2, 3, 8);
+    ppc::op_lfs(c, 0, 3, 12);
+    ppc::op_fmuls(c, 3, 3, 1, false);
+    ppc::op_fmuls(c, 2, 2, 1, false);
+    ppc::op_fmuls(c, 0, 0, 1, false);
+    ppc::op_stfs(c, 4, 3, 0);
+    ppc::op_stfs(c, 3, 3, 4);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
 void hle_Leaf_80139448(ppc::Ctx& c) {   // fn_80139448
-    if (!(in_ram(c.r[3] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lfs(c, 0, 3, 0);
-        ppc::op_lfs(c, 3, 3, 4);
-        ppc::op_fmuls(c, 4, 0, 1, false);
-        ppc::op_lfs(c, 2, 3, 8);
-        ppc::op_lfs(c, 0, 3, 12);
-        ppc::op_fmuls(c, 3, 3, 1, false);
-        ppc::op_fmuls(c, 2, 2, 1, false);
-        ppc::op_fmuls(c, 0, 0, 1, false);
-        ppc::op_stfs(c, 4, 3, 0);
-        ppc::op_stfs(c, 3, 3, 4);
-        ppc::op_stfs(c, 2, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        return;
-    }
+    if (leaf_off(0x80139448) || !(in_ram(c.r[3] + uint32_t(0), 16))) { slow_Leaf_80139448(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
     uint32_t r3 = c.r[3];
@@ -780,22 +811,24 @@ void hle_Leaf_80139448(ppc::Ctx& c) {   // fn_80139448
     c.f[4] = f4; c.ps1[4] = p4;
 }
 
+namespace {
+void slow_Leaf_803947A4(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_psq_l(c, 0, 4, 0, 0, 0);
+    ppc::op_psq_l(c, 1, 4, 8, 0, 0);
+    ppc::op_psq_l(c, 2, 4, 16, 0, 0);
+    ppc::op_psq_l(c, 3, 4, 24, 0, 0);
+    ppc::op_psq_l(c, 4, 4, 32, 0, 0);
+    ppc::op_psq_l(c, 5, 4, 40, 0, 0);
+    ppc::op_psq_st(c, 0, 3, 0, 0, 0);
+    ppc::op_psq_st(c, 1, 3, 8, 1, 0);
+    ppc::op_psq_st(c, 2, 3, 12, 0, 0);
+    ppc::op_psq_st(c, 3, 3, 20, 1, 0);
+    ppc::op_psq_st(c, 4, 3, 24, 0, 0);
+    ppc::op_psq_st(c, 5, 3, 32, 1, 0);
+}
+}  // namespace
 void hle_Leaf_803947A4(ppc::Ctx& c) {   // fn_803947A4
-    if (!(in_ram(c.r[3] + uint32_t(0), 36) && in_ram(c.r[4] + uint32_t(0), 48) && float_gqr0(c))) {   // the original instruction sequence
-        ppc::op_psq_l(c, 0, 4, 0, 0, 0);
-        ppc::op_psq_l(c, 1, 4, 8, 0, 0);
-        ppc::op_psq_l(c, 2, 4, 16, 0, 0);
-        ppc::op_psq_l(c, 3, 4, 24, 0, 0);
-        ppc::op_psq_l(c, 4, 4, 32, 0, 0);
-        ppc::op_psq_l(c, 5, 4, 40, 0, 0);
-        ppc::op_psq_st(c, 0, 3, 0, 0, 0);
-        ppc::op_psq_st(c, 1, 3, 8, 1, 0);
-        ppc::op_psq_st(c, 2, 3, 12, 0, 0);
-        ppc::op_psq_st(c, 3, 3, 20, 1, 0);
-        ppc::op_psq_st(c, 4, 3, 24, 0, 0);
-        ppc::op_psq_st(c, 5, 3, 32, 1, 0);
-        return;
-    }
+    if (leaf_off(0x803947A4) || !(in_ram(c.r[3] + uint32_t(0), 36) && in_ram(c.r[4] + uint32_t(0), 48) && float_gqr0(c))) { slow_Leaf_803947A4(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 36);
@@ -824,49 +857,51 @@ void hle_Leaf_803947A4(ppc::Ctx& c) {   // fn_803947A4
     c.f[5] = f5; c.ps1[5] = p5;
 }
 
+namespace {
+void slow_Leaf_80394B04(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 3, 4, 0);
+    ppc::op_lfs(c, 2, 5, 0);
+    ppc::op_lfs(c, 1, 4, 16);
+    ppc::op_fmuls(c, 7, 3, 2, false);
+    ppc::op_lfs(c, 0, 4, 32);
+    ppc::op_fmuls(c, 4, 1, 2, false);
+    ppc::op_lfs(c, 3, 4, 4);
+    ppc::op_fmuls(c, 1, 0, 2, false);
+    ppc::op_lfs(c, 5, 5, 4);
+    ppc::op_lfs(c, 0, 4, 36);
+    ppc::op_fmuls(c, 6, 3, 5, false);
+    ppc::op_lfs(c, 2, 4, 20);
+    ppc::op_fmuls(c, 0, 0, 5, false);
+    ppc::op_lfs(c, 8, 4, 8);
+    ppc::op_fmuls(c, 3, 2, 5, false);
+    ppc::op_lfs(c, 9, 5, 8);
+    ppc::op_lfs(c, 5, 4, 24);
+    ppc::op_fadds(c, 6, 7, 6, false);
+    ppc::op_lfs(c, 2, 4, 40);
+    ppc::op_fmuls(c, 8, 8, 9, false);
+    ppc::op_fadds(c, 3, 4, 3, false);
+    ppc::op_stwu(c, 1, 1, -32);
+    ppc::op_fmuls(c, 5, 5, 9, false);
+    ppc::op_fadds(c, 4, 8, 6, false);
+    ppc::op_fmuls(c, 2, 2, 9, false);
+    ppc::op_fadds(c, 3, 5, 3, false);
+    ppc::op_fadds(c, 0, 1, 0, false);
+    ppc::op_stfs(c, 4, 1, 8);
+    ppc::op_stfs(c, 3, 1, 12);
+    ppc::op_fadds(c, 0, 2, 0, false);
+    ppc::op_stfs(c, 4, 3, 0);
+    ppc::op_stfs(c, 0, 1, 16);
+    ppc::op_stfs(c, 3, 3, 4);
+    ppc::op_stfs(c, 0, 3, 8);
+    ppc::op_addi(c, 1, 1, 32);
+}
+}  // namespace
 void hle_Leaf_80394B04(ppc::Ctx& c) {   // fn_80394B04
-    if (!(in_ram(c.r[3] + uint32_t(0), 12) && in_ram(c.r[4] + uint32_t(0), 44) && in_ram(c.r[5] + uint32_t(0), 12))) {   // the original instruction sequence
-        ppc::op_lfs(c, 3, 4, 0);
-        ppc::op_lfs(c, 2, 5, 0);
-        ppc::op_lfs(c, 1, 4, 16);
-        ppc::op_fmuls(c, 7, 3, 2, false);
-        ppc::op_lfs(c, 0, 4, 32);
-        ppc::op_fmuls(c, 4, 1, 2, false);
-        ppc::op_lfs(c, 3, 4, 4);
-        ppc::op_fmuls(c, 1, 0, 2, false);
-        ppc::op_lfs(c, 5, 5, 4);
-        ppc::op_lfs(c, 0, 4, 36);
-        ppc::op_fmuls(c, 6, 3, 5, false);
-        ppc::op_lfs(c, 2, 4, 20);
-        ppc::op_fmuls(c, 0, 0, 5, false);
-        ppc::op_lfs(c, 8, 4, 8);
-        ppc::op_fmuls(c, 3, 2, 5, false);
-        ppc::op_lfs(c, 9, 5, 8);
-        ppc::op_lfs(c, 5, 4, 24);
-        ppc::op_fadds(c, 6, 7, 6, false);
-        ppc::op_lfs(c, 2, 4, 40);
-        ppc::op_fmuls(c, 8, 8, 9, false);
-        ppc::op_fadds(c, 3, 4, 3, false);
-        ppc::op_stwu(c, 1, 1, -32);
-        ppc::op_fmuls(c, 5, 5, 9, false);
-        ppc::op_fadds(c, 4, 8, 6, false);
-        ppc::op_fmuls(c, 2, 2, 9, false);
-        ppc::op_fadds(c, 3, 5, 3, false);
-        ppc::op_fadds(c, 0, 1, 0, false);
-        ppc::op_stfs(c, 4, 1, 8);
-        ppc::op_stfs(c, 3, 1, 12);
-        ppc::op_fadds(c, 0, 2, 0, false);
-        ppc::op_stfs(c, 4, 3, 0);
-        ppc::op_stfs(c, 0, 1, 16);
-        ppc::op_stfs(c, 3, 3, 4);
-        ppc::op_stfs(c, 0, 3, 8);
-        ppc::op_addi(c, 1, 1, 32);
-        return;
-    }
+    if (leaf_off(0x80394B04) || !(in_ram(c.r[3] + uint32_t(0), 12) && in_ram(c.r[4] + uint32_t(0), 44) && in_ram(c.r[5] + uint32_t(0), 12) && in_ram(c.r[1] - uint32_t(32), 32))) { slow_Leaf_80394B04(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
-    uint8_t sp[64] = {};   // the stack frame: spills and the link-register slot are dead after the return
+    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(32));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
@@ -918,18 +953,20 @@ void hle_Leaf_80394B04(ppc::Ctx& c) {   // fn_80394B04
     c.f[9] = f9; c.ps1[9] = p9;
 }
 
+namespace {
+void slow_Leaf_80138AF8(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 3, 4, 0);
+    ppc::op_lfs(c, 2, 4, 4);
+    ppc::op_lfs(c, 1, 4, 8);
+    ppc::op_lfs(c, 0, 4, 12);
+    ppc::op_stfs(c, 3, 3, 48);
+    ppc::op_stfs(c, 2, 3, 52);
+    ppc::op_stfs(c, 1, 3, 56);
+    ppc::op_stfs(c, 0, 3, 60);
+}
+}  // namespace
 void hle_Leaf_80138AF8(ppc::Ctx& c) {   // fn_80138AF8
-    if (!(in_ram(c.r[3] + uint32_t(48), 16) && in_ram(c.r[4] + uint32_t(0), 16))) {   // the original instruction sequence
-        ppc::op_lfs(c, 3, 4, 0);
-        ppc::op_lfs(c, 2, 4, 4);
-        ppc::op_lfs(c, 1, 4, 8);
-        ppc::op_lfs(c, 0, 4, 12);
-        ppc::op_stfs(c, 3, 3, 48);
-        ppc::op_stfs(c, 2, 3, 52);
-        ppc::op_stfs(c, 1, 3, 56);
-        ppc::op_stfs(c, 0, 3, 60);
-        return;
-    }
+    if (leaf_off(0x80138AF8) || !(in_ram(c.r[3] + uint32_t(48), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_80138AF8(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(48), 16);
@@ -949,80 +986,82 @@ void hle_Leaf_80138AF8(ppc::Ctx& c) {   // fn_80138AF8
     c.f[3] = f3; c.ps1[3] = p3;
 }
 
+namespace {
+void slow_Leaf_80394CE4(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_stwu(c, 1, 1, -64);
+    ppc::op_stfd(c, 31, 1, 48);
+    ppc::op_psq_st(c, 31, 1, 56, 0, 0);
+    ppc::op_stfd(c, 30, 1, 32);
+    ppc::op_psq_st(c, 30, 1, 40, 0, 0);
+    ppc::op_lfs(c, 0, 4, 0);
+    ppc::op_lfs(c, 6, 5, 0);
+    ppc::op_lfs(c, 2, 4, 16);
+    ppc::op_lfs(c, 1, 4, 32);
+    ppc::op_fmuls(c, 9, 0, 6, false);
+    ppc::op_fmuls(c, 7, 2, 6, false);
+    ppc::op_lfs(c, 0, 4, 48);
+    ppc::op_fmuls(c, 5, 1, 6, false);
+    ppc::op_lfs(c, 4, 4, 4);
+    ppc::op_fmuls(c, 1, 0, 6, false);
+    ppc::op_lfs(c, 8, 5, 4);
+    ppc::op_lfs(c, 3, 4, 20);
+    ppc::op_lfs(c, 0, 4, 52);
+    ppc::op_fmuls(c, 6, 4, 8, false);
+    ppc::op_lfs(c, 2, 4, 36);
+    ppc::op_fmuls(c, 3, 3, 8, false);
+    ppc::op_fmuls(c, 0, 0, 8, false);
+    ppc::op_lfs(c, 10, 4, 8);
+    ppc::op_fmuls(c, 4, 2, 8, false);
+    ppc::op_lfs(c, 13, 5, 8);
+    ppc::op_fadds(c, 11, 9, 6, false);
+    ppc::op_lfs(c, 8, 4, 24);
+    ppc::op_fmuls(c, 12, 10, 13, false);
+    ppc::op_lfs(c, 6, 4, 40);
+    ppc::op_fmuls(c, 9, 8, 13, false);
+    ppc::op_lfs(c, 2, 4, 56);
+    ppc::op_fadds(c, 8, 7, 3, false);
+    ppc::op_lfs(c, 30, 4, 12);
+    ppc::op_fadds(c, 4, 5, 4, false);
+    ppc::op_lfs(c, 31, 5, 12);
+    ppc::op_lfs(c, 10, 4, 28);
+    ppc::op_fmuls(c, 6, 6, 13, false);
+    ppc::op_fmuls(c, 2, 2, 13, false);
+    ppc::op_lfs(c, 7, 4, 44);
+    ppc::op_fadds(c, 0, 1, 0, false);
+    ppc::op_lfs(c, 3, 4, 60);
+    ppc::op_fmuls(c, 13, 30, 31, false);
+    ppc::op_fadds(c, 5, 12, 11, false);
+    ppc::op_fadds(c, 1, 9, 8, false);
+    ppc::op_fmuls(c, 10, 10, 31, false);
+    ppc::op_fadds(c, 8, 13, 5, false);
+    ppc::op_fmuls(c, 5, 7, 31, false);
+    ppc::op_fadds(c, 7, 10, 1, false);
+    ppc::op_fadds(c, 4, 6, 4, false);
+    ppc::op_stfs(c, 8, 3, 0);
+    ppc::op_fadds(c, 0, 2, 0, false);
+    ppc::op_fmuls(c, 1, 3, 31, false);
+    ppc::op_stfs(c, 7, 3, 4);
+    ppc::op_fadds(c, 2, 5, 4, false);
+    ppc::op_stfs(c, 8, 1, 8);
+    ppc::op_fadds(c, 0, 1, 0, false);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+    ppc::op_stfs(c, 7, 1, 12);
+    ppc::op_stfs(c, 2, 1, 16);
+    ppc::op_stfs(c, 0, 1, 20);
+    ppc::op_psq_l(c, 31, 1, 56, 0, 0);
+    ppc::op_lfd(c, 31, 1, 48);
+    ppc::op_psq_l(c, 30, 1, 40, 0, 0);
+    ppc::op_lfd(c, 30, 1, 32);
+    ppc::op_addi(c, 1, 1, 64);
+}
+}  // namespace
 void hle_Leaf_80394CE4(ppc::Ctx& c) {   // fn_80394CE4
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 64) && in_ram(c.r[5] + uint32_t(0), 16) && float_gqr0(c))) {   // the original instruction sequence
-        ppc::op_stwu(c, 1, 1, -64);
-        ppc::op_stfd(c, 31, 1, 48);
-        ppc::op_psq_st(c, 31, 1, 56, 0, 0);
-        ppc::op_stfd(c, 30, 1, 32);
-        ppc::op_psq_st(c, 30, 1, 40, 0, 0);
-        ppc::op_lfs(c, 0, 4, 0);
-        ppc::op_lfs(c, 6, 5, 0);
-        ppc::op_lfs(c, 2, 4, 16);
-        ppc::op_lfs(c, 1, 4, 32);
-        ppc::op_fmuls(c, 9, 0, 6, false);
-        ppc::op_fmuls(c, 7, 2, 6, false);
-        ppc::op_lfs(c, 0, 4, 48);
-        ppc::op_fmuls(c, 5, 1, 6, false);
-        ppc::op_lfs(c, 4, 4, 4);
-        ppc::op_fmuls(c, 1, 0, 6, false);
-        ppc::op_lfs(c, 8, 5, 4);
-        ppc::op_lfs(c, 3, 4, 20);
-        ppc::op_lfs(c, 0, 4, 52);
-        ppc::op_fmuls(c, 6, 4, 8, false);
-        ppc::op_lfs(c, 2, 4, 36);
-        ppc::op_fmuls(c, 3, 3, 8, false);
-        ppc::op_fmuls(c, 0, 0, 8, false);
-        ppc::op_lfs(c, 10, 4, 8);
-        ppc::op_fmuls(c, 4, 2, 8, false);
-        ppc::op_lfs(c, 13, 5, 8);
-        ppc::op_fadds(c, 11, 9, 6, false);
-        ppc::op_lfs(c, 8, 4, 24);
-        ppc::op_fmuls(c, 12, 10, 13, false);
-        ppc::op_lfs(c, 6, 4, 40);
-        ppc::op_fmuls(c, 9, 8, 13, false);
-        ppc::op_lfs(c, 2, 4, 56);
-        ppc::op_fadds(c, 8, 7, 3, false);
-        ppc::op_lfs(c, 30, 4, 12);
-        ppc::op_fadds(c, 4, 5, 4, false);
-        ppc::op_lfs(c, 31, 5, 12);
-        ppc::op_lfs(c, 10, 4, 28);
-        ppc::op_fmuls(c, 6, 6, 13, false);
-        ppc::op_fmuls(c, 2, 2, 13, false);
-        ppc::op_lfs(c, 7, 4, 44);
-        ppc::op_fadds(c, 0, 1, 0, false);
-        ppc::op_lfs(c, 3, 4, 60);
-        ppc::op_fmuls(c, 13, 30, 31, false);
-        ppc::op_fadds(c, 5, 12, 11, false);
-        ppc::op_fadds(c, 1, 9, 8, false);
-        ppc::op_fmuls(c, 10, 10, 31, false);
-        ppc::op_fadds(c, 8, 13, 5, false);
-        ppc::op_fmuls(c, 5, 7, 31, false);
-        ppc::op_fadds(c, 7, 10, 1, false);
-        ppc::op_fadds(c, 4, 6, 4, false);
-        ppc::op_stfs(c, 8, 3, 0);
-        ppc::op_fadds(c, 0, 2, 0, false);
-        ppc::op_fmuls(c, 1, 3, 31, false);
-        ppc::op_stfs(c, 7, 3, 4);
-        ppc::op_fadds(c, 2, 5, 4, false);
-        ppc::op_stfs(c, 8, 1, 8);
-        ppc::op_fadds(c, 0, 1, 0, false);
-        ppc::op_stfs(c, 2, 3, 8);
-        ppc::op_stfs(c, 0, 3, 12);
-        ppc::op_stfs(c, 7, 1, 12);
-        ppc::op_stfs(c, 2, 1, 16);
-        ppc::op_stfs(c, 0, 1, 20);
-        ppc::op_psq_l(c, 31, 1, 56, 0, 0);
-        ppc::op_lfd(c, 31, 1, 48);
-        ppc::op_psq_l(c, 30, 1, 40, 0, 0);
-        ppc::op_lfd(c, 30, 1, 32);
-        ppc::op_addi(c, 1, 1, 64);
-        return;
-    }
+    if (leaf_off(0x80394CE4) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 64) && in_ram(c.r[5] + uint32_t(0), 16) && in_ram(c.r[1] - uint32_t(64), 64) && float_gqr0(c))) { slow_Leaf_80394CE4(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
-    uint8_t sp[96] = {};   // the stack frame: spills and the link-register slot are dead after the return
+    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(64));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
@@ -1115,16 +1154,18 @@ void hle_Leaf_80394CE4(ppc::Ctx& c) {   // fn_80394CE4
     c.f[13] = f13; c.ps1[13] = p13;
 }
 
+namespace {
+void slow_Leaf_80032FD8(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 2, 4, 44);
+    ppc::op_lfs(c, 1, 4, 28);
+    ppc::op_lfs(c, 0, 4, 12);
+    ppc::op_stfs(c, 1, 3, 4);
+    ppc::op_stfs(c, 0, 3, 0);
+    ppc::op_stfs(c, 2, 3, 8);
+}
+}  // namespace
 void hle_Leaf_80032FD8(ppc::Ctx& c) {   // fn_80032FD8
-    if (!(in_ram(c.r[3] + uint32_t(0), 12) && in_ram(c.r[4] + uint32_t(12), 36))) {   // the original instruction sequence
-        ppc::op_lfs(c, 2, 4, 44);
-        ppc::op_lfs(c, 1, 4, 28);
-        ppc::op_lfs(c, 0, 4, 12);
-        ppc::op_stfs(c, 1, 3, 4);
-        ppc::op_stfs(c, 0, 3, 0);
-        ppc::op_stfs(c, 2, 3, 8);
-        return;
-    }
+    if (leaf_off(0x80032FD8) || !(in_ram(c.r[3] + uint32_t(0), 12) && in_ram(c.r[4] + uint32_t(12), 36))) { slow_Leaf_80032FD8(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
@@ -1141,23 +1182,25 @@ void hle_Leaf_80032FD8(ppc::Ctx& c) {   // fn_80032FD8
     c.f[2] = f2; c.ps1[2] = p2;
 }
 
+namespace {
+void slow_Leaf_80139610(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 1, 4, 0);
+    ppc::op_lfs(c, 0, 5, 0);
+    ppc::op_lfs(c, 3, 4, 4);
+    ppc::op_fmuls(c, 4, 1, 0, false);
+    ppc::op_lfs(c, 2, 5, 4);
+    ppc::op_lfs(c, 1, 4, 8);
+    ppc::op_lfs(c, 0, 5, 8);
+    ppc::op_fmadds(c, 4, 3, 4, 2, false);
+    ppc::op_fmadds(c, 4, 1, 4, 0, false);
+    ppc::op_stfs(c, 4, 3, 0);
+    ppc::op_stfs(c, 4, 3, 4);
+    ppc::op_stfs(c, 4, 3, 8);
+    ppc::op_stfs(c, 4, 3, 12);
+}
+}  // namespace
 void hle_Leaf_80139610(ppc::Ctx& c) {   // fn_80139610
-    if (!(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 12) && in_ram(c.r[5] + uint32_t(0), 12))) {   // the original instruction sequence
-        ppc::op_lfs(c, 1, 4, 0);
-        ppc::op_lfs(c, 0, 5, 0);
-        ppc::op_lfs(c, 3, 4, 4);
-        ppc::op_fmuls(c, 4, 1, 0, false);
-        ppc::op_lfs(c, 2, 5, 4);
-        ppc::op_lfs(c, 1, 4, 8);
-        ppc::op_lfs(c, 0, 5, 8);
-        ppc::op_fmadds(c, 4, 3, 4, 2, false);
-        ppc::op_fmadds(c, 4, 1, 4, 0, false);
-        ppc::op_stfs(c, 4, 3, 0);
-        ppc::op_stfs(c, 4, 3, 4);
-        ppc::op_stfs(c, 4, 3, 8);
-        ppc::op_stfs(c, 4, 3, 12);
-        return;
-    }
+    if (leaf_off(0x80139610) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 12) && in_ram(c.r[5] + uint32_t(0), 12))) { slow_Leaf_80139610(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
@@ -1185,13 +1228,15 @@ void hle_Leaf_80139610(ppc::Ctx& c) {   // fn_80139610
     c.f[4] = f4; c.ps1[4] = p4;
 }
 
+namespace {
+void slow_Leaf_800521A0(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_stfs(c, 1, 3, 0);
+    ppc::op_stfs(c, 2, 3, 4);
+    ppc::op_stfs(c, 3, 3, 8);
+}
+}  // namespace
 void hle_Leaf_800521A0(ppc::Ctx& c) {   // fn_800521A0
-    if (!(in_ram(c.r[3] + uint32_t(0), 12))) {   // the original instruction sequence
-        ppc::op_stfs(c, 1, 3, 0);
-        ppc::op_stfs(c, 2, 3, 4);
-        ppc::op_stfs(c, 3, 3, 8);
-        return;
-    }
+    if (leaf_off(0x800521A0) || !(in_ram(c.r[3] + uint32_t(0), 12))) { slow_Leaf_800521A0(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
     uint32_t r3 = c.r[3];
@@ -1203,47 +1248,49 @@ void hle_Leaf_800521A0(ppc::Ctx& c) {   // fn_800521A0
     stf((P3 + (8)), f3);
 }
 
+namespace {
+void slow_Leaf_800AFCD8(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_stwu(c, 1, 1, -48);
+    ppc::op_stfd(c, 31, 1, 32);
+    ppc::op_psq_st(c, 31, 1, 40, 0, 0);
+    ppc::op_stfd(c, 30, 1, 16);
+    ppc::op_psq_st(c, 30, 1, 24, 0, 0);
+    ppc::op_lfs(c, 30, 1, 56);
+    ppc::op_lfs(c, 31, 1, 60);
+    ppc::op_lfs(c, 13, 1, 64);
+    ppc::op_lfs(c, 12, 1, 68);
+    ppc::op_lfs(c, 11, 1, 72);
+    ppc::op_lfs(c, 10, 1, 76);
+    ppc::op_lfs(c, 9, 1, 80);
+    ppc::op_lfs(c, 0, 1, 84);
+    ppc::op_stfs(c, 1, 3, 0);
+    ppc::op_stfs(c, 2, 3, 4);
+    ppc::op_stfs(c, 3, 3, 8);
+    ppc::op_stfs(c, 4, 3, 12);
+    ppc::op_stfs(c, 5, 3, 16);
+    ppc::op_stfs(c, 6, 3, 20);
+    ppc::op_stfs(c, 7, 3, 24);
+    ppc::op_stfs(c, 8, 3, 28);
+    ppc::op_stfs(c, 30, 3, 32);
+    ppc::op_stfs(c, 31, 3, 36);
+    ppc::op_stfs(c, 13, 3, 40);
+    ppc::op_stfs(c, 12, 3, 44);
+    ppc::op_stfs(c, 11, 3, 48);
+    ppc::op_stfs(c, 10, 3, 52);
+    ppc::op_stfs(c, 9, 3, 56);
+    ppc::op_stfs(c, 0, 3, 60);
+    ppc::op_psq_l(c, 31, 1, 40, 0, 0);
+    ppc::op_lfd(c, 31, 1, 32);
+    ppc::op_psq_l(c, 30, 1, 24, 0, 0);
+    ppc::op_lfd(c, 30, 1, 16);
+    ppc::op_addi(c, 1, 1, 48);
+}
+}  // namespace
 void hle_Leaf_800AFCD8(ppc::Ctx& c) {   // fn_800AFCD8
-    if (!(in_ram(c.r[3] + uint32_t(0), 64) && float_gqr0(c))) {   // the original instruction sequence
-        ppc::op_stwu(c, 1, 1, -48);
-        ppc::op_stfd(c, 31, 1, 32);
-        ppc::op_psq_st(c, 31, 1, 40, 0, 0);
-        ppc::op_stfd(c, 30, 1, 16);
-        ppc::op_psq_st(c, 30, 1, 24, 0, 0);
-        ppc::op_lfs(c, 30, 1, 56);
-        ppc::op_lfs(c, 31, 1, 60);
-        ppc::op_lfs(c, 13, 1, 64);
-        ppc::op_lfs(c, 12, 1, 68);
-        ppc::op_lfs(c, 11, 1, 72);
-        ppc::op_lfs(c, 10, 1, 76);
-        ppc::op_lfs(c, 9, 1, 80);
-        ppc::op_lfs(c, 0, 1, 84);
-        ppc::op_stfs(c, 1, 3, 0);
-        ppc::op_stfs(c, 2, 3, 4);
-        ppc::op_stfs(c, 3, 3, 8);
-        ppc::op_stfs(c, 4, 3, 12);
-        ppc::op_stfs(c, 5, 3, 16);
-        ppc::op_stfs(c, 6, 3, 20);
-        ppc::op_stfs(c, 7, 3, 24);
-        ppc::op_stfs(c, 8, 3, 28);
-        ppc::op_stfs(c, 30, 3, 32);
-        ppc::op_stfs(c, 31, 3, 36);
-        ppc::op_stfs(c, 13, 3, 40);
-        ppc::op_stfs(c, 12, 3, 44);
-        ppc::op_stfs(c, 11, 3, 48);
-        ppc::op_stfs(c, 10, 3, 52);
-        ppc::op_stfs(c, 9, 3, 56);
-        ppc::op_stfs(c, 0, 3, 60);
-        ppc::op_psq_l(c, 31, 1, 40, 0, 0);
-        ppc::op_lfd(c, 31, 1, 32);
-        ppc::op_psq_l(c, 30, 1, 24, 0, 0);
-        ppc::op_lfd(c, 30, 1, 16);
-        ppc::op_addi(c, 1, 1, 48);
-        return;
-    }
+    if (leaf_off(0x800AFCD8) || !(in_ram(c.r[3] + uint32_t(0), 64) && in_ram(c.r[1] - uint32_t(48), 48) && float_gqr0(c))) { slow_Leaf_800AFCD8(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P1c = ppc::hp(c, c.r[1]);   // the caller's frame: stack arguments and the link-register slot
-    uint8_t sp[80] = {};   // the stack frame: spills and the link-register slot are dead after the return
+    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(48));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 64);
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
@@ -1300,4 +1347,2981 @@ void hle_Leaf_800AFCD8(ppc::Ctx& c) {   // fn_800AFCD8
     c.f[11] = f11; c.ps1[11] = p11;
     c.f[12] = f12; c.ps1[12] = p12;
     c.f[13] = f13; c.ps1[13] = p13;
+}
+
+namespace {
+void slow_Leaf_80394374(ppc::Ctx& c) {
+    L_80394374:;
+    { ppc::op_fabs(c, 3, 1, false); }
+    { ppc::op_stwu(c, 1, 1, -16); }
+    { ppc::op_lfs(c, 0, 2, -4936); }
+    { goto L_80394388; }
+    L_80394384:;
+    { ppc::op_fsubs(c, 3, 3, 0, false); }
+    L_80394388:;
+    { ppc::op_fcmpo(c, 0, 3, 0); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == true) { ppc::poll(c); goto L_80394384; } } }
+    { ppc::op_psq_st(c, 3, 1, 12, 1, 3); }
+    { ppc::op_lhz(c, 0, 1, 12); }
+    { ppc::op_sth(c, 0, 1, 8); }
+    { ppc::op_psq_l(c, 2, 1, 8, 1, 3); }
+    { ppc::op_addis(c, 6, 0, -32701); }
+    { ppc::op_lfs(c, 0, 2, -4932); }
+    { ppc::op_rlwinm(c, 0, 0, 4, 20, 27, false); }
+    { ppc::op_addi(c, 6, 6, 24120); }
+    { ppc::op_fsubs(c, 4, 3, 2, false); }
+    { ppc::op_add(c, 5, 6, 0, false); }
+    { ppc::op_fcmpo(c, 0, 1, 0); }
+    { ppc::op_lfs(c, 3, 5, 8); }
+    { ppc::op_lfs(c, 1, 5, 12); }
+    { ppc::op_fmuls(c, 3, 4, 3, false); }
+    { ppc::op_lfsx(c, 2, 6, 0); }
+    { ppc::op_fmuls(c, 1, 4, 1, false); }
+    { ppc::op_lfs(c, 0, 5, 4); }
+    { ppc::op_fadds(c, 2, 2, 3, false); }
+    { ppc::op_fadds(c, 0, 0, 1, false); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_803943E8; } } }
+    { ppc::op_fneg(c, 2, 2, false); }
+    L_803943E8:;
+    { ppc::op_stfs(c, 2, 3, 0); }
+    { ppc::op_stfs(c, 0, 4, 0); }
+    { ppc::op_addi(c, 1, 1, 16); }
+    { return; }
+    ppc::trap(0x803943F8, "fell off the end of function 80394374");
+}
+}  // namespace
+static void fast_Leaf_80394374(ppc::Ctx& c) {   // fn_80394374
+    if (leaf_off(0x80394374) || !(in_ram(c.r[3] + uint32_t(0), 4) && in_ram(c.r[4] + uint32_t(0), 4) && float_gqr0(c))) { slow_Leaf_80394374(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    uint8_t* const P3 = ppc::hp(c, c.r[3]); bool stamped3 = false;
+    uint8_t* const P4 = ppc::hp(c, c.r[4]); bool stamped4 = false;
+    lc.r[0] = c.r[0];
+    lc.r[1] = c.r[1];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+    lc.gqr[3] = c.gqr[3];
+L_80394374:;
+    ppc::op_fabs(lc, 3, 1, false);
+    ppc::op_stwu(lc, 1, 1, -16);
+    ppc::op_lfs(lc, 0, 2, -4936);
+    goto L_80394388;
+L_80394384:;
+    ppc::op_fsubs(lc, 3, 3, 0, false);
+L_80394388:;
+    ppc::op_fcmpo(lc, 0, 3, 0);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == true) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2]; c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3]; c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4]; c.cr[0] = lc.cr[0]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2]; lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3]; lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4]; lc.cr[0] = c.cr[0]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; lc.gqr[3] = c.gqr[3]; } goto L_80394384; }
+    ppc::op_psq_st(lc, 3, 1, 12, 1, 3);
+    ppc::op_lhz(lc, 0, 1, 12);
+    ppc::op_sth(lc, 0, 1, 8);
+    ppc::op_psq_l(lc, 2, 1, 8, 1, 3);
+    ppc::op_addis(lc, 6, 0, -32701);
+    ppc::op_lfs(lc, 0, 2, -4932);
+    ppc::op_rlwinm(lc, 0, 0, 4, 20, 27, false);
+    ppc::op_addi(lc, 6, 6, 24120);
+    ppc::op_fsubs(lc, 4, 3, 2, false);
+    ppc::op_add(lc, 5, 6, 0, false);
+    ppc::op_fcmpo(lc, 0, 1, 0);
+    ppc::op_lfs(lc, 3, 5, 8);
+    ppc::op_lfs(lc, 1, 5, 12);
+    ppc::op_fmuls(lc, 3, 4, 3, false);
+    ppc::op_lfsx(lc, 2, 6, 0);
+    ppc::op_fmuls(lc, 1, 4, 1, false);
+    ppc::op_lfs(lc, 0, 5, 4);
+    ppc::op_fadds(lc, 2, 2, 3, false);
+    ppc::op_fadds(lc, 0, 0, 1, false);
+    if (ppc::crbit(lc, 0) == false) goto L_803943E8;
+    ppc::op_fneg(lc, 2, 2, false);
+L_803943E8:;
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 4); stamped3 = true; }
+    stf((P3 + (0)), lc.f[2]);
+    if (!stamped4) { gx::note_write_range(c.r[4] + uint32_t(0), 4); stamped4 = true; }
+    stf((P4 + (0)), lc.f[0]);
+    ppc::op_addi(lc, 1, 1, 16);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[1] = lc.r[1];
+    c.r[2] = lc.r[2];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.r[5] = lc.r[5];
+    c.r[6] = lc.r[6];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.cr[0] = lc.cr[0];
+    c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov;
+}
+void hle_Leaf_80394374(ppc::Ctx& c) {
+    if (!leaf_verify(0x80394374)) { fast_Leaf_80394374(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80394374(c); slow_Leaf_80394374(shadow); verify_compare("Leaf_80394374", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8003EDD0(ppc::Ctx& c) {
+    L_8003EDD0:;
+    { ppc::op_lwz(c, 0, 3, 4); }
+    { ppc::op_cmpl(c, 0, 4, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8003EDE4; } } }
+    { ppc::op_addi(c, 3, 0, 1); }
+    { return; }
+    L_8003EDE4:;
+    { ppc::op_cmpi(c, 0, 4, 0); }
+    { ppc::op_rlwinm(c, 0, 6, 0, 0, 15, false); }
+    { ppc::op_addi(c, 7, 0, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_8003EE20; } } }
+    { ppc::op_addi(c, 3, 0, 1); }
+    { goto L_8003EE00; }
+    L_8003EDFC:;
+    { ppc::op_addi(c, 7, 7, 1); }
+    L_8003EE00:;
+    { ppc::op_slw(c, 3, 5, 7, false); }
+    { ppc::op_and(c, 4, 0, 5, true); }
+    { { if (ppc::crbit(c, 2) == true) { ppc::poll(c); goto L_8003EDFC; } } }
+    { ppc::op_and(c, 6, 3, 5, false); }
+    { ppc::op_neg(c, 0, 3, false); }
+    { ppc::op_or(c, 0, 0, 3, false); }
+    { ppc::op_rlwinm(c, 0, 3, 1, 31, 31, false); }
+    { return; }
+    L_8003EE20:;
+    { ppc::op_addi(c, 3, 0, 1); }
+    { return; }
+    ppc::trap(0x8003EE28, "fell off the end of function 8003EDD0");
+}
+}  // namespace
+static void fast_Leaf_8003EDD0(ppc::Ctx& c) {   // fn_8003EDD0
+    if (leaf_off(0x8003EDD0)) { slow_Leaf_8003EDD0(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.r[7] = c.r[7];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_8003EDD0:;
+    ppc::op_lwz(lc, 0, 3, 4);
+    ppc::op_cmpl(lc, 0, 4, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_8003EDE4;
+    ppc::op_addi(lc, 3, 0, 1);
+    goto L_done;
+L_8003EDE4:;
+    ppc::op_cmpi(lc, 0, 4, 0);
+    ppc::op_rlwinm(lc, 0, 6, 0, 0, 15, false);
+    ppc::op_addi(lc, 7, 0, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_8003EE20;
+    ppc::op_addi(lc, 3, 0, 1);
+    goto L_8003EE00;
+L_8003EDFC:;
+    ppc::op_addi(lc, 7, 7, 1);
+L_8003EE00:;
+    ppc::op_slw(lc, 3, 5, 7, false);
+    ppc::op_and(lc, 4, 0, 5, true);
+    if (ppc::crbit(lc, 2) == true) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.r[7] = lc.r[7]; c.cr[0] = lc.cr[0]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.r[7] = c.r[7]; lc.cr[0] = c.cr[0]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; } goto L_8003EDFC; }
+    ppc::op_and(lc, 6, 3, 5, false);
+    ppc::op_neg(lc, 0, 3, false);
+    ppc::op_or(lc, 0, 0, 3, false);
+    ppc::op_rlwinm(lc, 0, 3, 1, 31, 31, false);
+    goto L_done;
+L_8003EE20:;
+    ppc::op_addi(lc, 3, 0, 1);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.r[5] = lc.r[5];
+    c.r[6] = lc.r[6];
+    c.r[7] = lc.r[7];
+    c.cr[0] = lc.cr[0];
+    c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov;
+}
+void hle_Leaf_8003EDD0(ppc::Ctx& c) {
+    if (!leaf_verify(0x8003EDD0)) { fast_Leaf_8003EDD0(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8003EDD0(c); slow_Leaf_8003EDD0(shadow); verify_compare("Leaf_8003EDD0", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80367314(ppc::Ctx& c) {
+    L_80367314:;
+    { ppc::op_lwz(c, 5, 3, 0); }
+    { ppc::op_cmpi(c, 0, 5, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80367350; } } }
+    { ppc::op_cmpi(c, 0, 4, 0); }
+    { { if (ppc::crbit(c, 0) == true) { goto L_80367350; } } }
+    { ppc::op_cmpi(c, 0, 4, 7); }
+    { { if (ppc::crbit(c, 1) == true) { goto L_80367350; } } }
+    { ppc::op_addi(c, 3, 0, 1); }
+    { ppc::op_lwz(c, 0, 5, 0); }
+    { ppc::op_slw(c, 3, 3, 4, false); }
+    { ppc::op_and(c, 3, 3, 0, false); }
+    { ppc::op_neg(c, 0, 3, false); }
+    { ppc::op_or(c, 0, 0, 3, false); }
+    { ppc::op_rlwinm(c, 0, 3, 1, 31, 31, false); }
+    { return; }
+    L_80367350:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    { return; }
+    ppc::trap(0x80367358, "fell off the end of function 80367314");
+}
+}  // namespace
+static void fast_Leaf_80367314(ppc::Ctx& c) {   // fn_80367314
+    if (leaf_off(0x80367314)) { slow_Leaf_80367314(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_80367314:;
+    ppc::op_lwz(lc, 5, 3, 0);
+    ppc::op_cmpi(lc, 0, 5, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80367350;
+    ppc::op_cmpi(lc, 0, 4, 0);
+    if (ppc::crbit(lc, 0) == true) goto L_80367350;
+    ppc::op_cmpi(lc, 0, 4, 7);
+    if (ppc::crbit(lc, 1) == true) goto L_80367350;
+    ppc::op_addi(lc, 3, 0, 1);
+    ppc::op_lwz(lc, 0, 5, 0);
+    ppc::op_slw(lc, 3, 3, 4, false);
+    ppc::op_and(lc, 3, 3, 0, false);
+    ppc::op_neg(lc, 0, 3, false);
+    ppc::op_or(lc, 0, 0, 3, false);
+    ppc::op_rlwinm(lc, 0, 3, 1, 31, 31, false);
+    goto L_done;
+L_80367350:;
+    ppc::op_addi(lc, 3, 0, 0);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.r[5] = lc.r[5];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_80367314(ppc::Ctx& c) {
+    if (!leaf_verify(0x80367314)) { fast_Leaf_80367314(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80367314(c); slow_Leaf_80367314(shadow); verify_compare("Leaf_80367314", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80365C7C(ppc::Ctx& c) {
+    L_80365C7C:;
+    { ppc::op_lwz(c, 3, 3, 0); }
+    { ppc::op_lwz(c, 0, 3, 20); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[0]) == 0)) { goto L_80365C94; } } }
+    { ppc::op_add(c, 0, 3, 0, false); }
+    { goto L_80365C98; }
+    L_80365C94:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    L_80365C98:;
+    { ppc::op_cmpi(c, 0, 0, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80365CC8; } } }
+    { ppc::op_addi(c, 3, 4, 1); }
+    { ppc::op_rlwinm(c, 3, 3, 4, 0, 27, false); }
+    { ppc::op_add(c, 3, 0, 3, false); }
+    { ppc::op_lwz(c, 3, 3, 20); }
+    { ppc::op_cmpi(c, 0, 3, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80365CC0; } } }
+    { ppc::op_add(c, 3, 0, 3, false); }
+    { return; }
+    L_80365CC0:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    { return; }
+    L_80365CC8:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    { return; }
+    ppc::trap(0x80365CD0, "fell off the end of function 80365C7C");
+}
+}  // namespace
+static void fast_Leaf_80365C7C(ppc::Ctx& c) {   // fn_80365C7C
+    if (leaf_off(0x80365C7C)) { slow_Leaf_80365C7C(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_80365C7C:;
+    ppc::op_lwz(lc, 3, 3, 0);
+    ppc::op_lwz(lc, 0, 3, 20);
+    if ((int32_t(lc.r[0]) == 0)) goto L_80365C94;
+    ppc::op_add(lc, 0, 3, 0, false);
+    goto L_80365C98;
+L_80365C94:;
+    ppc::op_addi(lc, 0, 0, 0);
+L_80365C98:;
+    ppc::op_cmpi(lc, 0, 0, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80365CC8;
+    ppc::op_addi(lc, 3, 4, 1);
+    ppc::op_rlwinm(lc, 3, 3, 4, 0, 27, false);
+    ppc::op_add(lc, 3, 0, 3, false);
+    ppc::op_lwz(lc, 3, 3, 20);
+    ppc::op_cmpi(lc, 0, 3, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80365CC0;
+    ppc::op_add(lc, 3, 0, 3, false);
+    goto L_done;
+L_80365CC0:;
+    ppc::op_addi(lc, 3, 0, 0);
+    goto L_done;
+L_80365CC8:;
+    ppc::op_addi(lc, 3, 0, 0);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_80365C7C(ppc::Ctx& c) {
+    if (!leaf_verify(0x80365C7C)) { fast_Leaf_80365C7C(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80365C7C(c); slow_Leaf_80365C7C(shadow); verify_compare("Leaf_80365C7C", shadow, c);
+}
+
+namespace {
+void slow_Leaf_802655E8(ppc::Ctx& c) {
+    L_802655E8:;
+    { ppc::op_psq_l(c, 0, 3, 0, 0, 0); }
+    { ppc::op_psq_l(c, 2, 4, 0, 0, 0); }
+    { ppc::op_ps_muls0(c, 6, 2, 0, false); }
+    { ppc::op_psq_l(c, 3, 4, 16, 0, 0); }
+    { ppc::op_psq_l(c, 4, 4, 32, 0, 0); }
+    { ppc::op_ps_madds1(c, 6, 3, 6, 0, false); }
+    { ppc::op_psq_l(c, 1, 3, 8, 0, 0); }
+    { ppc::op_psq_l(c, 5, 4, 48, 0, 0); }
+    { ppc::op_ps_madds0(c, 6, 4, 6, 1, false); }
+    { ppc::op_psq_l(c, 0, 3, 16, 0, 0); }
+    { ppc::op_ps_madds1(c, 6, 5, 6, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 24, 0, 0); }
+    { ppc::op_ps_muls0(c, 8, 2, 0, false); }
+    { ppc::op_ps_madds1(c, 8, 3, 8, 0, false); }
+    { ppc::op_psq_l(c, 0, 3, 32, 0, 0); }
+    { ppc::op_ps_madds0(c, 8, 4, 8, 1, false); }
+    { ppc::op_ps_madds1(c, 8, 5, 8, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 40, 0, 0); }
+    { ppc::op_ps_muls0(c, 10, 2, 0, false); }
+    { ppc::op_ps_madds1(c, 10, 3, 10, 0, false); }
+    { ppc::op_psq_l(c, 0, 3, 48, 0, 0); }
+    { ppc::op_ps_madds0(c, 10, 4, 10, 1, false); }
+    { ppc::op_ps_madds1(c, 10, 5, 10, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 56, 0, 0); }
+    { ppc::op_ps_muls0(c, 12, 2, 0, false); }
+    { ppc::op_psq_l(c, 2, 4, 8, 0, 0); }
+    { ppc::op_ps_madds1(c, 12, 3, 12, 0, false); }
+    { ppc::op_psq_l(c, 0, 3, 0, 0, 0); }
+    { ppc::op_ps_madds0(c, 12, 4, 12, 1, false); }
+    { ppc::op_psq_l(c, 3, 4, 24, 0, 0); }
+    { ppc::op_ps_madds1(c, 12, 5, 12, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 8, 0, 0); }
+    { ppc::op_ps_muls0(c, 7, 2, 0, false); }
+    { ppc::op_psq_l(c, 4, 4, 40, 0, 0); }
+    { ppc::op_ps_madds1(c, 7, 3, 7, 0, false); }
+    { ppc::op_psq_l(c, 5, 4, 56, 0, 0); }
+    { ppc::op_ps_madds0(c, 7, 4, 7, 1, false); }
+    { ppc::op_psq_l(c, 0, 3, 16, 0, 0); }
+    { ppc::op_ps_madds1(c, 7, 5, 7, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 24, 0, 0); }
+    { ppc::op_ps_muls0(c, 9, 2, 0, false); }
+    { ppc::op_psq_st(c, 6, 5, 0, 0, 0); }
+    { ppc::op_ps_madds1(c, 9, 3, 9, 0, false); }
+    { ppc::op_psq_l(c, 0, 3, 32, 0, 0); }
+    { ppc::op_ps_madds0(c, 9, 4, 9, 1, false); }
+    { ppc::op_psq_st(c, 8, 5, 16, 0, 0); }
+    { ppc::op_ps_madds1(c, 9, 5, 9, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 40, 0, 0); }
+    { ppc::op_ps_muls0(c, 11, 2, 0, false); }
+    { ppc::op_psq_st(c, 10, 5, 32, 0, 0); }
+    { ppc::op_ps_madds1(c, 11, 3, 11, 0, false); }
+    { ppc::op_psq_l(c, 0, 3, 48, 0, 0); }
+    { ppc::op_ps_madds0(c, 11, 4, 11, 1, false); }
+    { ppc::op_psq_st(c, 12, 5, 48, 0, 0); }
+    { ppc::op_ps_madds1(c, 11, 5, 11, 1, false); }
+    { ppc::op_psq_l(c, 1, 3, 56, 0, 0); }
+    { ppc::op_ps_muls0(c, 13, 2, 0, false); }
+    { ppc::op_psq_st(c, 7, 5, 8, 0, 0); }
+    { ppc::op_ps_madds1(c, 13, 3, 13, 0, false); }
+    { ppc::op_psq_st(c, 9, 5, 24, 0, 0); }
+    { ppc::op_ps_madds0(c, 13, 4, 13, 1, false); }
+    { ppc::op_psq_st(c, 11, 5, 40, 0, 0); }
+    { ppc::op_ps_madds1(c, 13, 5, 13, 1, false); }
+    { ppc::op_psq_st(c, 13, 5, 56, 0, 0); }
+    { return; }
+    ppc::trap(0x802656EC, "fell off the end of function 802655E8");
+}
+}  // namespace
+static void fast_Leaf_802655E8(ppc::Ctx& c) {   // fn_802655E8
+    if (leaf_off(0x802655E8) || !(float_gqr0(c))) { slow_Leaf_802655E8(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.f[5] = c.f[5]; lc.ps1[5] = c.ps1[5];
+    lc.f[6] = c.f[6]; lc.ps1[6] = c.ps1[6];
+    lc.f[7] = c.f[7]; lc.ps1[7] = c.ps1[7];
+    lc.f[8] = c.f[8]; lc.ps1[8] = c.ps1[8];
+    lc.f[9] = c.f[9]; lc.ps1[9] = c.ps1[9];
+    lc.f[10] = c.f[10]; lc.ps1[10] = c.ps1[10];
+    lc.f[11] = c.f[11]; lc.ps1[11] = c.ps1[11];
+    lc.f[12] = c.f[12]; lc.ps1[12] = c.ps1[12];
+    lc.f[13] = c.f[13]; lc.ps1[13] = c.ps1[13];
+    lc.gqr[0] = c.gqr[0];
+L_802655E8:;
+    ppc::op_psq_l(lc, 0, 3, 0, 0, 0);
+    ppc::op_psq_l(lc, 2, 4, 0, 0, 0);
+    ppc::op_ps_muls0(lc, 6, 2, 0, false);
+    ppc::op_psq_l(lc, 3, 4, 16, 0, 0);
+    ppc::op_psq_l(lc, 4, 4, 32, 0, 0);
+    ppc::op_ps_madds1(lc, 6, 3, 6, 0, false);
+    ppc::op_psq_l(lc, 1, 3, 8, 0, 0);
+    ppc::op_psq_l(lc, 5, 4, 48, 0, 0);
+    ppc::op_ps_madds0(lc, 6, 4, 6, 1, false);
+    ppc::op_psq_l(lc, 0, 3, 16, 0, 0);
+    ppc::op_ps_madds1(lc, 6, 5, 6, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 24, 0, 0);
+    ppc::op_ps_muls0(lc, 8, 2, 0, false);
+    ppc::op_ps_madds1(lc, 8, 3, 8, 0, false);
+    ppc::op_psq_l(lc, 0, 3, 32, 0, 0);
+    ppc::op_ps_madds0(lc, 8, 4, 8, 1, false);
+    ppc::op_ps_madds1(lc, 8, 5, 8, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 40, 0, 0);
+    ppc::op_ps_muls0(lc, 10, 2, 0, false);
+    ppc::op_ps_madds1(lc, 10, 3, 10, 0, false);
+    ppc::op_psq_l(lc, 0, 3, 48, 0, 0);
+    ppc::op_ps_madds0(lc, 10, 4, 10, 1, false);
+    ppc::op_ps_madds1(lc, 10, 5, 10, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 56, 0, 0);
+    ppc::op_ps_muls0(lc, 12, 2, 0, false);
+    ppc::op_psq_l(lc, 2, 4, 8, 0, 0);
+    ppc::op_ps_madds1(lc, 12, 3, 12, 0, false);
+    ppc::op_psq_l(lc, 0, 3, 0, 0, 0);
+    ppc::op_ps_madds0(lc, 12, 4, 12, 1, false);
+    ppc::op_psq_l(lc, 3, 4, 24, 0, 0);
+    ppc::op_ps_madds1(lc, 12, 5, 12, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 8, 0, 0);
+    ppc::op_ps_muls0(lc, 7, 2, 0, false);
+    ppc::op_psq_l(lc, 4, 4, 40, 0, 0);
+    ppc::op_ps_madds1(lc, 7, 3, 7, 0, false);
+    ppc::op_psq_l(lc, 5, 4, 56, 0, 0);
+    ppc::op_ps_madds0(lc, 7, 4, 7, 1, false);
+    ppc::op_psq_l(lc, 0, 3, 16, 0, 0);
+    ppc::op_ps_madds1(lc, 7, 5, 7, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 24, 0, 0);
+    ppc::op_ps_muls0(lc, 9, 2, 0, false);
+    ppc::op_psq_st(lc, 6, 5, 0, 0, 0);
+    ppc::op_ps_madds1(lc, 9, 3, 9, 0, false);
+    ppc::op_psq_l(lc, 0, 3, 32, 0, 0);
+    ppc::op_ps_madds0(lc, 9, 4, 9, 1, false);
+    ppc::op_psq_st(lc, 8, 5, 16, 0, 0);
+    ppc::op_ps_madds1(lc, 9, 5, 9, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 40, 0, 0);
+    ppc::op_ps_muls0(lc, 11, 2, 0, false);
+    ppc::op_psq_st(lc, 10, 5, 32, 0, 0);
+    ppc::op_ps_madds1(lc, 11, 3, 11, 0, false);
+    ppc::op_psq_l(lc, 0, 3, 48, 0, 0);
+    ppc::op_ps_madds0(lc, 11, 4, 11, 1, false);
+    ppc::op_psq_st(lc, 12, 5, 48, 0, 0);
+    ppc::op_ps_madds1(lc, 11, 5, 11, 1, false);
+    ppc::op_psq_l(lc, 1, 3, 56, 0, 0);
+    ppc::op_ps_muls0(lc, 13, 2, 0, false);
+    ppc::op_psq_st(lc, 7, 5, 8, 0, 0);
+    ppc::op_ps_madds1(lc, 13, 3, 13, 0, false);
+    ppc::op_psq_st(lc, 9, 5, 24, 0, 0);
+    ppc::op_ps_madds0(lc, 13, 4, 13, 1, false);
+    ppc::op_psq_st(lc, 11, 5, 40, 0, 0);
+    ppc::op_ps_madds1(lc, 13, 5, 13, 1, false);
+    ppc::op_psq_st(lc, 13, 5, 56, 0, 0);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.f[5] = lc.f[5]; c.ps1[5] = lc.ps1[5];
+    c.f[6] = lc.f[6]; c.ps1[6] = lc.ps1[6];
+    c.f[7] = lc.f[7]; c.ps1[7] = lc.ps1[7];
+    c.f[8] = lc.f[8]; c.ps1[8] = lc.ps1[8];
+    c.f[9] = lc.f[9]; c.ps1[9] = lc.ps1[9];
+    c.f[10] = lc.f[10]; c.ps1[10] = lc.ps1[10];
+    c.f[11] = lc.f[11]; c.ps1[11] = lc.ps1[11];
+    c.f[12] = lc.f[12]; c.ps1[12] = lc.ps1[12];
+    c.f[13] = lc.f[13]; c.ps1[13] = lc.ps1[13];
+}
+void hle_Leaf_802655E8(ppc::Ctx& c) {
+    if (!leaf_verify(0x802655E8)) { fast_Leaf_802655E8(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_802655E8(c); slow_Leaf_802655E8(shadow); verify_compare("Leaf_802655E8", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80394FAC(ppc::Ctx& c) {
+    L_80394FAC:;
+    { ppc::op_lfs(c, 4, 5, 0); }
+    { ppc::op_lfs(c, 1, 4, 0); }
+    { ppc::op_lfs(c, 0, 4, 12); }
+    { ppc::op_fmuls(c, 3, 4, 1, false); }
+    { ppc::op_lfs(c, 2, 5, 12); }
+    { ppc::op_fmuls(c, 1, 4, 0, false); }
+    { ppc::op_lfs(c, 7, 5, 4); }
+    { ppc::op_lfs(c, 6, 4, 4); }
+    { ppc::op_fadds(c, 0, 2, 3, false); }
+    { ppc::op_fadds(c, 2, 2, 1, false); }
+    { ppc::op_lfs(c, 5, 4, 16); }
+    { ppc::op_lfs(c, 4, 5, 8); }
+    { ppc::op_fmuls(c, 6, 7, 6, false); }
+    { ppc::op_lfs(c, 3, 4, 8); }
+    { ppc::op_lfs(c, 1, 4, 20); }
+    { ppc::op_fmuls(c, 3, 4, 3, false); }
+    { ppc::op_fcmpo(c, 0, 0, 2); }
+    { ppc::op_fmuls(c, 5, 7, 5, false); }
+    { ppc::op_fmuls(c, 4, 4, 1, false); }
+    { { if (ppc::crbit(c, 1) == false) { goto L_80395008; } } }
+    { ppc::op_fmr(c, 1, 0, false); }
+    { ppc::op_fmr(c, 0, 2, false); }
+    { ppc::op_fmr(c, 2, 1, false); }
+    L_80395008:;
+    { ppc::op_fcmpo(c, 0, 6, 5); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_8039501C; } } }
+    { ppc::op_fadds(c, 0, 0, 6, false); }
+    { ppc::op_fadds(c, 2, 2, 5, false); }
+    { goto L_80395024; }
+    L_8039501C:;
+    { ppc::op_fadds(c, 0, 0, 5, false); }
+    { ppc::op_fadds(c, 2, 2, 6, false); }
+    L_80395024:;
+    { ppc::op_fcmpo(c, 0, 3, 4); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80395038; } } }
+    { ppc::op_fadds(c, 0, 0, 3, false); }
+    { ppc::op_fadds(c, 2, 2, 4, false); }
+    { goto L_80395040; }
+    L_80395038:;
+    { ppc::op_fadds(c, 0, 0, 4, false); }
+    { ppc::op_fadds(c, 2, 2, 3, false); }
+    L_80395040:;
+    { ppc::op_lfs(c, 6, 5, 16); }
+    { ppc::op_lfs(c, 3, 4, 0); }
+    { ppc::op_lfs(c, 1, 4, 12); }
+    { ppc::op_fmuls(c, 5, 6, 3, false); }
+    { ppc::op_lfs(c, 4, 5, 28); }
+    { ppc::op_fmuls(c, 3, 6, 1, false); }
+    { ppc::op_lfs(c, 9, 5, 20); }
+    { ppc::op_lfs(c, 8, 4, 4); }
+    { ppc::op_fadds(c, 1, 4, 5, false); }
+    { ppc::op_fadds(c, 3, 4, 3, false); }
+    { ppc::op_lfs(c, 7, 4, 16); }
+    { ppc::op_lfs(c, 6, 5, 24); }
+    { ppc::op_fmuls(c, 8, 9, 8, false); }
+    { ppc::op_lfs(c, 5, 4, 8); }
+    { ppc::op_lfs(c, 4, 4, 20); }
+    { ppc::op_fmuls(c, 5, 6, 5, false); }
+    { ppc::op_fcmpo(c, 0, 1, 3); }
+    { ppc::op_fmuls(c, 7, 9, 7, false); }
+    { ppc::op_fmuls(c, 6, 6, 4, false); }
+    { { if (ppc::crbit(c, 1) == false) { goto L_8039509C; } } }
+    { ppc::op_fmr(c, 4, 1, false); }
+    { ppc::op_fmr(c, 1, 3, false); }
+    { ppc::op_fmr(c, 3, 4, false); }
+    L_8039509C:;
+    { ppc::op_fcmpo(c, 0, 8, 7); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_803950B0; } } }
+    { ppc::op_fadds(c, 1, 1, 8, false); }
+    { ppc::op_fadds(c, 3, 3, 7, false); }
+    { goto L_803950B8; }
+    L_803950B0:;
+    { ppc::op_fadds(c, 1, 1, 7, false); }
+    { ppc::op_fadds(c, 3, 3, 8, false); }
+    L_803950B8:;
+    { ppc::op_fcmpo(c, 0, 5, 6); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_803950CC; } } }
+    { ppc::op_fadds(c, 1, 1, 5, false); }
+    { ppc::op_fadds(c, 3, 3, 6, false); }
+    { goto L_803950D4; }
+    L_803950CC:;
+    { ppc::op_fadds(c, 1, 1, 6, false); }
+    { ppc::op_fadds(c, 3, 3, 5, false); }
+    L_803950D4:;
+    { ppc::op_lfs(c, 7, 5, 32); }
+    { ppc::op_lfs(c, 5, 4, 0); }
+    { ppc::op_lfs(c, 4, 4, 12); }
+    { ppc::op_fmuls(c, 6, 7, 5, false); }
+    { ppc::op_lfs(c, 5, 5, 44); }
+    { ppc::op_fmuls(c, 4, 7, 4, false); }
+    { ppc::op_lfs(c, 9, 5, 36); }
+    { ppc::op_lfs(c, 8, 4, 4); }
+    { ppc::op_fadds(c, 10, 5, 6, false); }
+    { ppc::op_fadds(c, 11, 5, 4, false); }
+    { ppc::op_lfs(c, 7, 4, 16); }
+    { ppc::op_lfs(c, 6, 5, 40); }
+    { ppc::op_fmuls(c, 8, 9, 8, false); }
+    { ppc::op_lfs(c, 5, 4, 8); }
+    { ppc::op_lfs(c, 4, 4, 20); }
+    { ppc::op_fmuls(c, 5, 6, 5, false); }
+    { ppc::op_fcmpo(c, 0, 10, 11); }
+    { ppc::op_fmuls(c, 7, 9, 7, false); }
+    { ppc::op_fmuls(c, 6, 6, 4, false); }
+    { { if (ppc::crbit(c, 1) == false) { goto L_80395130; } } }
+    { ppc::op_fmr(c, 4, 10, false); }
+    { ppc::op_fmr(c, 10, 11, false); }
+    { ppc::op_fmr(c, 11, 4, false); }
+    L_80395130:;
+    { ppc::op_fcmpo(c, 0, 8, 7); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80395144; } } }
+    { ppc::op_fadds(c, 10, 10, 8, false); }
+    { ppc::op_fadds(c, 11, 11, 7, false); }
+    { goto L_8039514C; }
+    L_80395144:;
+    { ppc::op_fadds(c, 10, 10, 7, false); }
+    { ppc::op_fadds(c, 11, 11, 8, false); }
+    L_8039514C:;
+    { ppc::op_fcmpo(c, 0, 5, 6); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80395160; } } }
+    { ppc::op_fadds(c, 10, 10, 5, false); }
+    { ppc::op_fadds(c, 11, 11, 6, false); }
+    { goto L_80395168; }
+    L_80395160:;
+    { ppc::op_fadds(c, 10, 10, 6, false); }
+    { ppc::op_fadds(c, 11, 11, 5, false); }
+    L_80395168:;
+    { ppc::op_stfs(c, 0, 3, 0); }
+    { ppc::op_stfs(c, 1, 3, 4); }
+    { ppc::op_stfs(c, 10, 3, 8); }
+    { ppc::op_stfs(c, 2, 3, 12); }
+    { ppc::op_stfs(c, 3, 3, 16); }
+    { ppc::op_stfs(c, 11, 3, 20); }
+    { return; }
+    ppc::trap(0x80395184, "fell off the end of function 80394FAC");
+}
+}  // namespace
+static void fast_Leaf_80394FAC(ppc::Ctx& c) {   // fn_80394FAC
+    if (leaf_off(0x80394FAC) || !(in_ram(c.r[3] + uint32_t(0), 24) && in_ram(c.r[4] + uint32_t(0), 24) && in_ram(c.r[5] + uint32_t(0), 48))) { slow_Leaf_80394FAC(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    uint8_t* const P3 = ppc::hp(c, c.r[3]); bool stamped3 = false;
+    uint8_t* const P4 = ppc::hp(c, c.r[4]); bool stamped4 = false;
+    uint8_t* const P5 = ppc::hp(c, c.r[5]); bool stamped5 = false;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.f[5] = c.f[5]; lc.ps1[5] = c.ps1[5];
+    lc.f[6] = c.f[6]; lc.ps1[6] = c.ps1[6];
+    lc.f[7] = c.f[7]; lc.ps1[7] = c.ps1[7];
+    lc.f[8] = c.f[8]; lc.ps1[8] = c.ps1[8];
+    lc.f[9] = c.f[9]; lc.ps1[9] = c.ps1[9];
+    lc.f[10] = c.f[10]; lc.ps1[10] = c.ps1[10];
+    lc.f[11] = c.f[11]; lc.ps1[11] = c.ps1[11];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_80394FAC:;
+    { const double v = ldf((P5 + (0))); lc.f[4] = v; lc.ps1[4] = v; }
+    { const double v = ldf((P4 + (0))); lc.f[1] = v; lc.ps1[1] = v; }
+    { const double v = ldf((P4 + (12))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fmuls(lc, 3, 4, 1, false);
+    { const double v = ldf((P5 + (12))); lc.f[2] = v; lc.ps1[2] = v; }
+    ppc::op_fmuls(lc, 1, 4, 0, false);
+    { const double v = ldf((P5 + (4))); lc.f[7] = v; lc.ps1[7] = v; }
+    { const double v = ldf((P4 + (4))); lc.f[6] = v; lc.ps1[6] = v; }
+    ppc::op_fadds(lc, 0, 2, 3, false);
+    ppc::op_fadds(lc, 2, 2, 1, false);
+    { const double v = ldf((P4 + (16))); lc.f[5] = v; lc.ps1[5] = v; }
+    { const double v = ldf((P5 + (8))); lc.f[4] = v; lc.ps1[4] = v; }
+    ppc::op_fmuls(lc, 6, 7, 6, false);
+    { const double v = ldf((P4 + (8))); lc.f[3] = v; lc.ps1[3] = v; }
+    { const double v = ldf((P4 + (20))); lc.f[1] = v; lc.ps1[1] = v; }
+    ppc::op_fmuls(lc, 3, 4, 3, false);
+    ppc::op_fcmpo(lc, 0, 0, 2);
+    ppc::op_fmuls(lc, 5, 7, 5, false);
+    ppc::op_fmuls(lc, 4, 4, 1, false);
+    if (ppc::crbit(lc, 1) == false) goto L_80395008;
+    ppc::op_fmr(lc, 1, 0, false);
+    ppc::op_fmr(lc, 0, 2, false);
+    ppc::op_fmr(lc, 2, 1, false);
+L_80395008:;
+    ppc::op_fcmpo(lc, 0, 6, 5);
+    if (ppc::crbit(lc, 0) == false) goto L_8039501C;
+    ppc::op_fadds(lc, 0, 0, 6, false);
+    ppc::op_fadds(lc, 2, 2, 5, false);
+    goto L_80395024;
+L_8039501C:;
+    ppc::op_fadds(lc, 0, 0, 5, false);
+    ppc::op_fadds(lc, 2, 2, 6, false);
+L_80395024:;
+    ppc::op_fcmpo(lc, 0, 3, 4);
+    if (ppc::crbit(lc, 0) == false) goto L_80395038;
+    ppc::op_fadds(lc, 0, 0, 3, false);
+    ppc::op_fadds(lc, 2, 2, 4, false);
+    goto L_80395040;
+L_80395038:;
+    ppc::op_fadds(lc, 0, 0, 4, false);
+    ppc::op_fadds(lc, 2, 2, 3, false);
+L_80395040:;
+    { const double v = ldf((P5 + (16))); lc.f[6] = v; lc.ps1[6] = v; }
+    { const double v = ldf((P4 + (0))); lc.f[3] = v; lc.ps1[3] = v; }
+    { const double v = ldf((P4 + (12))); lc.f[1] = v; lc.ps1[1] = v; }
+    ppc::op_fmuls(lc, 5, 6, 3, false);
+    { const double v = ldf((P5 + (28))); lc.f[4] = v; lc.ps1[4] = v; }
+    ppc::op_fmuls(lc, 3, 6, 1, false);
+    { const double v = ldf((P5 + (20))); lc.f[9] = v; lc.ps1[9] = v; }
+    { const double v = ldf((P4 + (4))); lc.f[8] = v; lc.ps1[8] = v; }
+    ppc::op_fadds(lc, 1, 4, 5, false);
+    ppc::op_fadds(lc, 3, 4, 3, false);
+    { const double v = ldf((P4 + (16))); lc.f[7] = v; lc.ps1[7] = v; }
+    { const double v = ldf((P5 + (24))); lc.f[6] = v; lc.ps1[6] = v; }
+    ppc::op_fmuls(lc, 8, 9, 8, false);
+    { const double v = ldf((P4 + (8))); lc.f[5] = v; lc.ps1[5] = v; }
+    { const double v = ldf((P4 + (20))); lc.f[4] = v; lc.ps1[4] = v; }
+    ppc::op_fmuls(lc, 5, 6, 5, false);
+    ppc::op_fcmpo(lc, 0, 1, 3);
+    ppc::op_fmuls(lc, 7, 9, 7, false);
+    ppc::op_fmuls(lc, 6, 6, 4, false);
+    if (ppc::crbit(lc, 1) == false) goto L_8039509C;
+    ppc::op_fmr(lc, 4, 1, false);
+    ppc::op_fmr(lc, 1, 3, false);
+    ppc::op_fmr(lc, 3, 4, false);
+L_8039509C:;
+    ppc::op_fcmpo(lc, 0, 8, 7);
+    if (ppc::crbit(lc, 0) == false) goto L_803950B0;
+    ppc::op_fadds(lc, 1, 1, 8, false);
+    ppc::op_fadds(lc, 3, 3, 7, false);
+    goto L_803950B8;
+L_803950B0:;
+    ppc::op_fadds(lc, 1, 1, 7, false);
+    ppc::op_fadds(lc, 3, 3, 8, false);
+L_803950B8:;
+    ppc::op_fcmpo(lc, 0, 5, 6);
+    if (ppc::crbit(lc, 0) == false) goto L_803950CC;
+    ppc::op_fadds(lc, 1, 1, 5, false);
+    ppc::op_fadds(lc, 3, 3, 6, false);
+    goto L_803950D4;
+L_803950CC:;
+    ppc::op_fadds(lc, 1, 1, 6, false);
+    ppc::op_fadds(lc, 3, 3, 5, false);
+L_803950D4:;
+    { const double v = ldf((P5 + (32))); lc.f[7] = v; lc.ps1[7] = v; }
+    { const double v = ldf((P4 + (0))); lc.f[5] = v; lc.ps1[5] = v; }
+    { const double v = ldf((P4 + (12))); lc.f[4] = v; lc.ps1[4] = v; }
+    ppc::op_fmuls(lc, 6, 7, 5, false);
+    { const double v = ldf((P5 + (44))); lc.f[5] = v; lc.ps1[5] = v; }
+    ppc::op_fmuls(lc, 4, 7, 4, false);
+    { const double v = ldf((P5 + (36))); lc.f[9] = v; lc.ps1[9] = v; }
+    { const double v = ldf((P4 + (4))); lc.f[8] = v; lc.ps1[8] = v; }
+    ppc::op_fadds(lc, 10, 5, 6, false);
+    ppc::op_fadds(lc, 11, 5, 4, false);
+    { const double v = ldf((P4 + (16))); lc.f[7] = v; lc.ps1[7] = v; }
+    { const double v = ldf((P5 + (40))); lc.f[6] = v; lc.ps1[6] = v; }
+    ppc::op_fmuls(lc, 8, 9, 8, false);
+    { const double v = ldf((P4 + (8))); lc.f[5] = v; lc.ps1[5] = v; }
+    { const double v = ldf((P4 + (20))); lc.f[4] = v; lc.ps1[4] = v; }
+    ppc::op_fmuls(lc, 5, 6, 5, false);
+    ppc::op_fcmpo(lc, 0, 10, 11);
+    ppc::op_fmuls(lc, 7, 9, 7, false);
+    ppc::op_fmuls(lc, 6, 6, 4, false);
+    if (ppc::crbit(lc, 1) == false) goto L_80395130;
+    ppc::op_fmr(lc, 4, 10, false);
+    ppc::op_fmr(lc, 10, 11, false);
+    ppc::op_fmr(lc, 11, 4, false);
+L_80395130:;
+    ppc::op_fcmpo(lc, 0, 8, 7);
+    if (ppc::crbit(lc, 0) == false) goto L_80395144;
+    ppc::op_fadds(lc, 10, 10, 8, false);
+    ppc::op_fadds(lc, 11, 11, 7, false);
+    goto L_8039514C;
+L_80395144:;
+    ppc::op_fadds(lc, 10, 10, 7, false);
+    ppc::op_fadds(lc, 11, 11, 8, false);
+L_8039514C:;
+    ppc::op_fcmpo(lc, 0, 5, 6);
+    if (ppc::crbit(lc, 0) == false) goto L_80395160;
+    ppc::op_fadds(lc, 10, 10, 5, false);
+    ppc::op_fadds(lc, 11, 11, 6, false);
+    goto L_80395168;
+L_80395160:;
+    ppc::op_fadds(lc, 10, 10, 6, false);
+    ppc::op_fadds(lc, 11, 11, 5, false);
+L_80395168:;
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (0)), lc.f[0]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (4)), lc.f[1]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (8)), lc.f[10]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (12)), lc.f[2]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (16)), lc.f[3]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 24); stamped3 = true; }
+    stf((P3 + (20)), lc.f[11]);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.f[5] = lc.f[5]; c.ps1[5] = lc.ps1[5];
+    c.f[6] = lc.f[6]; c.ps1[6] = lc.ps1[6];
+    c.f[7] = lc.f[7]; c.ps1[7] = lc.ps1[7];
+    c.f[8] = lc.f[8]; c.ps1[8] = lc.ps1[8];
+    c.f[9] = lc.f[9]; c.ps1[9] = lc.ps1[9];
+    c.f[10] = lc.f[10]; c.ps1[10] = lc.ps1[10];
+    c.f[11] = lc.f[11]; c.ps1[11] = lc.ps1[11];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_80394FAC(ppc::Ctx& c) {
+    if (!leaf_verify(0x80394FAC)) { fast_Leaf_80394FAC(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80394FAC(c); slow_Leaf_80394FAC(shadow); verify_compare("Leaf_80394FAC", shadow, c);
+}
+
+namespace {
+void slow_Leaf_803B4F68(ppc::Ctx& c) {
+    L_803B4F68:;
+    { ppc::op_cmpi(c, 0, 4, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_803B4F78; } } }
+    { ppc::op_lwz(c, 3, 3, 0); }
+    { return; }
+    L_803B4F78:;
+    { ppc::op_lhz(c, 0, 3, 10); }
+    { ppc::op_add(c, 3, 4, 0, false); }
+    { ppc::op_lwz(c, 3, 3, 4); }
+    { return; }
+    ppc::trap(0x803B4F88, "fell off the end of function 803B4F68");
+}
+}  // namespace
+static void fast_Leaf_803B4F68(ppc::Ctx& c) {   // fn_803B4F68
+    if (leaf_off(0x803B4F68)) { slow_Leaf_803B4F68(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_803B4F68:;
+    ppc::op_cmpi(lc, 0, 4, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_803B4F78;
+    ppc::op_lwz(lc, 3, 3, 0);
+    goto L_done;
+L_803B4F78:;
+    ppc::op_lhz(lc, 0, 3, 10);
+    ppc::op_add(lc, 3, 4, 0, false);
+    ppc::op_lwz(lc, 3, 3, 4);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_803B4F68(ppc::Ctx& c) {
+    if (!leaf_verify(0x803B4F68)) { fast_Leaf_803B4F68(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_803B4F68(c); slow_Leaf_803B4F68(shadow); verify_compare("Leaf_803B4F68", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8037B388(ppc::Ctx& c) {
+    L_8037B388:;
+    { ppc::op_lwz(c, 6, 4, 4); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B3A4; } } }
+    { ppc::op_mulli(c, 0, 5, 260); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 0); }
+    { goto L_8037B3AC; }
+    L_8037B3A4:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 0); }
+    L_8037B3AC:;
+    { ppc::op_lwz(c, 6, 4, 8); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B3C8; } } }
+    { ppc::op_mulli(c, 0, 5, 100); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 4); }
+    { goto L_8037B3D0; }
+    L_8037B3C8:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 4); }
+    L_8037B3D0:;
+    { ppc::op_lwz(c, 6, 4, 12); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B3EC; } } }
+    { ppc::op_mulli(c, 0, 5, 584); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 40); }
+    { goto L_8037B3F4; }
+    L_8037B3EC:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 40); }
+    L_8037B3F4:;
+    { ppc::op_lwz(c, 6, 4, 16); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B410; } } }
+    { ppc::op_mulli(c, 0, 5, 40); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 28); }
+    { goto L_8037B418; }
+    L_8037B410:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 28); }
+    L_8037B418:;
+    { ppc::op_lwz(c, 6, 4, 20); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B434; } } }
+    { ppc::op_rlwinm(c, 5, 0, 3, 0, 28, false); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 8); }
+    { goto L_8037B43C; }
+    L_8037B434:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 8); }
+    L_8037B43C:;
+    { ppc::op_lwz(c, 6, 4, 24); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B458; } } }
+    { ppc::op_mulli(c, 0, 5, 12); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 36); }
+    { goto L_8037B460; }
+    L_8037B458:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 36); }
+    L_8037B460:;
+    { ppc::op_lwz(c, 6, 4, 28); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B47C; } } }
+    { ppc::op_rlwinm(c, 5, 0, 5, 0, 26, false); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 16); }
+    { goto L_8037B484; }
+    L_8037B47C:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 16); }
+    L_8037B484:;
+    { ppc::op_lwz(c, 6, 4, 32); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B4A0; } } }
+    { ppc::op_rlwinm(c, 5, 0, 7, 0, 24, false); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 20); }
+    { goto L_8037B4A8; }
+    L_8037B4A0:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 20); }
+    L_8037B4A8:;
+    { ppc::op_lwz(c, 6, 4, 36); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B4C4; } } }
+    { ppc::op_rlwinm(c, 5, 0, 6, 0, 25, false); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 24); }
+    { goto L_8037B4CC; }
+    L_8037B4C4:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 24); }
+    L_8037B4CC:;
+    { ppc::op_lwz(c, 6, 4, 40); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { goto L_8037B4E8; } } }
+    { ppc::op_mulli(c, 0, 5, 160); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 32); }
+    { goto L_8037B4F0; }
+    L_8037B4E8:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 32); }
+    L_8037B4F0:;
+    { ppc::op_lwz(c, 6, 4, 44); }
+    { ppc::op_cmpi(c, 0, 6, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_8037B50C; } } }
+    { ppc::op_rlwinm(c, 5, 0, 9, 0, 22, false); }
+    { ppc::op_add(c, 0, 6, 0, false); }
+    { ppc::op_stw(c, 0, 3, 12); }
+    { goto L_8037B514; }
+    L_8037B50C:;
+    { ppc::op_addi(c, 0, 0, 0); }
+    { ppc::op_stw(c, 0, 3, 12); }
+    L_8037B514:;
+    { ppc::op_lwz(c, 0, 4, 48); }
+    { ppc::op_stw(c, 0, 3, 44); }
+    { ppc::op_lwz(c, 0, 4, 52); }
+    { ppc::op_stw(c, 0, 3, 48); }
+    { ppc::op_lwz(c, 0, 4, 56); }
+    { ppc::op_stw(c, 0, 3, 52); }
+    { return; }
+    ppc::trap(0x8037B530, "fell off the end of function 8037B388");
+}
+}  // namespace
+static void fast_Leaf_8037B388(ppc::Ctx& c) {   // fn_8037B388
+    if (leaf_off(0x8037B388) || !(in_ram(c.r[3] + uint32_t(0), 56) && in_ram(c.r[4] + uint32_t(4), 56))) { slow_Leaf_8037B388(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    uint8_t* const P3 = ppc::hp(c, c.r[3]); bool stamped3 = false;
+    uint8_t* const P4 = ppc::hp(c, c.r[4]); bool stamped4 = false;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_8037B388:;
+    lc.r[6] = ld32((P4 + (4)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B3A4;
+    ppc::op_mulli(lc, 0, 5, 260);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (0)), lc.r[0]);
+    goto L_8037B3AC;
+L_8037B3A4:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (0)), lc.r[0]);
+L_8037B3AC:;
+    lc.r[6] = ld32((P4 + (8)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B3C8;
+    ppc::op_mulli(lc, 0, 5, 100);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (4)), lc.r[0]);
+    goto L_8037B3D0;
+L_8037B3C8:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (4)), lc.r[0]);
+L_8037B3D0:;
+    lc.r[6] = ld32((P4 + (12)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B3EC;
+    ppc::op_mulli(lc, 0, 5, 584);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (40)), lc.r[0]);
+    goto L_8037B3F4;
+L_8037B3EC:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (40)), lc.r[0]);
+L_8037B3F4:;
+    lc.r[6] = ld32((P4 + (16)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B410;
+    ppc::op_mulli(lc, 0, 5, 40);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (28)), lc.r[0]);
+    goto L_8037B418;
+L_8037B410:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (28)), lc.r[0]);
+L_8037B418:;
+    lc.r[6] = ld32((P4 + (20)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B434;
+    ppc::op_rlwinm(lc, 5, 0, 3, 0, 28, false);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (8)), lc.r[0]);
+    goto L_8037B43C;
+L_8037B434:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (8)), lc.r[0]);
+L_8037B43C:;
+    lc.r[6] = ld32((P4 + (24)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B458;
+    ppc::op_mulli(lc, 0, 5, 12);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (36)), lc.r[0]);
+    goto L_8037B460;
+L_8037B458:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (36)), lc.r[0]);
+L_8037B460:;
+    lc.r[6] = ld32((P4 + (28)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B47C;
+    ppc::op_rlwinm(lc, 5, 0, 5, 0, 26, false);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (16)), lc.r[0]);
+    goto L_8037B484;
+L_8037B47C:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (16)), lc.r[0]);
+L_8037B484:;
+    lc.r[6] = ld32((P4 + (32)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B4A0;
+    ppc::op_rlwinm(lc, 5, 0, 7, 0, 24, false);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (20)), lc.r[0]);
+    goto L_8037B4A8;
+L_8037B4A0:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (20)), lc.r[0]);
+L_8037B4A8:;
+    lc.r[6] = ld32((P4 + (36)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B4C4;
+    ppc::op_rlwinm(lc, 5, 0, 6, 0, 25, false);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (24)), lc.r[0]);
+    goto L_8037B4CC;
+L_8037B4C4:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (24)), lc.r[0]);
+L_8037B4CC:;
+    lc.r[6] = ld32((P4 + (40)));
+    if ((int32_t(lc.r[6]) == 0)) goto L_8037B4E8;
+    ppc::op_mulli(lc, 0, 5, 160);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (32)), lc.r[0]);
+    goto L_8037B4F0;
+L_8037B4E8:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (32)), lc.r[0]);
+L_8037B4F0:;
+    lc.r[6] = ld32((P4 + (44)));
+    ppc::op_cmpi(lc, 0, 6, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_8037B50C;
+    ppc::op_rlwinm(lc, 5, 0, 9, 0, 22, false);
+    ppc::op_add(lc, 0, 6, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (12)), lc.r[0]);
+    goto L_8037B514;
+L_8037B50C:;
+    ppc::op_addi(lc, 0, 0, 0);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (12)), lc.r[0]);
+L_8037B514:;
+    lc.r[0] = ld32((P4 + (48)));
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (44)), lc.r[0]);
+    lc.r[0] = ld32((P4 + (52)));
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (48)), lc.r[0]);
+    lc.r[0] = ld32((P4 + (56)));
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 56); stamped3 = true; }
+    st32((P3 + (52)), lc.r[0]);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[6] = lc.r[6];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_8037B388(ppc::Ctx& c) {
+    if (!leaf_verify(0x8037B388)) { fast_Leaf_8037B388(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8037B388(c); slow_Leaf_8037B388(shadow); verify_compare("Leaf_8037B388", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8029C4AC(ppc::Ctx& c) {
+    L_8029C4AC:;
+    { ppc::op_stwu(c, 1, 1, -32); }
+    { ppc::op_stfd(c, 1, 1, 8); }
+    { ppc::op_lwz(c, 6, 1, 8); }
+    { ppc::op_lwz(c, 0, 1, 12); }
+    { ppc::op_rlwinm(c, 6, 3, 0, 1, 11, false); }
+    { ppc::op_addis(c, 3, 3, -32752); }
+    { ppc::op_cmpli(c, 0, 3, 0u); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C4E0; } } }
+    { ppc::op_fmul(c, 0, 1, 1, false); }
+    { ppc::op_addi(c, 0, 0, 33); }
+    { ppc::op_stw(c, 0, 13, -25288); }
+    { ppc::op_fadd(c, 1, 1, 0, false); }
+    { goto L_8029C6EC; }
+    L_8029C4E0:;
+    { ppc::op_cmpi(c, 1, 6, 0); }
+    { { if (ppc::crbit(c, 5) == true) { goto L_8029C510; } } }
+    { ppc::op_rlwinm(c, 6, 3, 0, 1, 31, false); }
+    { ppc::op_or(c, 0, 3, 3, true); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C4F8; } } }
+    { goto L_8029C6EC; }
+    L_8029C4F8:;
+    { { if (ppc::crbit(c, 4) == false) { goto L_8029C510; } } }
+    { ppc::op_addi(c, 0, 0, 33); }
+    { ppc::op_addis(c, 3, 0, -32660); }
+    { ppc::op_stw(c, 0, 13, -25288); }
+    { ppc::op_lfs(c, 1, 3, 13728); }
+    { goto L_8029C6EC; }
+    L_8029C510:;
+    { ppc::op_srawi(c, 6, 3, 20, true); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C564; } } }
+    { goto L_8029C52C; }
+    L_8029C51C:;
+    { ppc::op_rlwinm(c, 0, 4, 21, 11, 31, false); }
+    { ppc::op_rlwinm(c, 0, 0, 21, 0, 10, false); }
+    { ppc::op_or(c, 6, 6, 4, false); }
+    { ppc::op_addi(c, 3, 3, -21); }
+    L_8029C52C:;
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[6]) == 0)) { ppc::poll(c); goto L_8029C51C; } } }
+    { ppc::op_addi(c, 7, 0, 0); }
+    { goto L_8029C544; }
+    L_8029C53C:;
+    { ppc::op_rlwinm(c, 6, 6, 1, 0, 30, false); }
+    { ppc::op_addi(c, 7, 7, 1); }
+    L_8029C544:;
+    { ppc::op_rlwinm(c, 6, 4, 0, 11, 11, true); }
+    { { if (ppc::crbit(c, 2) == true) { ppc::poll(c); goto L_8029C53C; } } }
+    { ppc::op_subfic(c, 4, 7, 32); }
+    { ppc::op_addi(c, 5, 7, -1); }
+    { ppc::op_srw(c, 0, 4, 4, false); }
+    { ppc::op_slw(c, 0, 0, 7, false); }
+    { ppc::op_subf(c, 3, 5, 3, false); }
+    { ppc::op_or(c, 6, 6, 4, false); }
+    L_8029C564:;
+    { ppc::op_addi(c, 4, 3, -1023); }
+    { ppc::op_rlwinm(c, 6, 5, 0, 12, 31, false); }
+    { ppc::op_rlwinm(c, 4, 4, 0, 31, 31, true); }
+    { ppc::op_oris(c, 5, 6, 16u); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_8029C588; } } }
+    { ppc::op_rlwinm(c, 0, 5, 1, 31, 31, false); }
+    { ppc::op_add(c, 4, 6, 6, false); }
+    { ppc::op_add(c, 6, 5, 4, false); }
+    { ppc::op_add(c, 0, 0, 0, false); }
+    L_8029C588:;
+    { ppc::op_rlwinm(c, 0, 5, 1, 31, 31, false); }
+    { ppc::op_add(c, 4, 6, 6, false); }
+    { ppc::op_add(c, 6, 5, 4, false); }
+    { ppc::op_add(c, 0, 0, 0, false); }
+    { ppc::op_addi(c, 9, 0, 0); }
+    { ppc::op_addi(c, 11, 0, 0); }
+    { ppc::op_addi(c, 10, 0, 0); }
+    { ppc::op_addi(c, 12, 0, 0); }
+    { ppc::op_addis(c, 7, 0, 32); }
+    { goto L_8029C5DC; }
+    L_8029C5B0:;
+    { ppc::op_add(c, 4, 11, 7, false); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[4]) > int32_t(c.r[6]))) { goto L_8029C5C8; } } }
+    { ppc::op_add(c, 11, 4, 7, false); }
+    { ppc::op_subf(c, 6, 4, 6, false); }
+    { ppc::op_add(c, 12, 12, 7, false); }
+    L_8029C5C8:;
+    { ppc::op_rlwinm(c, 0, 5, 1, 31, 31, false); }
+    { ppc::op_add(c, 4, 6, 6, false); }
+    { ppc::op_add(c, 6, 5, 4, false); }
+    { ppc::op_add(c, 0, 0, 0, false); }
+    { ppc::op_rlwinm(c, 7, 7, 31, 1, 31, false); }
+    L_8029C5DC:;
+    { /* cr0 compare is folded into the next branch */ }
+    { { if (!((int32_t(c.r[7]) == 0))) { ppc::poll(c); goto L_8029C5B0; } } }
+    { ppc::op_addis(c, 7, 0, -32768); }
+    { goto L_8029C654; }
+    L_8029C5EC:;
+    { ppc::op_cmp(c, 0, 11, 6); }
+    { ppc::op_or(c, 11, 5, 11, false); }
+    { ppc::op_add(c, 8, 9, 7, false); }
+    { { if (ppc::crbit(c, 0) == true) { goto L_8029C608; } } }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C640; } } }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((c.r[8] > c.r[0])) { goto L_8029C640; } } }
+    L_8029C608:;
+    { ppc::op_rlwinm(c, 8, 4, 0, 0, 0, false); }
+    { ppc::op_add(c, 9, 8, 7, false); }
+    { ppc::op_addis(c, 4, 4, -32768); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if (!((c.r[4] == 0u))) { goto L_8029C628; } } }
+    { ppc::op_rlwinm(c, 9, 4, 0, 0, 0, true); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C628; } } }
+    { ppc::op_addi(c, 11, 11, 1); }
+    L_8029C628:;
+    { ppc::op_cmpl(c, 0, 0, 8); }
+    { ppc::op_subf(c, 6, 5, 6, false); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_8029C638; } } }
+    { ppc::op_addi(c, 6, 6, -1); }
+    L_8029C638:;
+    { ppc::op_subf(c, 0, 8, 0, false); }
+    { ppc::op_add(c, 10, 10, 7, false); }
+    L_8029C640:;
+    { ppc::op_rlwinm(c, 0, 5, 1, 31, 31, false); }
+    { ppc::op_add(c, 4, 6, 6, false); }
+    { ppc::op_add(c, 6, 5, 4, false); }
+    { ppc::op_add(c, 0, 0, 0, false); }
+    { ppc::op_rlwinm(c, 7, 7, 31, 1, 31, false); }
+    L_8029C654:;
+    { /* cr0 compare is folded into the next branch */ }
+    { { if (!((int32_t(c.r[7]) == 0))) { ppc::poll(c); goto L_8029C5EC; } } }
+    { ppc::op_or(c, 6, 0, 0, true); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_8029C6B8; } } }
+    { ppc::op_lfd(c, 0, 2, -7248); }
+    { ppc::op_fcmpo(c, 0, 0, 0); }
+    { ppc::op_stfd(c, 0, 1, 16); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C6B8; } } }
+    { ppc::op_addis(c, 0, 10, 1); }
+    { ppc::op_stfd(c, 0, 1, 16); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if (!((c.r[0] == 65535u))) { goto L_8029C694; } } }
+    { ppc::op_addi(c, 10, 0, 0); }
+    { ppc::op_addi(c, 12, 12, 1); }
+    { goto L_8029C6B8; }
+    L_8029C694:;
+    { ppc::op_fcmpo(c, 0, 0, 0); }
+    { { if (ppc::crbit(c, 1) == false) { goto L_8029C6B0; } } }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if (!((c.r[0] == 65534u))) { goto L_8029C6A8; } } }
+    { ppc::op_addi(c, 12, 12, 1); }
+    L_8029C6A8:;
+    { ppc::op_addi(c, 10, 10, 2); }
+    { goto L_8029C6B8; }
+    L_8029C6B0:;
+    { ppc::op_rlwinm(c, 10, 0, 0, 31, 31, false); }
+    { ppc::op_add(c, 10, 10, 0, false); }
+    L_8029C6B8:;
+    { ppc::op_rlwinm(c, 12, 0, 0, 31, 31, false); }
+    { ppc::op_srawi(c, 12, 4, 1, false); }
+    { ppc::op_cmpi(c, 0, 0, 1); }
+    { ppc::op_rlwinm(c, 10, 5, 31, 1, 31, false); }
+    { ppc::op_addis(c, 4, 4, 16352); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8029C6D4; } } }
+    { ppc::op_oris(c, 5, 5, 32768u); }
+    L_8029C6D4:;
+    { ppc::op_addi(c, 0, 3, -1023); }
+    { ppc::op_stw(c, 5, 1, 20); }
+    { ppc::op_rlwinm(c, 0, 0, 19, 0, 11, false); }
+    { ppc::op_add(c, 4, 4, 0, false); }
+    { ppc::op_stw(c, 4, 1, 16); }
+    { ppc::op_lfd(c, 1, 1, 16); }
+    L_8029C6EC:;
+    { ppc::op_addi(c, 1, 1, 32); }
+    { return; }
+    ppc::trap(0x8029C6F4, "fell off the end of function 8029C4AC");
+}
+}  // namespace
+static void fast_Leaf_8029C4AC(ppc::Ctx& c) {   // fn_8029C4AC
+    if (leaf_off(0x8029C4AC)) { slow_Leaf_8029C4AC(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[1] = c.r[1];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.r[7] = c.r[7];
+    lc.r[8] = c.r[8];
+    lc.r[9] = c.r[9];
+    lc.r[10] = c.r[10];
+    lc.r[11] = c.r[11];
+    lc.r[12] = c.r[12];
+    lc.r[13] = c.r[13];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.cr[0] = c.cr[0];
+    lc.cr[1] = c.cr[1];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_8029C4AC:;
+    ppc::op_stwu(lc, 1, 1, -32);
+    ppc::op_stfd(lc, 1, 1, 8);
+    ppc::op_lwz(lc, 6, 1, 8);
+    ppc::op_lwz(lc, 0, 1, 12);
+    ppc::op_rlwinm(lc, 6, 3, 0, 1, 11, false);
+    ppc::op_addis(lc, 3, 3, -32752);
+    ppc::op_cmpli(lc, 0, 3, 0u);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C4E0;
+    ppc::op_fmul(lc, 0, 1, 1, false);
+    ppc::op_addi(lc, 0, 0, 33);
+    ppc::op_stw(lc, 0, 13, -25288);
+    ppc::op_fadd(lc, 1, 1, 0, false);
+    goto L_8029C6EC;
+L_8029C4E0:;
+    ppc::op_cmpi(lc, 1, 6, 0);
+    if (ppc::crbit(lc, 5) == true) goto L_8029C510;
+    ppc::op_rlwinm(lc, 6, 3, 0, 1, 31, false);
+    ppc::op_or(lc, 0, 3, 3, true);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C4F8;
+    goto L_8029C6EC;
+L_8029C4F8:;
+    if (ppc::crbit(lc, 4) == false) goto L_8029C510;
+    ppc::op_addi(lc, 0, 0, 33);
+    ppc::op_addis(lc, 3, 0, -32660);
+    ppc::op_stw(lc, 0, 13, -25288);
+    ppc::op_lfs(lc, 1, 3, 13728);
+    goto L_8029C6EC;
+L_8029C510:;
+    ppc::op_srawi(lc, 6, 3, 20, true);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C564;
+    goto L_8029C52C;
+L_8029C51C:;
+    ppc::op_rlwinm(lc, 0, 4, 21, 11, 31, false);
+    ppc::op_rlwinm(lc, 0, 0, 21, 0, 10, false);
+    ppc::op_or(lc, 6, 6, 4, false);
+    ppc::op_addi(lc, 3, 3, -21);
+L_8029C52C:;
+    if ((int32_t(lc.r[6]) == 0)) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.r[7] = lc.r[7]; c.r[8] = lc.r[8]; c.r[9] = lc.r[9]; c.r[10] = lc.r[10]; c.r[11] = lc.r[11]; c.r[12] = lc.r[12]; c.r[13] = lc.r[13]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.cr[0] = lc.cr[0]; c.cr[1] = lc.cr[1]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.r[7] = c.r[7]; lc.r[8] = c.r[8]; lc.r[9] = c.r[9]; lc.r[10] = c.r[10]; lc.r[11] = c.r[11]; lc.r[12] = c.r[12]; lc.r[13] = c.r[13]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.cr[0] = c.cr[0]; lc.cr[1] = c.cr[1]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; } goto L_8029C51C; }
+    ppc::op_addi(lc, 7, 0, 0);
+    goto L_8029C544;
+L_8029C53C:;
+    ppc::op_rlwinm(lc, 6, 6, 1, 0, 30, false);
+    ppc::op_addi(lc, 7, 7, 1);
+L_8029C544:;
+    ppc::op_rlwinm(lc, 6, 4, 0, 11, 11, true);
+    if (ppc::crbit(lc, 2) == true) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.r[7] = lc.r[7]; c.r[8] = lc.r[8]; c.r[9] = lc.r[9]; c.r[10] = lc.r[10]; c.r[11] = lc.r[11]; c.r[12] = lc.r[12]; c.r[13] = lc.r[13]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.cr[0] = lc.cr[0]; c.cr[1] = lc.cr[1]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.r[7] = c.r[7]; lc.r[8] = c.r[8]; lc.r[9] = c.r[9]; lc.r[10] = c.r[10]; lc.r[11] = c.r[11]; lc.r[12] = c.r[12]; lc.r[13] = c.r[13]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.cr[0] = c.cr[0]; lc.cr[1] = c.cr[1]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; } goto L_8029C53C; }
+    ppc::op_subfic(lc, 4, 7, 32);
+    ppc::op_addi(lc, 5, 7, -1);
+    ppc::op_srw(lc, 0, 4, 4, false);
+    ppc::op_slw(lc, 0, 0, 7, false);
+    ppc::op_subf(lc, 3, 5, 3, false);
+    ppc::op_or(lc, 6, 6, 4, false);
+L_8029C564:;
+    ppc::op_addi(lc, 4, 3, -1023);
+    ppc::op_rlwinm(lc, 6, 5, 0, 12, 31, false);
+    ppc::op_rlwinm(lc, 4, 4, 0, 31, 31, true);
+    ppc::op_oris(lc, 5, 6, 16u);
+    if (ppc::crbit(lc, 2) == true) goto L_8029C588;
+    ppc::op_rlwinm(lc, 0, 5, 1, 31, 31, false);
+    ppc::op_add(lc, 4, 6, 6, false);
+    ppc::op_add(lc, 6, 5, 4, false);
+    ppc::op_add(lc, 0, 0, 0, false);
+L_8029C588:;
+    ppc::op_rlwinm(lc, 0, 5, 1, 31, 31, false);
+    ppc::op_add(lc, 4, 6, 6, false);
+    ppc::op_add(lc, 6, 5, 4, false);
+    ppc::op_add(lc, 0, 0, 0, false);
+    ppc::op_addi(lc, 9, 0, 0);
+    ppc::op_addi(lc, 11, 0, 0);
+    ppc::op_addi(lc, 10, 0, 0);
+    ppc::op_addi(lc, 12, 0, 0);
+    ppc::op_addis(lc, 7, 0, 32);
+    goto L_8029C5DC;
+L_8029C5B0:;
+    ppc::op_add(lc, 4, 11, 7, false);
+    if ((int32_t(lc.r[4]) > int32_t(lc.r[6]))) goto L_8029C5C8;
+    ppc::op_add(lc, 11, 4, 7, false);
+    ppc::op_subf(lc, 6, 4, 6, false);
+    ppc::op_add(lc, 12, 12, 7, false);
+L_8029C5C8:;
+    ppc::op_rlwinm(lc, 0, 5, 1, 31, 31, false);
+    ppc::op_add(lc, 4, 6, 6, false);
+    ppc::op_add(lc, 6, 5, 4, false);
+    ppc::op_add(lc, 0, 0, 0, false);
+    ppc::op_rlwinm(lc, 7, 7, 31, 1, 31, false);
+L_8029C5DC:;
+    if (!((int32_t(lc.r[7]) == 0))) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.r[7] = lc.r[7]; c.r[8] = lc.r[8]; c.r[9] = lc.r[9]; c.r[10] = lc.r[10]; c.r[11] = lc.r[11]; c.r[12] = lc.r[12]; c.r[13] = lc.r[13]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.cr[0] = lc.cr[0]; c.cr[1] = lc.cr[1]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.r[7] = c.r[7]; lc.r[8] = c.r[8]; lc.r[9] = c.r[9]; lc.r[10] = c.r[10]; lc.r[11] = c.r[11]; lc.r[12] = c.r[12]; lc.r[13] = c.r[13]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.cr[0] = c.cr[0]; lc.cr[1] = c.cr[1]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; } goto L_8029C5B0; }
+    ppc::op_addis(lc, 7, 0, -32768);
+    goto L_8029C654;
+L_8029C5EC:;
+    ppc::op_cmp(lc, 0, 11, 6);
+    ppc::op_or(lc, 11, 5, 11, false);
+    ppc::op_add(lc, 8, 9, 7, false);
+    if (ppc::crbit(lc, 0) == true) goto L_8029C608;
+    if (ppc::crbit(lc, 2) == false) goto L_8029C640;
+    if ((lc.r[8] > lc.r[0])) goto L_8029C640;
+L_8029C608:;
+    ppc::op_rlwinm(lc, 8, 4, 0, 0, 0, false);
+    ppc::op_add(lc, 9, 8, 7, false);
+    ppc::op_addis(lc, 4, 4, -32768);
+    if (!((lc.r[4] == 0u))) goto L_8029C628;
+    ppc::op_rlwinm(lc, 9, 4, 0, 0, 0, true);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C628;
+    ppc::op_addi(lc, 11, 11, 1);
+L_8029C628:;
+    ppc::op_cmpl(lc, 0, 0, 8);
+    ppc::op_subf(lc, 6, 5, 6, false);
+    if (ppc::crbit(lc, 0) == false) goto L_8029C638;
+    ppc::op_addi(lc, 6, 6, -1);
+L_8029C638:;
+    ppc::op_subf(lc, 0, 8, 0, false);
+    ppc::op_add(lc, 10, 10, 7, false);
+L_8029C640:;
+    ppc::op_rlwinm(lc, 0, 5, 1, 31, 31, false);
+    ppc::op_add(lc, 4, 6, 6, false);
+    ppc::op_add(lc, 6, 5, 4, false);
+    ppc::op_add(lc, 0, 0, 0, false);
+    ppc::op_rlwinm(lc, 7, 7, 31, 1, 31, false);
+L_8029C654:;
+    if (!((int32_t(lc.r[7]) == 0))) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.r[5] = lc.r[5]; c.r[6] = lc.r[6]; c.r[7] = lc.r[7]; c.r[8] = lc.r[8]; c.r[9] = lc.r[9]; c.r[10] = lc.r[10]; c.r[11] = lc.r[11]; c.r[12] = lc.r[12]; c.r[13] = lc.r[13]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.cr[0] = lc.cr[0]; c.cr[1] = lc.cr[1]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.r[5] = c.r[5]; lc.r[6] = c.r[6]; lc.r[7] = c.r[7]; lc.r[8] = c.r[8]; lc.r[9] = c.r[9]; lc.r[10] = c.r[10]; lc.r[11] = c.r[11]; lc.r[12] = c.r[12]; lc.r[13] = c.r[13]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.cr[0] = c.cr[0]; lc.cr[1] = c.cr[1]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; } goto L_8029C5EC; }
+    ppc::op_or(lc, 6, 0, 0, true);
+    if (ppc::crbit(lc, 2) == true) goto L_8029C6B8;
+    ppc::op_lfd(lc, 0, 2, -7248);
+    ppc::op_fcmpo(lc, 0, 0, 0);
+    ppc::op_stfd(lc, 0, 1, 16);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C6B8;
+    ppc::op_addis(lc, 0, 10, 1);
+    ppc::op_stfd(lc, 0, 1, 16);
+    if (!((lc.r[0] == 65535u))) goto L_8029C694;
+    ppc::op_addi(lc, 10, 0, 0);
+    ppc::op_addi(lc, 12, 12, 1);
+    goto L_8029C6B8;
+L_8029C694:;
+    ppc::op_fcmpo(lc, 0, 0, 0);
+    if (ppc::crbit(lc, 1) == false) goto L_8029C6B0;
+    if (!((lc.r[0] == 65534u))) goto L_8029C6A8;
+    ppc::op_addi(lc, 12, 12, 1);
+L_8029C6A8:;
+    ppc::op_addi(lc, 10, 10, 2);
+    goto L_8029C6B8;
+L_8029C6B0:;
+    ppc::op_rlwinm(lc, 10, 0, 0, 31, 31, false);
+    ppc::op_add(lc, 10, 10, 0, false);
+L_8029C6B8:;
+    ppc::op_rlwinm(lc, 12, 0, 0, 31, 31, false);
+    ppc::op_srawi(lc, 12, 4, 1, false);
+    ppc::op_cmpi(lc, 0, 0, 1);
+    ppc::op_rlwinm(lc, 10, 5, 31, 1, 31, false);
+    ppc::op_addis(lc, 4, 4, 16352);
+    if (ppc::crbit(lc, 2) == false) goto L_8029C6D4;
+    ppc::op_oris(lc, 5, 5, 32768u);
+L_8029C6D4:;
+    ppc::op_addi(lc, 0, 3, -1023);
+    ppc::op_stw(lc, 5, 1, 20);
+    ppc::op_rlwinm(lc, 0, 0, 19, 0, 11, false);
+    ppc::op_add(lc, 4, 4, 0, false);
+    ppc::op_stw(lc, 4, 1, 16);
+    ppc::op_lfd(lc, 1, 1, 16);
+L_8029C6EC:;
+    ppc::op_addi(lc, 1, 1, 32);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[1] = lc.r[1];
+    c.r[2] = lc.r[2];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.r[5] = lc.r[5];
+    c.r[6] = lc.r[6];
+    c.r[7] = lc.r[7];
+    c.r[8] = lc.r[8];
+    c.r[9] = lc.r[9];
+    c.r[10] = lc.r[10];
+    c.r[11] = lc.r[11];
+    c.r[12] = lc.r[12];
+    c.r[13] = lc.r[13];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.cr[0] = lc.cr[0];
+    c.cr[1] = lc.cr[1];
+    c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov;
+}
+void hle_Leaf_8029C4AC(ppc::Ctx& c) {
+    if (!leaf_verify(0x8029C4AC)) { fast_Leaf_8029C4AC(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8029C4AC(c); slow_Leaf_8029C4AC(shadow); verify_compare("Leaf_8029C4AC", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80367660(ppc::Ctx& c) {
+    L_80367660:;
+    { ppc::op_lwz(c, 3, 3, 0); }
+    { ppc::op_cmpi(c, 0, 3, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80367678; } } }
+    { ppc::op_lbz(c, 3, 3, 2); }
+    { ppc::op_extsb(c, 3, 3, false); }
+    { return; }
+    L_80367678:;
+    { ppc::op_addi(c, 3, 0, -1); }
+    { return; }
+    ppc::trap(0x80367680, "fell off the end of function 80367660");
+}
+}  // namespace
+static void fast_Leaf_80367660(ppc::Ctx& c) {   // fn_80367660
+    if (leaf_off(0x80367660)) { slow_Leaf_80367660(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_80367660:;
+    ppc::op_lwz(lc, 3, 3, 0);
+    ppc::op_cmpi(lc, 0, 3, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80367678;
+    ppc::op_lbz(lc, 3, 3, 2);
+    ppc::op_extsb(lc, 3, 3, false);
+    goto L_done;
+L_80367678:;
+    ppc::op_addi(lc, 3, 0, -1);
+    goto L_done;
+L_done:;
+    c.r[3] = lc.r[3];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_80367660(ppc::Ctx& c) {
+    if (!leaf_verify(0x80367660)) { fast_Leaf_80367660(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80367660(c); slow_Leaf_80367660(shadow); verify_compare("Leaf_80367660", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80064C34(ppc::Ctx& c) {
+    L_80064C34:;
+    { ppc::op_psq_l(c, 0, 4, 0, 0, 0); }
+    { ppc::op_psq_l(c, 1, 5, 0, 0, 0); }
+    { ppc::op_ps_add(c, 0, 0, 1, false); }
+    { ppc::op_psq_st(c, 0, 3, 0, 0, 0); }
+    { ppc::op_psq_l(c, 0, 4, 8, 1, 0); }
+    { ppc::op_psq_l(c, 1, 5, 8, 1, 0); }
+    { ppc::op_ps_add(c, 0, 0, 1, false); }
+    { ppc::op_psq_st(c, 0, 3, 8, 1, 0); }
+    { return; }
+    ppc::trap(0x80064C58, "fell off the end of function 80064C34");
+}
+}  // namespace
+static void fast_Leaf_80064C34(ppc::Ctx& c) {   // fn_80064C34
+    if (leaf_off(0x80064C34) || !(float_gqr0(c))) { slow_Leaf_80064C34(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.gqr[0] = c.gqr[0];
+L_80064C34:;
+    ppc::op_psq_l(lc, 0, 4, 0, 0, 0);
+    ppc::op_psq_l(lc, 1, 5, 0, 0, 0);
+    ppc::op_ps_add(lc, 0, 0, 1, false);
+    ppc::op_psq_st(lc, 0, 3, 0, 0, 0);
+    ppc::op_psq_l(lc, 0, 4, 8, 1, 0);
+    ppc::op_psq_l(lc, 1, 5, 8, 1, 0);
+    ppc::op_ps_add(lc, 0, 0, 1, false);
+    ppc::op_psq_st(lc, 0, 3, 8, 1, 0);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+}
+void hle_Leaf_80064C34(ppc::Ctx& c) {
+    if (!leaf_verify(0x80064C34)) { fast_Leaf_80064C34(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80064C34(c); slow_Leaf_80064C34(shadow); verify_compare("Leaf_80064C34", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80394914(ppc::Ctx& c) {
+    L_80394914:;
+    { ppc::op_psq_l(c, 2, 4, 0, 0, 0); }
+    { ppc::op_psq_l(c, 0, 5, 0, 0, 0); }
+    { ppc::op_psq_l(c, 3, 4, 8, 0, 0); }
+    { ppc::op_psq_l(c, 4, 4, 16, 0, 0); }
+    { ppc::op_ps_mul(c, 8, 2, 0, false); }
+    { ppc::op_psq_l(c, 1, 5, 8, 1, 0); }
+    { ppc::op_psq_l(c, 5, 4, 24, 0, 0); }
+    { ppc::op_ps_madd(c, 9, 3, 8, 1, false); }
+    { ppc::op_psq_l(c, 6, 4, 32, 0, 0); }
+    { ppc::op_ps_mul(c, 8, 4, 0, false); }
+    { ppc::op_psq_l(c, 7, 4, 40, 0, 0); }
+    { ppc::op_psq_st(c, 3, 3, 8, 0, 0); }
+    { ppc::op_ps_sum0(c, 10, 9, 9, 10, false); }
+    { ppc::op_ps_madd(c, 9, 5, 8, 1, false); }
+    { ppc::op_psq_st(c, 5, 3, 24, 0, 0); }
+    { ppc::op_ps_mul(c, 8, 6, 0, false); }
+    { ppc::op_psq_st(c, 10, 3, 12, 1, 0); }
+    { ppc::op_ps_sum0(c, 10, 9, 9, 10, false); }
+    { ppc::op_ps_madd(c, 9, 7, 8, 1, false); }
+    { ppc::op_psq_st(c, 7, 3, 40, 0, 0); }
+    { ppc::op_psq_st(c, 10, 3, 28, 1, 0); }
+    { ppc::op_ps_sum0(c, 10, 9, 9, 10, false); }
+    { ppc::op_psq_st(c, 2, 3, 0, 0, 0); }
+    { ppc::op_psq_st(c, 4, 3, 16, 0, 0); }
+    { ppc::op_psq_st(c, 6, 3, 32, 0, 0); }
+    { ppc::op_psq_st(c, 10, 3, 44, 1, 0); }
+    { return; }
+    ppc::trap(0x80394980, "fell off the end of function 80394914");
+}
+}  // namespace
+static void fast_Leaf_80394914(ppc::Ctx& c) {   // fn_80394914
+    if (leaf_off(0x80394914) || !(float_gqr0(c))) { slow_Leaf_80394914(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.f[5] = c.f[5]; lc.ps1[5] = c.ps1[5];
+    lc.f[6] = c.f[6]; lc.ps1[6] = c.ps1[6];
+    lc.f[7] = c.f[7]; lc.ps1[7] = c.ps1[7];
+    lc.f[8] = c.f[8]; lc.ps1[8] = c.ps1[8];
+    lc.f[9] = c.f[9]; lc.ps1[9] = c.ps1[9];
+    lc.f[10] = c.f[10]; lc.ps1[10] = c.ps1[10];
+    lc.gqr[0] = c.gqr[0];
+L_80394914:;
+    ppc::op_psq_l(lc, 2, 4, 0, 0, 0);
+    ppc::op_psq_l(lc, 0, 5, 0, 0, 0);
+    ppc::op_psq_l(lc, 3, 4, 8, 0, 0);
+    ppc::op_psq_l(lc, 4, 4, 16, 0, 0);
+    ppc::op_ps_mul(lc, 8, 2, 0, false);
+    ppc::op_psq_l(lc, 1, 5, 8, 1, 0);
+    ppc::op_psq_l(lc, 5, 4, 24, 0, 0);
+    ppc::op_ps_madd(lc, 9, 3, 8, 1, false);
+    ppc::op_psq_l(lc, 6, 4, 32, 0, 0);
+    ppc::op_ps_mul(lc, 8, 4, 0, false);
+    ppc::op_psq_l(lc, 7, 4, 40, 0, 0);
+    ppc::op_psq_st(lc, 3, 3, 8, 0, 0);
+    ppc::op_ps_sum0(lc, 10, 9, 9, 10, false);
+    ppc::op_ps_madd(lc, 9, 5, 8, 1, false);
+    ppc::op_psq_st(lc, 5, 3, 24, 0, 0);
+    ppc::op_ps_mul(lc, 8, 6, 0, false);
+    ppc::op_psq_st(lc, 10, 3, 12, 1, 0);
+    ppc::op_ps_sum0(lc, 10, 9, 9, 10, false);
+    ppc::op_ps_madd(lc, 9, 7, 8, 1, false);
+    ppc::op_psq_st(lc, 7, 3, 40, 0, 0);
+    ppc::op_psq_st(lc, 10, 3, 28, 1, 0);
+    ppc::op_ps_sum0(lc, 10, 9, 9, 10, false);
+    ppc::op_psq_st(lc, 2, 3, 0, 0, 0);
+    ppc::op_psq_st(lc, 4, 3, 16, 0, 0);
+    ppc::op_psq_st(lc, 6, 3, 32, 0, 0);
+    ppc::op_psq_st(lc, 10, 3, 44, 1, 0);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.f[5] = lc.f[5]; c.ps1[5] = lc.ps1[5];
+    c.f[6] = lc.f[6]; c.ps1[6] = lc.ps1[6];
+    c.f[7] = lc.f[7]; c.ps1[7] = lc.ps1[7];
+    c.f[8] = lc.f[8]; c.ps1[8] = lc.ps1[8];
+    c.f[9] = lc.f[9]; c.ps1[9] = lc.ps1[9];
+    c.f[10] = lc.f[10]; c.ps1[10] = lc.ps1[10];
+}
+void hle_Leaf_80394914(ppc::Ctx& c) {
+    if (!leaf_verify(0x80394914)) { fast_Leaf_80394914(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80394914(c); slow_Leaf_80394914(shadow); verify_compare("Leaf_80394914", shadow, c);
+}
+
+namespace {
+void slow_Leaf_803948C0(ppc::Ctx& c) {
+    L_803948C0:;
+    { ppc::op_psq_l(c, 0, 5, 0, 0, 0); }
+    { ppc::op_psq_l(c, 2, 4, 0, 0, 0); }
+    { ppc::op_psq_l(c, 4, 4, 16, 0, 0); }
+    { ppc::op_psq_l(c, 5, 4, 32, 0, 0); }
+    { ppc::op_ps_mul(c, 2, 2, 0, false); }
+    { ppc::op_ps_mul(c, 4, 4, 0, false); }
+    { ppc::op_psq_l(c, 1, 5, 8, 1, 0); }
+    { ppc::op_ps_mul(c, 5, 5, 0, false); }
+    { ppc::op_psq_l(c, 3, 4, 8, 0, 0); }
+    { ppc::op_psq_l(c, 0, 4, 24, 0, 0); }
+    { ppc::op_psq_l(c, 6, 4, 40, 0, 0); }
+    { ppc::op_ps_mul(c, 3, 3, 1, false); }
+    { ppc::op_psq_st(c, 2, 3, 0, 0, 0); }
+    { ppc::op_ps_mul(c, 0, 0, 1, false); }
+    { ppc::op_ps_mul(c, 6, 6, 1, false); }
+    { ppc::op_psq_st(c, 4, 3, 16, 0, 0); }
+    { ppc::op_psq_st(c, 3, 3, 8, 0, 0); }
+    { ppc::op_psq_st(c, 0, 3, 24, 0, 0); }
+    { ppc::op_psq_st(c, 5, 3, 32, 0, 0); }
+    { ppc::op_psq_st(c, 6, 3, 40, 0, 0); }
+    { return; }
+    ppc::trap(0x80394914, "fell off the end of function 803948C0");
+}
+}  // namespace
+static void fast_Leaf_803948C0(ppc::Ctx& c) {   // fn_803948C0
+    if (leaf_off(0x803948C0) || !(float_gqr0(c))) { slow_Leaf_803948C0(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.f[5] = c.f[5]; lc.ps1[5] = c.ps1[5];
+    lc.f[6] = c.f[6]; lc.ps1[6] = c.ps1[6];
+    lc.gqr[0] = c.gqr[0];
+L_803948C0:;
+    ppc::op_psq_l(lc, 0, 5, 0, 0, 0);
+    ppc::op_psq_l(lc, 2, 4, 0, 0, 0);
+    ppc::op_psq_l(lc, 4, 4, 16, 0, 0);
+    ppc::op_psq_l(lc, 5, 4, 32, 0, 0);
+    ppc::op_ps_mul(lc, 2, 2, 0, false);
+    ppc::op_ps_mul(lc, 4, 4, 0, false);
+    ppc::op_psq_l(lc, 1, 5, 8, 1, 0);
+    ppc::op_ps_mul(lc, 5, 5, 0, false);
+    ppc::op_psq_l(lc, 3, 4, 8, 0, 0);
+    ppc::op_psq_l(lc, 0, 4, 24, 0, 0);
+    ppc::op_psq_l(lc, 6, 4, 40, 0, 0);
+    ppc::op_ps_mul(lc, 3, 3, 1, false);
+    ppc::op_psq_st(lc, 2, 3, 0, 0, 0);
+    ppc::op_ps_mul(lc, 0, 0, 1, false);
+    ppc::op_ps_mul(lc, 6, 6, 1, false);
+    ppc::op_psq_st(lc, 4, 3, 16, 0, 0);
+    ppc::op_psq_st(lc, 3, 3, 8, 0, 0);
+    ppc::op_psq_st(lc, 0, 3, 24, 0, 0);
+    ppc::op_psq_st(lc, 5, 3, 32, 0, 0);
+    ppc::op_psq_st(lc, 6, 3, 40, 0, 0);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.f[5] = lc.f[5]; c.ps1[5] = lc.ps1[5];
+    c.f[6] = lc.f[6]; c.ps1[6] = lc.ps1[6];
+}
+void hle_Leaf_803948C0(ppc::Ctx& c) {
+    if (!leaf_verify(0x803948C0)) { fast_Leaf_803948C0(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_803948C0(c); slow_Leaf_803948C0(shadow); verify_compare("Leaf_803948C0", shadow, c);
+}
+
+namespace {
+void slow_Leaf_803942AC(ppc::Ctx& c) {
+    L_803942AC:;
+    { ppc::op_fabs(c, 3, 1, false); }
+    { ppc::op_stwu(c, 1, 1, -16); }
+    { ppc::op_lfs(c, 0, 2, -4936); }
+    { goto L_803942C0; }
+    L_803942BC:;
+    { ppc::op_fsubs(c, 3, 3, 0, false); }
+    L_803942C0:;
+    { ppc::op_fcmpo(c, 0, 3, 0); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == true) { ppc::poll(c); goto L_803942BC; } } }
+    { ppc::op_psq_st(c, 3, 1, 12, 1, 3); }
+    { ppc::op_lhz(c, 0, 1, 12); }
+    { ppc::op_sth(c, 0, 1, 8); }
+    { ppc::op_psq_l(c, 2, 1, 8, 1, 3); }
+    { ppc::op_addis(c, 4, 0, -32701); }
+    { ppc::op_rlwinm(c, 0, 0, 4, 20, 27, false); }
+    { ppc::op_lfs(c, 0, 2, -4932); }
+    { ppc::op_addi(c, 4, 4, 24120); }
+    { ppc::op_fsubs(c, 4, 3, 2, false); }
+    { ppc::op_add(c, 3, 4, 0, false); }
+    { ppc::op_fcmpo(c, 0, 1, 0); }
+    { ppc::op_lfs(c, 3, 3, 8); }
+    { ppc::op_lfsx(c, 2, 4, 0); }
+    { ppc::op_fmuls(c, 0, 4, 3, false); }
+    { ppc::op_fadds(c, 1, 2, 0, false); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80394310; } } }
+    { ppc::op_fneg(c, 1, 1, false); }
+    L_80394310:;
+    { ppc::op_addi(c, 1, 1, 16); }
+    { return; }
+    ppc::trap(0x80394318, "fell off the end of function 803942AC");
+}
+}  // namespace
+static void fast_Leaf_803942AC(ppc::Ctx& c) {   // fn_803942AC
+    if (leaf_off(0x803942AC) || !(float_gqr0(c))) { slow_Leaf_803942AC(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[1] = c.r[1];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+    lc.gqr[3] = c.gqr[3];
+L_803942AC:;
+    ppc::op_fabs(lc, 3, 1, false);
+    ppc::op_stwu(lc, 1, 1, -16);
+    ppc::op_lfs(lc, 0, 2, -4936);
+    goto L_803942C0;
+L_803942BC:;
+    ppc::op_fsubs(lc, 3, 3, 0, false);
+L_803942C0:;
+    ppc::op_fcmpo(lc, 0, 3, 0);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == true) { if ((++c.poll_count & 0x7FFu) == 0) { c.r[0] = lc.r[0]; c.r[1] = lc.r[1]; c.r[2] = lc.r[2]; c.r[3] = lc.r[3]; c.r[4] = lc.r[4]; c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0]; c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1]; c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2]; c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3]; c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4]; c.cr[0] = lc.cr[0]; c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov; ppc::poll_slow(c); lc.r[0] = c.r[0]; lc.r[1] = c.r[1]; lc.r[2] = c.r[2]; lc.r[3] = c.r[3]; lc.r[4] = c.r[4]; lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0]; lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1]; lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2]; lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3]; lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4]; lc.cr[0] = c.cr[0]; lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov; lc.gqr[3] = c.gqr[3]; } goto L_803942BC; }
+    ppc::op_psq_st(lc, 3, 1, 12, 1, 3);
+    ppc::op_lhz(lc, 0, 1, 12);
+    ppc::op_sth(lc, 0, 1, 8);
+    ppc::op_psq_l(lc, 2, 1, 8, 1, 3);
+    ppc::op_addis(lc, 4, 0, -32701);
+    ppc::op_rlwinm(lc, 0, 0, 4, 20, 27, false);
+    ppc::op_lfs(lc, 0, 2, -4932);
+    ppc::op_addi(lc, 4, 4, 24120);
+    ppc::op_fsubs(lc, 4, 3, 2, false);
+    ppc::op_add(lc, 3, 4, 0, false);
+    ppc::op_fcmpo(lc, 0, 1, 0);
+    ppc::op_lfs(lc, 3, 3, 8);
+    ppc::op_lfsx(lc, 2, 4, 0);
+    ppc::op_fmuls(lc, 0, 4, 3, false);
+    ppc::op_fadds(lc, 1, 2, 0, false);
+    if (ppc::crbit(lc, 0) == false) goto L_80394310;
+    ppc::op_fneg(lc, 1, 1, false);
+L_80394310:;
+    ppc::op_addi(lc, 1, 1, 16);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[1] = lc.r[1];
+    c.r[2] = lc.r[2];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.cr[0] = lc.cr[0];
+    c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov;
+}
+void hle_Leaf_803942AC(ppc::Ctx& c) {
+    if (!leaf_verify(0x803942AC)) { fast_Leaf_803942AC(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_803942AC(c); slow_Leaf_803942AC(shadow); verify_compare("Leaf_803942AC", shadow, c);
+}
+
+namespace {
+void slow_Leaf_803890C8(ppc::Ctx& c) {
+    L_803890C8:;
+    { ppc::op_lwz(c, 7, 3, 0); }
+    { ppc::op_addi(c, 6, 0, 0); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[7]) == 0)) { goto L_803890E8; } } }
+    { ppc::op_lwz(c, 0, 3, 4); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[0]) == 0)) { goto L_803890E8; } } }
+    { ppc::op_addi(c, 6, 0, 1); }
+    L_803890E8:;
+    { ppc::op_cmpi(c, 0, 6, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80389130; } } }
+    { ppc::op_cmpli(c, 0, 4, 8u); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80389130; } } }
+    { ppc::op_cmpi(c, 0, 5, 0); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80389114; } } }
+    { ppc::op_lwz(c, 5, 3, 4); }
+    { ppc::op_addi(c, 0, 0, -1); }
+    { ppc::op_addi(c, 3, 0, 1); }
+    { ppc::op_stbx(c, 0, 5, 4); }
+    { return; }
+    L_80389114:;
+    { ppc::op_lhz(c, 0, 7, 0); }
+    { ppc::op_cmp(c, 0, 5, 0); }
+    { { if (ppc::crbit(c, 0) == false) { goto L_80389130; } } }
+    { ppc::op_lwz(c, 6, 3, 4); }
+    { ppc::op_addi(c, 3, 0, 1); }
+    { ppc::op_stbx(c, 5, 6, 4); }
+    { return; }
+    L_80389130:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    { return; }
+    ppc::trap(0x80389138, "fell off the end of function 803890C8");
+}
+}  // namespace
+static void fast_Leaf_803890C8(ppc::Ctx& c) {   // fn_803890C8
+    if (leaf_off(0x803890C8)) { slow_Leaf_803890C8(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.r[7] = c.r[7];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_803890C8:;
+    ppc::op_lwz(lc, 7, 3, 0);
+    ppc::op_addi(lc, 6, 0, 0);
+    if ((int32_t(lc.r[7]) == 0)) goto L_803890E8;
+    ppc::op_lwz(lc, 0, 3, 4);
+    if ((int32_t(lc.r[0]) == 0)) goto L_803890E8;
+    ppc::op_addi(lc, 6, 0, 1);
+L_803890E8:;
+    ppc::op_cmpi(lc, 0, 6, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80389130;
+    ppc::op_cmpli(lc, 0, 4, 8u);
+    if (ppc::crbit(lc, 0) == false) goto L_80389130;
+    ppc::op_cmpi(lc, 0, 5, 0);
+    if (ppc::crbit(lc, 0) == false) goto L_80389114;
+    ppc::op_lwz(lc, 5, 3, 4);
+    ppc::op_addi(lc, 0, 0, -1);
+    ppc::op_addi(lc, 3, 0, 1);
+    ppc::op_stbx(lc, 0, 5, 4);
+    goto L_done;
+L_80389114:;
+    ppc::op_lhz(lc, 0, 7, 0);
+    ppc::op_cmp(lc, 0, 5, 0);
+    if (ppc::crbit(lc, 0) == false) goto L_80389130;
+    ppc::op_lwz(lc, 6, 3, 4);
+    ppc::op_addi(lc, 3, 0, 1);
+    ppc::op_stbx(lc, 5, 6, 4);
+    goto L_done;
+L_80389130:;
+    ppc::op_addi(lc, 3, 0, 0);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.r[5] = lc.r[5];
+    c.r[6] = lc.r[6];
+    c.r[7] = lc.r[7];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_803890C8(ppc::Ctx& c) {
+    if (!leaf_verify(0x803890C8)) { fast_Leaf_803890C8(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_803890C8(c); slow_Leaf_803890C8(shadow); verify_compare("Leaf_803890C8", shadow, c);
+}
+
+namespace {
+void slow_Leaf_803703F8(ppc::Ctx& c) {
+    L_803703F8:;
+    { ppc::op_lwz(c, 3, 3, 32); }
+    { ppc::op_rlwinm(c, 4, 0, 2, 0, 29, false); }
+    { ppc::op_lfsx(c, 1, 3, 0); }
+    { return; }
+    ppc::trap(0x80370408, "fell off the end of function 803703F8");
+}
+}  // namespace
+static void fast_Leaf_803703F8(ppc::Ctx& c) {   // fn_803703F8
+    if (leaf_off(0x803703F8)) { slow_Leaf_803703F8(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+L_803703F8:;
+    ppc::op_lwz(lc, 3, 3, 32);
+    ppc::op_rlwinm(lc, 4, 0, 2, 0, 29, false);
+    ppc::op_lfsx(lc, 1, 3, 0);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+}
+void hle_Leaf_803703F8(ppc::Ctx& c) {
+    if (!leaf_verify(0x803703F8)) { fast_Leaf_803703F8(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_803703F8(c); slow_Leaf_803703F8(shadow); verify_compare("Leaf_803703F8", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8013969C(ppc::Ctx& c) {
+    L_8013969C:;
+    { ppc::op_lfs(c, 0, 2, -26220); }
+    { ppc::op_lwz(c, 7, 4, 0); }
+    { ppc::op_fdivs(c, 4, 0, 1, false); }
+    { ppc::op_lwz(c, 6, 4, 4); }
+    { ppc::op_lwz(c, 5, 4, 8); }
+    { ppc::op_lwz(c, 0, 4, 12); }
+    { ppc::op_stw(c, 7, 3, 0); }
+    { ppc::op_stw(c, 6, 3, 4); }
+    { ppc::op_stw(c, 5, 3, 8); }
+    { ppc::op_lfs(c, 0, 3, 0); }
+    { ppc::op_lfs(c, 2, 3, 4); }
+    { ppc::op_fmuls(c, 3, 0, 4, false); }
+    { ppc::op_stw(c, 0, 3, 12); }
+    { ppc::op_lfs(c, 1, 3, 8); }
+    { ppc::op_fmuls(c, 2, 2, 4, false); }
+    { ppc::op_lfs(c, 0, 3, 12); }
+    { ppc::op_fmuls(c, 1, 1, 4, false); }
+    { ppc::op_fmuls(c, 0, 0, 4, false); }
+    { ppc::op_stfs(c, 3, 3, 0); }
+    { ppc::op_stfs(c, 2, 3, 4); }
+    { ppc::op_stfs(c, 1, 3, 8); }
+    { ppc::op_stfs(c, 0, 3, 12); }
+    { return; }
+    ppc::trap(0x801396F8, "fell off the end of function 8013969C");
+}
+}  // namespace
+static void fast_Leaf_8013969C(ppc::Ctx& c) {   // fn_8013969C
+    if (leaf_off(0x8013969C) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_8013969C(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    uint8_t* const P3 = ppc::hp(c, c.r[3]); bool stamped3 = false;
+    uint8_t* const P4 = ppc::hp(c, c.r[4]); bool stamped4 = false;
+    lc.r[0] = c.r[0];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[6] = c.r[6];
+    lc.r[7] = c.r[7];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+L_8013969C:;
+    ppc::op_lfs(lc, 0, 2, -26220);
+    lc.r[7] = ld32((P4 + (0)));
+    ppc::op_fdivs(lc, 4, 0, 1, false);
+    lc.r[6] = ld32((P4 + (4)));
+    lc.r[5] = ld32((P4 + (8)));
+    lc.r[0] = ld32((P4 + (12)));
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (0)), lc.r[7]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (4)), lc.r[6]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (8)), lc.r[5]);
+    { const double v = ldf((P3 + (0))); lc.f[0] = v; lc.ps1[0] = v; }
+    { const double v = ldf((P3 + (4))); lc.f[2] = v; lc.ps1[2] = v; }
+    ppc::op_fmuls(lc, 3, 0, 4, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (12)), lc.r[0]);
+    { const double v = ldf((P3 + (8))); lc.f[1] = v; lc.ps1[1] = v; }
+    ppc::op_fmuls(lc, 2, 2, 4, false);
+    { const double v = ldf((P3 + (12))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fmuls(lc, 1, 1, 4, false);
+    ppc::op_fmuls(lc, 0, 0, 4, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (0)), lc.f[3]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (4)), lc.f[2]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (8)), lc.f[1]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (12)), lc.f[0]);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[5] = lc.r[5];
+    c.r[6] = lc.r[6];
+    c.r[7] = lc.r[7];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+}
+void hle_Leaf_8013969C(ppc::Ctx& c) {
+    if (!leaf_verify(0x8013969C)) { fast_Leaf_8013969C(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8013969C(c); slow_Leaf_8013969C(shadow); verify_compare("Leaf_8013969C", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80139648(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lwz(c, 7, 4, 0);
+    ppc::op_lwz(c, 6, 4, 4);
+    ppc::op_lwz(c, 5, 4, 8);
+    ppc::op_lwz(c, 0, 4, 12);
+    ppc::op_stw(c, 7, 3, 0);
+    ppc::op_stw(c, 6, 3, 4);
+    ppc::op_lfs(c, 2, 3, 0);
+    ppc::op_lfs(c, 0, 3, 4);
+    ppc::op_fmuls(c, 4, 2, 1, false);
+    ppc::op_stw(c, 5, 3, 8);
+    ppc::op_fmuls(c, 3, 0, 1, false);
+    ppc::op_stw(c, 0, 3, 12);
+    ppc::op_lfs(c, 2, 3, 8);
+    ppc::op_lfs(c, 0, 3, 12);
+    ppc::op_fmuls(c, 2, 2, 1, false);
+    ppc::op_stfs(c, 4, 3, 0);
+    ppc::op_fmuls(c, 0, 0, 1, false);
+    ppc::op_stfs(c, 3, 3, 4);
+    ppc::op_stfs(c, 2, 3, 8);
+    ppc::op_stfs(c, 0, 3, 12);
+}
+}  // namespace
+void hle_Leaf_80139648(ppc::Ctx& c) {   // fn_80139648
+    if (leaf_off(0x80139648) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 16))) { slow_Leaf_80139648(c); return; }
+    uint8_t* const P3 = ppc::hp(c, c.r[3]);
+    uint8_t* const P4 = ppc::hp(c, c.r[4]);
+    gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    uint32_t r3 = c.r[3];
+    uint32_t r4 = c.r[4];
+    double f1 = c.f[1];
+    uint32_t r7 = ld32((P4 + (0)));
+    uint32_t r6 = ld32((P4 + (4)));
+    uint32_t r5 = ld32((P4 + (8)));
+    uint32_t r0 = ld32((P4 + (12)));
+    st32((P3 + (0)), r7);
+    st32((P3 + (4)), r6);
+    double f2 = ldf((P3 + (0))); double p2 = f2;
+    double f0 = ldf((P3 + (4))); double p0 = f0;
+    double f4 = rs(f2 * f1); double p4 = f4;
+    st32((P3 + (8)), r5);
+    double f3 = rs(f0 * f1); double p3 = f3;
+    st32((P3 + (12)), r0);
+    f2 = ldf((P3 + (8))); p2 = f2;
+    f0 = ldf((P3 + (12))); p0 = f0;
+    f2 = rs(f2 * f1); p2 = f2;
+    stf((P3 + (0)), f4);
+    f0 = rs(f0 * f1); p0 = f0;
+    stf((P3 + (4)), f3);
+    stf((P3 + (8)), f2);
+    stf((P3 + (12)), f0);
+    c.r[0] = r0;
+    c.r[5] = r5;
+    c.r[6] = r6;
+    c.r[7] = r7;
+    c.f[0] = f0; c.ps1[0] = p0;
+    c.f[2] = f2; c.ps1[2] = p2;
+    c.f[3] = f3; c.ps1[3] = p3;
+    c.f[4] = f4; c.ps1[4] = p4;
+}
+
+namespace {
+void slow_Leaf_80032D70(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_stwu(c, 1, 1, -32);
+    ppc::op_lwz(c, 12, 4, 80);
+    ppc::op_stw(c, 31, 1, 28);
+    ppc::op_lwz(c, 31, 4, 76);
+    ppc::op_stw(c, 30, 1, 24);
+    ppc::op_lwz(c, 30, 4, 72);
+    ppc::op_stw(c, 29, 1, 20);
+    ppc::op_lwz(c, 29, 4, 68);
+    ppc::op_lwz(c, 11, 4, 84);
+    ppc::op_lwz(c, 10, 4, 88);
+    ppc::op_lwz(c, 9, 4, 92);
+    ppc::op_lwz(c, 8, 4, 96);
+    ppc::op_lwz(c, 7, 4, 100);
+    ppc::op_lwz(c, 6, 4, 104);
+    ppc::op_lwz(c, 5, 4, 108);
+    ppc::op_lwz(c, 0, 4, 112);
+    ppc::op_stw(c, 29, 3, 0);
+    ppc::op_stw(c, 30, 3, 4);
+    ppc::op_stw(c, 31, 3, 8);
+    ppc::op_stw(c, 12, 3, 12);
+    ppc::op_stw(c, 11, 3, 16);
+    ppc::op_stw(c, 10, 3, 20);
+    ppc::op_stw(c, 9, 3, 24);
+    ppc::op_stw(c, 8, 3, 28);
+    ppc::op_stw(c, 7, 3, 32);
+    ppc::op_stw(c, 6, 3, 36);
+    ppc::op_stw(c, 5, 3, 40);
+    ppc::op_stw(c, 0, 3, 44);
+    ppc::op_lwz(c, 31, 1, 28);
+    ppc::op_lwz(c, 30, 1, 24);
+    ppc::op_lwz(c, 29, 1, 20);
+    ppc::op_addi(c, 1, 1, 32);
+}
+}  // namespace
+void hle_Leaf_80032D70(ppc::Ctx& c) {   // fn_80032D70
+    if (leaf_off(0x80032D70) || !(in_ram(c.r[3] + uint32_t(0), 48) && in_ram(c.r[4] + uint32_t(68), 48) && in_ram(c.r[1] - uint32_t(32), 32))) { slow_Leaf_80032D70(c); return; }
+    uint8_t* const P3 = ppc::hp(c, c.r[3]);
+    uint8_t* const P4 = ppc::hp(c, c.r[4]);
+    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(32));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
+    gx::note_write_range(c.r[3] + uint32_t(0), 48);
+    uint32_t r1 = c.r[1];
+    uint32_t r3 = c.r[3];
+    uint32_t r4 = c.r[4];
+    uint32_t r29 = c.r[29];
+    uint32_t r30 = c.r[30];
+    uint32_t r31 = c.r[31];
+    st32(sp + 0, c.r[1]);
+    uint32_t r12 = ld32((P4 + (80)));
+    st32((sp + 28), r31);
+    r31 = ld32((P4 + (76)));
+    st32((sp + 24), r30);
+    r30 = ld32((P4 + (72)));
+    st32((sp + 20), r29);
+    r29 = ld32((P4 + (68)));
+    uint32_t r11 = ld32((P4 + (84)));
+    uint32_t r10 = ld32((P4 + (88)));
+    uint32_t r9 = ld32((P4 + (92)));
+    uint32_t r8 = ld32((P4 + (96)));
+    uint32_t r7 = ld32((P4 + (100)));
+    uint32_t r6 = ld32((P4 + (104)));
+    uint32_t r5 = ld32((P4 + (108)));
+    uint32_t r0 = ld32((P4 + (112)));
+    st32((P3 + (0)), r29);
+    st32((P3 + (4)), r30);
+    st32((P3 + (8)), r31);
+    st32((P3 + (12)), r12);
+    st32((P3 + (16)), r11);
+    st32((P3 + (20)), r10);
+    st32((P3 + (24)), r9);
+    st32((P3 + (28)), r8);
+    st32((P3 + (32)), r7);
+    st32((P3 + (36)), r6);
+    st32((P3 + (40)), r5);
+    st32((P3 + (44)), r0);
+    r31 = ld32((sp + 28));
+    r30 = ld32((sp + 24));
+    r29 = ld32((sp + 20));
+    c.r[0] = r0;
+    c.r[5] = r5;
+    c.r[6] = r6;
+    c.r[7] = r7;
+    c.r[8] = r8;
+    c.r[9] = r9;
+    c.r[10] = r10;
+    c.r[11] = r11;
+    c.r[12] = r12;
+}
+
+namespace {
+void slow_Leaf_80032FF4(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 2, 4, 0);
+    ppc::op_lfs(c, 1, 4, 4);
+    ppc::op_lfs(c, 0, 4, 8);
+    ppc::op_stfs(c, 2, 3, 12);
+    ppc::op_stfs(c, 1, 3, 28);
+    ppc::op_stfs(c, 0, 3, 44);
+}
+}  // namespace
+void hle_Leaf_80032FF4(ppc::Ctx& c) {   // fn_80032FF4
+    if (leaf_off(0x80032FF4) || !(in_ram(c.r[3] + uint32_t(12), 36) && in_ram(c.r[4] + uint32_t(0), 12))) { slow_Leaf_80032FF4(c); return; }
+    uint8_t* const P3 = ppc::hp(c, c.r[3]);
+    uint8_t* const P4 = ppc::hp(c, c.r[4]);
+    gx::note_write_range(c.r[3] + uint32_t(12), 36);
+    uint32_t r3 = c.r[3];
+    uint32_t r4 = c.r[4];
+    double f2 = ldf((P4 + (0))); double p2 = f2;
+    double f1 = ldf((P4 + (4))); double p1 = f1;
+    double f0 = ldf((P4 + (8))); double p0 = f0;
+    stf((P3 + (12)), f2);
+    stf((P3 + (28)), f1);
+    stf((P3 + (44)), f0);
+    c.f[0] = f0; c.ps1[0] = p0;
+    c.f[1] = f1; c.ps1[1] = p1;
+    c.f[2] = f2; c.ps1[2] = p2;
+}
+
+namespace {
+void slow_Leaf_8011F1E4(ppc::Ctx& c) {
+    L_8011F1E4:;
+    { ppc::op_psq_l(c, 0, 3, 0, 0, 0); }
+    { ppc::op_psq_l(c, 1, 4, 0, 0, 0); }
+    { ppc::op_psq_l(c, 2, 3, 8, 1, 0); }
+    { ppc::op_psq_l(c, 3, 4, 8, 1, 0); }
+    { ppc::op_ps_sub(c, 4, 0, 1, false); }
+    { ppc::op_ps_sub(c, 5, 2, 3, false); }
+    { ppc::op_ps_mul(c, 4, 4, 4, false); }
+    { ppc::op_ps_madd(c, 1, 5, 4, 5, false); }
+    { ppc::op_ps_sum0(c, 1, 1, 4, 4, false); }
+    { return; }
+    ppc::trap(0x8011F20C, "fell off the end of function 8011F1E4");
+}
+}  // namespace
+static void fast_Leaf_8011F1E4(ppc::Ctx& c) {   // fn_8011F1E4
+    if (leaf_off(0x8011F1E4) || !(float_gqr0(c))) { slow_Leaf_8011F1E4(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.f[5] = c.f[5]; lc.ps1[5] = c.ps1[5];
+    lc.gqr[0] = c.gqr[0];
+L_8011F1E4:;
+    ppc::op_psq_l(lc, 0, 3, 0, 0, 0);
+    ppc::op_psq_l(lc, 1, 4, 0, 0, 0);
+    ppc::op_psq_l(lc, 2, 3, 8, 1, 0);
+    ppc::op_psq_l(lc, 3, 4, 8, 1, 0);
+    ppc::op_ps_sub(lc, 4, 0, 1, false);
+    ppc::op_ps_sub(lc, 5, 2, 3, false);
+    ppc::op_ps_mul(lc, 4, 4, 4, false);
+    ppc::op_ps_madd(lc, 1, 5, 4, 5, false);
+    ppc::op_ps_sum0(lc, 1, 1, 4, 4, false);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.f[5] = lc.f[5]; c.ps1[5] = lc.ps1[5];
+}
+void hle_Leaf_8011F1E4(ppc::Ctx& c) {
+    if (!leaf_verify(0x8011F1E4)) { fast_Leaf_8011F1E4(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8011F1E4(c); slow_Leaf_8011F1E4(shadow); verify_compare("Leaf_8011F1E4", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8036624C(ppc::Ctx& c) {
+    L_8036624C:;
+    { ppc::op_lwz(c, 3, 3, 0); }
+    { ppc::op_lwz(c, 0, 3, 40); }
+    { /* cr0 compare is folded into the next branch */ }
+    { { if ((int32_t(c.r[0]) == 0)) { goto L_80366264; } } }
+    { ppc::op_add(c, 3, 3, 0, false); }
+    { goto L_80366268; }
+    L_80366264:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    L_80366268:;
+    { ppc::op_cmpi(c, 0, 3, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_80366278; } } }
+    { ppc::op_lwz(c, 3, 3, 4); }
+    { return; }
+    L_80366278:;
+    { ppc::op_addi(c, 3, 0, 0); }
+    { return; }
+    ppc::trap(0x80366280, "fell off the end of function 8036624C");
+}
+}  // namespace
+static void fast_Leaf_8036624C(ppc::Ctx& c) {   // fn_8036624C
+    if (leaf_off(0x8036624C)) { slow_Leaf_8036624C(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_8036624C:;
+    ppc::op_lwz(lc, 3, 3, 0);
+    ppc::op_lwz(lc, 0, 3, 40);
+    if ((int32_t(lc.r[0]) == 0)) goto L_80366264;
+    ppc::op_add(lc, 3, 3, 0, false);
+    goto L_80366268;
+L_80366264:;
+    ppc::op_addi(lc, 3, 0, 0);
+L_80366268:;
+    ppc::op_cmpi(lc, 0, 3, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_80366278;
+    ppc::op_lwz(lc, 3, 3, 4);
+    goto L_done;
+L_80366278:;
+    ppc::op_addi(lc, 3, 0, 0);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_8036624C(ppc::Ctx& c) {
+    if (!leaf_verify(0x8036624C)) { fast_Leaf_8036624C(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8036624C(c); slow_Leaf_8036624C(shadow); verify_compare("Leaf_8036624C", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8036B2C8(ppc::Ctx& c) {
+    L_8036B2C8:;
+    { ppc::op_lfs(c, 1, 2, -5732); }
+    { ppc::op_lfs(c, 0, 4, 0); }
+    { ppc::op_fcmpu(c, 0, 1, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8036B310; } } }
+    { ppc::op_lfs(c, 0, 4, 4); }
+    { ppc::op_fcmpu(c, 0, 1, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8036B310; } } }
+    { ppc::op_lfs(c, 0, 4, 8); }
+    { ppc::op_fcmpu(c, 0, 1, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8036B310; } } }
+    { ppc::op_lwz(c, 0, 3, 0); }
+    { ppc::op_ori(c, 0, 5, 24u); }
+    { ppc::op_rlwinm(c, 5, 0, 0, 29, 29, true); }
+    { ppc::op_stw(c, 5, 3, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_8036B344; } } }
+    { ppc::op_ori(c, 5, 0, 2u); }
+    { ppc::op_stw(c, 0, 3, 0); }
+    { goto L_8036B344; }
+    L_8036B310:;
+    { ppc::op_lwz(c, 5, 3, 0); }
+    { ppc::op_addi(c, 0, 0, -27); }
+    { ppc::op_lfs(c, 0, 4, 0); }
+    { ppc::op_lfs(c, 1, 4, 4); }
+    { ppc::op_and(c, 5, 0, 0, false); }
+    { ppc::op_stw(c, 0, 3, 0); }
+    { ppc::op_fcmpu(c, 0, 0, 1); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8036B344; } } }
+    { ppc::op_lfs(c, 0, 4, 8); }
+    { ppc::op_fcmpu(c, 0, 1, 0); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8036B344; } } }
+    { ppc::op_ori(c, 0, 0, 16u); }
+    { ppc::op_stw(c, 0, 3, 0); }
+    L_8036B344:;
+    { ppc::op_lfs(c, 2, 4, 0); }
+    { ppc::op_lfs(c, 1, 4, 4); }
+    { ppc::op_lfs(c, 0, 4, 8); }
+    { ppc::op_stfs(c, 2, 3, 4); }
+    { ppc::op_stfs(c, 1, 3, 8); }
+    { ppc::op_stfs(c, 0, 3, 12); }
+    { return; }
+    ppc::trap(0x8036B360, "fell off the end of function 8036B2C8");
+}
+}  // namespace
+static void fast_Leaf_8036B2C8(ppc::Ctx& c) {   // fn_8036B2C8
+    if (leaf_off(0x8036B2C8) || !(in_ram(c.r[3] + uint32_t(0), 16) && in_ram(c.r[4] + uint32_t(0), 12))) { slow_Leaf_8036B2C8(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    uint8_t* const P3 = ppc::hp(c, c.r[3]); bool stamped3 = false;
+    uint8_t* const P4 = ppc::hp(c, c.r[4]); bool stamped4 = false;
+    lc.r[0] = c.r[0];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_8036B2C8:;
+    ppc::op_lfs(lc, 1, 2, -5732);
+    { const double v = ldf((P4 + (0))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fcmpu(lc, 0, 1, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_8036B310;
+    { const double v = ldf((P4 + (4))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fcmpu(lc, 0, 1, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_8036B310;
+    { const double v = ldf((P4 + (8))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fcmpu(lc, 0, 1, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_8036B310;
+    lc.r[0] = ld32((P3 + (0)));
+    ppc::op_ori(lc, 0, 5, 24u);
+    ppc::op_rlwinm(lc, 5, 0, 0, 29, 29, true);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (0)), lc.r[5]);
+    if (ppc::crbit(lc, 2) == true) goto L_8036B344;
+    ppc::op_ori(lc, 5, 0, 2u);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (0)), lc.r[0]);
+    goto L_8036B344;
+L_8036B310:;
+    lc.r[5] = ld32((P3 + (0)));
+    ppc::op_addi(lc, 0, 0, -27);
+    { const double v = ldf((P4 + (0))); lc.f[0] = v; lc.ps1[0] = v; }
+    { const double v = ldf((P4 + (4))); lc.f[1] = v; lc.ps1[1] = v; }
+    ppc::op_and(lc, 5, 0, 0, false);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (0)), lc.r[0]);
+    ppc::op_fcmpu(lc, 0, 0, 1);
+    if (ppc::crbit(lc, 2) == false) goto L_8036B344;
+    { const double v = ldf((P4 + (8))); lc.f[0] = v; lc.ps1[0] = v; }
+    ppc::op_fcmpu(lc, 0, 1, 0);
+    if (ppc::crbit(lc, 2) == false) goto L_8036B344;
+    ppc::op_ori(lc, 0, 0, 16u);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    st32((P3 + (0)), lc.r[0]);
+L_8036B344:;
+    { const double v = ldf((P4 + (0))); lc.f[2] = v; lc.ps1[2] = v; }
+    { const double v = ldf((P4 + (4))); lc.f[1] = v; lc.ps1[1] = v; }
+    { const double v = ldf((P4 + (8))); lc.f[0] = v; lc.ps1[0] = v; }
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (4)), lc.f[2]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (8)), lc.f[1]);
+    if (!stamped3) { gx::note_write_range(c.r[3] + uint32_t(0), 16); stamped3 = true; }
+    stf((P3 + (12)), lc.f[0]);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[5] = lc.r[5];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_8036B2C8(ppc::Ctx& c) {
+    if (!leaf_verify(0x8036B2C8)) { fast_Leaf_8036B2C8(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_8036B2C8(c); slow_Leaf_8036B2C8(shadow); verify_compare("Leaf_8036B2C8", shadow, c);
+}
+
+namespace {
+void slow_Leaf_8003F468(ppc::Ctx& c) {   // the translated instruction sequence
+    ppc::op_lfs(c, 2, 4, 0);
+    ppc::op_lfs(c, 1, 4, 4);
+    ppc::op_lfs(c, 0, 4, 8);
+    ppc::op_stfs(c, 2, 3, 0);
+    ppc::op_stfs(c, 1, 3, 4);
+    ppc::op_stfs(c, 0, 3, 8);
+}
+}  // namespace
+void hle_Leaf_8003F468(ppc::Ctx& c) {   // fn_8003F468
+    if (leaf_off(0x8003F468) || !(in_ram(c.r[3] + uint32_t(0), 12) && in_ram(c.r[4] + uint32_t(0), 12))) { slow_Leaf_8003F468(c); return; }
+    uint8_t* const P3 = ppc::hp(c, c.r[3]);
+    uint8_t* const P4 = ppc::hp(c, c.r[4]);
+    gx::note_write_range(c.r[3] + uint32_t(0), 12);
+    uint32_t r3 = c.r[3];
+    uint32_t r4 = c.r[4];
+    double f2 = ldf((P4 + (0))); double p2 = f2;
+    double f1 = ldf((P4 + (4))); double p1 = f1;
+    double f0 = ldf((P4 + (8))); double p0 = f0;
+    stf((P3 + (0)), f2);
+    stf((P3 + (4)), f1);
+    stf((P3 + (8)), f0);
+    c.f[0] = f0; c.ps1[0] = p0;
+    c.f[1] = f1; c.ps1[1] = p1;
+    c.f[2] = f2; c.ps1[2] = p2;
+}
+
+namespace {
+void slow_Leaf_801996BC(ppc::Ctx& c) {
+    L_801996BC:;
+    { ppc::op_psq_l(c, 0, 4, 0, 0, 0); }
+    { ppc::op_ps_muls0(c, 0, 0, 1, false); }
+    { ppc::op_psq_st(c, 0, 3, 0, 0, 0); }
+    { ppc::op_psq_l(c, 0, 4, 8, 1, 0); }
+    { ppc::op_ps_muls0(c, 0, 0, 1, false); }
+    { ppc::op_psq_st(c, 0, 3, 8, 1, 0); }
+    { return; }
+    ppc::trap(0x801996D8, "fell off the end of function 801996BC");
+}
+}  // namespace
+static void fast_Leaf_801996BC(ppc::Ctx& c) {   // fn_801996BC
+    if (leaf_off(0x801996BC) || !(float_gqr0(c))) { slow_Leaf_801996BC(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.gqr[0] = c.gqr[0];
+L_801996BC:;
+    ppc::op_psq_l(lc, 0, 4, 0, 0, 0);
+    ppc::op_ps_muls0(lc, 0, 0, 1, false);
+    ppc::op_psq_st(lc, 0, 3, 0, 0, 0);
+    ppc::op_psq_l(lc, 0, 4, 8, 1, 0);
+    ppc::op_ps_muls0(lc, 0, 0, 1, false);
+    ppc::op_psq_st(lc, 0, 3, 8, 1, 0);
+    goto L_done;
+L_done:;
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+}
+void hle_Leaf_801996BC(ppc::Ctx& c) {
+    if (!leaf_verify(0x801996BC)) { fast_Leaf_801996BC(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_801996BC(c); slow_Leaf_801996BC(shadow); verify_compare("Leaf_801996BC", shadow, c);
+}
+
+namespace {
+void slow_Leaf_80394548(ppc::Ctx& c) {
+    L_80394548:;
+    { ppc::op_lfs(c, 0, 2, -4932); }
+    { ppc::op_stwu(c, 1, 1, -32); }
+    { ppc::op_fcmpu(c, 0, 0, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_80394568; } } }
+    { ppc::op_fcmpu(c, 0, 0, 1); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_80394568; } } }
+    { ppc::op_fmr(c, 1, 0, false); }
+    { goto L_803946E8; }
+    L_80394568:;
+    { ppc::op_lfs(c, 4, 2, -4932); }
+    { ppc::op_fcmpo(c, 0, 2, 4); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_803945E0; } } }
+    { ppc::op_fcmpo(c, 0, 1, 4); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_803945B0; } } }
+    { ppc::op_fcmpo(c, 0, 2, 1); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8039459C; } } }
+    { ppc::op_fmr(c, 3, 2, false); }
+    { ppc::op_addi(c, 0, 0, 0); }
+    { goto L_80394654; }
+    L_8039459C:;
+    { ppc::op_fmr(c, 3, 1, false); }
+    { ppc::op_lfs(c, 4, 2, -4920); }
+    { ppc::op_fmr(c, 1, 2, false); }
+    { ppc::op_addi(c, 0, 0, 1); }
+    { goto L_80394654; }
+    L_803945B0:;
+    { ppc::op_fneg(c, 1, 1, false); }
+    { ppc::op_fcmpo(c, 0, 2, 1); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_803945CC; } } }
+    { ppc::op_fmr(c, 3, 2, false); }
+    { ppc::op_addi(c, 0, 0, 1); }
+    { goto L_80394654; }
+    L_803945CC:;
+    { ppc::op_fmr(c, 3, 1, false); }
+    { ppc::op_lfs(c, 4, 2, -4912); }
+    { ppc::op_fmr(c, 1, 2, false); }
+    { ppc::op_addi(c, 0, 0, 0); }
+    { goto L_80394654; }
+    L_803945E0:;
+    { ppc::op_fcmpo(c, 0, 1, 4); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_80394620; } } }
+    { ppc::op_fneg(c, 0, 2, false); }
+    { ppc::op_fcmpo(c, 0, 0, 1); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_8039460C; } } }
+    { ppc::op_fmr(c, 3, 0, false); }
+    { ppc::op_lfs(c, 4, 2, -4908); }
+    { ppc::op_addi(c, 0, 0, 1); }
+    { goto L_80394654; }
+    L_8039460C:;
+    { ppc::op_fmr(c, 3, 1, false); }
+    { ppc::op_lfs(c, 4, 2, -4920); }
+    { ppc::op_fmr(c, 1, 0, false); }
+    { ppc::op_addi(c, 0, 0, 0); }
+    { goto L_80394654; }
+    L_80394620:;
+    { ppc::op_fneg(c, 0, 2, false); }
+    { ppc::op_fneg(c, 1, 1, false); }
+    { ppc::op_fcmpo(c, 0, 0, 1); }
+    { ppc::op_cror(c, 2, 1, 2); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_80394644; } } }
+    { ppc::op_fmr(c, 3, 0, false); }
+    { ppc::op_lfs(c, 4, 2, -4904); }
+    { ppc::op_addi(c, 0, 0, 0); }
+    { goto L_80394654; }
+    L_80394644:;
+    { ppc::op_fmr(c, 3, 1, false); }
+    { ppc::op_lfs(c, 4, 2, -4912); }
+    { ppc::op_fmr(c, 1, 0, false); }
+    { ppc::op_addi(c, 0, 0, 1); }
+    L_80394654:;
+    { ppc::op_cmpi(c, 0, 0, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_803946A4; } } }
+    { ppc::op_fdivs(c, 1, 1, 3, false); }
+    { ppc::op_lfs(c, 0, 2, -4924); }
+    { ppc::op_fmuls(c, 1, 1, 0, false); }
+    { ppc::op_psq_st(c, 1, 1, 16, 1, 3); }
+    { ppc::op_lhz(c, 0, 1, 16); }
+    { ppc::op_sth(c, 0, 1, 10); }
+    { ppc::op_psq_l(c, 0, 1, 10, 1, 3); }
+    { ppc::op_addis(c, 4, 0, -32701); }
+    { ppc::op_rlwinm(c, 0, 0, 3, 0, 28, false); }
+    { ppc::op_addi(c, 4, 4, 28232); }
+    { ppc::op_fsubs(c, 2, 1, 0, false); }
+    { ppc::op_add(c, 3, 4, 0, false); }
+    { ppc::op_lfsx(c, 0, 4, 0); }
+    { ppc::op_lfs(c, 1, 3, 4); }
+    { ppc::op_fmuls(c, 1, 2, 1, false); }
+    { ppc::op_fadds(c, 0, 0, 1, false); }
+    { ppc::op_fsubs(c, 1, 4, 0, false); }
+    { goto L_803946E8; }
+    L_803946A4:;
+    { ppc::op_fdivs(c, 1, 1, 3, false); }
+    { ppc::op_lfs(c, 0, 2, -4924); }
+    { ppc::op_fmuls(c, 1, 1, 0, false); }
+    { ppc::op_psq_st(c, 1, 1, 12, 1, 3); }
+    { ppc::op_lhz(c, 0, 1, 12); }
+    { ppc::op_sth(c, 0, 1, 8); }
+    { ppc::op_psq_l(c, 0, 1, 8, 1, 3); }
+    { ppc::op_addis(c, 4, 0, -32701); }
+    { ppc::op_rlwinm(c, 0, 0, 3, 0, 28, false); }
+    { ppc::op_addi(c, 4, 4, 28232); }
+    { ppc::op_fsubs(c, 2, 1, 0, false); }
+    { ppc::op_add(c, 3, 4, 0, false); }
+    { ppc::op_lfsx(c, 0, 4, 0); }
+    { ppc::op_lfs(c, 1, 3, 4); }
+    { ppc::op_fmuls(c, 1, 2, 1, false); }
+    { ppc::op_fadds(c, 0, 0, 1, false); }
+    { ppc::op_fadds(c, 1, 4, 0, false); }
+    L_803946E8:;
+    { ppc::op_addi(c, 1, 1, 32); }
+    { return; }
+    ppc::trap(0x803946F0, "fell off the end of function 80394548");
+}
+}  // namespace
+static void fast_Leaf_80394548(ppc::Ctx& c) {   // fn_80394548
+    if (leaf_off(0x80394548) || !(float_gqr0(c))) { slow_Leaf_80394548(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[1] = c.r[1];
+    lc.r[2] = c.r[2];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.f[0] = c.f[0]; lc.ps1[0] = c.ps1[0];
+    lc.f[1] = c.f[1]; lc.ps1[1] = c.ps1[1];
+    lc.f[2] = c.f[2]; lc.ps1[2] = c.ps1[2];
+    lc.f[3] = c.f[3]; lc.ps1[3] = c.ps1[3];
+    lc.f[4] = c.f[4]; lc.ps1[4] = c.ps1[4];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+    lc.gqr[3] = c.gqr[3];
+L_80394548:;
+    ppc::op_lfs(lc, 0, 2, -4932);
+    ppc::op_stwu(lc, 1, 1, -32);
+    ppc::op_fcmpu(lc, 0, 0, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_80394568;
+    ppc::op_fcmpu(lc, 0, 0, 1);
+    if (ppc::crbit(lc, 2) == false) goto L_80394568;
+    ppc::op_fmr(lc, 1, 0, false);
+    goto L_803946E8;
+L_80394568:;
+    ppc::op_lfs(lc, 4, 2, -4932);
+    ppc::op_fcmpo(lc, 0, 2, 4);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_803945E0;
+    ppc::op_fcmpo(lc, 0, 1, 4);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_803945B0;
+    ppc::op_fcmpo(lc, 0, 2, 1);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_8039459C;
+    ppc::op_fmr(lc, 3, 2, false);
+    ppc::op_addi(lc, 0, 0, 0);
+    goto L_80394654;
+L_8039459C:;
+    ppc::op_fmr(lc, 3, 1, false);
+    ppc::op_lfs(lc, 4, 2, -4920);
+    ppc::op_fmr(lc, 1, 2, false);
+    ppc::op_addi(lc, 0, 0, 1);
+    goto L_80394654;
+L_803945B0:;
+    ppc::op_fneg(lc, 1, 1, false);
+    ppc::op_fcmpo(lc, 0, 2, 1);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_803945CC;
+    ppc::op_fmr(lc, 3, 2, false);
+    ppc::op_addi(lc, 0, 0, 1);
+    goto L_80394654;
+L_803945CC:;
+    ppc::op_fmr(lc, 3, 1, false);
+    ppc::op_lfs(lc, 4, 2, -4912);
+    ppc::op_fmr(lc, 1, 2, false);
+    ppc::op_addi(lc, 0, 0, 0);
+    goto L_80394654;
+L_803945E0:;
+    ppc::op_fcmpo(lc, 0, 1, 4);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_80394620;
+    ppc::op_fneg(lc, 0, 2, false);
+    ppc::op_fcmpo(lc, 0, 0, 1);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_8039460C;
+    ppc::op_fmr(lc, 3, 0, false);
+    ppc::op_lfs(lc, 4, 2, -4908);
+    ppc::op_addi(lc, 0, 0, 1);
+    goto L_80394654;
+L_8039460C:;
+    ppc::op_fmr(lc, 3, 1, false);
+    ppc::op_lfs(lc, 4, 2, -4920);
+    ppc::op_fmr(lc, 1, 0, false);
+    ppc::op_addi(lc, 0, 0, 0);
+    goto L_80394654;
+L_80394620:;
+    ppc::op_fneg(lc, 0, 2, false);
+    ppc::op_fneg(lc, 1, 1, false);
+    ppc::op_fcmpo(lc, 0, 0, 1);
+    ppc::op_cror(lc, 2, 1, 2);
+    if (ppc::crbit(lc, 2) == false) goto L_80394644;
+    ppc::op_fmr(lc, 3, 0, false);
+    ppc::op_lfs(lc, 4, 2, -4904);
+    ppc::op_addi(lc, 0, 0, 0);
+    goto L_80394654;
+L_80394644:;
+    ppc::op_fmr(lc, 3, 1, false);
+    ppc::op_lfs(lc, 4, 2, -4912);
+    ppc::op_fmr(lc, 1, 0, false);
+    ppc::op_addi(lc, 0, 0, 1);
+L_80394654:;
+    ppc::op_cmpi(lc, 0, 0, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_803946A4;
+    ppc::op_fdivs(lc, 1, 1, 3, false);
+    ppc::op_lfs(lc, 0, 2, -4924);
+    ppc::op_fmuls(lc, 1, 1, 0, false);
+    ppc::op_psq_st(lc, 1, 1, 16, 1, 3);
+    ppc::op_lhz(lc, 0, 1, 16);
+    ppc::op_sth(lc, 0, 1, 10);
+    ppc::op_psq_l(lc, 0, 1, 10, 1, 3);
+    ppc::op_addis(lc, 4, 0, -32701);
+    ppc::op_rlwinm(lc, 0, 0, 3, 0, 28, false);
+    ppc::op_addi(lc, 4, 4, 28232);
+    ppc::op_fsubs(lc, 2, 1, 0, false);
+    ppc::op_add(lc, 3, 4, 0, false);
+    ppc::op_lfsx(lc, 0, 4, 0);
+    ppc::op_lfs(lc, 1, 3, 4);
+    ppc::op_fmuls(lc, 1, 2, 1, false);
+    ppc::op_fadds(lc, 0, 0, 1, false);
+    ppc::op_fsubs(lc, 1, 4, 0, false);
+    goto L_803946E8;
+L_803946A4:;
+    ppc::op_fdivs(lc, 1, 1, 3, false);
+    ppc::op_lfs(lc, 0, 2, -4924);
+    ppc::op_fmuls(lc, 1, 1, 0, false);
+    ppc::op_psq_st(lc, 1, 1, 12, 1, 3);
+    ppc::op_lhz(lc, 0, 1, 12);
+    ppc::op_sth(lc, 0, 1, 8);
+    ppc::op_psq_l(lc, 0, 1, 8, 1, 3);
+    ppc::op_addis(lc, 4, 0, -32701);
+    ppc::op_rlwinm(lc, 0, 0, 3, 0, 28, false);
+    ppc::op_addi(lc, 4, 4, 28232);
+    ppc::op_fsubs(lc, 2, 1, 0, false);
+    ppc::op_add(lc, 3, 4, 0, false);
+    ppc::op_lfsx(lc, 0, 4, 0);
+    ppc::op_lfs(lc, 1, 3, 4);
+    ppc::op_fmuls(lc, 1, 2, 1, false);
+    ppc::op_fadds(lc, 0, 0, 1, false);
+    ppc::op_fadds(lc, 1, 4, 0, false);
+L_803946E8:;
+    ppc::op_addi(lc, 1, 1, 32);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.f[0] = lc.f[0]; c.ps1[0] = lc.ps1[0];
+    c.f[1] = lc.f[1]; c.ps1[1] = lc.ps1[1];
+    c.f[2] = lc.f[2]; c.ps1[2] = lc.ps1[2];
+    c.f[3] = lc.f[3]; c.ps1[3] = lc.ps1[3];
+    c.f[4] = lc.f[4]; c.ps1[4] = lc.ps1[4];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_80394548(ppc::Ctx& c) {
+    if (!leaf_verify(0x80394548)) { fast_Leaf_80394548(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_80394548(c); slow_Leaf_80394548(shadow); verify_compare("Leaf_80394548", shadow, c);
+}
+
+namespace {
+void slow_Leaf_800ABCE0(ppc::Ctx& c) {
+    L_800ABCE0:;
+    { ppc::op_lwz(c, 3, 3, 12); }
+    { ppc::op_cmpi(c, 0, 3, 0); }
+    { { if (ppc::crbit(c, 2) == true) { goto L_800ABCF8; } } }
+    { ppc::op_mulli(c, 0, 4, 24); }
+    { ppc::op_add(c, 3, 3, 0, false); }
+    { return; }
+    L_800ABCF8:;
+    { ppc::op_lbz(c, 0, 13, -27448); }
+    { ppc::op_extsb(c, 0, 0, true); }
+    { { if (ppc::crbit(c, 2) == false) { goto L_800ABD30; } } }
+    { ppc::op_addis(c, 4, 0, -32697); }
+    { ppc::op_addi(c, 0, 0, 1); }
+    { ppc::op_addi(c, 4, 4, -8252); }
+    { ppc::op_addi(c, 5, 0, -1); }
+    { ppc::op_addi(c, 3, 0, 0); }
+    { ppc::op_stw(c, 5, 4, 4); }
+    { ppc::op_stw(c, 5, 4, 8); }
+    { ppc::op_stw(c, 3, 4, 12); }
+    { ppc::op_stw(c, 5, 4, 16); }
+    { ppc::op_stw(c, 3, 4, 20); }
+    { ppc::op_stb(c, 0, 13, -27448); }
+    L_800ABD30:;
+    { ppc::op_addis(c, 3, 0, -32697); }
+    { ppc::op_addi(c, 3, 3, -8252); }
+    { return; }
+    ppc::trap(0x800ABD3C, "fell off the end of function 800ABCE0");
+}
+}  // namespace
+static void fast_Leaf_800ABCE0(ppc::Ctx& c) {   // fn_800ABCE0
+    if (leaf_off(0x800ABCE0)) { slow_Leaf_800ABCE0(c); return; }
+    ppc::Ctx lc; lc.mem = c.mem;
+    lc.r[0] = c.r[0];
+    lc.r[3] = c.r[3];
+    lc.r[4] = c.r[4];
+    lc.r[5] = c.r[5];
+    lc.r[13] = c.r[13];
+    lc.cr[0] = c.cr[0];
+    lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;
+L_800ABCE0:;
+    ppc::op_lwz(lc, 3, 3, 12);
+    ppc::op_cmpi(lc, 0, 3, 0);
+    if (ppc::crbit(lc, 2) == true) goto L_800ABCF8;
+    ppc::op_mulli(lc, 0, 4, 24);
+    ppc::op_add(lc, 3, 3, 0, false);
+    goto L_done;
+L_800ABCF8:;
+    ppc::op_lbz(lc, 0, 13, -27448);
+    ppc::op_extsb(lc, 0, 0, true);
+    if (ppc::crbit(lc, 2) == false) goto L_800ABD30;
+    ppc::op_addis(lc, 4, 0, -32697);
+    ppc::op_addi(lc, 0, 0, 1);
+    ppc::op_addi(lc, 4, 4, -8252);
+    ppc::op_addi(lc, 5, 0, -1);
+    ppc::op_addi(lc, 3, 0, 0);
+    ppc::op_stw(lc, 5, 4, 4);
+    ppc::op_stw(lc, 5, 4, 8);
+    ppc::op_stw(lc, 3, 4, 12);
+    ppc::op_stw(lc, 5, 4, 16);
+    ppc::op_stw(lc, 3, 4, 20);
+    ppc::op_stb(lc, 0, 13, -27448);
+L_800ABD30:;
+    ppc::op_addis(lc, 3, 0, -32697);
+    ppc::op_addi(lc, 3, 3, -8252);
+    goto L_done;
+L_done:;
+    c.r[0] = lc.r[0];
+    c.r[3] = lc.r[3];
+    c.r[4] = lc.r[4];
+    c.r[5] = lc.r[5];
+    c.cr[0] = lc.cr[0];
+}
+void hle_Leaf_800ABCE0(ppc::Ctx& c) {
+    if (!leaf_verify(0x800ABCE0)) { fast_Leaf_800ABCE0(c); return; }
+    static ppc::Ctx shadow; shadow = c; fast_Leaf_800ABCE0(c); slow_Leaf_800ABCE0(shadow); verify_compare("Leaf_800ABCE0", shadow, c);
 }

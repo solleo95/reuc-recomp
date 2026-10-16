@@ -5,8 +5,8 @@
 #include <vector>
 
 namespace gx {
-// Recycles single large blocks (a deque node holding one DrawPacket, ~6 KB): the guest thread allocates them, the render thread frees them.
-// The default heap hands such blocks back to the OS and faults fresh pages in every frame. Free blocks are capped; the rest go back to the heap.
+// Recycles packet-sized deque nodes: the guest thread allocates them, the render thread frees them.
+// Free blocks are capped; the rest go back to the heap.
 template<size_t Size>
 struct BlockPool {
     struct State { std::mutex mutex; std::vector<void*> blocks; };
@@ -26,7 +26,7 @@ struct BlockPool {
 template<class T>
 struct PoolAllocator {
     using value_type = T;
-    static constexpr bool pooled = sizeof(T) >= 1024;
+    static constexpr bool pooled = sizeof(T) >= 512;
     PoolAllocator() = default;
     template<class U> PoolAllocator(const PoolAllocator<U>&) {}
     T* allocate(size_t n) { return static_cast<T*>(pooled && n == 1 ? BlockPool<sizeof(T)>::get() : ::operator new(n * sizeof(T))); }

@@ -1,10 +1,13 @@
 """Native versions of small straight-line leaf functions of the translated game.
 
-python -I tools/leaf_hle.py <generated dir> <hle address>...
+python -I tools/leaf_hle.py [<generation dir>] <hle address>...
+
+The original function bodies come from build/leaf_ref (tools/leaf_ref.py translates them on demand, so generated/ may be wiped); an explicit generation
+folder as the first argument overrides that.
 
 For every function it writes (runtime/hle/leaf_gen.cpp, tests/test_leaf_hle.cpp, and the project/hle_map.txt lines on stdout):
   * a native function that runs the same instructions on local registers and host memory: loads and stores in the original order, the original
-    single-precision rounding, the stack frame (register spills, the link register slot) kept in a local array, the write barrier stamped once per
+    single-precision rounding, the stack frame (register spills, the link register slot) written to the guest stack (the game reads stale stack slots), the write barrier stamped once per
     touched span instead of once per store. It is used only when every base register points into RAM and the GQRs are float formats; otherwise it
     runs the original instruction sequence unchanged (the slow path is a verbatim copy of the translated body).
   * a differential test: the translated instructions against the native function on randomised memory and registers; memory, every register,
@@ -14,6 +17,9 @@ Only straight-line leaves (no branch, no call) made of the supported instruction
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import leaf_hybrid
 
 SUPPORTED_INT = {"addi", "addis", "or", "lwz", "stw", "stwu", "mfspr", "mtspr"}
 SUPPORTED_FLOAT = {"lfs", "stfs", "lfd", "stfd", "psq_l", "psq_st", "fadds", "fsubs", "fmuls", "fmadds", "fmsubs", "fneg", "fmr", "fabs"}
@@ -142,25 +148,29 @@ def emit_native(address, name, ops, raw):
     p1_read = {x[1] for x in f_read if isinstance(x, tuple)}
     ram_bases = sorted(b for b in spans if b != 1)
     L = []
+    L.append("namespace {")
+    L.append("void slow_%s(ppc::Ctx& c) {   // the translated instruction sequence" % name)
+    for r in raw:
+        L.append("    ppc::" + r.replace("ppc::", ""))
+    L.append("}")
+    L.append("}  // namespace")
     L.append("void hle_%s(ppc::Ctx& c) {   // fn_%s" % (name, address))
     cond = []
     for b in ram_bases:
         lo, hi = spans[b][0], spans[b][1]
         cond.append("in_ram(c.r[%d] + uint32_t(%d), %d)" % (b, lo, hi - lo))
+    if frame:
+        cond.append("in_ram(c.r[1] - uint32_t(%d), %d)" % (frame, frame))
     uses_psq = any(op in ("psq_l", "psq_st") for op, _ in ops)
     if uses_psq:
         cond.append("float_gqr0(c)")
-    L.append("    if (!(%s)) {   // the original instruction sequence" % (" && ".join(cond) if cond else "true"))
-    for r in raw:
-        L.append("        ppc::" + r.replace("ppc::", ""))
-    L.append("        return;")
-    L.append("    }")
+    L.append("    if (leaf_off(0x%s) || !(%s)) { slow_%s(c); return; }" % (address, " && ".join(cond) if cond else "true", name))
     for b in ram_bases:
         L.append("    uint8_t* const P%d = ppc::hp(c, c.r[%d]);" % (b, b))
     if any(base_of(op, a_) == 1 and off_of(op, a_) >= frame for op, a_ in ops if op in MEMORY_OPS):
         L.append("    uint8_t* const P1c = ppc::hp(c, c.r[1]);   // the caller's frame: stack arguments and the link-register slot")
     if frame:
-        L.append("    uint8_t sp[%d] = {};   // the stack frame: spills and the link-register slot are dead after the return" % (frame + 32))
+        L.append("    uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(%d));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there" % frame)
     for b in ram_bases:
         s = spans[b]
         if s[3] > s[2]:
@@ -270,41 +280,69 @@ def emit_native(address, name, ops, raw):
 
 
 def main():
-    gen_dir = Path(sys.argv[1])
+    args = sys.argv[1:]
+    if args and Path(args[0]).is_dir():
+        gen_dir = Path(args.pop(0))
+    else:
+        import leaf_ref
+        gen_dir = leaf_ref.reference_generation()
     chosen = []
-    for address in sys.argv[2:]:
+    for address in args:
         body = load_function(gen_dir, address.upper())
         parsed, why = parse(body)
-        if not parsed:
-            print("rejected %s: %s" % (address, why), file=sys.stderr)
+        if parsed:
+            chosen.append((address.upper(), parsed, "straight"))
             continue
-        chosen.append((address.upper(), parsed))
+        try:
+            hybrid, why2 = leaf_hybrid.parse_hybrid(body)
+            if hybrid:
+                leaf_hybrid.analyse(hybrid[0])
+        except ValueError as error:
+            hybrid, why2 = None, str(error)
+        if not hybrid:
+            print("rejected %s: %s / %s" % (address, why, why2), file=sys.stderr)
+            continue
+        chosen.append((address.upper(), hybrid, "hybrid"))
     root = Path(__file__).resolve().parent.parent
     code = ['// Generated by tools/leaf_hle.py from the translated game: native versions of small straight-line leaf functions. Do not edit.',
-            '#include "ppc_rt.h"', '#include "gx_write_watch.h"', '#include <cmath>', '#include <cstring>', '',
+            '#include "ppc_rt.h"', '#include "gx_write_watch.h"', '#include <cmath>', '#include <cstdio>', '#include <cstdlib>', '#include <cstring>', '#include <vector>', '',
             'namespace {', 'using ppc::Ctx;',
             'inline bool in_ram(uint32_t ea, uint32_t size) { return (ea >= 0x80000000u && ea + size <= 0x81800000u) || (ea >= 0x90000000u && ea + size <= 0x94000000u); }',
             'inline bool float_gqr0(const Ctx& c) { return ((c.gqr[0] >> 16) & 7) < 4 && (c.gqr[0] & 7) < 4; }',
             'inline double rs(double v) { return ppc::rnd_s(v); }',
+            '// UC_LEAF_OFF=80137BC4,8003EDD0 runs those functions through their translated instruction sequence again (bisecting a suspected mismatch without a rebuild).',
+            'std::vector<uint32_t> parse_leaf_off() { std::vector<uint32_t> out; if (const char* env = std::getenv("UC_LEAF_OFF")) { for (const char* p = env; *p;) { char* end; const unsigned long v = std::strtoul(p, &end, 16); if (end == p) { ++p; continue; } out.push_back(uint32_t(v)); p = end; } } return out; }',
+            'const std::vector<uint32_t> g_leaf_off = parse_leaf_off();',
+            'const std::vector<uint32_t> g_leaf_verify = [] { std::vector<uint32_t> out; if (const char* env = std::getenv("UC_LEAF_VERIFY")) { for (const char* p = env; *p;) { char* end; const unsigned long v = std::strtoul(p, &end, 16); if (end == p) { ++p; continue; } out.push_back(uint32_t(v)); p = end; } } return out; }();',
+            '// UC_LEAF_VERIFY=8029C4AC runs the native version and then the translated sequence on a copy of the registers and reports any difference (functions whose only memory effects are dead stack words or idempotent stores).',
+            'inline bool leaf_verify(uint32_t address) { if (g_leaf_verify.empty()) return false; for (uint32_t a : g_leaf_verify) if (a == address) return true; return false; }',
+            'void verify_compare(const char* name, const Ctx& want, const Ctx& have) {',
+            '    for (int i = 0; i < 32; ++i) { if (want.r[i] != have.r[i]) std::fprintf(stderr, "[leaf-verify] %s r%d: translated %08X native %08X (r3 %08X r4 %08X r1 %08X)\\n", name, i, want.r[i], have.r[i], want.r[3], want.r[4], want.r[1]); uint64_t x, y; std::memcpy(&x, &want.f[i], 8); std::memcpy(&y, &have.f[i], 8); if (x != y && !(want.f[i] != want.f[i] && have.f[i] != have.f[i])) std::fprintf(stderr, "[leaf-verify] %s f%d: translated %016llX native %016llX\\n", name, i, (unsigned long long)x, (unsigned long long)y); std::memcpy(&x, &want.ps1[i], 8); std::memcpy(&y, &have.ps1[i], 8); if (x != y && !(want.ps1[i] != want.ps1[i] && have.ps1[i] != have.ps1[i])) std::fprintf(stderr, "[leaf-verify] %s ps1 of f%d: translated %016llX native %016llX\\n", name, i, (unsigned long long)x, (unsigned long long)y); }',
+            '    for (int i = 0; i < 8; ++i) if (want.cr[i] != have.cr[i]) std::fprintf(stderr, "[leaf-verify] %s cr%d: translated %X native %X\\n", name, i, want.cr[i], have.cr[i]);',
+            '    if (want.xer_ca != have.xer_ca || want.xer_so != have.xer_so || want.xer_ov != have.xer_ov || want.lr != have.lr || want.ctr != have.ctr) std::fprintf(stderr, "[leaf-verify] %s xer/lr/ctr differ\\n", name);',
+            '}',
+            'inline bool leaf_off(uint32_t address) { if (g_leaf_off.empty()) return false; for (uint32_t a : g_leaf_off) if (a == address) return true; return false; }',
             'inline uint32_t ld32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return _byteswap_ulong(v); }',
             'inline void st32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }',
+            'inline uint32_t ld16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return _byteswap_ushort(v); }',
+            'inline void st16(uint8_t* p, uint32_t v) { const uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(p, &h, 2); }',
             'inline double ldf(const uint8_t* p) { const uint32_t b = ld32(p); float f; std::memcpy(&f, &b, 4); return f; }',
             'inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }',
             'inline double ldd(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); v = _byteswap_uint64(v); double d; std::memcpy(&d, &v, 8); return d; }',
             'inline void std_(uint8_t* p, double d) { uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }',
             '}  // namespace', '']
     test = ['// Generated by tools/leaf_hle.py: the translated instructions of each leaf function against its native version. Do not edit.',
-            '#include "check.h"', '#include "ppc_fixture.h"', '#include <cstdio>', '#include <cstring>', '#include <random>', '#include <string>', '#include <vector>',
+            '#define WIN32_LEAN_AND_MEAN', '#include <windows.h>', '#include "check.h"', '#include "ppc_fixture.h"', '#include <cstdio>', '#include <cstring>', '#include <chrono>', '#include <random>', '#include <string>', '#include <thread>', '#include <vector>',
             'using namespace ppc;', '']
     mapping = []
-    for address, (ops, raw) in chosen:
+    for address, (ops, raw), kind in chosen:
         name = "Leaf_%s" % address
-        code.append(emit_native(address, name, ops, raw))
+        code.append(emit_native(address, name, ops, raw) if kind == "straight" else leaf_hybrid.emit_hybrid(address, name, ops, raw))
         code.append("")
         test.append("void hle_%s(Ctx&);" % name)
         mapping.append("@%s %s" % (address, name))
     test += ['', 'namespace {']
-    for address, (ops, raw) in chosen:
+    for address, (ops, raw), kind in chosen:
         test.append("void ref_Leaf_%s(Ctx& c) {" % address)
         for r in raw:
             test.append("    " + r.replace("ppc::", ""))
@@ -321,26 +359,31 @@ def main():
              'double random_double() { std::uniform_real_distribution<double> d(-50.0, 50.0); switch (rng() % 8) { case 0: return 0.0; case 1: return -0.0; case 2: return 1e30; case 3: return 1e-45; default: return d(rng) * (1.0 + 1e-9); } }',
              'bool is_nan32(uint32_t w) { return (w & 0x7F800000u) == 0x7F800000u && (w & 0x007FFFFFu); }',
              'bool same_double(double a, double b) { uint64_t x, y; std::memcpy(&x, &a, 8); std::memcpy(&y, &b, 8); return x == y || (a != a && b != b); }',
-             'struct State { std::vector<uint8_t> memory; uint32_t r[32], lr; double f[32], p[32]; };',
+             'struct State { std::vector<uint8_t> memory; uint32_t r[32], lr, ctr, poll; double f[32], p[32]; uint8_t cr[8], xer[3]; bool faulted = false; };',
+             'bool call_guarded(void (*fn)(Ctx&), Ctx& c) { __try { fn(c); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; } }   // a pointer chased through random memory may leave the guest address space: the original and the native version must fault alike',
              'State run(void (*fn)(Ctx&), const std::vector<uint32_t>& words, const uint32_t (&ptr)[6], const uint32_t (&ints)[32], const double (&fl)[64], uint32_t lr, const std::vector<std::pair<uint32_t, uint32_t>>& sda) {',
              '    Fix fix; Ctx& c = fix.c;',
              '    for (size_t i = 0; i < words.size(); ++i) wr32(c, kBase + uint32_t(i) * 4, words[i]);',
              '    for (const auto& [at, v] : sda) wr32(c, at, v);',
              '    for (uint32_t i = 0; i < 96; ++i) wr32(c, kStack + i * 4, words[(i * 7) % words.size()]);   // the caller frame: stack arguments',
              '    for (int i = 0; i < 32; ++i) { c.r[i] = ints[i]; c.f[i] = fl[i]; c.ps1[i] = fl[32 + i]; }',
-             '    c.r[1] = kStack; c.r[2] = kSda; for (int i = 0; i < 6; ++i) c.r[3 + i] = ptr[i]; c.lr = lr; c.gqr[0] = 0; c.gqr[1] = 0;',
-             '    fn(c);',
-             '    State s; s.memory.assign(c.mem + (kBase & 0x3FFFFFFF), c.mem + (kBase & 0x3FFFFFFF) + kRegion); s.lr = c.lr;',
+             '    c.r[1] = kStack; c.r[2] = kSda; c.r[13] = kSda; for (int i = 0; i < 6; ++i) c.r[3 + i] = ptr[i]; c.lr = lr; c.ctr = lr * 3u; c.poll_count = 0; for (int i = 0; i < 8; ++i) { c.gqr[i] = 0; c.cr[i] = uint8_t((lr >> (i * 3)) & 15); } c.xer_ca = lr & 1; c.xer_ov = (lr >> 1) & 1; c.xer_so = (lr >> 2) & 1;',
+             '    const bool ok = call_guarded(fn, c);',
+             '    State s; s.faulted = !ok; s.memory.assign(c.mem + (kBase & 0x3FFFFFFF), c.mem + (kBase & 0x3FFFFFFF) + kRegion); s.lr = c.lr; s.ctr = c.ctr; s.poll = c.poll_count; for (int i = 0; i < 8; ++i) s.cr[i] = c.cr[i]; s.xer[0] = c.xer_ca; s.xer[1] = c.xer_ov; s.xer[2] = c.xer_so;',
              '    for (int i = 0; i < 32; ++i) { s.r[i] = c.r[i]; s.f[i] = c.f[i]; s.p[i] = c.ps1[i]; }',
              '    return s;',
              '}',
              'bool same_state(const State& a, const State& b, std::string& why) {',
+             '    if (a.faulted || b.faulted) { if (a.faulted != b.faulted) why = "one of them faulted"; return a.faulted == b.faulted; }',
              '    for (size_t i = 0; i + 4 <= a.memory.size(); i += 4) { uint32_t x, y; std::memcpy(&x, &a.memory[i], 4); std::memcpy(&y, &b.memory[i], 4); if (x != y && !(is_nan32(_byteswap_ulong(x)) && is_nan32(_byteswap_ulong(y)))) { why = "memory at +" + std::to_string(i); return false; } }',
-             '    for (int i = 0; i < 32; ++i) { if (a.r[i] != b.r[i]) { why = "r" + std::to_string(i); return false; } if (!same_double(a.f[i], b.f[i])) { why = "f" + std::to_string(i); return false; } if (!same_double(a.p[i], b.p[i])) { why = "ps1 of f" + std::to_string(i); return false; } }',
+             '    for (int i = 0; i < 32; ++i) { if (a.r[i] != b.r[i]) { char t[64]; std::snprintf(t, sizeof t, " (reference %08X, native %08X)", a.r[i], b.r[i]); why = "r" + std::to_string(i) + t; return false; } if (!same_double(a.f[i], b.f[i])) { why = "f" + std::to_string(i); return false; } if (!same_double(a.p[i], b.p[i])) { why = "ps1 of f" + std::to_string(i); return false; } }',
              '    if (a.lr != b.lr) { why = "lr"; return false; }',
+             '    if (a.ctr != b.ctr) { why = "ctr"; return false; } if (a.poll != b.poll) { why = "poll count"; return false; }',
+             '    for (int i = 0; i < 8; ++i) if (a.cr[i] != b.cr[i]) { why = "cr" + std::to_string(i); return false; }',
+             '    for (int i = 0; i < 3; ++i) if (a.xer[i] != b.xer[i]) { why = "xer"; return false; }',
              '    return true;',
              '}',
-             'void compare(const char* name, void (*hle)(Ctx&), void (*ref)(Ctx&), const std::vector<int>& sda_offsets, int iterations = 2000) {',
+             'void compare(const char* name, void (*hle)(Ctx&), void (*ref)(Ctx&), const std::vector<int>& sda_offsets, bool loops, int iterations = 2000) {',
              '    int mismatches = 0;',
              '    for (int n = 0; n < iterations; ++n) {',
              '        std::vector<uint32_t> words(kRegion / 4);',
@@ -348,10 +391,10 @@ def main():
              '        uint32_t ptr[6];',
              '        for (auto& p : ptr) p = kBase + 0x80 + uint32_t(rng() % 0x60) * 16;',
              '        if (n % 4 == 1) ptr[1] = ptr[0]; else if (n % 4 == 2) ptr[2] = ptr[0]; else if (n % 4 == 3) ptr[1] = ptr[2];',
-             '        uint32_t ints[32]; for (auto& v : ints) v = uint32_t(rng());',
-             '        double fl[64]; for (auto& v : fl) v = random_double();',
+             '        uint32_t ints[32]; for (auto& v : ints) v = loops ? uint32_t(rng() % 64) : uint32_t(rng());   // a function with a loop gets small counts and sane constants: random ones can make the original loop forever',
+             '        double fl[64]; for (auto& v : fl) v = loops ? std::uniform_real_distribution<double>(-50, 50)(rng) : random_double();',
              '        for (int i = 32; i < 64; ++i) fl[i] = double(float(fl[i]));   // the second halves always hold single-precision values (psq_l after psq_st would round them)',
-             '        std::vector<std::pair<uint32_t, uint32_t>> sda; for (int off : sda_offsets) sda.push_back({kSda + uint32_t(off), random_float_bits()});',
+             '        std::vector<std::pair<uint32_t, uint32_t>> sda; for (int off : sda_offsets) { float k = float(std::uniform_real_distribution<double>(0.5, 10)(rng)); uint32_t kb; std::memcpy(&kb, &k, 4); sda.push_back({kSda + uint32_t(off), loops ? kb : random_float_bits()}); }',
              '        const uint32_t lr = uint32_t(rng());',
              '        const State want = run(ref, words, ptr, ints, fl, lr, sda), have = run(hle, words, ptr, ints, fl, lr, sda);',
              '        std::string why;',
@@ -360,15 +403,19 @@ def main():
              '    std::printf("%s: %d mismatches in %d randomised runs\\n", name, mismatches, iterations);',
              '    CHECK(mismatches == 0);',
              '}',
-             '}  // namespace', '', 'int main() {']
-    for address, (ops, raw) in chosen:
-        _, _, _, _, _, spans, _ = analyse(ops)
+             '}  // namespace', '', 'int main() {', '    std::thread([] { std::this_thread::sleep_for(std::chrono::seconds(120)); std::puts("leaf test hung (a loop that never ends?)"); std::_Exit(3); }).detach();', '    std::setvbuf(stdout, nullptr, _IONBF, 0);']
+    for address, (ops, raw), kind in chosen:
         sda = []
-        for b in (2, 13):
-            if b in spans:
-                for off in range(spans[b][0], spans[b][1], 4):
-                    sda.append(off)
-        test.append('    compare("Leaf_%s", hle_Leaf_%s, ref_Leaf_%s, {%s});' % (address, address, address, ", ".join(str(x) for x in sda)))
+        if kind == "straight":
+            _, _, _, _, _, spans, _ = analyse(ops)
+            for b in (2, 13):
+                if b in spans:
+                    for off in range(spans[b][0], spans[b][1], 4):
+                        sda.append(off)
+        else:
+            sda = leaf_hybrid.sda_offsets(ops)
+        loops = kind == "hybrid" and leaf_hybrid.has_loop(ops)
+        test.append('    compare("Leaf_%s", hle_Leaf_%s, ref_Leaf_%s, {%s}, %s);' % (address, address, address, ", ".join(str(x) for x in sda), "true" if loops else "false"))
     test += ['    return 0;', '}', '']
     (root / "runtime/hle/leaf_gen.cpp").write_text("\n".join(code), encoding="utf-8")
     (root / "tests/test_leaf_hle.cpp").write_text("\n".join(test), encoding="utf-8")

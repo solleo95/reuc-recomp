@@ -15,7 +15,7 @@ struct TextureCopy {
 };
 struct FramePacket {
     uint64_t serial = 0;
-    std::deque<DrawPacket, PoolAllocator<DrawPacket>> draws;   // a DrawPacket is ~6 KB: a deque never relocates them while a batch grows
+    std::deque<DrawPacket, PoolAllocator<DrawPacket>> draws;   // deque nodes keep draw addresses stable while a batch grows
     bool present = true;
     bool clear_after_copy = true;
     std::array<uint8_t,4> clear_color{16,32,64,255};
