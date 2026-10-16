@@ -5,9 +5,17 @@ generated/
 .superpowers/
 third_party/signatures/
 project/hle.cfg
-build-trace/
+/build-*/
 build-trace.log
 __pycache__/
-build-prof/
 project/pgo/
-build-pgo-gen/
+
+# Local build state and agent worktrees
+/.ninja_log
+/.ninja_deps
+/.claude/worktrees/
+/scripts/agent-env.ps1
+
+# Local notes and duplicate asset backups
+/memory_cheat_codes.txt
+/assets/control-icon-concepts — копия/
