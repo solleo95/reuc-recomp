@@ -43,7 +43,8 @@ inline void poll(Ctx& c) { if ((++c.poll_count & 0x7FFu) == 0) [[unlikely]] poll
 
 // ---- memory ----
 PPC_INLINE bool is_mmio(uint32_t ea) { return ea - 0xCC000000u < 0x02000000u; }
-PPC_INLINE uint8_t* hp(Ctx& c, uint32_t ea) { return c.mem + (ea & 0x3FFFFFFFu); }
+// The guest address space is mapped 1:1 at c.mem (runtime/guest_mem.cpp: every alias of MEM1/MEM2/locked cache is a view), so no mask is needed.
+PPC_INLINE uint8_t* hp(Ctx& c, uint32_t ea) { return c.mem + ea; }
 // The base register of a plain load/store is a literal at every call site, so these fold at compile time. r1 (stack), r2 and r13 (small data)
 // always address RAM: no MMIO test. The stack also never holds a texture, mesh array or display list, so a stack store skips the write barrier.
 PPC_INLINE bool ram_base(int a) { return a == 1 || a == 2 || a == 13; }
