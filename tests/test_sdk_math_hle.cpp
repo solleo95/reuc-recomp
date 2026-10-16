@@ -5,12 +5,13 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <tuple>
 #include <vector>
 using namespace ppc;
 
 void hle_PSMTXIdentity(Ctx&); void hle_PSMTXCopy(Ctx&); void hle_PSMTXConcat(Ctx&); void hle_PSMTXTransApply(Ctx&); void hle_PSMTXScaleApply(Ctx&);
 void hle_PSMTXMultVec(Ctx&); void hle_PSVECAdd(Ctx&); void hle_PSVECSubtract(Ctx&); void hle_PSVECScale(Ctx&); void hle_PSVECNormalize(Ctx&);
-void hle_PSVECSquareMag(Ctx&); void hle_PSVECMag(Ctx&); void hle_PSQUATDotProduct(Ctx&); void hle_PSVECCrossProduct(Ctx&); void hle_SegmentTriangleHit(Ctx&);
+void hle_PSVECSquareMag(Ctx&); void hle_PSVECMag(Ctx&); void hle_PSQUATDotProduct(Ctx&); void hle_PSVECCrossProduct(Ctx&); void hle_SegmentTriangleHit(Ctx&); void hle_BoundsRecordInit(Ctx&); void hle_HitBufferConstruct(Ctx&);
 
 namespace {
 void ref_PSMTXIdentity(Ctx& c) {
@@ -264,6 +265,65 @@ void compare_segment_triangle(int iterations = 20000) {
     CHECK(mismatches == 0);
     CHECK(hits > iterations / 4);
 }
+
+// The translated instructions of the bounds record init (801316C8) and the hit buffer constructor (800462E8); the element constructor (80131684) is
+// empty (a lone blr), so __construct_array (80289B34) has no effect on guest memory besides its own dead stack frame.
+void ref_BoundsRecordInit(Ctx& c) {
+    op_lfs(c, 1, 2, -26752); op_addi(c, 0, 0, 0); op_lfs(c, 0, 2, -26748); op_stfs(c, 1, 3, 0); op_stfs(c, 1, 3, 4); op_stfs(c, 1, 3, 8);
+    op_stfs(c, 1, 3, 12); op_stfs(c, 1, 3, 16); op_stfs(c, 1, 3, 20); op_stfs(c, 0, 3, 24); op_stw(c, 0, 3, 28); op_stw(c, 0, 3, 36);
+}
+void ref_HitBufferConstruct(Ctx& c) {
+    const uint32_t entry_sp = c.r[1];
+    op_stwu(c, 1, 1, -32); op_mfspr(c, 0, 8); op_addis(c, 6, 0, -32705); op_addis(c, 4, 0, -32749); op_stw(c, 0, 1, 36); op_addis(c, 5, 0, -32749);
+    op_addi(c, 6, 6, 7256); op_addi(c, 4, 4, 5764); op_stw(c, 31, 1, 28); op_addi(c, 5, 5, 5768); op_addi(c, 7, 0, 32); op_stw(c, 30, 1, 24);
+    op_stw(c, 29, 1, 20); op_or(c, 3, 29, 3, false); op_stw(c, 6, 3, 0); op_addi(c, 6, 0, 108); op_addi(c, 3, 3, 8);
+    /* fn_80289B34: construct 32 elements with an empty constructor */
+    op_addi(c, 3, 29, 3464);
+    /* fn_80131684: empty */
+    op_addi(c, 0, 0, 0); op_addi(c, 31, 0, 0); op_stw(c, 0, 29, 4); op_addi(c, 30, 0, 0);
+    do {
+        op_add(c, 3, 29, 30, false); op_addi(c, 3, 3, 8);
+        ref_BoundsRecordInit(c);
+        op_addi(c, 31, 31, 1); op_addi(c, 30, 30, 108); op_cmpli(c, 0, 31, 32u);
+    } while (crbit(c, 0) == true);
+    op_addi(c, 3, 29, 3464);
+    ref_BoundsRecordInit(c);
+    op_addi(c, 0, 0, 0); op_or(c, 29, 3, 29, false); op_stw(c, 0, 29, 3572);
+    op_lwz(c, 31, 1, 28); op_lwz(c, 30, 1, 24); op_lwz(c, 29, 1, 20);
+    c.r[1] = entry_sp;
+}
+
+void compare_hit_buffer(int iterations = 3000) {
+    int mismatches = 0;
+    for (int n = 0; n < iterations; ++n) {
+        std::vector<uint32_t> words(0x1000 / 4);
+        for (auto& w : words) w = random_float_bits();
+        uint32_t constants[2] = {n % 9 ? float_bits(1e30) : random_float_bits(), n % 7 ? 0xC0000000u : random_float_bits()};
+        const uint32_t this_ptr = kBase + 0x40 + (n % 5) * 4;
+        for (int which = 0; which < 2; ++which) {
+            void (*ref)(Ctx&) = which ? ref_BoundsRecordInit : ref_HitBufferConstruct;
+            void (*hle)(Ctx&) = which ? hle_BoundsRecordInit : hle_HitBufferConstruct;
+            Fix a, b;
+            auto go = [&](Fix& f, void (*fn)(Ctx&)) {
+                Ctx& c = f.c;
+                for (size_t i = 0; i < words.size(); ++i) wr32(c, kBase + uint32_t(i) * 4, words[i]);
+                wr32(c, kSda - 26752, constants[0]); wr32(c, kSda - 26748, constants[1]);
+                c.r[2] = kSda; c.r[1] = kBase + 0x3000; c.r[3] = this_ptr; c.r[29] = 0xAAAA0029; c.r[30] = 0xAAAA0030; c.r[31] = 0xAAAA0031;
+                for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
+                fn(c);
+                std::vector<uint8_t> memory(f.c.mem + (kBase & 0x3FFFFFFF), f.c.mem + (kBase & 0x3FFFFFFF) + 0x1000);
+                return std::make_tuple(memory, c.r[3], c.r[29], c.r[30], c.r[31], bits(c.f[1]), bits(c.f[0]), bits(c.ps1[1]));
+            };
+            const auto want = go(a, ref);
+            const auto have = go(b, hle);
+            const bool same = same_memory(std::get<0>(want), std::get<0>(have)) && std::get<1>(want) == std::get<1>(have) && std::get<2>(want) == std::get<2>(have)
+                && std::get<3>(want) == std::get<3>(have) && std::get<4>(want) == std::get<4>(have) && (which == 0 || (std::get<5>(want) == std::get<5>(have) && std::get<6>(want) == std::get<6>(have) && std::get<7>(want) == std::get<7>(have)));
+            if (!same && ++mismatches <= 3) std::printf("%s differs at iteration %d\n", which ? "BoundsRecordInit" : "HitBufferConstruct", n);
+        }
+    }
+    std::printf("BoundsRecordInit / HitBufferConstruct: %d mismatches in %d randomised runs each\n", mismatches, iterations);
+    CHECK(mismatches == 0);
+}
 }  // namespace
 
 int main() {
@@ -282,5 +342,6 @@ int main() {
     compare("PSQUATDotProduct", hle_PSQUATDotProduct, ref_PSQUATDotProduct, true);
     compare("PSVECCrossProduct", hle_PSVECCrossProduct, ref_PSVECCrossProduct, false);
     compare_segment_triangle();
+    compare_hit_buffer();
     return 0;
 }

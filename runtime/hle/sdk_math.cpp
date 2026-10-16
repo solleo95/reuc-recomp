@@ -302,3 +302,44 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
     st1(c, out + 8, add(PS{p0.z, 1.0}, PS{hit.z, 1.0}));
     c.r[3] = 1;
 }
+
+// Two tiny routines of the game's collision code that run thousands of times a frame (together ~7% of the heavy window), written on host memory.
+// 801316C8: initialises the 40-byte bounds record at r3 (six floats f1, one float f0, two zero words). 800462E8: the constructor of the 3.6 KB hit
+// buffer at r3 (vtable, then __construct_array with an empty element constructor, then this init on 33 records of 108 bytes); it returns r3.
+// Both stay on the original per-store path when the record is not entirely in RAM. tests/test_sdk_math_hle.cpp runs the translated instructions.
+namespace {
+SDK_INLINE bool in_ram(uint32_t ea, uint32_t size) { return (ea >= 0x80000000u && ea + size <= 0x81800000u) || (ea >= 0x90000000u && ea + size <= 0x94000000u); }
+SDK_INLINE uint32_t through_double(uint32_t bits) { float f; std::memcpy(&f, &bits, 4); const float g = float(double(f)); uint32_t r; std::memcpy(&r, &g, 4); return r; }   // lfs then stfs
+SDK_INLINE void put32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
+SDK_INLINE void bounds_record(uint8_t* p, uint32_t low, uint32_t high) {
+    for (int i = 0; i < 6; ++i) put32(p + 4 * i, low);
+    put32(p + 24, high); put32(p + 28, 0); put32(p + 36, 0);
+}
+SDK_INLINE void bounds_record_slow(Ctx& c, uint32_t ea, uint32_t low, uint32_t high) {
+    for (int i = 0; i < 6; ++i) ppc::wr32(c, ea + 4 * i, low);
+    ppc::wr32(c, ea + 24, high); ppc::wr32(c, ea + 28, 0); ppc::wr32(c, ea + 36, 0);
+}
+}  // namespace
+void hle_BoundsRecordInit(ppc::Ctx& c) {
+    const uint32_t low = through_double(ppc::rd32_ram(c, c.r[2] - 26752)), high = through_double(ppc::rd32_ram(c, c.r[2] - 26748)), ea = c.r[3];
+    if (in_ram(ea, 40)) { gx::note_write_range(ea, 40); bounds_record(ppc::hp(c, ea), low, high); } else bounds_record_slow(c, ea, low, high);
+    float f; std::memcpy(&f, &low, 4); c.f[1] = c.ps1[1] = f; std::memcpy(&f, &high, 4); c.f[0] = c.ps1[0] = f; c.r[0] = 0;
+}
+void hle_HitBufferConstruct(ppc::Ctx& c) {
+    const uint32_t low = through_double(ppc::rd32_ram(c, c.r[2] - 26752)), high = through_double(ppc::rd32_ram(c, c.r[2] - 26748)), ea = c.r[3];
+    const uint32_t vtable = uint32_t(int32_t(-32705) << 16) + 7256, size = 3576;
+    if (in_ram(ea, size)) {
+        gx::note_write_range(ea, size);
+        uint8_t* p = ppc::hp(c, ea);
+        put32(p, vtable); put32(p + 4, 0);
+        for (uint32_t i = 0; i < 32; ++i) bounds_record(p + 8 + 108 * i, low, high);
+        bounds_record(p + 3464, low, high);
+        put32(p + 3572, 0);
+    } else {
+        ppc::wr32(c, ea, vtable); ppc::wr32(c, ea + 4, 0);
+        for (uint32_t i = 0; i < 32; ++i) bounds_record_slow(c, ea + 8 + 108 * i, low, high);
+        bounds_record_slow(c, ea + 3464, low, high);
+        ppc::wr32(c, ea + 3572, 0);
+    }
+    float f; std::memcpy(&f, &low, 4); c.f[1] = c.ps1[1] = f; std::memcpy(&f, &high, 4); c.f[0] = c.ps1[0] = f; c.r[0] = 0;
+}
