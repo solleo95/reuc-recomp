@@ -11,7 +11,7 @@ set "ARGS=%*"
 if not defined ARGS set "ARGS=--seconds 20"
 call "%~dp0env.bat" || exit /b 1
 if not exist "%BUILD%" mkdir "%BUILD%"
-cmake -S "%ROOT%" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl > "%BUILD%\configure.log" 2>&1
+cmake -S "%ROOT%" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON > "%BUILD%\configure.log" 2>&1
 if errorlevel 1 goto :fail
 cmake --build "%BUILD%" --target translator > "%BUILD%\translator_build.log" 2>&1
 if errorlevel 1 goto :fail

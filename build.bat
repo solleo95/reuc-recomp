@@ -18,7 +18,7 @@ call "%ROOT%\scripts\env.bat" || exit /b 1
 if not exist "%BUILD%" mkdir "%BUILD%"
 
 echo [2/6] Configure and build the translator
-cmake -S "%ROOT%" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl > "%BUILD%\configure.log" 2>&1
+cmake -S "%ROOT%" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON > "%BUILD%\configure.log" 2>&1
 if errorlevel 1 goto :build_failed
 cmake --build "%BUILD%" --target translator > "%BUILD%\translator_build.log" 2>&1
 if errorlevel 1 goto :build_failed
