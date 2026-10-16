@@ -223,3 +223,4 @@ KPADEnableMotor Nop
 @802657AC PSVECMag
 @802657F0 PSQUATDotProduct
 @80265810 PSVECCrossProduct
+@800460A0 SegmentTriangleHit   # the game's segment/triangle collision test built on the vector routines above

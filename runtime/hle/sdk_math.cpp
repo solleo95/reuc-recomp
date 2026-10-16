@@ -254,3 +254,51 @@ void hle_PSVECCrossProduct(ppc::Ctx& c) {
     st1(c, c.r[5] + 0, x);
     st(c, c.r[5] + 4, yz);
 }
+
+// int SegmentTriangleHit(Vec* hit, Vec* p0, Vec* p1, Vec* v0, Vec* v1, Vec* v2)  r3..r8 -> r3
+// The game's collision test at 800460A0 (a Moller-Trumbore segment p0->p1 against the triangle v0 v1 v2; the hit point goes to *hit). The translated
+// function is eight calls of the routines above on stack temporaries; this runs the same operations on locals: identical single-precision
+// rounding, identical comparisons (a NaN fails every comparison like fcmpo), only the dead stack temporaries are not written.
+// The thresholds are small-data constants (eps, 0, 1). tests/test_sdk_math_hle.cpp runs the original instruction sequence against it.
+namespace {
+struct V3 { PS xy; double z; };
+SDK_INLINE V3 vld(Ctx& c, uint32_t ea) { return {ld(c, ea), f32_at(c, ea + 8)}; }
+SDK_INLINE V3 vsub(const V3& a, const V3& b) { return {sub(a.xy, b.xy), rs(a.z - b.z)}; }
+SDK_INLINE V3 vcross(const V3& a, const V3& b) {   // PSVECCrossProduct on locals
+    const PS az = {a.z, a.z}, bz = {b.z, b.z}, bswap = merge10(b.xy, b.xy);
+    const PS bz_az = mul(b.xy, az);
+    const PS bx_a = muls0(b.xy, a.xy.p0);
+    const PS first = msub(a.xy, bz, bz_az);
+    const PS second = msub(a.xy, bswap, bx_a);
+    const PS yz = neg(merge01(first, second));
+    return {{first.p1, yz.p0}, yz.p1};
+}
+SDK_INLINE double vdot(const V3& a, const V3& b) {   // the "PSQUATDotProduct" the SDK data labels it: x*x' + y*y' + z*z' with the paired-single rounding
+    const PS hi = mul(PS{a.xy.p1, a.z}, PS{b.xy.p1, b.z});
+    return sum0(madd(a.xy, b.xy, hi), hi, hi).p0;
+}
+}  // namespace
+void hle_SegmentTriangleHit(ppc::Ctx& c) {
+    float_gqr(c);
+    const double eps = f32_at(c, c.r[2] - 32296), zero = f32_at(c, c.r[2] - 32304), one = f32_at(c, c.r[2] - 32300);
+    const uint32_t out = c.r[3];
+    const V3 p0 = vld(c, c.r[4]), p1 = vld(c, c.r[5]), v0 = vld(c, c.r[6]), v1 = vld(c, c.r[7]), v2 = vld(c, c.r[8]);
+    const V3 e1 = vsub(v1, v0), e2 = vsub(v2, v0), dir = vsub(p1, p0);
+    const V3 pvec = vcross(dir, e2);
+    const double det = vdot(e1, pvec);
+    c.r[3] = 0;
+    if (det < eps) return;
+    const V3 tvec = vsub(p0, v0);
+    const double u = vdot(tvec, pvec);
+    if (u < zero || u > det) return;
+    const V3 qvec = vcross(tvec, e1);
+    const double v = vdot(dir, qvec);
+    if (v < zero || rs(u + v) > det) return;
+    const double t = rs(vdot(e2, qvec) * rs(one / det));
+    if (t < zero || t > one) return;
+    const V3 hit = {muls0(dir.xy, t), muls0(PS{dir.z, 1.0}, t).p0};
+    const PS xy = add(p0.xy, hit.xy);
+    st(c, out + 0, xy);
+    st1(c, out + 8, add(PS{p0.z, 1.0}, PS{hit.z, 1.0}));
+    c.r[3] = 1;
+}

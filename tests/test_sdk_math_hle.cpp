@@ -10,7 +10,7 @@ using namespace ppc;
 
 void hle_PSMTXIdentity(Ctx&); void hle_PSMTXCopy(Ctx&); void hle_PSMTXConcat(Ctx&); void hle_PSMTXTransApply(Ctx&); void hle_PSMTXScaleApply(Ctx&);
 void hle_PSMTXMultVec(Ctx&); void hle_PSVECAdd(Ctx&); void hle_PSVECSubtract(Ctx&); void hle_PSVECScale(Ctx&); void hle_PSVECNormalize(Ctx&);
-void hle_PSVECSquareMag(Ctx&); void hle_PSVECMag(Ctx&); void hle_PSQUATDotProduct(Ctx&); void hle_PSVECCrossProduct(Ctx&);
+void hle_PSVECSquareMag(Ctx&); void hle_PSVECMag(Ctx&); void hle_PSQUATDotProduct(Ctx&); void hle_PSVECCrossProduct(Ctx&); void hle_SegmentTriangleHit(Ctx&);
 
 namespace {
 void ref_PSMTXIdentity(Ctx& c) {
@@ -158,6 +158,112 @@ void compare(const char* name, void (*hle)(Ctx&), void (*ref)(Ctx&), bool return
     std::printf("%s: %d mismatches in %d randomised runs\n", name, mismatches, iterations);
     CHECK(mismatches == 0);
 }
+
+// The translated instructions of the game's segment/triangle test (800460A0), calling the reference op sequences of the routines it uses.
+void ref_SegmentTriangleHit(Ctx& c) {
+    const uint32_t entry_sp = c.r[1];
+    op_stwu(c, 1, 1, -144); op_stfd(c, 31, 1, 128); op_psq_st(c, 31, 1, 136, 0, 0); op_stfd(c, 30, 1, 112); op_psq_st(c, 30, 1, 120, 0, 0);
+    op_addi(c, 11, 1, 112);
+    for (int i = 27; i <= 31; ++i) wr32(c, c.r[11] - 4 * (32 - i), c.r[i]);                  // _savegpr_27
+    op_or(c, 6, 30, 6, false); op_or(c, 3, 27, 3, false); op_or(c, 4, 28, 4, false); op_or(c, 5, 29, 5, false); op_or(c, 7, 3, 7, false);
+    op_or(c, 8, 31, 8, false); op_or(c, 30, 4, 30, false); op_addi(c, 5, 1, 68);
+    ref_PSVECSubtract(c);
+    op_or(c, 31, 3, 31, false); op_or(c, 30, 4, 30, false); op_addi(c, 5, 1, 56);
+    ref_PSVECSubtract(c);
+    op_or(c, 29, 3, 29, false); op_or(c, 28, 4, 28, false); op_addi(c, 5, 1, 44);
+    ref_PSVECSubtract(c);
+    op_addi(c, 3, 1, 44); op_addi(c, 4, 1, 56); op_addi(c, 5, 1, 32);
+    ref_PSVECCrossProduct(c);
+    op_addi(c, 3, 1, 68); op_addi(c, 4, 1, 32);
+    ref_PSQUATDotProduct(c);
+    op_lfs(c, 0, 2, -32296); op_fmr(c, 30, 1, false); op_fcmpo(c, 0, 1, 0);
+    if (crbit(c, 0) == false) goto L_8004613C;
+    op_addi(c, 3, 0, 0); goto L_80046208;
+L_8004613C:;
+    op_or(c, 28, 3, 28, false); op_or(c, 30, 4, 30, false); op_addi(c, 5, 1, 20);
+    ref_PSVECSubtract(c);
+    op_addi(c, 3, 1, 20); op_addi(c, 4, 1, 32);
+    ref_PSQUATDotProduct(c);
+    op_lfs(c, 0, 2, -32304); op_fmr(c, 31, 1, false); op_fcmpo(c, 0, 1, 0);
+    if (crbit(c, 0) == true) goto L_80046170;
+    op_fcmpo(c, 0, 1, 30);
+    if (crbit(c, 1) == false) goto L_80046178;
+L_80046170:;
+    op_addi(c, 3, 0, 0); goto L_80046208;
+L_80046178:;
+    op_addi(c, 3, 1, 20); op_addi(c, 4, 1, 68); op_addi(c, 5, 1, 8);
+    ref_PSVECCrossProduct(c);
+    op_addi(c, 3, 1, 44); op_addi(c, 4, 1, 8);
+    ref_PSQUATDotProduct(c);
+    op_lfs(c, 0, 2, -32304); op_fcmpo(c, 0, 1, 0);
+    if (crbit(c, 0) == true) goto L_800461AC;
+    op_fadds(c, 0, 31, 1, false); op_fcmpo(c, 0, 0, 30);
+    if (crbit(c, 1) == false) goto L_800461B4;
+L_800461AC:;
+    op_addi(c, 3, 0, 0); goto L_80046208;
+L_800461B4:;
+    op_addi(c, 3, 1, 56); op_addi(c, 4, 1, 8);
+    ref_PSQUATDotProduct(c);
+    op_lfs(c, 2, 2, -32300); op_lfs(c, 0, 2, -32304); op_fdivs(c, 3, 2, 30, false); op_fmuls(c, 1, 1, 3, false); op_fcmpo(c, 0, 1, 0);
+    if (crbit(c, 0) == true) goto L_800461E0;
+    op_fcmpo(c, 0, 1, 2);
+    if (crbit(c, 1) == false) goto L_800461E8;
+L_800461E0:;
+    op_addi(c, 3, 0, 0); goto L_80046208;
+L_800461E8:;
+    op_addi(c, 3, 1, 44); op_or(c, 3, 4, 3, false);
+    ref_PSVECScale(c);
+    op_or(c, 28, 3, 28, false); op_or(c, 27, 5, 27, false); op_addi(c, 4, 1, 44);
+    ref_PSVECAdd(c);
+    op_addi(c, 3, 0, 1);
+L_80046208:;
+    c.r[1] = entry_sp;   // the epilogue (the saved registers and the frame are dead after the return)
+}
+
+struct TriResult { std::vector<uint8_t> memory; uint32_t r3; };
+TriResult run_tri(Fix& f, void (*fn)(Ctx&), const std::vector<uint32_t>& words, const uint32_t (&arg)[6], const uint32_t (&k)[3]) {
+    Ctx& c = f.c;
+    fill_region(f, words);
+    wr32(c, kSda - 32296, k[0]); wr32(c, kSda - 32304, k[1]); wr32(c, kSda - 32300, k[2]);
+    c.r[2] = kSda; c.r[1] = kBase + 0x1000;
+    for (int i = 0; i < 6; ++i) c.r[3 + i] = arg[i];
+    for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
+    c.f[1] = 5.0; c.gqr[0] = 0;
+    fn(c);
+    return {region(f), c.r[3]};
+}
+uint32_t float_bits(double v) { const float x = float(v); uint32_t b; std::memcpy(&b, &x, 4); return b; }
+void compare_segment_triangle(int iterations = 20000) {
+    int mismatches = 0, hits = 0;
+    for (int n = 0; n < iterations; ++n) {
+        std::vector<uint32_t> words(kRegion / 4, 0);
+        const uint32_t out = kBase + 0x60, p0 = kBase + 0x10, p1 = kBase + 0x20, v0 = kBase + 0x30, v1 = kBase + 0x40, v2 = kBase + 0x50;
+        auto put = [&](uint32_t at, double x, double y, double z) { const size_t i = (at - kBase) / 4; words[i] = float_bits(x); words[i + 1] = float_bits(y); words[i + 2] = float_bits(z); };
+        std::uniform_real_distribution<double> d(-10, 10), unit(0.0, 1.0);
+        if (n % 3 != 0) {   // a segment through a random triangle (most of these hit), jittered so that edges and parallel cases appear too
+            double a[3], b[3], cc[3];
+            for (int k = 0; k < 3; ++k) { a[k] = d(rng); b[k] = d(rng); cc[k] = d(rng); }
+            double u = unit(rng), v = unit(rng) * (1 - u), nx = (b[1]-a[1])*(cc[2]-a[2]) - (b[2]-a[2])*(cc[1]-a[1]), ny = (b[2]-a[2])*(cc[0]-a[0]) - (b[0]-a[0])*(cc[2]-a[2]), nz = (b[0]-a[0])*(cc[1]-a[1]) - (b[1]-a[1])*(cc[0]-a[0]);
+            double px = a[0] + u*(b[0]-a[0]) + v*(cc[0]-a[0]), py = a[1] + u*(b[1]-a[1]) + v*(cc[1]-a[1]), pz = a[2] + u*(b[2]-a[2]) + v*(cc[2]-a[2]);
+            const double s0 = unit(rng) * 2 - 0.3, s1 = unit(rng) * 2 - 0.3;
+            put(v0, a[0], a[1], a[2]); put(v1, b[0], b[1], b[2]); put(v2, cc[0], cc[1], cc[2]);
+            put(p0, px - nx * 0.05 * s0 + d(rng) * 1e-3, py - ny * 0.05 * s0, pz - nz * 0.05 * s0); put(p1, px + nx * 0.05 * s1, py + ny * 0.05 * s1 + d(rng) * 1e-3, pz + nz * 0.05 * s1);
+        } else for (auto& w : words) w = random_float_bits();   // arbitrary bit patterns: NaN, inf, denormals
+        if (n % 7 == 0) for (uint32_t at : {p0, p1}) { const size_t i = (at - kBase) / 4; words[i + 3] = random_float_bits(); }
+        uint32_t arg[6] = {out, p0, p1, v0, v1, v2};
+        if (n % 11 == 0) arg[0] = p0; else if (n % 13 == 0) arg[0] = p1;   // the hit point overwrites an input
+        uint32_t k[3] = {float_bits(1e-4), 0, float_bits(1.0)};
+        if (n % 17 == 0) { k[0] = random_float_bits(); k[1] = random_float_bits(); k[2] = random_float_bits(); }
+        Fix expected, got;
+        const auto want = run_tri(expected, ref_SegmentTriangleHit, words, arg, k);
+        const auto have = run_tri(got, hle_SegmentTriangleHit, words, arg, k);
+        hits += want.r3 == 1;
+        if (!(same_memory(want.memory, have.memory) && want.r3 == have.r3) && ++mismatches <= 3) std::printf("SegmentTriangleHit differs at iteration %d (reference %u, native %u)\n", n, want.r3, have.r3);
+    }
+    std::printf("SegmentTriangleHit: %d mismatches in %d randomised runs (%d hits)\n", mismatches, iterations, hits);
+    CHECK(mismatches == 0);
+    CHECK(hits > iterations / 4);
+}
 }  // namespace
 
 int main() {
@@ -175,5 +281,6 @@ int main() {
     compare("PSVECMag", hle_PSVECMag, ref_PSVECMag, true);
     compare("PSQUATDotProduct", hle_PSQUATDotProduct, ref_PSQUATDotProduct, true);
     compare("PSVECCrossProduct", hle_PSVECCrossProduct, ref_PSVECCrossProduct, false);
+    compare_segment_triangle();
     return 0;
 }
