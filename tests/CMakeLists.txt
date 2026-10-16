@@ -164,7 +164,7 @@ foreach(t test_dol test_dol_scan test_isa test_analyzer test_isa_roundtrip test_
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
-foreach(t test_ppc_int test_ppc_mem test_ppc_float test_clock test_mmio test_lowmem test_sched test_os_hle test_dvd test_vi test_exi test_ios test_dsp test_gx_audit test_render_lifecycle test_sdk_math_hle)
+foreach(t test_ppc_int test_ppc_mem test_ppc_float test_clock test_mmio test_lowmem test_sched test_os_hle test_dvd test_vi test_exi test_ios test_dsp test_gx_audit test_render_lifecycle test_sdk_math_hle test_leaf_hle)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${t}.cpp)
     add_executable(${t} ${t}.cpp)
     target_link_libraries(${t} PRIVATE test_support)

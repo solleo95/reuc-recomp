@@ -223,4 +223,21 @@ KPADEnableMotor Nop
 @802657AC PSVECMag
 @802657F0 PSQUATDotProduct
 @80265810 PSVECCrossProduct
+@801316C8 BoundsRecordInit   # 10-store init of a bounds record, called ~66 times per hit buffer
+@800462E8 HitBufferConstruct   # constructor of the collision hit buffer (32+1 bounds records)
+@80137BC4 Leaf_80137BC4   # tools/leaf_hle.py: generated native leaf functions (4x4 matrix product, vec4 helpers, ...)
+@80139368 Leaf_80139368
+@801394B8 Leaf_801394B8
+@8013951C Leaf_8013951C
+@8013939C Leaf_8013939C
+@801393C0 Leaf_801393C0
+@80139448 Leaf_80139448
+@803947A4 Leaf_803947A4
+@80394B04 Leaf_80394B04
+@80138AF8 Leaf_80138AF8
+@80394CE4 Leaf_80394CE4
+@80032FD8 Leaf_80032FD8
+@80139610 Leaf_80139610
+@800521A0 Leaf_800521A0
+@800AFCD8 Leaf_800AFCD8
 @800460A0 SegmentTriangleHit   # the game's segment/triangle collision test built on the vector routines above
