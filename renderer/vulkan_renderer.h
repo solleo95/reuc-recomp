@@ -31,6 +31,9 @@ public:
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
     void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9);
     bool render(const gx::FramePacket& packet);
+    // Freshest pointer in aim units: reticle draws are re-aimed to it when their commands are recorded (late_aim.h).
+    void set_aim_source(std::function<std::array<float,2>()> source) { aim_source_ = std::move(source); }
+    uint64_t late_aim_draws() const { return late_aim_draws_.load(); }
     void resize(uint32_t width, uint32_t height);
     // Compiles every known pipeline (seed and recorded keys) before the game starts; progress(done,total) is called on this thread.
     void warm_pipelines(const std::function<void(size_t,size_t)>& progress);
@@ -48,6 +51,8 @@ public:
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
     VkDevice device = VK_NULL_HANDLE;
 private:
+    std::function<std::array<float,2>()> aim_source_;
+    std::atomic<uint64_t> late_aim_draws_{0};
     struct Buffer { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; void* mapped = nullptr; VkDeviceSize size = 0; };
     struct Texture {
         VkImage image=VK_NULL_HANDLE;

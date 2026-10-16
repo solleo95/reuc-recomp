@@ -66,6 +66,7 @@ struct DrawPacket {
     BlendState blend;
     std::array<uint8_t,8> texture_wrap{}; // SDK mode: S0..1,T2..3,mag4,mip5..6,min7
     std::optional<PromptDraw> native_prompt;
+    bool late_aim = false;   // an aim reticle quad: the renderer moves it to the freshest pointer (late_aim.h)
     std::shared_ptr<const MeshBuffers> mesh;   // when set, the geometry lives here and `vertices`/`indices` stay empty
     std::span<const Vertex> vertex_view() const { return mesh ? std::span<const Vertex>(mesh->vertices) : std::span<const Vertex>(vertices); }
     std::span<const uint32_t> index_view() const { return mesh ? std::span<const uint32_t>(mesh->indices) : std::span<const uint32_t>(indices); }

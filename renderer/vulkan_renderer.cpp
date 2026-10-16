@@ -1,3 +1,4 @@
+#include "late_aim.h"
 #include "vulkan_renderer.h"
 #include "render_scale.h"
 #include "rebuild_gate.h"
@@ -1063,6 +1064,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto right=std::clamp<int64_t>((int64_t(s[0])+s[2])*efb_extent_.width/640,x,efb_extent_.width);
                 const auto bottom=std::clamp<int64_t>((int64_t(s[1])+s[3])*efb_extent_.height/480,y,efb_extent_.height);
                 draw_scissor={{int32_t(x),int32_t(y)},{uint32_t(right-x),uint32_t(bottom-y)}};
+            }
+            if (draw.late_aim && aim_source_) {
+                const auto latest=aim_source_();
+                const float dx=(latest[0]-packet.aim_consumed[0])*gx::kAimToNdcX*0.5f*area.width, dy=(latest[1]-packet.aim_consumed[1])*gx::kAimToNdcY*0.5f*area.height;
+                if (dx!=0 || dy!=0) { draw_viewport.x+=dx; draw_viewport.y+=dy; draw_scissor=scissor; ++late_aim_draws_; }
             }
             vkCmdSetViewport(slot.command,0,1,&draw_viewport); vkCmdSetScissor(slot.command,0,1,&draw_scissor);
             const Buffer& vertex_buffer=info.vertices ? *info.vertices : slot.vertices;

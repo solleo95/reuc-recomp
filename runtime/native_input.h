@@ -1,6 +1,7 @@
 #pragma once
 #include "ppc_rt.h"
 #include "input_bindings.h"
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
@@ -40,6 +41,8 @@ public:
     uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
+    std::array<float,2> latest_aim();     // any thread: the pointer as of now
+    std::array<float,2> consumed_aim();   // the pointer of the last sample the guest read
     // Demo (determinism): every value the guest reads from this object (consume, consume_actions, using_host_input, generation) is appended to one
     // ordered file while recording and returned from that file while playing, so a deterministic run needs neither the harness nor a window.
     void demo_record(const std::filesystem::path&);
@@ -71,6 +74,7 @@ private:
     InputContext context_=InputContext::inactive;
 };
 void input_hle_init(NativeInput* input);
+std::array<float,2> input_consumed_aim();   // the pointer the guest read last (zero without input)
 }
 void hle_KPADRead(ppc::Ctx&);
 void hle_WPADProbe(ppc::Ctx&);

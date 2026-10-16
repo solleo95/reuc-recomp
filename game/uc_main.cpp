@@ -324,6 +324,7 @@ static int real_main(int argc, char** argv) {
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
     uc::VulkanRenderer renderer;
     uc::NativeInput input;
+    renderer.set_aim_source([&input] { return input.latest_aim(); });
     if (!options.demo_record.empty()) input.demo_record(options.demo_record);
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
@@ -620,7 +621,7 @@ static int real_main(int argc, char** argv) {
         if (now >= next_watch) {
             if ((options.gx_audit || options.profile) && !options.headless) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
-                std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes));
+                std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws());
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
                 if(!present_intervals.empty()) {
                     std::sort(present_intervals.begin(),present_intervals.end());

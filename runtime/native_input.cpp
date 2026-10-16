@@ -151,6 +151,9 @@ bool NativeInput::aim(float x,float y) {
     if(!state_.valid) return false;
     state_.x=x; state_.y=y; return true;
 }
+std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); return {state_.x,state_.y}; }
+std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
+std::array<float,2> input_consumed_aim() { return input ? input->consumed_aim() : std::array<float,2>{}; }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
     if(replaying_) {

@@ -24,6 +24,7 @@ struct FramePacket {
     std::array<uint32_t,4> display_source{0,0,640,480};
     std::vector<PromptDraw> prompts;
     bool black_output = false; // VI blanked: present black, the EFB copy still happens
+    std::array<float,2> aim_consumed{};   // pointer (aim units) the game read when it drew this batch; the reference of the late-aim shift
 };
 
 // A game frame is ~23 packets in the train (one per EFB copy) and the renderer drains them in bursts: the packet window must cover
