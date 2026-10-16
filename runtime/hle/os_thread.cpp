@@ -25,6 +25,7 @@ void hle_OSCreateThread(ppc::Ctx& c) {
     uint32_t th = c.r[3], entry = c.r[4], param = c.r[5], top = c.r[6], size = c.r[7];
     int prio = int(c.r[8]);
     if (prio < 0 || prio > 31) { c.r[3] = 0; return; }                 // the SDK refuses priorities outside 0..31
+    std::fprintf(stderr, "[thread] OSThread %08X entry %08X priority %d stack %u\n", th, entry, prio, size);   // once per thread: which guest function each scheduler thread runs
     ppc::wr16(c, th + layout::kThreadState, 1);
     ppc::wr16(c, th + layout::kThreadAttr, c.r[9] & 1);
     ppc::wr32(c, th + layout::kThreadSuspend, 1);

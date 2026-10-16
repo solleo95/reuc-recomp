@@ -603,7 +603,7 @@ void VulkanRenderer::collect() {
         completed_.push_back(slot.serial); slot.reported = true;
         uint64_t stamps[2];
         if (slot.timed && vkGetQueryPoolResults(device, timing_pool_, uint32_t((&slot - slots_.data()) * 2), 2, sizeof stamps, stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && stamps[1] >= stamps[0])
-            gpu_busy_ns_ += uint64_t(double(stamps[1] - stamps[0]) * timestamp_period_);
+        { const uint64_t ns = uint64_t(double(stamps[1] - stamps[0]) * timestamp_period_); gpu_busy_ns_ += ns; if (ns > gpu_window_max_ns_) gpu_window_max_ns_ = ns; }
         slot.timed = false;
     }
 }
@@ -773,8 +773,10 @@ void VulkanRenderer::rebuild() {
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));
     create.presentMode = VK_PRESENT_MODE_FIFO_KHR; create.clipped = VK_TRUE;
-    if (const char* wanted = std::getenv("UC_PRESENT_MODE")) {   // diagnostics: fifo (default, vsync), mailbox or immediate when the surface offers it
-        const VkPresentModeKHR mode = std::string_view(wanted) == "immediate" ? VK_PRESENT_MODE_IMMEDIATE_KHR : std::string_view(wanted) == "mailbox" ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+    {   // mailbox by default: with fifo the compositor held a swapchain image for up to two extra refreshes now and then, and the guest stalled in GXWaitDrawDone for 9-12 ms (the micro-freezes). UC_PRESENT_MODE=fifo|mailbox|immediate overrides; fifo is also the fallback
+        const char* env = std::getenv("UC_PRESENT_MODE");
+        const std::string_view wanted = env ? env : "mailbox";
+        const VkPresentModeKHR mode = wanted == "immediate" ? VK_PRESENT_MODE_IMMEDIATE_KHR : wanted == "mailbox" ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
         uint32_t mode_count = 0; vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, surface_, &mode_count, nullptr);
         std::vector<VkPresentModeKHR> modes(mode_count); vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, surface_, &mode_count, modes.data());
         if (std::find(modes.begin(), modes.end(), mode) != modes.end()) create.presentMode = mode;

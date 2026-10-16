@@ -35,6 +35,8 @@ uint64_t seal_window_wait_ns(); // part of seal_wait_ns spent waiting for the pa
 uint64_t seal_count();
 struct FrameLatency { uint64_t frames, total_ns, max_ns; };   // sealed -> GPU complete, presenting packets only
 FrameLatency frame_latency();
+struct LatencyWindow { double sealed_to_done_ms, taken_to_done_ms; };   // worst presenting packet completed since the last call (frame log): in the queue + rendered, and rendered only
+LatencyWindow take_latency_window();
 class Packets {
 public:
     uint64_t seal_batch(FramePacket packet);
@@ -51,6 +53,7 @@ private:
     std::deque<std::unique_ptr<const FramePacket>> queued_;
     std::map<uint64_t, bool> outstanding_;
     std::map<uint64_t, std::chrono::steady_clock::time_point> frames_in_flight_;   // unfinished presenting packets and when they were sealed
+    std::map<uint64_t, std::chrono::steady_clock::time_point> taken_at_;           // ... and when the renderer took them
     uint64_t next_serial_ = 1;
     bool canceled_ = false;
 };

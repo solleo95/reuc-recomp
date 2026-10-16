@@ -48,6 +48,7 @@ public:
     void shutdown();
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
+    double take_gpu_window_ms() { return gpu_window_max_ns_.exchange(0) / 1e6; }   // longest single GPU submission retired since the last call (frame log)
     uint64_t gpu_busy_ns() const { return gpu_busy_ns_.load(); }   // summed GPU execution time of retired frame submissions
     uint64_t texture_creations() const { owner(); return texture_creations_; }
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
@@ -192,7 +193,7 @@ private:
     bool resized_ = true;
     std::chrono::steady_clock::time_point last_rebuild_{};
     std::atomic<uint32_t> errors_{0};
-    std::atomic<uint64_t> presentations_{0}, gpu_busy_ns_{0};
+    std::atomic<uint64_t> presentations_{0}, gpu_busy_ns_{0}, gpu_window_max_ns_{0};
     VkQueryPool timing_pool_ = VK_NULL_HANDLE;   // two timestamps per slot
     double timestamp_period_ = 0;
     uint64_t texture_creations_=0;

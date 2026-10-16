@@ -489,6 +489,7 @@ static int real_main(int argc, char** argv) {
                       for(int t=0;t<8;++t) { const uint64_t run=sched.thread_run_ns(t+1); row.thread_ms[t]=(run-frame_thread_last[t])/1e6; frame_thread_last[t]=run; } }
                     row.retraces=uc::vi_stats().retraces; row.textures=renderer.texture_creations(); row.decodes=uc::gx_stats().texture_decodes; row.dvd_reads=uc::dvd_stats().reads;
                     row.audio_blocks=uc::audio_stats().frames; row.seal_wait_ns=gx::seal_wait_ns(); row.switches=sched.switch_stats().switches; row.queued=uint32_t(depth.queued); row.outstanding=uint32_t(depth.outstanding);
+                    { const auto window=gx::take_latency_window(); row.sealed_to_done_ms=window.sealed_to_done_ms; row.taken_to_done_ms=window.taken_to_done_ms; row.gpu_ms=renderer.take_gpu_window_ms(); }
                     frame_log->add(row);
                     frame_cpu_last=cpu; frame_busy_ns=frame_events_ns=0; frame_events=0;
                 } else if (frame_log) frame_cpu_last=thread_cycles();
@@ -704,7 +705,7 @@ static int real_main(int argc, char** argv) {
     const auto picture_stats=uc::picture_probe_stats();
     std::fprintf(stderr,"picture probe stats: calls %llu records %llu invalid %llu\n",(unsigned long long)picture_stats.calls,(unsigned long long)picture_stats.records,(unsigned long long)picture_stats.invalid);
     std::fprintf(stderr,"player event probe stats: events %llu records %llu invalid %llu\n",(unsigned long long)event_stats.events,(unsigned long long)event_stats.records,(unsigned long long)event_stats.invalid);
-    if(frame_log) { char text[64]; std::string notes="# guest thread entry points:"; for(int t=1;t<=8;++t) {std::snprintf(text,sizeof text," %d=%08X",t,sched.thread_entry(t)); notes+=text;} frame_log->note(notes+"\n"); }
+    if(frame_log) { char text[64]; std::string notes="# guest thread entry points:"; for(int t=1;t<=8;++t) {std::snprintf(text,sizeof text," %d=%08X",t,sched.thread_entry(t)); notes+=text;} std::snprintf(text,sizeof text,"\n# frame t_ms 0 = %.1f ms steady\n",double(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count())/1e6); notes+=text; frame_log->note(notes+sched.idle_report()); }
     frame_log.reset();   // joins the writer thread after the last rows
     std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
     if(options.audio_audit) {

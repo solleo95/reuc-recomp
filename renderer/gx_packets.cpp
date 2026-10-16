@@ -8,6 +8,8 @@ namespace { std::atomic<uint64_t> total_seal_wait_ns{0}, total_window_wait_ns{0}
 uint64_t seal_wait_ns() { return total_seal_wait_ns.load(); }
 uint64_t seal_window_wait_ns() { return total_window_wait_ns.load(); }
 uint64_t seal_count() { return total_seals.load(); }
+std::atomic<uint64_t> window_sealed_max_ns{0}, window_taken_max_ns{0};
+LatencyWindow take_latency_window() { return {window_sealed_max_ns.exchange(0) / 1e6, window_taken_max_ns.exchange(0) / 1e6}; }
 FrameLatency frame_latency() { return {latency_frames.load(), latency_total_ns.load(), latency_max_ns.load()}; }
 uint64_t Packets::seal_batch(FramePacket packet) {
     std::unique_lock lock(mutex_);
@@ -36,6 +38,7 @@ std::unique_ptr<const FramePacket> Packets::try_take() {
     std::lock_guard lock(mutex_);
     if (queued_.empty()) return {};
     outstanding_.at(queued_.front()->serial) = true;
+    if (frames_in_flight_.count(queued_.front()->serial)) taken_at_[queued_.front()->serial] = std::chrono::steady_clock::now();
     auto packet = std::move(queued_.front());
     queued_.pop_front();
     return packet;
@@ -49,6 +52,12 @@ bool Packets::complete(uint64_t serial) {
         const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - frame->second).count());
         ++latency_frames; latency_total_ns += ns;
         if (ns > latency_max_ns) latency_max_ns = ns;
+        if (ns > window_sealed_max_ns) window_sealed_max_ns = ns;
+        if (auto taken = taken_at_.find(serial); taken != taken_at_.end()) {
+            const uint64_t rendered = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - taken->second).count());
+            if (rendered > window_taken_max_ns) window_taken_max_ns = rendered;
+            taken_at_.erase(taken);
+        }
         frames_in_flight_.erase(frame);
     }
     space_.notify_all();
@@ -63,7 +72,7 @@ void Packets::cancel() {
     std::lock_guard lock(mutex_);
     canceled_ = true;
     queued_.clear();
-    outstanding_.clear();
+    outstanding_.clear(); taken_at_.clear();
     space_.notify_all();
     ready_.notify_all();
 }

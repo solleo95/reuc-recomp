@@ -260,6 +260,20 @@ std::string Sched::dump_threads() const {
     return s;
 }
 
+std::string Sched::idle_report() const {
+    std::lock_guard<std::mutex> lg(idle_report_m_);
+    std::string s; char b[160];
+    for (const auto& [key, st] : idle_by_) {
+        std::snprintf(b, sizeof b, "# idle %7.1f ms in %5llu waits (max %.1f ms, %llu ended by an event, rest by a timer): ", st.total_ns / 1e6, (unsigned long long)st.count, st.max_ns / 1e6, (unsigned long long)st.by_event);
+        s += b; s += key; s += "\n";
+    }
+    for (const auto& e : idle_events_) {
+        std::snprintf(b, sizeof b, "# idle-wait end %.1f ms steady, %.1f ms, ended by %s: ", e.end_ns / 1e6, e.duration_ns / 1e6, e.by_event ? "event" : "timer");
+        s += b; s += e.key; s += "\n";
+    }
+    return s;
+}
+
 std::string Sched::dump_contexts() const {
     std::string s;
     static const char* names[] = {"suspended", "ready", "running", "waiting", "dead"};
@@ -304,7 +318,15 @@ void Sched::idle_wait() {
     }
     const uint64_t idle_start = steady_ns();
     bool woke = ext_cv_.wait_until(lk, until, [&] { return !ext_q_.empty() || shutdown_; });
-    idle_ns_ += steady_ns() - idle_start;
+    const uint64_t idle_duration = steady_ns() - idle_start;
+    idle_ns_ += idle_duration;
+    if (idle_duration >= 1000000) {   // diagnosis of frame-time spikes: which threads were blocked on what
+        std::string key; char b[48];
+        for (const auto& t : threads_) if (t->state == Thread::State::Waiting) { std::snprintf(b, sizeof b, "t%d:%08X@%08X ", t->id, t->wait_key, t->ctx.lr); key += b; }
+        std::lock_guard<std::mutex> lg(idle_report_m_);
+        auto& st = idle_by_[key]; ++st.count; st.total_ns += idle_duration; if (idle_duration > st.max_ns) st.max_ns = idle_duration; st.by_event += woke;
+        if (idle_duration >= 2000000 && idle_events_.size() < 4000) idle_events_.push_back({steady_ns(), idle_duration, woke, key});
+    }
     if (!woke && !timed) {
         lk.unlock();
         fail("deadlock: all guest threads are blocked and no event is pending\n" + dump_threads());

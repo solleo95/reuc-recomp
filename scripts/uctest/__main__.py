@@ -46,6 +46,7 @@ def main(argv=None):
     run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
     run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
+    run.add_argument("--slow-at", type=int, default=0, help="fight: drop to speed 1 at this game second (retraces / 60) instead of the learned point")
     run.add_argument("--mark", action="store_true", help="fight: ignore the saved slowdown point and wait for F5 to set a new one")
     run.add_argument("--max-minutes", type=float, default=10, help="autoplay wall-time limit")
     bench = sub.add_parser("bench", help="compare game builds on the heavy fight: cycles per frame at one scene weight, alternating runs, 95%% CI (see uctest/bench.py)")

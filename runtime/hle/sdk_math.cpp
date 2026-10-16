@@ -5,6 +5,7 @@
 // the other floating-point scratch registers are caller-saved by the calling convention.
 #include "ppc_rt.h"
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 namespace {

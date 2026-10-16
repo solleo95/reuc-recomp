@@ -97,8 +97,11 @@ class Game:
                 "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
         if self.skip_intro:
             args.append("--skip-intro")
+        if "--fps-limit" not in self.game_args:
+            args.extend(["--fps-limit", "0"])   # as a player runs it (launcher default: unlimited): the game steps at its own pace, not the original 30 Hz
         args.extend(self.game_args)
-        args.append("--mute")   # tests run silent: the owner is usually at the machine
+        if not os.environ.get("UC_TEST_SOUND"):   # UC_TEST_SOUND=1 plays the audio
+            args.append("--mute")   # tests run silent: the owner is usually at the machine
         if not os.environ.get("UC_TEST_LAYERS"):   # UC_TEST_LAYERS=1 keeps the implicit Vulkan layers (RTSS, OBS, ReShade...) on, as a player runs the game
             args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
         if self.god:

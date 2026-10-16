@@ -126,6 +126,11 @@ private:
     int pin_cpu_ = -1;   // >= 0: every guest host thread runs on this logical CPU (benchmarks: steadier timing than letting Windows move the thread between cores and CCDs)
     std::atomic<uint32_t> entry_[32] = {};
     static uint64_t steady_ns();
+    struct IdleStat { uint64_t count = 0, total_ns = 0, max_ns = 0, by_event = 0; };
+    std::map<std::string, IdleStat> idle_by_;
+    struct IdleEvent { uint64_t end_ns, duration_ns; bool by_event; std::string key; };
+    std::vector<IdleEvent> idle_events_;   // the first waits of 2 ms or more, with the time they ended
+    mutable std::mutex idle_report_m_;
 public:
     struct SwitchStats { uint64_t switches, wake_ns; };
     SwitchStats switch_stats() const { return {switches_.load(), wake_ns_.load()}; }
@@ -138,6 +143,7 @@ public:
     uint64_t guest_cycles() const { uint64_t sum = 0; for (const auto& c : run_cycles_) sum += c.load(); return sum; }
     uint64_t idle_ns() const { return idle_ns_.load(); }   // time every guest thread was blocked and the scheduler waited for an event
     uint64_t thread_run_ns(int id) const { return id > 0 && id < 32 ? run_ns_[id].load() : 0; }
+    std::string idle_report() const;   // idle waits of 1 ms or more, grouped by the blocked threads and the wait keys they sat on (frame-log notes)
     uint32_t thread_entry(int id) const { return id > 0 && id < 32 ? entry_[id].load() : 0; }
 };
 
