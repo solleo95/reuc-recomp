@@ -34,6 +34,8 @@ public:
     // Freshest pointer in aim units: reticle draws are re-aimed to it when their commands are recorded (late_aim.h).
     void set_aim_source(std::function<std::array<float,2>()> source) { aim_source_ = std::move(source); }
     uint64_t late_aim_draws() const { return late_aim_draws_.load(); }
+    struct FrameTimings { double acquire_ms = 0, submit_ms = 0, present_ms = 0; };   // inside the last render(): the calls a layer or the driver can stall
+    FrameTimings last_timings() const { return timings_; }
     void resize(uint32_t width, uint32_t height);
     // Compiles every known pipeline (seed and recorded keys) before the game starts; progress(done,total) is called on this thread.
     void warm_pipelines(const std::function<void(size_t,size_t)>& progress);
@@ -51,6 +53,7 @@ public:
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
     VkDevice device = VK_NULL_HANDLE;
 private:
+    FrameTimings timings_;
     std::function<std::array<float,2>()> aim_source_;
     std::atomic<uint64_t> late_aim_draws_{0};
     struct Buffer { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; void* mapped = nullptr; VkDeviceSize size = 0; };

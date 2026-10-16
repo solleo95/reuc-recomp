@@ -1,0 +1,50 @@
+#include "frame_log.h"
+#include "fatal.h"
+#include <chrono>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+namespace uc {
+FrameLog::FrameLog(const std::filesystem::path& path) {
+    std::error_code ignored;
+    std::filesystem::create_directories(path.parent_path(), ignored);
+    file_ = _wfopen(path.c_str(), L"wb");
+    if (!file_) fatal("cannot create the frame log %ls", path.c_str());
+    std::fprintf(file_, "t_ms,interval_ms,busy_ms,acquire_ms,submit_ms,present_ms,events_ms,events,cpu_mcycles,retraces,textures,decodes,dvd_reads,audio_blocks,seal_wait_ns,switches,queued,outstanding\n");
+    rows_.reserve(4096);
+    writer_ = std::thread([this] { run(); });
+}
+FrameLog::~FrameLog() {
+    { std::lock_guard lock(mutex_); stop_ = true; }
+    wake_.notify_all();
+    writer_.join();
+    std::fclose(file_);
+}
+void FrameLog::add(const FrameRow& row) {
+    std::lock_guard lock(mutex_);
+    rows_.push_back(row);
+}
+void FrameLog::run() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    std::vector<FrameRow> rows; rows.reserve(4096);
+    for (;;) {
+        bool stopping;
+        {
+            std::unique_lock lock(mutex_);
+            wake_.wait_for(lock, std::chrono::seconds(5), [this] { return stop_; });
+            stopping = stop_;
+            rows.swap(rows_);
+        }
+        flush(rows);
+        if (stopping) return;
+    }
+}
+void FrameLog::flush(std::vector<FrameRow>& rows) {
+    for (const auto& r : rows)
+        std::fprintf(file_, "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%u,%u\n", r.t_ms, r.interval_ms, r.busy_ms, r.acquire_ms, r.submit_ms, r.present_ms, r.events_ms, r.events, r.cpu_mcycles,
+                     (unsigned long long)r.retraces, (unsigned long long)r.textures, (unsigned long long)r.decodes, (unsigned long long)r.dvd_reads, (unsigned long long)r.audio_blocks, (unsigned long long)r.seal_wait_ns,
+                     (unsigned long long)r.switches, r.queued, r.outstanding);
+    rows.clear();
+    std::fflush(file_);
+}
+}

@@ -2,6 +2,7 @@
 import collections
 import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -98,7 +99,8 @@ class Game:
             args.append("--skip-intro")
         args.extend(self.game_args)
         args.append("--mute")   # tests run silent: the owner is usually at the machine
-        args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
+        if not os.environ.get("UC_TEST_LAYERS"):   # UC_TEST_LAYERS=1 keeps the implicit Vulkan layers (RTSS, OBS, ReShade...) on, as a player runs the game
+            args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
         if self.god:
             args.append("--god")
         if self.skip_tutorials:

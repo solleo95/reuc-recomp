@@ -41,6 +41,7 @@
 #include "audio_output.h"
 #include "ax_audio.h"
 #include "det_trace.h"
+#include "frame_log.h"
 #include "audio_gap_audit.h"
 #include "vulkan_renderer.h"
 #include <algorithm>
@@ -412,6 +413,15 @@ static int real_main(int argc, char** argv) {
     std::unique_ptr<const gx::FramePacket> pending;
     uc::FrameLimit frame_limit(options.fps_limit);
     std::chrono::steady_clock::time_point last_present_at{};
+    // Frame log (frame_log.h): UC_FRAME_LOG=<file> or an empty frame_log.on next to uc.exe.
+    std::unique_ptr<uc::FrameLog> frame_log;
+    {
+        const char* path=std::getenv("UC_FRAME_LOG");
+        if(path) frame_log=std::make_unique<uc::FrameLog>(fs::path(path));
+        else if(fs::exists(exe_dir()/"frame_log.on")) frame_log=std::make_unique<uc::FrameLog>(exe_dir()/"debug"/("frames-"+std::to_string(GetCurrentProcessId())+".csv"));
+    }
+    uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0; uint32_t frame_events=0;
+    const auto thread_cycles=[]() -> uint64_t { ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); return cycles; };
     std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
     uint64_t audit_capture_serial=0;
     uint64_t debug_capture_serial=0;
@@ -436,7 +446,7 @@ static int real_main(int argc, char** argv) {
             const bool rendered=renderer.render(*pending);
             profile_retries+=!rendered;
             const auto render_elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
-            render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6;
+            render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6; frame_busy_ns+=uint64_t(render_elapsed);
             if (rendered) {
             progressed = true;
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
@@ -469,6 +479,17 @@ static int real_main(int argc, char** argv) {
             if (pending->present) {
                 const auto presented_at=std::chrono::steady_clock::now();
                 if (last_present_at!=std::chrono::steady_clock::time_point{} && present_intervals.size()<present_intervals.capacity()) present_intervals.push_back(std::chrono::duration<double,std::milli>(presented_at-last_present_at).count());
+                if (frame_log && last_present_at!=std::chrono::steady_clock::time_point{}) {
+                    const auto depth=packets.depth(); const auto timings=renderer.last_timings(); const uint64_t cpu=thread_cycles();
+                    uc::FrameRow row;
+                    row.t_ms=std::chrono::duration<double,std::milli>(presented_at-start).count(); row.interval_ms=std::chrono::duration<double,std::milli>(presented_at-last_present_at).count();
+                    row.busy_ms=frame_busy_ns/1e6; row.acquire_ms=timings.acquire_ms; row.submit_ms=timings.submit_ms; row.present_ms=timings.present_ms;
+                    row.events_ms=frame_events_ns/1e6; row.events=frame_events; row.cpu_mcycles=frame_cpu_last ? (cpu-frame_cpu_last)/1e6 : 0;
+                    row.retraces=uc::vi_stats().retraces; row.textures=renderer.texture_creations(); row.decodes=uc::gx_stats().texture_decodes; row.dvd_reads=uc::dvd_stats().reads;
+                    row.audio_blocks=uc::audio_stats().frames; row.seal_wait_ns=gx::seal_wait_ns(); row.switches=sched.switch_stats().switches; row.queued=uint32_t(depth.queued); row.outstanding=uint32_t(depth.outstanding);
+                    frame_log->add(row);
+                    frame_cpu_last=cpu; frame_busy_ns=frame_events_ns=0; frame_events=0;
+                } else if (frame_log) frame_cpu_last=thread_cycles();
                 last_present_at=presented_at; frame_limit.presented(presented_at);
             }
             if (pending->present && debug_capture_requested) {
@@ -606,7 +627,9 @@ static int real_main(int argc, char** argv) {
         ++profile_loops;
         if (!options.headless) {
             SDL_Event event;
+            const auto events_start=frame_log ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             while (SDL_PollEvent(&event)) {
+                ++frame_events;
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
                 if(controlled) continue;
@@ -618,6 +641,7 @@ static int real_main(int argc, char** argv) {
                     input.focus(true);
                 }
             }
+            if (frame_log) frame_events_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-events_start).count());
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();
             for (int drained = 0; drained < 64 && !close && render_pending(); ++drained) {}   // a game frame is ~23 packets: do not pay a wait per packet
@@ -678,6 +702,7 @@ static int real_main(int argc, char** argv) {
     const auto picture_stats=uc::picture_probe_stats();
     std::fprintf(stderr,"picture probe stats: calls %llu records %llu invalid %llu\n",(unsigned long long)picture_stats.calls,(unsigned long long)picture_stats.records,(unsigned long long)picture_stats.invalid);
     std::fprintf(stderr,"player event probe stats: events %llu records %llu invalid %llu\n",(unsigned long long)event_stats.events,(unsigned long long)event_stats.records,(unsigned long long)event_stats.invalid);
+    frame_log.reset();   // joins the writer thread after the last rows
     std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
     if(options.audio_audit) {
         fs::create_directories(exe_dir()/"debug");

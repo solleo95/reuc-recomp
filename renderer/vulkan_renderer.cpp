@@ -997,7 +997,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     bool suboptimal=false;
     PresentImage* present_image=nullptr;
     if (packet.present) {
+        const auto acquire_start = std::chrono::steady_clock::now();
         VkResult acquired = vkAcquireNextImageKHR(device, swapchain_, 1000000ull, slot.acquired, VK_NULL_HANDLE, &image_index);
+        timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) return false;
         if (acquired == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;   // stale swapchain while the window is resized: the frame is rendered but not shown, the guest must not wait for the rebuild
         else {
@@ -1166,7 +1168,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command.commandBuffer = slot.command;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = submit.signalSemaphoreInfoCount = present_image ? 1 : 0; submit.commandBufferInfoCount = 1;
     submit.pWaitSemaphoreInfos = &wait; submit.pSignalSemaphoreInfos = &signal; submit.pCommandBufferInfos = &command;
+    const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
+    timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) copy_target->initialized=true;
     for (auto& texture : slot.textures) texture.initialized=true;
     slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; efb_initialized_=true; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();
@@ -1174,7 +1178,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; present.pNext = &present_fence; present.waitSemaphoreCount = 1; present.pWaitSemaphores = &present_image->ready;
     present.swapchainCount = 1; present.pSwapchains = &swapchain_; present.pImageIndices = &image_index;
+    const auto present_start = std::chrono::steady_clock::now();
     VkResult result = vkQueuePresentKHR(queue_, &present);
+    timings_.present_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_start).count();
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { present_image->pending = true; ++presentations_; }
     else if (result != VK_ERROR_OUT_OF_DATE_KHR) vk_check(result, "present frame");
     if (suboptimal || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;
