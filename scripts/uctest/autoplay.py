@@ -9,8 +9,9 @@ from . import vision
 from .menus import TARGETS, screen_of
 from .steps import KEYS, PRESS_FRAMES
 
-SHOT_FRAMES = 2    # trigger held 2 KPAD frames, released 1: measured at speed 8, 14 of 15 pulls fire (a 1-frame hold fires 12 of 26); beyond that only more game frames per second help (TD-050)
-SHOT_CYCLE = SHOT_FRAMES + 1
+SHOT_HOLD_S, SHOT_GAP_S = 2 / 30, 1 / 30   # trigger held 66 ms, released 33 ms: at the original 30 Hz that is 2 KPAD frames held, 1 released (14 of 15 pulls fire, a 1-frame hold fires 12 of 26); the same game time at any step rate (TD-050)
+IGNORE_AFTER_S = 1.5   # a target whose health does not drop for 1.5 s of fire is unreachable (behind seats, in the next car) or not where the bot thinks: skip it for 10 s (was 30 pulls without a kill: 3 s at 30 Hz, 0.75 s at 120 Hz where the bot gave up on live zombies)
+DEPTH_WEIGHT = 40.0   # the nearest zombie is the threat: depth counts in units, the distance of its head from the crosshair (aim units squared) is weighted by this
 MENU_FLOW = {"title": "title_start", "save_select": "save_slot_1", "scenario": "scenario_train", "character": "character_rebecca",
              "loadout": "loadout_confirm", "start_dialog": "start_yes"}   # page -> the button that moves on towards the next mission
 ENEMY_CLASSES = {0x803F2B60}   # actor classes with a known position layout (train zombies, G22); other actors are bosses/props: not aimed at
@@ -24,7 +25,7 @@ def pick_target(frame, crosshair, ignore=()):
         if not e.get("alive", True) or not e.get("visible") or not e.get("head") or e["id"] in ignore or e.get("cls") not in (None, *ENEMY_CLASSES):
             continue
         dx, dy = e["head"][0] - crosshair[0], e["head"][1] - crosshair[1]
-        key = dx * dx + dy * dy + 0.01 * (e.get("depth") or 0)
+        key = (e.get("depth") or 0) + DEPTH_WEIGHT * (dx * dx + dy * dy)
         if best_key is None or key < best_key:
             best, best_key = e, key
     return best
@@ -48,7 +49,8 @@ class Autoplay:
         self.next_capture = CAPTURE_EVERY_TICKS
         self.stopped = None
         self.last_n = None
-        self.shots_at = {}       # enemy id -> shots without a kill
+        self.shots_at = {}       # enemy id -> game tick of the first shot at it since its last kill or skip
+        self.rate, self.rate_from = 30.0, None   # KPAD samples per game second (the game step rate), measured
         self.ignore_until = {}   # enemy id -> tick until which it is skipped (unreachable or already down)
         self.last_shot_n = self.last_tutorial_n = -10**9
 
@@ -74,6 +76,11 @@ class Autoplay:
         self.frames = f["n"]
         tick = f.get("retraces", f["n"])
         now = tick / 60
+        if self.rate_from is None:
+            self.rate_from = (f["n"], tick)
+        elif tick - self.rate_from[1] >= 60:
+            self.rate = max(15.0, (f["n"] - self.rate_from[0]) / ((tick - self.rate_from[1]) / 60))
+            self.rate_from = (f["n"], tick)
         screen = screen_of(f)
         self.furthest = screen or self.furthest
         marker = (screen, self.kills)
@@ -135,25 +142,30 @@ class Autoplay:
         tick = f.get("retraces", f["n"])
         ignore = {i for i, until in self.ignore_until.items() if until > tick}
         target = pick_target(f, self.aim, ignore)
+        hold = max(2, round(self.rate * SHOT_HOLD_S))
+        cycle = hold + max(1, round(self.rate * SHOT_GAP_S))
         if target:
             x, y = (max(-1.0, min(1.0, v)) for v in target["head"])
             self.aim = (x, y)
-            if f["n"] - self.last_shot_n >= SHOT_CYCLE:   # one trigger pull per cycle; in between only the aim follows the target
+            if f["n"] - self.last_shot_n >= cycle:   # one trigger pull per cycle; in between only the aim follows the target
                 self.last_shot_n = f["n"]
-                self.g.press("B", SHOT_FRAMES, x, y, wait=False)
+                self.g.press("B", hold, x, y, wait=False)
                 self.shots += 1
-                self.shots_at[target["id"]] = self.shots_at.get(target["id"], 0) + 1
-                if self.shots_at[target["id"]] >= 30:   # 30 shots without a kill: unreachable or down; try another for 10 s
-                    self.shots_at[target["id"]] = 0
+                hp = target.get("hp")
+                since, hp0 = self.shots_at.setdefault(target["id"], (tick, hp))
+                if hp is not None and hp0 is not None and hp < hp0:   # hits land: keep firing
+                    self.shots_at[target["id"]] = (tick, hp)
+                elif tick - since >= IGNORE_AFTER_S * 60:   # no damage for 1.5 s: unreachable; try another for 10 s
+                    del self.shots_at[target["id"]]
                     self.ignore_until[target["id"]] = tick + 600
                     self.event("ignore", id=target["id"])
                 self.event("shot", id=target["id"], aim=[round(x, 3), round(y, 3)])
             else:
                 self.g.aim(x, y, wait=False)
-        elif f["n"] - self.last_shot_n >= SHOT_CYCLE:   # no target we can see: keep firing at the screen centre (enemies the memory scan misses are usually there)
+        elif f["n"] - self.last_shot_n >= cycle:   # no target we can see: keep firing at the screen centre (enemies the memory scan misses are usually there)
             self.last_shot_n = f["n"]
             self.aim = (0.0, 0.0)
-            self.g.press("B", SHOT_FRAMES, 0.0, 0.0, wait=False)
+            self.g.press("B", hold, 0.0, 0.0, wait=False)
             self.shots += 1
             self.centres += 1
             if self.centres % 20 == 1:   # logged sparsely: one line per ~2 game seconds of centre fire

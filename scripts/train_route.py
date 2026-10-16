@@ -107,7 +107,7 @@ def main():
         lifetime="260" if args.progression else "80"
         process = subprocess.Popen([str(exe), "--skip-intro", "--profile", "--seconds", lifetime,
                                     "--render-scale", str(args.render_scale), "--width", str(args.width), "--height", str(args.height),
-                                    "--test-control", str(control), "--save-root", str(folder / "saves"),"--config",str(config_path)]
+                                    "--test-control", str(control), "--save-root", str(folder / "saves"),"--config",str(config_path),"--fps-limit","0"]   # tests run unlocked
                                    + (["--audio-audit"] if args.audio_audit else [])
                                    + (["--gx-gaps"] if args.gx_gaps else [])
                                    + (["--unlock-60fps"] if args.unlock_60fps else [])

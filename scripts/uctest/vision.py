@@ -26,7 +26,7 @@ def enrich(frame, projection):
         if "head" in e and isinstance(e["head"], list):   # already projected (fake frames)
             enemies.append(e)
             continue
-        item = {"id": e["id"], "cls": e.get("cls"), "alive": e.get("hp") is None or e["hp"] > 0, "visible": False, "head": None, "body": None, "depth": None, "head_intact": e.get("head", True)}
+        item = {"id": e["id"], "cls": e.get("cls"), "alive": e.get("hp") is None or e["hp"] > 0, "visible": False, "head": None, "body": None, "depth": None, "head_intact": e.get("head", True), "hp": e.get("hp")}
         if view and projection:
             root = e["root"]
             aim_point = project(view, projection, (root[0], root[1] + (HEAD_HEIGHT if item["head_intact"] else TORSO_HEIGHT), root[2]))

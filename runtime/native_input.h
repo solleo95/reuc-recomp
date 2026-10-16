@@ -47,9 +47,10 @@ public:
     // ordered file while recording and returned from that file while playing, so a deterministic run needs neither the harness nor a window.
     void demo_record(const std::filesystem::path&);
     void demo_play(const std::filesystem::path&);
+    uint32_t demo_speed(uint32_t live);   // clock speed factor the game pacing uses in a deterministic run: recorded when it changes, replayed at the same pacing call
     ~NativeInput();
 private:
-    enum class Tag:uint8_t { sample=1,actions,host,generation };
+    enum class Tag:uint8_t { sample=1,actions,host,generation,speed };
     void demo_put(Tag,const void*,size_t);
     // Playing: the i-th consume() returns the i-th recorded sample and the i-th consume_actions() the i-th recorded action frame, whatever order the
     // guest's reads interleave in (a build that schedules guest threads differently still gets the same input at the same frame); using_host_input()
@@ -62,6 +63,10 @@ private:
     size_t demo_sample_at_=0,demo_action_at_=0;
     uint8_t demo_host_=1;
     uint64_t demo_generation_=0;
+    std::vector<std::pair<uint64_t,uint32_t>> demo_speeds_;   // (pacing call number, speed factor from then on)
+    size_t demo_speed_at_=0;
+    uint64_t speed_calls_=0;
+    uint32_t speed_now_=1,speed_last_=0;
     bool replaying_=false;
     void cancel_host(); // Requires mutex_.
     std::mutex mutex_;
@@ -75,6 +80,7 @@ private:
 };
 void input_hle_init(NativeInput* input);
 std::array<float,2> input_consumed_aim();   // the pointer the guest read last (zero without input)
+uint32_t input_demo_speed(uint32_t live);   // the clock speed factor the deterministic game pacing uses (recorded and replayed with the demo; live without input)
 }
 void hle_KPADRead(ppc::Ctx&);
 void hle_WPADProbe(ppc::Ctx&);

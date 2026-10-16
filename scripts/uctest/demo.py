@@ -36,8 +36,8 @@ def record(args, run_once):
     trace = DEMOS / f"{args.name}.trace"
     trace.unlink(missing_ok=True)
     run = types.SimpleNamespace(exe=args.exe, speed=8, god=True, skip_tutorials=True, saves_from=None, save_as=None, chapter=1, mark=False,
-                                measure=args.measure, max_minutes=args.max_minutes, repeat=1,
-                                game_arg=["--deterministic", "--demo-record", str(demo), "--profile"]
+                                measure=args.measure, max_minutes=args.max_minutes, repeat=1, slow_at=args.slow_at, wave_offset=args.wave_offset,
+                                game_arg=["--deterministic", "--demo-record", str(demo), "--profile", "--game-hz", str(DET_GAME_HZ)]
                                 + (["--det-out", str(trace), "--det-frames", "1000000"] if args.trace else []))   # hashing 88 MB per retrace slows the whole run (menus 5x), so only on request
     report, run_dir = run_once("fight", run)
     if not report["ok"]:
@@ -50,11 +50,14 @@ def record(args, run_once):
     return 0
 
 
+DET_GAME_HZ = 120   # step rate of deterministic runs (virtual clock: every game second holds exactly this many steps, however slow the host). Real unlimited play steps as fast as the machine allows (about 120-190 Hz in the heavy fight); the 480 Hz ceiling would make a deterministic game second 16x the work of the original 30 Hz and the demo crawl
 GUEST_CPU = 4   # logical CPU the guest threads are pinned to in replays (its SMT sibling stays free): a process landing on another core or CCD ran up to 5% faster or slower
 
 
 def replay_args(exe, demo, stop, saves, extra=()):
     pin = ["--guest-cpu", str(GUEST_CPU)] if GUEST_CPU >= 0 and "--guest-cpu" not in extra else []
+    pin += [] if "--fps-limit" in extra else ["--fps-limit", "0"]   # every test runs the game unlocked, as a player does; a limit only by an explicit argument
+    pin += [] if "--game-hz" in extra else ["--game-hz", str(DET_GAME_HZ)]
     return [str(exe), "--test-server", "demo", "--save-root", str(saves), "--width", "1280", "--height", "720", "--god", "--skip-tutorials",
             "--skip-intro", "--deterministic", "--demo-play", str(demo), "--stop-retrace", str(stop), "--mute", "--no-vulkan-layers", "--profile", *pin, *extra]
 
@@ -167,7 +170,7 @@ def check(args):
         shutil.copytree(SAVE_SOURCE, saves)
         out = folder / f"demo{index}.bin"
         with open(out.with_suffix(".log"), "wb") as log:
-            subprocess.run(replay_args(Path(args.exe).resolve(), demo, window["to"], saves, ["--det-out", str(out), "--det-frames", "1000000"]),
+            subprocess.run(replay_args(Path(args.exe).resolve(), demo, window["to"], saves, ["--det-out", str(out), "--det-frames", str(args.frames)]),
                            stdout=log, stderr=log, cwd=Path(args.exe).resolve().parent, timeout=3600)
         traces.append(det_check.read_trace(out))
         print(f"demo check: replay {index}: {len(traces[-1])} retraces", flush=True)

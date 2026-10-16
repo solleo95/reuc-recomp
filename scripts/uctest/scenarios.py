@@ -101,8 +101,10 @@ def fight(g, args):
     from .autoplay import Autoplay
     mark_path = Path(__file__).parent / "marks" / "fight.json"
     mark = None
-    if not args.mark and not args.slow_at and mark_path.exists():
+    if not args.mark and not getattr(args, "slow_at", 0) and mark_path.exists():
         mark = json.loads(mark_path.read_text(encoding="utf-8"))
+        if getattr(args, "wave_offset", None) is not None:   # --wave-offset: the slowdown point relative to the 30-actor wave start, instead of the learned F5 point
+            mark["wave_offset"] = args.wave_offset
     key_state = ctypes.windll.user32.GetAsyncKeyState
     VK_F5 = 0x74
     pressed_before = bool(key_state(VK_F5) & 0x8000)
@@ -124,7 +126,7 @@ def fight(g, args):
     WAVE_ACTORS = 30   # the train wave lists 32 actors (living and dead) at once
     trace_path, next_tick, wave_since = g.run_dir / "fight_trace.csv", 0, None
     trace_path.write_text("game_second,listed,alive,draws\n")
-    if mark and not args.slow_at:
+    if mark and not getattr(args, "slow_at", 0):
         print(f"fight: slowdown point from {mark_path.name}: {mark['wave_offset']} game seconds after the {WAVE_ACTORS}-actor wave starts (F5 replaces it)", flush=True)
     else:
         print("fight: no saved slowdown point; the bot plays at speed 8, press F5 when the fight is on screen (no focus needed)", flush=True)
@@ -148,7 +150,7 @@ def fight(g, args):
                 wave_since = (wave_since if wave_since is not None else tick // 60) if listed(g.frame) >= WAVE_ACTORS else None
                 if mark and wave_since is not None and tick // 60 - wave_since >= mark["wave_offset"]:
                     break
-                if args.slow_at and tick // 60 >= args.slow_at:   # --slow-at: an absolute game second instead of the learned point (e.g. where leeches appear)
+                if getattr(args, "slow_at", 0) and tick // 60 >= getattr(args, "slow_at", 0):   # --slow-at: an absolute game second instead of the learned point (e.g. where leeches appear)
                     break
     frame = g.frame
     classes = collections.Counter(hex(e["cls"]) for e in frame.get("enemies") or [] if e.get("cls"))

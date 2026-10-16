@@ -59,7 +59,7 @@ def run(exe, out, frames, saves, timeout):
         shutil.rmtree(saves)
     shutil.copytree(SAVE_SOURCE, saves)
     args = [str(exe), "--det-out", str(out), "--det-frames", str(frames), "--save-root", str(saves), "--seconds", str(timeout),
-            "--mute", "--no-vulkan-layers", "--width", "1280", "--height", "720"]
+            "--mute", "--no-vulkan-layers", "--width", "1280", "--height", "720", "--fps-limit", "0", "--game-hz", "120"]
     start = time.monotonic()
     log = open(out.with_suffix(".log"), "wb")
     process = subprocess.run(args, stdout=log, stderr=log, cwd=Path(exe).parent, timeout=timeout + 60)

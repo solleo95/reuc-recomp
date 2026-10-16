@@ -4,6 +4,7 @@
 #include "gx_vertices.h"
 #include "clock.h"
 #include "hle/os.h"
+#include "native_input.h"
 #include <atomic>
 #include <chrono>
 #include <algorithm>
@@ -18,7 +19,10 @@ uint64_t deadline_ticks,last_boundary_ticks;
 // Experimental --game-hz: the game clock waits for a wall-clock (virtual clock) deadline instead of a VI retrace and gets the real elapsed time as its timestep.
 // shortcut: coarse scheduler sleep (1 ms granularity) plus a 2 ms spin; replace with a waitable timer if the spin shows up in CPU use.
 void timed_wait() {
-    const uint64_t period=uc::kTimebaseHz/game_hz,now=uc::now_ticks(),spin=uc::ms_to_ticks(2);
+    uint64_t period=uc::kTimebaseHz/game_hz;
+    // Deterministic runs have a virtual clock that cannot run faster: the test speed factor (x8 to skip to a scene) gives each step a longer timestep instead, i.e. fewer steps per game second (at most 50 ms, the clamp of timed_step).
+    if(uc::deterministic_clock()) period=std::min<uint64_t>(period*uc::input_demo_speed(uc::clock_speed()),uc::ms_to_ticks(50));
+    const uint64_t now=uc::now_ticks(),spin=uc::ms_to_ticks(2);
     deadline_ticks=std::max(deadline_ticks+period,now);   // a late frame starts the next one at once instead of waiting for the next slot
     if(deadline_ticks>now+spin) uc::os_sched().sleep_ticks(deadline_ticks-spin-now);
     while(uc::now_ticks()<deadline_ticks) {}

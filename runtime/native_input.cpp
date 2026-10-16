@@ -55,11 +55,27 @@ void NativeInput::demo_play(const std::filesystem::path& path) {
             }
             demo_actions_.push_back(std::move(frame)); break;
         }
+        case Tag::speed: { need(at,12); uint64_t call; uint32_t factor; std::memcpy(&call,&data[at],8); std::memcpy(&factor,&data[at+8],4); at+=12; demo_speeds_.emplace_back(call,factor); break; }
         default: throw std::runtime_error("the input demo has an unknown record");
         }
     }
     replaying_=true;
 }
+uint32_t NativeInput::demo_speed(uint32_t live) {
+    std::lock_guard lock(mutex_);
+    const uint64_t call=speed_calls_++;
+    if(replaying_) {
+        while(demo_speed_at_<demo_speeds_.size() && demo_speeds_[demo_speed_at_].first<=call) speed_now_=demo_speeds_[demo_speed_at_++].second;
+        return speed_now_;
+    }
+    if(demo_out_ && live!=speed_last_) {
+        speed_last_=live;
+        uint8_t record[12]; std::memcpy(record,&call,8); std::memcpy(record+8,&live,4);
+        demo_put(Tag::speed,record,12);
+    }
+    return live;
+}
+uint32_t input_demo_speed(uint32_t live) { return input ? input->demo_speed(live) : live; }
 void NativeInput::demo_put(Tag tag,const void* data,size_t size) {
     const uint8_t byte=uint8_t(tag);
     std::fwrite(&byte,1,1,demo_out_); std::fwrite(data,1,size,demo_out_);
