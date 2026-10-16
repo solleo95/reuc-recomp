@@ -31,15 +31,15 @@ def main():
     # The fight scenario trains the heavy 30-enemy scene (2D HUD layout code, animation) that the plain autoplay passes in a few seconds; it needs
     # the slowdown point saved by an F5 press (scripts/uctest/marks/fight.json).
     for scenario in (["autoplay", "--god", "--speed", "8", "--max-minutes", str(args.minutes)], ["controls", "--speed", "8"],
-                     ["fight", "--god", "--measure", "8", "--max-minutes", "4"]):
+                     ["fight", "--god", "--wave-offset", "15", "--measure", "8", "--max-minutes", "4"]):
         subprocess.run(harness + scenario + ["--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
-    demo = ROOT / "build" / "demos" / "fight2.demo"
-    if demo.exists():   # the deterministic fight (python -m uctest demo record fight2) trains the same heavy scene in every refresh
-        subprocess.run([sys.executable, "-m", "uctest", "demo", "replay", "fight2", "--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
+    demo = ROOT / "build" / "demos" / "fight3.demo"
+    if demo.exists():   # the deterministic heavy leech wave (python -m uctest demo record fight3 --wave-offset 15 --measure 12) trains the same scene in every refresh
+        subprocess.run([sys.executable, "-m", "uctest", "demo", "replay", "fight3", "--exe", str(staged)], cwd=ROOT / "scripts", env=env, check=True)
     raw = glob.glob(str(PROFILES / "*.profraw"))
     if not raw:
         sys.exit("no raw profiles were written")
-    llvm_profdata = shutil.which("llvm-profdata") or r"C:\Program Files\LLVM\bin\llvm-profdata.exe"
+    llvm_profdata = r"C:\Program Files\LLVM\bin\llvm-profdata.exe"
     OUT.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([llvm_profdata, "merge", "--sparse", "-o", str(OUT), *raw], check=True)
     staged.unlink(missing_ok=True)
