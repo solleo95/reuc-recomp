@@ -37,6 +37,20 @@ int main() {
     CHECK(draw.vertices[1].position[0] == 1 && draw.vertices[2].position[1] == 1);
     CHECK((draw.vertices[0].color[0] == std::array<uint8_t,4>({255,0,0,255})));
     CHECK(draw.vertices[2].texcoord[0][1] == 1);
+    // Every split point exercises partial assembly followed by complete vertices.
+    for (size_t split = 0; split < input.size(); ++split) {
+        gx::Vertices divided({ram, {}, {}});
+        divided.begin(*draw.state, 0x90, 0, 3, 7, 0x80029D84);
+        divided.write_attribute(7, input.first(split));
+        divided.write_attribute(7, input.subspan(split));
+        auto result = divided.take_draw();
+        CHECK(result.indices == draw.indices && result.vertices.size() == draw.vertices.size());
+        for (size_t i = 0; i < result.vertices.size(); ++i) {
+            CHECK(result.vertices[i].position == draw.vertices[i].position);
+            CHECK(result.vertices[i].color == draw.vertices[i].color);
+            CHECK(result.vertices[i].texcoord == draw.vertices[i].texcoord);
+        }
+    }
     rejects(gx::ErrorCode::sequence, [&] { capture.write_attribute(7, input.first(1)); });
     // A different VAT and indexed quantized positions read validated guest arrays.
     state.descriptors[11] = state.descriptors[13] = gx::Mode::none;

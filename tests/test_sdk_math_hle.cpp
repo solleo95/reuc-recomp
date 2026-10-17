@@ -265,6 +265,13 @@ void compare_segment_triangle(int iterations = 20000) {
             put(v0,0,0,0); put(v1,1,0,0); put(v2,0,n%11==0 ? 0 : 1,0);
             put(p0,x,0,det); put(p1,x,0,0);
         }
+        if (n % 23 == 0) {
+            // Narrow arithmetic: cancellation, subnormal boundaries, overflow and signed zero.
+            const uint32_t edge[] = {0,0x80000000u,1,0x007FFFFFu,0x00800000u,0x00800001u,
+                                    0x3F7FFFFFu,0x3F800000u,0x3F800001u,0x7F7FFFFFu,0xFF7FFFFFu};
+            for (uint32_t at : {p0,p1,v0,v1,v2}) for (size_t axis=0;axis<3;++axis)
+                words[(at-kBase)/4+axis]=edge[(n/23+at/16+axis)%std::size(edge)];
+        }
         if (n % 7 == 0) for (uint32_t at : {p0, p1}) { const size_t i = (at - kBase) / 4; words[i + 3] = random_float_bits(); }
         uint32_t arg[6] = {out, p0, p1, v0, v1, v2};
         if (n % 11 == 0) arg[0] = p0; else if (n % 13 == 0) arg[0] = p1;   // the hit point overwrites an input

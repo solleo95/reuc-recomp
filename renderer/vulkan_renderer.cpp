@@ -864,8 +864,6 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(found->second.initialized) throw std::invalid_argument("native EFB copy version cannot be overwritten");
         copy_target=&found->second; slot.copy_sources.push_back(request.target);
     }
-    if (slot.texture_pool) vk_check(vkResetDescriptorPool(device,slot.texture_pool,0),"reset retired texture descriptor pool");
-    slot.texture_sets.clear();
     std::unordered_set<const gx::TexturePixels*> used_textures;
     for(const auto& draw:packet.draws) for(size_t map=0;map<8;++map) used_textures.insert(draw_texture(draw,map).get());
     std::unordered_map<const gx::TexturePixels*,size_t> renderer_references;
@@ -943,18 +941,21 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(slot.uniforms.size<VkDeviceSize(count)*uniform_stride_) { destroy_buffer(slot.uniforms); slot.uniforms=make_buffer(VkDeviceSize(count)*uniform_stride_,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT); }
         if(count>slot.descriptor_capacity) {
             if(slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
-            slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0;
+            slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0; slot.texture_sets.clear();
             VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,count*8},{VK_DESCRIPTOR_TYPE_SAMPLER,count*8},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,count},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,count}};
             VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=count; pool.poolSizeCount=4; pool.pPoolSizes=sizes;
             vk_check(vkCreateDescriptorPool(device,&pool,nullptr,&slot.texture_pool),"texture descriptor pool");
+            std::vector<VkDescriptorSetLayout> layouts(count,texture_layout_);
+            slot.texture_sets.resize(count);
+            VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; allocate.descriptorPool=slot.texture_pool; allocate.descriptorSetCount=count; allocate.pSetLayouts=layouts.data();
+            vk_check(vkAllocateDescriptorSets(device,&allocate,slot.texture_sets.data()),"texture descriptor sets");
             slot.descriptor_capacity=count; ++descriptor_pool_creations_;
         }
-        std::vector<VkDescriptorSetLayout> layouts(count,texture_layout_);
-        slot.texture_sets.resize(count); slot.textures.reserve(count);
+        // The slot fence has retired; rewrite its retained sets before their next submission.
+        slot.textures.reserve(count);
         std::unordered_map<const gx::TexturePixels*,size_t> texture_indices;
         for(size_t i=0;i<slot.textures.size();++i) texture_indices.emplace(slot.textures[i].source.get(),i);
-        VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; allocate.descriptorPool=slot.texture_pool; allocate.descriptorSetCount=count; allocate.pSetLayouts=layouts.data();
-        vk_check(vkAllocateDescriptorSets(device,&allocate,slot.texture_sets.data()),"texture descriptor sets");
+        VkDeviceSize uniform_offset=0;
         for (size_t i=0;i<count;++i) {
             std::array<VkDescriptorImageInfo,8> image{};
             for(size_t map=0;map<8;++map) {
@@ -974,11 +975,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 }
                 image[map]={VK_NULL_HANDLE,slot.textures[found->second].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
-            auto* uniform_at=static_cast<std::byte*>(slot.uniforms.mapped)+i*uniform_stride_;
-            std::memcpy(uniform_at,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
-            std::array<uint32_t,kTevWords> tev{}; std::copy(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,tev.begin());
-            std::memcpy(uniform_at+sizeof(gx::DrawUniform),tev.data(),sizeof tev);
-            VkDescriptorBufferInfo uniform{slot.uniforms.buffer,i*uniform_stride_,kDrawUniformBytes};
+            if(i==0 || packet.draws[i].uniforms.block()!=packet.draws[i-1].uniforms.block() ||
+               !std::equal(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,gpu_draws[i-1].key.begin()+1)) {
+                uniform_offset=i*uniform_stride_;
+                auto* uniform_at=static_cast<std::byte*>(slot.uniforms.mapped)+uniform_offset;
+                std::memcpy(uniform_at,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
+                std::array<uint32_t,kTevWords> tev{}; std::copy(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,tev.begin());
+                std::memcpy(uniform_at+sizeof(gx::DrawUniform),tev.data(),sizeof tev);
+            }
+            VkDescriptorBufferInfo uniform{slot.uniforms.buffer,uniform_offset,kDrawUniformBytes};
             std::array<VkDescriptorImageInfo,8> samplers{};
             for(size_t map=0;map<8;++map) {
                 const auto wrap=packet.draws[i].texture_wrap[map];

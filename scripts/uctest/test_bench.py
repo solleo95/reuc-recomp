@@ -17,28 +17,49 @@ def fake_run(rng, factor, seconds=20, noise=0.01):
 
 
 class BenchStatistics(unittest.TestCase):
-    def test_demo_local_cpu_profile_and_explicit_override(self):
+    def test_demo_cpu_is_fixed_even_with_stale_local_profile(self):
         import json
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
 
-        with tempfile.TemporaryDirectory() as folder, patch.object(demo, "ROOT", Path(folder)), \
-                patch("os.cpu_count", return_value=32):
+        with tempfile.TemporaryDirectory() as folder, patch.object(demo, "ROOT", Path(folder)):
             config = Path(folder) / "build" / "bench-machine.json"
             config.parent.mkdir()
             args = demo.replay_args("game", "fight", 100, "saves")
-            self.assertEqual(args[args.index("--guest-cpu")+1], "4")
-            config.write_text(json.dumps({"guest_cpu": 26}))
+            self.assertEqual(args[args.index("--guest-cpu")+1], "26")
+            config.write_text(json.dumps({"guest_cpu": 4}))
             args = demo.replay_args("game", "fight", 100, "saves")
             self.assertEqual(args[args.index("--guest-cpu")+1], "26")
-            args = demo.replay_args("game", "fight", 100, "saves", ["--guest-cpu", "2"])
+            args = demo.replay_args("game", "fight", 100, "saves", ["--guest-cpu", "26"])
             self.assertEqual(args.count("--guest-cpu"), 1)
-            self.assertEqual(args[-2:], ["--guest-cpu", "2"])
-            for invalid in (32, -2, True, "26"):
-                config.write_text(json.dumps({"guest_cpu": invalid}))
+            self.assertEqual(args[-2:], ["--guest-cpu", "26"])
+            for invalid in (["--guest-cpu", "4"], ["--guest-cpu", "-1"], ["--guest-cpu"], ["--guest-cpu=4"]):
                 with self.assertRaises(ValueError):
-                    demo.replay_args("game", "fight", 100, "saves")
+                    demo.replay_args("game", "fight", 100, "saves", invalid)
+
+    def test_live_harness_pins_cpu_and_rejects_other_cpu_before_launch(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from .client import Game
+
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); source=root/"source"; source.mkdir()
+            for index, extra in enumerate(([], ["--guest-cpu", "26"])):
+                run=root/str(index); run.mkdir()
+                game=Game(run_dir=run, saves=source, game_args=extra)
+                with patch("uctest.client.subprocess.Popen") as launch:
+                    game._launch()
+                command=launch.call_args.args[0]
+                self.assertEqual(command.count("--guest-cpu"),1)
+                self.assertEqual(command[command.index("--guest-cpu")+1],"26")
+            run=root/"invalid"; run.mkdir()
+            game=Game(run_dir=run, saves=source, game_args=["--guest-cpu","28"])
+            with patch("uctest.client.subprocess.Popen") as launch:
+                with self.assertRaises(ValueError):
+                    game._launch()
+                launch.assert_not_called()
 
     def test_demo_replay_records_binary_demo_and_launch_arguments(self):
         import hashlib

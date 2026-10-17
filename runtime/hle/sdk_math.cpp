@@ -10,7 +10,10 @@
 
 namespace {
 using ppc::Ctx;
-struct PS { double p0, p1; };
+struct PS {
+    float p0, p1;
+    PS(double a, double b) : p0(float(a)), p1(float(b)) {}
+};
 using DoublePair = double __attribute__((ext_vector_type(2)));
 using FloatPair = float __attribute__((ext_vector_type(2)));
 using BytePair = uint8_t __attribute__((ext_vector_type(8)));
@@ -26,17 +29,18 @@ SDK_INLINE double f32_at(Ctx& c, uint32_t ea) { const uint32_t bits = ppc::rd32_
 SDK_INLINE PS ld(Ctx& c, uint32_t ea) {   // psq_l ..., 0, 0
     BytePair bytes; std::memcpy(&bytes,ppc::hp(c,ea),8);
     bytes=__builtin_shufflevector(bytes,bytes,3,2,1,0,7,6,5,4);
-    const auto values=__builtin_convertvector(__builtin_bit_cast(FloatPair,bytes),DoublePair);
+    const auto values=__builtin_bit_cast(FloatPair,bytes);
     return {values[0],values[1]};
 }
 SDK_INLINE PS ld1(Ctx& c, uint32_t ea) { return {f32_at(c, ea), 1.0}; }           // psq_l ..., 1, 0: one element, ps1 = 1.0
 SDK_INLINE PS ls(Ctx& c, uint32_t ea) { const double v = f32_at(c, ea); return {v, v}; }   // lfs
-SDK_INLINE void st_unwatched(Ctx& c, uint32_t ea, PS v) {
-    const auto floats=__builtin_convertvector(DoublePair{v.p0,v.p1},FloatPair);
+SDK_INLINE void put_pair(uint8_t* at, PS v) {
+    const FloatPair floats{v.p0,v.p1};
     const auto bytes=__builtin_bit_cast(BytePair,floats);
     const auto encoded=__builtin_shufflevector(bytes,bytes,3,2,1,0,7,6,5,4);
-    std::memcpy(ppc::hp(c,ea),&encoded,8);
+    std::memcpy(at,&encoded,8);
 }
+SDK_INLINE void st_unwatched(Ctx& c, uint32_t ea, PS v) { put_pair(ppc::hp(c,ea),v); }
 SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
     gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
     st_unwatched(c,ea,v);
@@ -44,14 +48,14 @@ SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
 SDK_INLINE void st1(Ctx& c, uint32_t ea, PS v) { const float x = float(v.p0); uint32_t bits; std::memcpy(&bits, &x, 4); ppc::wr32_ram(c, ea, bits); }
 
 SDK_INLINE DoublePair pair(PS v) { return {v.p0,v.p1}; }
-// Both lanes retain the PPC double intermediate followed by single-precision rounding.
+// FMA and scalar multiplication retain the PPC double intermediate.
 SDK_INLINE PS rounded(DoublePair v) {
-    const auto result=__builtin_convertvector(__builtin_convertvector(v,FloatPair),DoublePair);
+    const auto result=__builtin_convertvector(v,FloatPair);
     return {result[0],result[1]};
 }
-PS add(PS a, PS b) { return rounded(pair(a)+pair(b)); }
-PS sub(PS a, PS b) { return rounded(pair(a)-pair(b)); }
-PS mul(PS a, PS b) { return rounded(pair(a)*pair(b)); }
+PS add(PS a, PS b) { const FloatPair v=FloatPair{a.p0,a.p1}+FloatPair{b.p0,b.p1}; return {v[0],v[1]}; }
+PS sub(PS a, PS b) { const FloatPair v=FloatPair{a.p0,a.p1}-FloatPair{b.p0,b.p1}; return {v[0],v[1]}; }
+PS mul(PS a, PS b) { const FloatPair v=FloatPair{a.p0,a.p1}*FloatPair{b.p0,b.p1}; return {v[0],v[1]}; }
 PS muls0(PS a, double s) { return rounded(pair(a)*DoublePair{s,s}); }                       // ps_muls0: s = ps0 of the scalar operand
 // ps_madd*/ps_msub (t, a, b, cc): a * cc + b, a * cc - b, with the multiplier half picked by the variant.
 PS madd(PS a, PS cc, PS b) { return rounded(__builtin_elementwise_fma(pair(a),pair(cc),pair(b))); }
@@ -211,7 +215,7 @@ void hle_PSVECNormalize(ppc::Ctx& c) {
     const double half = f32_at(c, c.r[2] - 9472), three = f32_at(c, c.r[2] - 9468);
     PS len2 = madd(z, z, sq);
     len2 = sum0(len2, sq, z);
-    const double estimate = 1.0 / std::sqrt(len2.p0);                       // frsqrte (the emulation computes it exactly)
+    const double estimate = 1.0 / std::sqrt(double(len2.p0));               // frsqrte (the emulation computes it exactly)
     double t = rs(estimate * estimate);
     const double h = rs(estimate * half);
     t = rs(-std::fma(t, len2.p0, -three));                                   // fnmsubs: three - t * len2
@@ -238,7 +242,7 @@ void hle_PSVECMag(ppc::Ctx& c) {
     const PS len2 = sum0(madd(z, z, xy), xy, xy);
     ret1(c, len2);
     if (!(std::isnan(len2.p0) || std::isnan(zero)) && !(len2.p0 < zero) && !(len2.p0 > zero)) return;   // fcmpu equal: the length is zero
-    const double estimate = 1.0 / std::sqrt(len2.p0);
+    const double estimate = 1.0 / std::sqrt(double(len2.p0));
     double t = rs(estimate * estimate);
     const double h = rs(estimate * half);
     t = rs(-std::fma(t, len2.p0, -three));
@@ -281,21 +285,27 @@ void hle_PSVECCrossProduct(ppc::Ctx& c) {
 // rounding, identical comparisons (a NaN fails every comparison like fcmpo), only the dead stack temporaries are not written.
 // The thresholds are small-data constants (eps, 0, 1). tests/test_sdk_math_hle.cpp runs the original instruction sequence against it.
 namespace {
-struct V3 { PS xy; double z; };
-SDK_INLINE V3 vld(Ctx& c, uint32_t ea) { return {ld(c, ea), f32_at(c, ea + 8)}; }
-SDK_INLINE V3 vsub(const V3& a, const V3& b) { return {sub(a.xy, b.xy), rs(a.z - b.z)}; }
+struct V3 { FloatPair xy; float z; };
+SDK_INLINE PS wide(FloatPair v) { return {v[0],v[1]}; }
+SDK_INLINE V3 vld(Ctx& c, uint32_t ea) {
+    BytePair bytes; std::memcpy(&bytes,ppc::hp(c,ea),8);
+    bytes=__builtin_shufflevector(bytes,bytes,3,2,1,0,7,6,5,4);
+    return {__builtin_bit_cast(FloatPair,bytes),float(f32_at(c,ea+8))};
+}
+// V3 inputs are singles: binary add/sub/mul round identically; FMA keeps its double intermediate.
+SDK_INLINE V3 vsub(const V3& a, const V3& b) { return {a.xy-b.xy,a.z-b.z}; }
 SDK_INLINE V3 vcross(const V3& a, const V3& b) {   // PSVECCrossProduct on locals
-    const PS az = {a.z, a.z}, bz = {b.z, b.z}, bswap = merge10(b.xy, b.xy);
-    const PS bz_az = mul(b.xy, az);
-    const PS bx_a = muls0(b.xy, a.xy.p0);
-    const PS first = msub(a.xy, bz, bz_az);
-    const PS second = msub(a.xy, bswap, bx_a);
+    const FloatPair bz_az = b.xy * FloatPair{a.z,a.z};
+    const FloatPair bx_a = b.xy * FloatPair{a.xy[0],a.xy[0]};
+    const PS first = msub(wide(a.xy), {b.z,b.z}, wide(bz_az));
+    const PS second = msub(wide(a.xy), {b.xy[1],b.xy[0]}, wide(bx_a));
     const PS yz = neg(merge01(first, second));
-    return {{first.p1, yz.p0}, yz.p1};
+    return {{float(first.p1),float(yz.p0)},float(yz.p1)};
 }
 SDK_INLINE double vdot(const V3& a, const V3& b) {   // the "PSQUATDotProduct" the SDK data labels it: x*x' + y*y' + z*z' with the paired-single rounding
-    const PS hi = mul(PS{a.xy.p1, a.z}, PS{b.xy.p1, b.z});
-    return sum0(madd(a.xy, b.xy, hi), hi, hi).p0;
+    const FloatPair hi = FloatPair{a.xy[1],a.z} * FloatPair{b.xy[1],b.z};
+    const float x = float(std::fma(double(a.xy[0]),double(b.xy[0]),double(hi[0])));
+    return x + hi[1];
 }
 }  // namespace
 void hle_SegmentTriangleHit(ppc::Ctx& c) {
@@ -311,11 +321,11 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
     // run gets. The restore of f30/f31 through psq_l leaves ps1 rounded to a single.
     const uint32_t entry = c.r[1];
     uint8_t* const fr = in_ram(entry - 144, 152) ? ppc::hp(c, entry - 144) : nullptr;
-    auto temp = [fr](uint32_t at, const V3& v) { if (fr) { put_f32(fr + at, v.xy.p0); put_f32(fr + at + 4, v.xy.p1); put_f32(fr + at + 8, v.z); } };
+    auto temp = [fr](uint32_t at, const V3& v) { if (fr) { put_pair(fr + at, wide(v.xy)); put_f32(fr + at + 8, v.z); } };
     if (fr) {
         put32(fr, entry); put32(fr + 148, c.lr);
-        put_f64(fr + 128, c.f[31]); put_f32(fr + 136, c.f[31]); put_f32(fr + 140, c.ps1[31]);
-        put_f64(fr + 112, c.f[30]); put_f32(fr + 120, c.f[30]); put_f32(fr + 124, c.ps1[30]);
+        put_f64(fr + 128, c.f[31]); put_pair(fr + 136, {c.f[31],c.ps1[31]});
+        put_f64(fr + 112, c.f[30]); put_pair(fr + 120, {c.f[30],c.ps1[30]});
         for (int i = 27; i <= 31; ++i) put32(fr + 92 + 4 * (i - 27), c.r[i]);
     }
     c.ps1[31] = double(float(c.ps1[31])); c.ps1[30] = double(float(c.ps1[30]));
@@ -331,11 +341,10 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
     if (v < zero || rs(u + v) > det) return;
     const double t = rs(vdot(e2, qvec) * rs(one / det));
     if (t < zero || t > one) return;
-    const V3 hit = {muls0(dir.xy, t), muls0(PS{dir.z, 1.0}, t).p0};
+    const V3 hit = {dir.xy * FloatPair{float(t),float(t)},dir.z * float(t)};
     temp(44, hit);   // PSVECScale(dir, dir, t) in place
-    const PS xy = add(p0.xy, hit.xy);
-    st(c, out + 0, xy);
-    st1(c, out + 8, add(PS{p0.z, 1.0}, PS{hit.z, 1.0}));
+    st(c, out + 0, wide(p0.xy + hit.xy));
+    st1(c, out + 8, {p0.z + hit.z,0.0});
     c.r[3] = 1;
 }
 

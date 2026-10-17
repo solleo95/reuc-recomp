@@ -193,6 +193,28 @@ int main() {
         op_psq_st(c,20,3,0,0,0);
         CHECK(rd32(c,c.r[3])==expected && rd32(c,c.r[3]+4)==(expected^0x80000000u));
     }
+    // Pair arithmetic keeps double intermediates, single rounding and aliased source registers.
+    using PairBinary = void (*)(Ctx&,int,int,int,bool);
+    const PairBinary pair_binary[]={op_ps_add,op_ps_sub,op_ps_mul,op_ps_muls0,op_ps_muls1};
+    const double pair_values[]={0.0,-0.0,1.0000000596046448,-1.0000001788139343,1e-320,1e-46,1e-40,1e39,-1e39,INFINITY,-INFINITY,NAN};
+    for(size_t operation=0;operation<5;++operation) for(int target:{0,1,2}) for(bool record:{false,true})
+        for(double a:pair_values) for(double b:pair_values) {
+            c.f[1]=a;c.ps1[1]=-b;c.f[2]=b;c.ps1[2]=a;
+            const auto scalar=[&](double x,double y) {
+                volatile double left=x,right=y;
+                volatile double result=operation==0 ? left+right : operation==1 ? left-right : left*right;
+                return rnd_s(result);
+            };
+            const double expected0=scalar(a,operation==4 ? a : b);
+            const double expected1=scalar(-b,operation==3 ? b : a);
+            c.fpscr=0xA0000000;c.cr[1]=7;
+            pair_binary[operation](c,target,1,2,record);
+            const auto same=[](double actual,double expected) {
+                return std::isnan(expected) ? std::isnan(actual) : std::memcmp(&actual,&expected,8)==0;
+            };
+            CHECK(same(c.f[target],expected0) && same(c.ps1[target],expected1));
+            CHECK(c.cr[1]==(record ? 10 : 7) && c.fpscr==0xA0000000);
+        }
     // Paired FMA must match two scalar operations, including aliased destinations and fused rounding.
     using PairFma = void (*)(Ctx&,int,int,int,int,bool);
     const PairFma pair_fmas[]={op_ps_madd,op_ps_msub,op_ps_nmadd,op_ps_nmsub,op_ps_madds0,op_ps_madds1};

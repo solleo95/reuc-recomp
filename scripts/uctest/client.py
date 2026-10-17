@@ -19,6 +19,17 @@ LIVE_SAVES = Path(r"S:\Games\Umbrella Chronicles\saves")
 PINNED_SAVES = Path(__file__).resolve().parents[2] / "build" / "autotest" / "saves-pinned"
 SAVE_SOURCE = Path(os.environ["UC_SAVE_SOURCE"]) if os.environ.get("UC_SAVE_SOURCE") else (PINNED_SAVES if PINNED_SAVES.is_dir() else LIVE_SAVES)
 CHECKPOINTS = ROOT / "build" / "autotest" / "checkpoints"
+GUEST_CPU = 26
+
+
+def guest_cpu_args(extra):
+    # Keep every harness entry point on the same measured CPU, including explicit game arguments.
+    for index, arg in enumerate(extra):
+        if arg.startswith("--guest-cpu=") or (arg == "--guest-cpu" and
+                (index+1 == len(extra) or extra[index+1] != str(GUEST_CPU))):
+            raise ValueError(f"test harness requires --guest-cpu {GUEST_CPU}")
+    return [] if "--guest-cpu" in extra else ["--guest-cpu", str(GUEST_CPU)]
+
 
 
 def resolve_saves(spec):
@@ -94,6 +105,7 @@ class Game:
         self._cleanup()
 
     def _launch(self):
+        pin = guest_cpu_args(self.game_args)
         saves = self.run_dir / "saves"
         if not saves.exists():
             shutil.copytree(self.saves or SAVE_SOURCE, saves)
@@ -103,6 +115,7 @@ class Game:
             args.append("--skip-intro")
         if "--fps-limit" not in self.game_args:
             args.extend(["--fps-limit", "0"])   # as a player runs it (launcher default: unlimited): the game steps at its own pace, not the original 30 Hz
+        args.extend(pin)
         args.extend(self.game_args)
         if not os.environ.get("UC_TEST_SOUND"):   # UC_TEST_SOUND=1 plays the audio
             args.append("--mute")   # tests run silent: the owner is usually at the machine

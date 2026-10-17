@@ -210,6 +210,11 @@ void Vertices::write_attribute(uint32_t producer, std::span<const std::byte> byt
     size_t remaining = (count_ - draw_.vertices.size()) * vertex_size_ - vertex_bytes_.size();
     if (bytes.size() > remaining) throw Error(ErrorCode::truncated, draw_.callsite, remaining, bytes.size());
     while (!bytes.empty()) {
+        if (vertex_bytes_.empty() && bytes.size() >= vertex_size_) {
+            draw_.vertices.push_back(decode(bytes.first(vertex_size_)));
+            bytes = bytes.subspan(vertex_size_);
+            continue;
+        }
         size_t n = std::min(bytes.size(), vertex_size_ - vertex_bytes_.size());
         const size_t old = vertex_bytes_.size();
         vertex_bytes_.resize(old + n);

@@ -5,7 +5,7 @@ import shutil
 import sys
 import time
 
-from .client import CHECKPOINTS, Game, StepFailed, resolve_saves
+from .client import CHECKPOINTS, GUEST_CPU, Game, StepFailed, resolve_saves
 from .scenarios import SCENARIOS
 
 
@@ -56,7 +56,7 @@ def main(argv=None):
     bench.add_argument("--runs", type=int, default=0, help="rounds; every round runs each build once (default 1 with --demo: one pair screens differences above ~5%%, 3 rounds in alternating order resolve ~2%%; 3 without --demo)")
     bench.add_argument("--measure", type=int, default=20, help="seconds of the fight that count")
     bench.add_argument("--max-minutes", type=float, default=10)
-    bench.add_argument("--guest-cpu", type=int, default=4, help="logical CPU the guest threads are pinned to (its SMT sibling cpu^1 is kept free); -1 leaves placement to Windows")
+    bench.add_argument("--guest-cpu", type=int, default=GUEST_CPU, choices=[GUEST_CPU], help="test harness pins guest threads to CPU 26")
     bench.add_argument("--game-arg", action="append", default=[])
     demo = sub.add_parser("demo", help="record / check a deterministic demo of the heavy fight (see uctest/demo.py)")
     demo.add_argument("action", choices=["record", "check", "profile", "replay"])

@@ -718,6 +718,30 @@ int main(int argc, char** argv) {
         submit(work,&portrait);sampled=portrait.capture(10);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
         work.black_output=false;
+        // Reused slots must rewrite textures and uniforms after descriptor growth and shrinkage.
+        uint64_t descriptor_serial=11;
+        for(size_t count:{32u,33u,65u,2u,65u}) for(size_t repeat=0;repeat<6;++repeat) {
+            work=packet; work.serial=descriptor_serial++; work.draws.assign(count,quad);
+            const gx::Shared<gx::DrawUniform> shared_uniforms;
+            for(auto& item:work.draws) {
+                item.material=packet.draws[0].material;
+                item.uniforms=shared_uniforms;
+                item.texture=two_texels;
+                for(auto& vertex:item.vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.75f,.5f};}
+            }
+            work.draws.back().texture=offsets;
+            submit(work,&portrait); sampled=portrait.capture(work.serial);
+            CHECK(sampled.rgba[center]==128 && sampled.rgba[center+1]==128 && sampled.rgba[center+2]==128);
+            work.serial=descriptor_serial++;
+            work.draws.back().material.stages=1;
+            work.draws.back().material.stage[0]={0x82FFF,0x8FF80,0x380,0,0};
+            submit(work,&portrait); sampled=portrait.capture(work.serial);
+            CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
+            work.draws.back().material=packet.draws[0].material;
+            work.serial=descriptor_serial++;work.draws.back().uniforms.edit().pixel[0]=0;
+            submit(work,&portrait); sampled=portrait.capture(work.serial);
+            CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        }
         portrait.shutdown(); CHECK(portrait.validation_errors()==0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");

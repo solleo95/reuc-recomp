@@ -374,27 +374,38 @@ PPC_INLINE void op_mtfsb1(Ctx& c, int bit, bool rc) { c.fpscr |= 0x80000000u >> 
 PPC_INLINE void op_mcrfs(Ctx& c, int d, int s) { c.cr[d] = uint8_t((c.fpscr >> (28 - 4 * s)) & 0xF); c.fpscr &= ~(0xFu << (28 - 4 * s)); }
 
 // ---- paired singles ----
+using PsDoublePair = double __attribute__((ext_vector_type(2)));
+using PsFloatPair = float __attribute__((ext_vector_type(2)));
+PPC_INLINE PsDoublePair ps_pair(const Ctx& c,int r) { return {c.f[r],c.ps1[r]}; }
+PPC_INLINE void ps_result(Ctx& c,int t,PsDoublePair value,bool rc) {
+    const auto result=__builtin_convertvector(__builtin_convertvector(value,PsFloatPair),PsDoublePair);
+    c.f[t]=result[0];c.ps1[t]=result[1];fp_rc(c,rc);
+}
 #define PPC_PS_BIN(nm, EXPR) \
     PPC_INLINE void op_##nm(Ctx& c, int t, int a, int b, bool rc) { \
         double x0 = c.f[a], x1 = c.ps1[a], y0 = c.f[b], y1 = c.ps1[b]; \
         c.f[t] = rnd_s(EXPR(x0, y0)); c.ps1[t] = rnd_s(EXPR(x1, y1)); fp_rc(c, rc); }
-#define PS_ADD(x, y) ((x) + (y))
-#define PS_SUB(x, y) ((x) - (y))
 #define PS_DIV(x, y) ((x) / (y))
-PPC_PS_BIN(ps_add, PS_ADD) PPC_PS_BIN(ps_sub, PS_SUB) PPC_PS_BIN(ps_div, PS_DIV)
-PPC_INLINE void op_ps_mul(Ctx& c, int t, int a, int cc, bool rc) { double p0 = rnd_s(c.f[a] * c.f[cc]), p1 = rnd_s(c.ps1[a] * c.ps1[cc]); c.f[t] = p0; c.ps1[t] = p1; fp_rc(c, rc); }
-PPC_INLINE void op_ps_muls0(Ctx& c, int t, int a, int cc, bool rc) { double s = c.f[cc], p0 = rnd_s(c.f[a] * s), p1 = rnd_s(c.ps1[a] * s); c.f[t] = p0; c.ps1[t] = p1; fp_rc(c, rc); }
-PPC_INLINE void op_ps_muls1(Ctx& c, int t, int a, int cc, bool rc) { double s = c.ps1[cc], p0 = rnd_s(c.f[a] * s), p1 = rnd_s(c.ps1[a] * s); c.f[t] = p0; c.ps1[t] = p1; fp_rc(c, rc); }
+PPC_PS_BIN(ps_div, PS_DIV)
+PPC_INLINE void op_ps_add(Ctx& c,int t,int a,int b,bool rc) { ps_result(c,t,ps_pair(c,a)+ps_pair(c,b),rc); }
+PPC_INLINE void op_ps_sub(Ctx& c,int t,int a,int b,bool rc) { ps_result(c,t,ps_pair(c,a)-ps_pair(c,b),rc); }
+PPC_INLINE void op_ps_mul(Ctx& c,int t,int a,int cc,bool rc) { ps_result(c,t,ps_pair(c,a)*ps_pair(c,cc),rc); }
+PPC_INLINE void op_ps_muls0(Ctx& c,int t,int a,int cc,bool rc) { ps_result(c,t,ps_pair(c,a)*PsDoublePair{c.f[cc],c.f[cc]},rc); }
+PPC_INLINE void op_ps_muls1(Ctx& c,int t,int a,int cc,bool rc) { ps_result(c,t,ps_pair(c,a)*PsDoublePair{c.ps1[cc],c.ps1[cc]},rc); }
 #define PPC_PS_FMA(nm, E0, E1) \
     PPC_INLINE void op_##nm(Ctx& c, int t, int a, int b, int cc, bool rc) { \
         double a0 = c.f[a], a1 = c.ps1[a], b0 = c.f[b], b1 = c.ps1[b], c0 = c.f[cc], c1 = c.ps1[cc]; \
         double r0 = rnd_s(E0), r1 = rnd_s(E1); c.f[t] = r0; c.ps1[t] = r1; fp_rc(c, rc); }
-PPC_PS_FMA(ps_madd, std::fma(a0, c0, b0), std::fma(a1, c1, b1))
-PPC_PS_FMA(ps_msub, std::fma(a0, c0, -b0), std::fma(a1, c1, -b1))
-PPC_PS_FMA(ps_nmadd, -std::fma(a0, c0, b0), -std::fma(a1, c1, b1))
-PPC_PS_FMA(ps_nmsub, -std::fma(a0, c0, -b0), -std::fma(a1, c1, -b1))
-PPC_PS_FMA(ps_madds0, std::fma(a0, c0, b0), std::fma(a1, c0, b1))
-PPC_PS_FMA(ps_madds1, std::fma(a0, c1, b0), std::fma(a1, c1, b1))
+#define PPC_PS_VECTOR_FMA(nm, EXPR) \
+    PPC_INLINE void op_##nm(Ctx& c,int t,int a,int b,int cc,bool rc) { \
+        const auto av=ps_pair(c,a),bv=ps_pair(c,b),cv=ps_pair(c,cc); ps_result(c,t,(EXPR),rc); }
+PPC_PS_VECTOR_FMA(ps_madd, __builtin_elementwise_fma(av,cv,bv))
+PPC_PS_VECTOR_FMA(ps_msub, __builtin_elementwise_fma(av,cv,-bv))
+PPC_PS_VECTOR_FMA(ps_nmadd, -__builtin_elementwise_fma(av,cv,bv))
+PPC_PS_VECTOR_FMA(ps_nmsub, -__builtin_elementwise_fma(av,cv,-bv))
+PPC_PS_VECTOR_FMA(ps_madds0, __builtin_elementwise_fma(av,(PsDoublePair{cv[0],cv[0]}),bv))
+PPC_PS_VECTOR_FMA(ps_madds1, __builtin_elementwise_fma(av,(PsDoublePair{cv[1],cv[1]}),bv))
+#undef PPC_PS_VECTOR_FMA
 PPC_PS_FMA(ps_sel, (a0 >= 0.0 ? c0 : b0), (a1 >= 0.0 ? c1 : b1))
 PPC_PS_FMA(ps_sum0, (a0 + b1), c1)
 PPC_PS_FMA(ps_sum1, c0, (a0 + b1))

@@ -21,6 +21,7 @@ import types
 from pathlib import Path
 
 from .bench import t95
+from .client import guest_cpu_args
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMOS = ROOT / "build" / "demos"
@@ -61,22 +62,8 @@ def record(args, run_once):
 
 
 DET_GAME_HZ = 120   # step rate of deterministic runs (virtual clock: every game second holds exactly this many steps, however slow the host). Real unlimited play steps as fast as the machine allows (about 120-190 Hz in the heavy fight); the 480 Hz ceiling would make a deterministic game second 16x the work of the original 30 Hz and the demo crawl
-GUEST_CPU = 4   # fallback; build/bench-machine.json keeps a measured CPU choice local to this machine
-
-
-def guest_cpu():
-    profile = ROOT / "build" / "bench-machine.json"
-    if not profile.exists():
-        return GUEST_CPU
-    cpu = json.loads(profile.read_text())["guest_cpu"]
-    if type(cpu) is not int or not -1 <= cpu < (os.cpu_count() or 1):
-        raise ValueError("bench-machine.json guest_cpu must be -1 or an available logical CPU index")
-    return cpu
-
-
 def replay_args(exe, demo, stop, saves, extra=()):
-    cpu = guest_cpu() if "--guest-cpu" not in extra else -1
-    pin = ["--guest-cpu", str(cpu)] if cpu >= 0 else []
+    pin = guest_cpu_args(extra)
     pin += [] if "--fps-limit" in extra else ["--fps-limit", "0"]   # every test runs the game unlocked, as a player does; a limit only by an explicit argument
     pin += [] if "--game-hz" in extra else ["--game-hz", str(DET_GAME_HZ)]
     return [str(exe), "--test-server", "demo", "--save-root", str(saves), "--width", "1280", "--height", "720", "--god", "--skip-tutorials",

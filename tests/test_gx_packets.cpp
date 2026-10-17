@@ -4,9 +4,61 @@
 #include <future>
 #include <thread>
 using namespace std::chrono_literals;
-static_assert(gx::PoolAllocator<gx::DrawPacket>::pooled,"Draw nodes must stay pooled when DrawPacket changes size");
+static_assert(gx::PoolAllocator<gx::DrawPacket>::pooled,"Exercise the pooled allocation path");
+
+class CountingResource final : public std::pmr::memory_resource {
+public:
+    std::atomic<size_t> allocations{},outstanding{};
+private:
+    void* do_allocate(size_t bytes,size_t alignment) override {
+        auto* memory=std::pmr::new_delete_resource()->allocate(bytes,alignment);
+        ++allocations;++outstanding;return memory;
+    }
+    void do_deallocate(void* memory,size_t bytes,size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(memory,bytes,alignment);--outstanding;
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this==&other; }
+};
+
+static void arena_ownership() {
+    CountingResource resource;
+    auto* previous=std::pmr::set_default_resource(&resource);
+    {
+        gx::DrawQueue producer;
+        producer.emplace_back().callsite=17;
+        const auto* stable=&producer.front();
+        for(size_t i=1;i<1024;++i) producer.emplace_back().callsite=uint32_t(i);
+        CHECK(&producer.front()==stable);
+        gx::DrawQueue copy=producer;
+        CHECK(copy.get_allocator()!=producer.get_allocator());
+        copy.front().callsite=29;CHECK(producer.front().callsite==17);
+        gx::DrawQueue published;
+        published=std::move(producer);
+        CHECK(&published.front()==stable && published.size()==1024);
+        producer=gx::DrawQueue{};
+        auto consumer=std::async(std::launch::async,[packet=std::move(published)]() mutable {
+            CHECK(packet.front().callsite==17 && packet.back().callsite==1023);
+            packet.clear();
+        });
+        producer.emplace_back().callsite=31;
+        consumer.get();
+        CHECK(producer.front().callsite==31);
+        struct alignas(64) Aligned { char bytes[64]; };
+        gx::FrameAllocator<Aligned> aligned;
+        auto* memory=aligned.allocate(2);
+        CHECK(reinterpret_cast<uintptr_t>(memory)%alignof(Aligned)==0);
+        aligned.deallocate(memory,2);
+        bool overflow=false;
+        try { (void)aligned.allocate(std::numeric_limits<size_t>::max()); }
+        catch(const std::bad_array_new_length&) { overflow=true; }
+        CHECK(overflow);
+    }
+    std::pmr::set_default_resource(previous);
+    CHECK(resource.outstanding==0 && resource.allocations<64);
+}
 
 int main() {
+    arena_ownership();
     gx::PoolAllocator<gx::DrawPacket> allocator;
     auto* node=allocator.allocate(1);
     std::thread recycle([&]{allocator.deallocate(node,1);});

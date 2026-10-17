@@ -1,5 +1,6 @@
 #pragma once
 #include "block_pool.h"
+#include "frame_arena.h"
 #include "gx_vertices.h"
 #include <condition_variable>
 #include <chrono>
@@ -9,13 +10,14 @@
 #include <mutex>
 
 namespace gx {
+using DrawQueue=std::deque<DrawPacket,FrameAllocator<DrawPacket>>;
 struct TextureCopy {
     std::array<uint32_t,4> source; // x,y,width,height in the SDK's640x480 EFB coordinates
     std::shared_ptr<const TexturePixels> target;
 };
 struct FramePacket {
     uint64_t serial = 0;
-    std::deque<DrawPacket, PoolAllocator<DrawPacket>> draws;   // deque nodes keep draw addresses stable while a batch grows
+    DrawQueue draws;   // stable draw addresses; arena storage retires with the frame
     bool present = true;
     bool clear_after_copy = true;
     std::array<uint8_t,4> clear_color{16,32,64,255};

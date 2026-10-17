@@ -107,7 +107,7 @@ std::atomic<uint64_t> geometry_hits{0},geometry_misses{0};
 inline void add_guest_stat(std::atomic<uint64_t>& counter,uint64_t amount) {
     counter.store(counter.load(std::memory_order_relaxed)+amount,std::memory_order_relaxed);
 }
-std::deque<gx::DrawPacket,gx::PoolAllocator<gx::DrawPacket>> draws;
+gx::DrawQueue draws;
 struct RecordedDraw {
     gx::State state;
     uint32_t callsite;
@@ -578,7 +578,7 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
         }
         ++prompt_batch;
         const uint64_t serial=packets->seal_batch(std::move(frame));
-        draws.clear(); return serial;
+        draws=gx::DrawQueue{}; return serial;
     } catch (const gx::Error& error) {
         if (error.code==gx::ErrorCode::canceled) throw uc::ThreadExit{};
         throw;

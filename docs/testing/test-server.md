@@ -10,6 +10,8 @@ opens two single-client named pipes (JSON lines, UTF-8, `\n`):
 
 `<name>` is `[A-Za-z0-9_-]{1,32}`. The window is visible but never activated; no system input is sent. The harness always passes `--no-vulkan-layers` (sets `VK_LOADER_LAYERS_DISABLE=~implicit~`): implicit layers such as OBS capture, RTSS, ReShade and the Steam overlay cost ~3 FPS and add 50+ ms hitches, so tests measure the game alone. Normal play keeps the layers on. Use `python -m uctest` instead of speaking the protocol by hand (see `.claude/skills/uc-test/SKILL.md`).
 
+All `uctest` game launches (live scenarios, bench, demo recording/replay/check/profile) pin guest threads with `--guest-cpu 26`. Other CPU arguments are rejected; the old local `build/bench-machine.json` no longer overrides placement. This harness configuration requires a machine where logical CPU 26 is available; normal launcher calibration is independent.
+
 ## Commands
 
 Every command carries an integer `id` (≥ 1, unique among open commands) and gets exactly one reply `{"id":n,"ok":true,...}` or `{"id":n,"error":"text"}`. Unknown fields are errors. A line is ≤ 4096 bytes, at most 256 commands are open.
