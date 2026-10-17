@@ -11,6 +11,9 @@
 namespace {
 using ppc::Ctx;
 struct PS { double p0, p1; };
+using DoublePair = double __attribute__((ext_vector_type(2)));
+using FloatPair = float __attribute__((ext_vector_type(2)));
+using BytePair = uint8_t __attribute__((ext_vector_type(8)));
 
 double rs(double v) { return ppc::rnd_s(v); }
 // psq_l/psq_st with GQR0: the SDK math code only ever uses float pairs; any other format would change what the code means.
@@ -21,18 +24,18 @@ void float_gqr(const Ctx& c) {
 #define SDK_INLINE __attribute__((always_inline)) inline
 SDK_INLINE double f32_at(Ctx& c, uint32_t ea) { const uint32_t bits = ppc::rd32_ram(c, ea); float f; std::memcpy(&f, &bits, 4); return f; }
 SDK_INLINE PS ld(Ctx& c, uint32_t ea) {   // psq_l ..., 0, 0
-    uint64_t v; std::memcpy(&v, ppc::hp(c, ea), 8);
-    const uint32_t lo = _byteswap_ulong(uint32_t(v)), hi = _byteswap_ulong(uint32_t(v >> 32));
-    float x, y; std::memcpy(&x, &lo, 4); std::memcpy(&y, &hi, 4);
-    return {x, y};
+    BytePair bytes; std::memcpy(&bytes,ppc::hp(c,ea),8);
+    bytes=__builtin_shufflevector(bytes,bytes,3,2,1,0,7,6,5,4);
+    const auto values=__builtin_convertvector(__builtin_bit_cast(FloatPair,bytes),DoublePair);
+    return {values[0],values[1]};
 }
 SDK_INLINE PS ld1(Ctx& c, uint32_t ea) { return {f32_at(c, ea), 1.0}; }           // psq_l ..., 1, 0: one element, ps1 = 1.0
 SDK_INLINE PS ls(Ctx& c, uint32_t ea) { const double v = f32_at(c, ea); return {v, v}; }   // lfs
 SDK_INLINE void st_unwatched(Ctx& c, uint32_t ea, PS v) {
-    const float x = float(v.p0), y = float(v.p1);
-    uint32_t lo, hi; std::memcpy(&lo, &x, 4); std::memcpy(&hi, &y, 4);
-    const uint64_t pair = uint64_t(_byteswap_ulong(lo)) | uint64_t(_byteswap_ulong(hi)) << 32;
-    std::memcpy(ppc::hp(c, ea), &pair, 8);
+    const auto floats=__builtin_convertvector(DoublePair{v.p0,v.p1},FloatPair);
+    const auto bytes=__builtin_bit_cast(BytePair,floats);
+    const auto encoded=__builtin_shufflevector(bytes,bytes,3,2,1,0,7,6,5,4);
+    std::memcpy(ppc::hp(c,ea),&encoded,8);
 }
 SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
     gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
@@ -40,15 +43,21 @@ SDK_INLINE void st(Ctx& c, uint32_t ea, PS v) {
 }
 SDK_INLINE void st1(Ctx& c, uint32_t ea, PS v) { const float x = float(v.p0); uint32_t bits; std::memcpy(&bits, &x, 4); ppc::wr32_ram(c, ea, bits); }
 
-PS add(PS a, PS b) { return {rs(a.p0 + b.p0), rs(a.p1 + b.p1)}; }
-PS sub(PS a, PS b) { return {rs(a.p0 - b.p0), rs(a.p1 - b.p1)}; }
-PS mul(PS a, PS b) { return {rs(a.p0 * b.p0), rs(a.p1 * b.p1)}; }
-PS muls0(PS a, double s) { return {rs(a.p0 * s), rs(a.p1 * s)}; }                       // ps_muls0: s = ps0 of the scalar operand
+SDK_INLINE DoublePair pair(PS v) { return {v.p0,v.p1}; }
+// Both lanes retain the PPC double intermediate followed by single-precision rounding.
+SDK_INLINE PS rounded(DoublePair v) {
+    const auto result=__builtin_convertvector(__builtin_convertvector(v,FloatPair),DoublePair);
+    return {result[0],result[1]};
+}
+PS add(PS a, PS b) { return rounded(pair(a)+pair(b)); }
+PS sub(PS a, PS b) { return rounded(pair(a)-pair(b)); }
+PS mul(PS a, PS b) { return rounded(pair(a)*pair(b)); }
+PS muls0(PS a, double s) { return rounded(pair(a)*DoublePair{s,s}); }                       // ps_muls0: s = ps0 of the scalar operand
 // ps_madd*/ps_msub (t, a, b, cc): a * cc + b, a * cc - b, with the multiplier half picked by the variant.
-PS madd(PS a, PS cc, PS b) { return {rs(std::fma(a.p0, cc.p0, b.p0)), rs(std::fma(a.p1, cc.p1, b.p1))}; }
-PS msub(PS a, PS cc, PS b) { return {rs(std::fma(a.p0, cc.p0, -b.p0)), rs(std::fma(a.p1, cc.p1, -b.p1))}; }
-PS madds0(PS a, PS cc, PS b) { return {rs(std::fma(a.p0, cc.p0, b.p0)), rs(std::fma(a.p1, cc.p0, b.p1))}; }
-PS madds1(PS a, PS cc, PS b) { return {rs(std::fma(a.p0, cc.p1, b.p0)), rs(std::fma(a.p1, cc.p1, b.p1))}; }
+PS madd(PS a, PS cc, PS b) { return rounded(__builtin_elementwise_fma(pair(a),pair(cc),pair(b))); }
+PS msub(PS a, PS cc, PS b) { return rounded(__builtin_elementwise_fma(pair(a),pair(cc),-pair(b))); }
+PS madds0(PS a, PS cc, PS b) { return rounded(__builtin_elementwise_fma(pair(a),DoublePair{cc.p0,cc.p0},pair(b))); }
+PS madds1(PS a, PS cc, PS b) { return rounded(__builtin_elementwise_fma(pair(a),DoublePair{cc.p1,cc.p1},pair(b))); }
 PS sum0(PS a, PS b, PS cc) { return {rs(a.p0 + b.p1), rs(cc.p1)}; }
 PS sum1(PS a, PS b, PS cc) { return {rs(cc.p0), rs(a.p0 + b.p1)}; }
 PS merge01(PS a, PS b) { return {a.p0, b.p1}; }

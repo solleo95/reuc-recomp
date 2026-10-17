@@ -9,6 +9,9 @@ project/hle.cfg
 build-trace.log
 __pycache__/
 project/pgo/
+cpu-profile.json
+cpu-profile.json.calibrating
+cpu-profile.json.tmp-*
 
 # Local build state and agent worktrees
 /.ninja_log

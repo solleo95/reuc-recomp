@@ -113,7 +113,7 @@ class Game:
         if self.skip_tutorials:
             args.append("--skip-tutorials")
         log = open(self.run_dir / "run.log", "wb")
-        self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, creationflags=0)
+        self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         log.close()
 
     def _cleanup(self):

@@ -1,5 +1,6 @@
 #include "binding_editor.h"
 #include "launch.h"
+#include "cpu_calibration.h"
 #include "options_config.h"
 #include "render_scale.h"
 #include "prompt_icons.h"
@@ -144,6 +145,10 @@ int run(int argc,wchar_t** argv) {
     }
     if(!smoke.empty()) {fs::create_directories(smoke);config_path=smoke/L"config.json";}
     if(!smoke_exe.empty() && smoke.empty())throw std::invalid_argument("--smoke-exe requires --smoke");
+    std::unique_ptr<uc::CpuCalibration> calibration;
+    uc::CpuCalibrationResult cpu_choice;bool cpu_ready=false,launch_requested=false;
+    try {calibration=std::make_unique<uc::CpuCalibration>((smoke.empty() ? directory : smoke)/L"cpu-profile.json");}
+    catch(const std::exception& e) {cpu_ready=true;std::fprintf(stderr,"[cpu-calibration] Windows scheduling: %s\n",e.what());}
     uc::Options diagnostic;
     if(!smoke_exe.empty()) {
         diagnostic.test_control=fs::absolute(smoke/L"control.txt");diagnostic.save_root=fs::absolute(smoke/L"saves");
@@ -177,7 +182,7 @@ int run(int argc,wchar_t** argv) {
             document=std::move(next);saved_options=chosen;saved_language=language;error.clear();failed=false;return true;
         } catch(const std::exception& e) {error=e.what();return false;}
     };
-    bool done=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
+    bool done=false,smoke_capture_wait_checked=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
     while(!done) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
@@ -191,6 +196,7 @@ int run(int argc,wchar_t** argv) {
                 } else ImGui_ImplSDL3_ProcessEvent(&event);
             }
         }
+        if(calibration && calibration->ready()) {cpu_choice=calibration->get();calibration.reset();cpu_ready=true;}
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();
         if(!smoke.empty()) {
             auto& io=ImGui::GetIO();io.AddFocusEvent(true);
@@ -206,7 +212,7 @@ int run(int argc,wchar_t** argv) {
                 clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);
             }
             if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";}
-            else {clicks[56]="reload";clicks[62]="defaults";clicks[70]="launch";}
+            else {clicks[4]="launch";clicks[56]="reload";clicks[62]="defaults";}
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
                 const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
@@ -491,12 +497,12 @@ int run(int argc,wchar_t** argv) {
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || !game_found);
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found);
         ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
         push_font(ui.serif,26);
-        if(button(tr(running ? "running" : "play"),"launch",{width*.395f,74*unit}) && save(options)) {
-            try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic);}
-            catch(const std::exception& e) {error=e.what();}
+        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{width*.395f,74*unit}) && save(options)) {
+            launch_requested=true;
+            std::fprintf(stderr,"[cpu-calibration] Play requested: %s\n",cpu_ready ? "ready" : "waiting");
         }
         ImGui::PopFont();ImGui::PopStyleColor(3);ImGui::EndDisabled();
         ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
@@ -506,6 +512,19 @@ int run(int argc,wchar_t** argv) {
             const bool changed=editor.bindings()!=document.input || !same_options(chosen,saved_options) || language!=saved_language;
             const bool same_as_failed=failed && editor.bindings()==failed_bindings && same_options(chosen,failed_options) && language==failed_language;
             if(changed && !same_as_failed && !save(chosen)) {failed=true;failed_options=chosen;failed_bindings=editor.bindings();failed_language=language;}
+        }
+        const bool check_capture_wait=!smoke_exe.empty() && !smoke_capture_wait_checked && launch_requested && cpu_ready && !editor.capturing();
+        if(check_capture_wait)editor.begin_capture(uc::Action::fire,false);
+        if(launch_requested && cpu_ready && !done && !blocked && !editor.capturing() && game_found) {
+            launch_requested=false;
+            if(save(options)) {
+                try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu);}
+                catch(const std::exception& e) {error=e.what();}
+            }
+        }
+        if(check_capture_wait) {
+            if(!launch_requested || process)throw std::runtime_error("pending Play lost during binding capture");
+            editor.cancel_capture();smoke_capture_wait_checked=true;
         }
         ImGui::End();ImGui::Render();
         if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
@@ -543,8 +562,10 @@ int run(int argc,wchar_t** argv) {
             if(frame>=456) {
                 if(smoke_exe.empty())done=true;
                 else {
-                    if(!process)throw std::runtime_error("launch button failed: "+error);
-                    if(!uc::game_running(process)) {
+                    if(!process && !launch_requested)throw std::runtime_error("launch button failed: "+error);
+                    if(!process) {
+                        if(SDL_GetTicks()-start>35000)throw std::runtime_error("calibration wait timed out");
+                    } else if(!uc::game_running(process)) {
                         DWORD code=0;if(!GetExitCodeProcess(process.get(),&code) || code!=0)throw std::runtime_error("game launch smoke failed");
                         done=true;
                     } else if(SDL_GetTicks()-start>35000)throw std::runtime_error("game launch smoke timed out");
@@ -554,6 +575,7 @@ int run(int argc,wchar_t** argv) {
         if(!SDL_RenderPresent(ui.renderer))throw std::runtime_error(SDL_GetError());
         ++frame;
     }
+    if(!smoke_exe.empty() && !smoke_capture_wait_checked)throw std::runtime_error("pending Play capture check did not run");
     if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage; no OS input\n");
     return 0;
 }

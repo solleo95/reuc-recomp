@@ -257,6 +257,14 @@ void compare_segment_triangle(int iterations = 20000) {
             put(v0, a[0], a[1], a[2]); put(v1, b[0], b[1], b[2]); put(v2, cc[0], cc[1], cc[2]);
             put(p0, px - nx * 0.05 * s0 + d(rng) * 1e-3, py - ny * 0.05 * s0, pz - nz * 0.05 * s0); put(p1, px + nx * 0.05 * s1, py + ny * 0.05 * s1 + d(rng) * 1e-3, pz + nz * 0.05 * s1);
         } else for (auto& w : words) w = random_float_bits();   // arbitrary bit patterns: NaN, inf, denormals
+        if(n%19==0) {
+            // Determinant at either side of epsilon, barycentric edges, and zero-area triangles.
+            const float epsilon=1e-4f;
+            const float det=n%5==0 ? std::nextafter(epsilon,0.f) : n%5==1 ? std::nextafter(epsilon,1.f) : epsilon;
+            const double x=n%7==0 ? -0.0 : n%7==1 ? 1.0 : n%7==2 ? std::nextafter(1.f,2.f) : .25;
+            put(v0,0,0,0); put(v1,1,0,0); put(v2,0,n%11==0 ? 0 : 1,0);
+            put(p0,x,0,det); put(p1,x,0,0);
+        }
         if (n % 7 == 0) for (uint32_t at : {p0, p1}) { const size_t i = (at - kBase) / 4; words[i + 3] = random_float_bits(); }
         uint32_t arg[6] = {out, p0, p1, v0, v1, v2};
         if (n % 11 == 0) arg[0] = p0; else if (n % 13 == 0) arg[0] = p1;   // the hit point overwrites an input

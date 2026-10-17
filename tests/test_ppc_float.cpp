@@ -151,7 +151,71 @@ int main() {
         c.f[21] = 0; op_lfs(c, 21, base, 24); CHECK(c.f[21] == 6.25 && c.ps1[21] == 6.25);
         CHECK(gx::page_epoch[(page & 0x3FFFFFFFu) >> 12] == (base == 1 ? 0u : 9u));
     }
+    // Paired float stack traffic uses the same unwatched RAM path as scalar stack stores.
+    for(int base : {1,2,13,3}) {
+        const uint32_t address=0x80015FFCu;
+        c.r[base]=address; c.gqr[0]=0; c.f[20]=1.5; c.ps1[20]=-0.1;
+        gx::page_epoch[0x15000>>12]=gx::page_epoch[0x16000>>12]=0;
+        op_psq_st(c,20,base,0,0,0);
+        CHECK(rd32(c,address)==0x3FC00000u && rd32(c,address+4)==0xBDCCCCCDu);
+        CHECK(gx::page_epoch[0x15000>>12]==(base==1 ? 0u : 9u));
+        CHECK(gx::page_epoch[0x16000>>12]==(base==1 ? 0u : 9u));
+        op_psq_l(c,21,base,0,0,0);
+        CHECK(c.f[21]==1.5 && c.ps1[21]==double(-0.1f));
+        gx::page_epoch[0x15000>>12]=0;
+        op_psq_st(c,20,base,-4,1,0);
+        CHECK(gx::page_epoch[0x15000>>12]==(base==1 ? 0u : 9u));
+        op_psq_l(c,21,base,-4,1,0);
+        CHECK(c.f[21]==1.5 && c.ps1[21]==1.0);
+    }
+    // Float pairs preserve scalar conversion bits, including signed zero, NaNs and subnormals.
+    for(uint32_t bits : {0u,0x80000000u,1u,0x80000001u,0x007FFFFFu,0x7F7FFFFFu,0x7F800000u,0xFF800000u,0x7FC12345u,0x7F812345u}) {
+        float value;std::memcpy(&value,&bits,4);
+        volatile float scalar_input=value; // Force scalar conversions instead of folding a signaling-NaN round trip.
+        const double expected=double(scalar_input);
+        c.gqr[0]=0;c.r[3]=0x80015FFCu;
+        wr32(c,c.r[3],bits);wr32(c,c.r[3]+4,bits^0x80000000u);
+        op_psq_l(c,20,3,0,0,0);
+        CHECK(std::memcmp(&c.f[20],&expected,8)==0);
+        const double opposite=-expected;
+        CHECK(std::memcmp(&c.ps1[20],&opposite,8)==0);
+        volatile double scalar_output=expected;
+        const float rounded=float(scalar_output);uint32_t rounded_bits;std::memcpy(&rounded_bits,&rounded,4);
+        op_psq_st(c,20,3,0,0,0);
+        if(rd32(c,c.r[3])!=rounded_bits || rd32(c,c.r[3]+4)!=(rounded_bits^0x80000000u))
+            std::fprintf(stderr,"PSQ bits %08x expected %08x actual %08x:%08x\n",bits,rounded_bits,rd32(c,c.r[3]),rd32(c,c.r[3]+4));
+        CHECK(rd32(c,c.r[3])==rounded_bits && rd32(c,c.r[3]+4)==(rounded_bits^0x80000000u));
+    }
+    for(double value : {1.0000000596046448,1.0000001788139343,-1.0000000596046448,1e-46,-1e-46,1e39,-1e39}) {
+        volatile double scalar=value;
+        const float rounded=float(scalar);uint32_t expected;std::memcpy(&expected,&rounded,4);
+        c.f[20]=value;c.ps1[20]=-value;
+        op_psq_st(c,20,3,0,0,0);
+        CHECK(rd32(c,c.r[3])==expected && rd32(c,c.r[3]+4)==(expected^0x80000000u));
+    }
+    // Paired FMA must match two scalar operations, including aliased destinations and fused rounding.
+    using PairFma = void (*)(Ctx&,int,int,int,int,bool);
+    const PairFma pair_fmas[]={op_ps_madd,op_ps_msub,op_ps_nmadd,op_ps_nmsub,op_ps_madds0,op_ps_madds1};
+    const double operands[]={0.0,-0.0,1.0000000596046448,-1.0000001788139343,1e-40,1e20,-1e20,INFINITY,-INFINITY,NAN};
+    for(size_t operation=0;operation<6;++operation) for(int target:{0,1,2,3})
+        for(double a:operands) for(double b:operands) for(double multiplier:operands) {
+            c.f[1]=a;c.ps1[1]=-b;c.f[2]=b;c.ps1[2]=a;c.f[3]=multiplier;c.ps1[3]=-multiplier;
+            const auto scalar=[&](double x,double y,double z) {
+                volatile double fused=std::fma(x,z,(operation==1 || operation==3) ? -y : y);
+                return rnd_s((operation==2 || operation==3) ? -double(fused) : double(fused));
+            };
+            const double expected0=scalar(a,b,operation==5 ? -multiplier : multiplier);
+            const double expected1=scalar(-b,a,operation==4 ? multiplier : -multiplier);
+            c.fpscr=0xA0000000;c.cr[1]=0;
+            pair_fmas[operation](c,target,1,2,3,true);
+            const auto same=[](double actual,double expected) {
+                return std::isnan(expected) ? std::isnan(actual) : std::memcmp(&actual,&expected,8)==0;
+            };
+            CHECK(same(c.f[target],expected0) && same(c.ps1[target],expected1));
+            CHECK(c.cr[1]==10);
+        }
     // ps_cmpu0 / ps_cmpu1 write a CR field like fcmp
+    c.f[1]=1.0;c.ps1[1]=2.0;c.f[2]=10.0;c.ps1[2]=20.0;
     op_ps_cmpu0(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
     op_ps_cmpu1(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
     return 0;

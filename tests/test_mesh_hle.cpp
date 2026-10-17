@@ -52,6 +52,9 @@ int main() {
         ppc::wrf32(c,0x8000154C,640);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         auto packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
+        CHECK(packet->draws[0].callsite==0x80366E14 && packet->draws[0].primitive==0x90 && packet->draws[0].vat==0);
+        CHECK(packet->draws[0].mesh && packet->draws[0].vertices.empty() && packet->draws[0].indices.empty());
+        CHECK(!packet->draws[0].native_prompt && !packet->draws[0].late_aim);
         CHECK(packet->draws[0].vertex_view().size()==3 && packet->draws[0].vertex_view()[0].position[0]==1 && packet->draws[0].vertex_view()[2].position[0]==3);
         CHECK((indices_of(packet->draws[0])==std::vector<uint32_t>{0,1,2}));
         CHECK(packet->draws[0].transforms->position_rows[0][3]==5);
@@ -71,6 +74,33 @@ int main() {
         CHECK((*packet->draws[0].state->viewport)[2]==640);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         ppc::wrf32(c,0x8000350C,5);
+
+        // Cached immutable state survives reuse, host array changes, and a later SDK viewport write.
+        const auto previous_state=packet->draws[0].state.block();
+        c.r[3]=24; c.r[4]=0x80003500; c.r[5]=48; hle_GXSetArray(c);
+        c.r[3]=0x80002000; hle_ResMeshDraw(c); hle_ResMeshDraw(c);
+        c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+        packet=packets.try_take(); CHECK(packet && packet->draws.size()==2);
+        CHECK(packet->draws[0].state.block()==packet->draws[1].state.block());
+        CHECK(packet->draws[0].state->arrays[15].address==0x80003500);
+        CHECK(previous_state->arrays[15].address==0);
+        CHECK((*previous_state->viewport)[2]==640);
+        CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
+
+        // Service/texture-size words do not affect a material; ambient inputs do, including old packet ownership.
+        c.r[3]=0x80002000; hle_ResMeshDraw(c);
+        const auto sdk_word=ppc::rd32(c,0x80001000),size_word=ppc::rd32(c,0x80001108);
+        ppc::wr32(c,0x80001000,sdk_word^1); ppc::wr32(c,0x80001108,size_word^0x100);
+        hle_ResMeshDraw(c);
+        ppc::wr32(c,0x800010A8,0x008000FF); hle_ResMeshDraw(c);
+        c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+        packet=packets.try_take(); CHECK(packet && packet->draws.size()==3);
+        CHECK(packet->draws[0].uniforms.block()==packet->draws[1].uniforms.block());
+        CHECK(packet->draws[0].uniforms->ambient[0][1]==0);
+        CHECK(packet->draws[2].uniforms->ambient[0][1]==128.f/255);
+        CHECK(packet->draws[2].uniforms->ambient[0][3]==1);
+        CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
+        ppc::wr32(c,0x80001000,sdk_word); ppc::wr32(c,0x80001108,size_word);
 
         // Mutable array bytes and encoded indices invalidate the whole mesh.
         auto misses_before=uc::gx_stats().geometry_misses;
@@ -158,5 +188,5 @@ int main() {
         CHECK(packet->draws[1].uniforms->tex_rows[0][3]==0 && packet->draws[2].uniforms->tex_rows[0][3]==0.25f);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
-    sched.run(thread); CHECK(uc::gx_stats().draws==11);
+    sched.run(thread); CHECK(uc::gx_stats().draws==16);
 }

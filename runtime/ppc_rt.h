@@ -438,13 +438,13 @@ PPC_INLINE void gq_store1(Ctx& c, uint32_t ea, int type, int scale, double v) {
     x = std::isnan(x) ? lo : x < lo ? lo : x > hi ? hi : x;
     if (gq_bytes(type) == 1) wr8(c, ea, uint32_t(int32_t(x))); else wr16(c, ea, uint32_t(int32_t(x)));
 }
-PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i) {
+PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i, bool ram = false) {
     uint32_t g = c.gqr[i]; int type = (g >> 16) & 7, scale = gq_scale(g >> 24);
-    if (type < 4 && w && !is_mmio(ea)) [[likely]] {   // single float: ps1 reads as 1.0
+    if (type < 4 && w && (ram || !is_mmio(ea))) [[likely]] {   // single float: ps1 reads as 1.0
         const uint32_t bits = rd32_ram(c, ea); float f; std::memcpy(&f, &bits, 4);
         c.f[t] = f; c.ps1[t] = 1.0; return;
     }
-    if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
+    if (type < 4 && !w && (ram || (!is_mmio(ea) && !is_mmio(ea + 4)))) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
         uint64_t v; std::memcpy(&v, hp(c, ea), 8);
         const uint32_t b0 = _byteswap_ulong(uint32_t(v)), b1 = _byteswap_ulong(uint32_t(v >> 32)); float f0, f1; std::memcpy(&f0, &b0, 4); std::memcpy(&f1, &b1, 4);
         c.f[t] = f0; c.ps1[t] = f1; return;
@@ -453,24 +453,24 @@ PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i) {
     double p1 = w ? 1.0 : gq_load1(c, ea + gq_bytes(type), type, scale);
     c.f[t] = p0; c.ps1[t] = p1;
 }
-PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i) {
+PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i, bool stack = false) {
     uint32_t g = c.gqr[i]; int type = g & 7, scale = gq_scale(g >> 8);
-    if (type < 4 && w && !is_mmio(ea)) [[likely]] {   // single float
+    if (type < 4 && w && (stack || !is_mmio(ea))) [[likely]] {   // single float
         const float f = float(c.f[t]); uint32_t bits; std::memcpy(&bits, &f, 4);
-        wr32_ram(c, ea, bits); return;
+        if (stack) wr32_stack(c, ea, bits); else wr32_ram(c, ea, bits); return;
     }
-    if (type < 4 && !w && !is_mmio(ea) && !is_mmio(ea + 4)) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
+    if (type < 4 && !w && (stack || (!is_mmio(ea) && !is_mmio(ea + 4)))) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
         const float f0 = float(c.f[t]), f1 = float(c.ps1[t]); uint32_t b0, b1; std::memcpy(&b0, &f0, 4); std::memcpy(&b1, &f1, 4);
         const uint64_t v = uint64_t(_byteswap_ulong(b0)) | uint64_t(_byteswap_ulong(b1)) << 32;
-        gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7);
+        if (!stack) { gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7); }
         std::memcpy(hp(c, ea), &v, 8); return;
     }
     gq_store1(c, ea, type, scale, c.f[t]);
     if (!w) gq_store1(c, ea + gq_bytes(type), type, scale, c.ps1[t]);
 }
-PPC_INLINE void op_psq_l(Ctx& c, int t, int a, int32_t d, int w, int i) { psq_load(c, t, ea_d(c, a, d), w, i); }
+PPC_INLINE void op_psq_l(Ctx& c, int t, int a, int32_t d, int w, int i) { psq_load(c, t, ea_d(c, a, d), w, i, ram_base(a)); }
 PPC_INLINE void op_psq_lu(Ctx& c, int t, int a, int32_t d, int w, int i) { uint32_t e = c.r[a] + uint32_t(d); psq_load(c, t, e, w, i); c.r[a] = e; }
-PPC_INLINE void op_psq_st(Ctx& c, int t, int a, int32_t d, int w, int i) { psq_store(c, t, ea_d(c, a, d), w, i); }
+PPC_INLINE void op_psq_st(Ctx& c, int t, int a, int32_t d, int w, int i) { psq_store(c, t, ea_d(c, a, d), w, i, stack_base(a)); }
 PPC_INLINE void op_psq_stu(Ctx& c, int t, int a, int32_t d, int w, int i) { uint32_t e = c.r[a] + uint32_t(d); psq_store(c, t, e, w, i); c.r[a] = e; }
 PPC_INLINE void op_psq_lx(Ctx& c, int t, int a, int b, int w, int i) { psq_load(c, t, ea_x(c, a, b), w, i); }
 PPC_INLINE void op_psq_lux(Ctx& c, int t, int a, int b, int w, int i) { uint32_t e = c.r[a] + c.r[b]; psq_load(c, t, e, w, i); c.r[a] = e; }

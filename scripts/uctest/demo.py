@@ -9,7 +9,9 @@
 A demo stays valid while the guest code, the HLE behaviour that the guest can see and the saves it starts from stay the same; after a change that
 alters guest-visible behaviour record it again (`python -m uctest demo check <name>` replays it twice and compares guest-memory hashes).
 """
+import hashlib
 import json
+import os
 import re
 import shutil
 import statistics
@@ -23,6 +25,14 @@ from .bench import t95
 ROOT = Path(__file__).resolve().parents[2]
 DEMOS = ROOT / "build" / "demos"
 DETBENCH = re.compile(r"^\[detbench\] retrace (\d+) draws (\d+) guest_mcycles ([0-9.]+) wall_ms ([0-9.]+)")
+FPS = re.compile(r"^\[fps\] window_ms ([0-9.]+) retraces (\d+):(\d+) presents (\d+)", re.MULTILINE)
+
+
+def read_peak_fps(log, window):
+    """Peak presentation rate over complete wall-second intervals inside the measured fight."""
+    rates = [1000 * int(presents) / float(ms) for ms, first, last, presents in FPS.findall(log)
+             if float(ms) >= 1000 and window["from"] <= int(first) <= int(last) <= window["to"]]
+    return max(rates, default=None)
 
 
 def paths(name):
@@ -51,11 +61,22 @@ def record(args, run_once):
 
 
 DET_GAME_HZ = 120   # step rate of deterministic runs (virtual clock: every game second holds exactly this many steps, however slow the host). Real unlimited play steps as fast as the machine allows (about 120-190 Hz in the heavy fight); the 480 Hz ceiling would make a deterministic game second 16x the work of the original 30 Hz and the demo crawl
-GUEST_CPU = 4   # logical CPU the guest threads are pinned to in replays (its SMT sibling stays free): a process landing on another core or CCD ran up to 5% faster or slower
+GUEST_CPU = 4   # fallback; build/bench-machine.json keeps a measured CPU choice local to this machine
+
+
+def guest_cpu():
+    profile = ROOT / "build" / "bench-machine.json"
+    if not profile.exists():
+        return GUEST_CPU
+    cpu = json.loads(profile.read_text())["guest_cpu"]
+    if type(cpu) is not int or not -1 <= cpu < (os.cpu_count() or 1):
+        raise ValueError("bench-machine.json guest_cpu must be -1 or an available logical CPU index")
+    return cpu
 
 
 def replay_args(exe, demo, stop, saves, extra=()):
-    pin = ["--guest-cpu", str(GUEST_CPU)] if GUEST_CPU >= 0 and "--guest-cpu" not in extra else []
+    cpu = guest_cpu() if "--guest-cpu" not in extra else -1
+    pin = ["--guest-cpu", str(cpu)] if cpu >= 0 else []
     pin += [] if "--fps-limit" in extra else ["--fps-limit", "0"]   # every test runs the game unlocked, as a player does; a limit only by an explicit argument
     pin += [] if "--game-hz" in extra else ["--game-hz", str(DET_GAME_HZ)]
     return [str(exe), "--test-server", "demo", "--save-root", str(saves), "--width", "1280", "--height", "720", "--god", "--skip-tutorials",
@@ -74,8 +95,15 @@ def replay_once(spec, name, run_dir):
         shutil.rmtree(saves)
     shutil.copytree(SAVE_SOURCE, saves)
     log_path = run_dir / "run.log"
+    command = replay_args(Path(exe).resolve(), demo, window["to"], saves, extra)
+    (run_dir / "launch.json").write_text(json.dumps({
+        "command": command, "started_at_ms": time.time_ns() // 1000000,
+        "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
+        "demo_sha256": hashlib.sha256(demo.read_bytes()).hexdigest(),
+        "diagnostic_environment": {key: os.environ.get(key) for key in ("UC_CPU_SAMPLE", "UC_CPU_SAMPLE_FLAG", "UC_GX_CACHE_VERIFY", "LLVM_PROFILE_FILE")},
+    }, indent=2))
     with open(log_path, "wb") as log:
-        subprocess.run(replay_args(Path(exe).resolve(), demo, window["to"], saves, extra), stdout=log, stderr=log, cwd=Path(exe).resolve().parent, timeout=1800)
+        subprocess.run(command, stdout=log, stderr=log, cwd=Path(exe).resolve().parent, timeout=1800, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     rows = []
     for line in log_path.read_text(errors="replace").splitlines():
         m = DETBENCH.match(line)
@@ -109,7 +137,7 @@ def profile(args):
     samples = exe.parent / "cpu-samples.txt"
     samples.unlink(missing_ok=True)
     with open(run_dir / "run.log", "wb") as log:
-        subprocess.run(replay_args(exe, demo, window["to"], run_dir / "saves"), stdout=log, stderr=log, cwd=exe.parent, env=env, timeout=1800)
+        subprocess.run(replay_args(exe, demo, window["to"], run_dir / "saves"), stdout=log, stderr=log, cwd=exe.parent, env=env, timeout=1800, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     kept = run_dir / "cpu-samples.txt"
     if samples.exists():
         shutil.copy(samples, kept)
@@ -120,6 +148,7 @@ def profile(args):
 def bench(args):
     DEMOS.mkdir(parents=True, exist_ok=True)
     results = {exe: [] for exe in args.exes}
+    reference_work = reference_window = None
     for round_ in range(args.runs):
         for exe in (args.exes if round_ % 2 == 0 else args.exes[::-1]):   # A B, then B A: a slow drift of the machine hits both builds alike over two rounds
             run_dir = ROOT / "build" / "autotest" / f"demo-{int(time.time() * 1000)}"
@@ -129,16 +158,27 @@ def bench(args):
             if len(rows) < expected - 1:
                 print(f"bench: only {len(rows)} of {expected} game seconds measured; see {run_dir / 'run.log'}")
                 return 1
+            work = [(r[0], r[1]) for r in rows]
+            measured_window = (window["from"], window["to"])
+            if reference_work is None:
+                reference_work, reference_window = work, measured_window
+            elif work != reference_work or measured_window != reference_window:
+                print(f"bench: INVALID: guest work differs by retrace or draw count; no speed verdict; see {run_dir / 'run.log'}")
+                return 1
             wall, cycles, draws = sum(r[3] for r in rows), sum(r[2] for r in rows), sum(r[1] for r in rows)
-            results[exe].append((wall, cycles, draws))
+            peak = read_peak_fps((run_dir / "run.log").read_text(errors="replace"), window)
+            peak_text = f"{peak:.1f}" if peak is not None else "unavailable (older executable)"
+            results[exe].append((wall, cycles, draws, peak))
             print(f"bench: round {round_ + 1}/{args.runs} {exe.split('|', 1)[0].rsplit(chr(92), 1)[-1].rsplit('/', 1)[-1]}{'|' + exe.split('|', 1)[1] if '|' in exe else ''}: {wall / 1000:.2f} s wall for {len(rows)} game seconds ({len(rows) * 60 / (wall / 1000):.1f} retraces/s), "
-                  f"{cycles:.0f} Mcycles, {draws} draws", flush=True)
+                  f"{cycles:.0f} Mcycles, {draws} draws, peak FPS (1s): {peak_text}", flush=True)
     names = list(args.exes)
     lines = []
     for exe in names:
         walls = [r[0] for r in results[exe]]
         sd = 100 * statistics.stdev(walls) / statistics.fmean(walls) if len(walls) > 1 else 0.0
-        lines.append(f"  {exe}: {statistics.fmean(walls) / 1000:.3f} s wall (sd between runs {sd:.1f}%), draws {results[exe][0][2]} in every run: {len({r[2] for r in results[exe]}) == 1}")
+        peaks = [r[3] for r in results[exe] if r[3] is not None]
+        peak_text = f"{max(peaks):.1f}" if peaks else "unavailable (older executable)"
+        lines.append(f"  {exe}: {statistics.fmean(walls) / 1000:.3f} s wall (sd between runs {sd:.1f}%), draws {results[exe][0][2]} in every run: {len({r[2] for r in results[exe]}) == 1}, peak FPS (1s): {peak_text}")
     for exe in names[1:]:
         diffs = [100 * (b[0] / a[0] - 1) for a, b in zip(results[names[0]], results[exe])]
         mean = statistics.fmean(diffs)
@@ -146,7 +186,15 @@ def bench(args):
         half = t95(len(diffs) - 1) * statistics.stdev(diffs) / len(diffs) ** 0.5 if len(diffs) > 1 else 5.0
         verdict = "INCONCLUSIVE" if abs(mean) <= half else ("FASTER" if mean < 0 else "SLOWER")
         best = 100 * (min(r[0] for r in results[exe]) / min(r[0] for r in results[names[0]]) - 1)   # a pause of the machine only ever makes a run slower: the best run is the steadiest figure
-        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {"95% CI" if len(diffs) > 1 else "noise floor"} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%")
+        base_peaks = [r[3] for r in results[names[0]] if r[3] is not None]
+        peaks = [r[3] for r in results[exe] if r[3] is not None]
+        peak_comparison = ""
+        if base_peaks and peaks and max(base_peaks) > 0:
+            peak_change = 100 * (max(peaks) / max(base_peaks) - 1)
+            peak_comparison = f"; peak FPS (1s): {max(base_peaks):.1f} -> {max(peaks):.1f} ({peak_change:+.1f}%)"
+            if verdict == "SLOWER" and peak_change > 0:
+                peak_comparison += "; mixed result: retain for investigation"
+        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {"95% CI" if len(diffs) > 1 else "noise floor"} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%{peak_comparison}")
     print("\n".join(lines))
     return 0
 
@@ -171,7 +219,7 @@ def check(args):
         out = folder / f"demo{index}.bin"
         with open(out.with_suffix(".log"), "wb") as log:
             subprocess.run(replay_args(Path(args.exe).resolve(), demo, window["to"], saves, ["--det-out", str(out), "--det-frames", str(args.frames)]),
-                           stdout=log, stderr=log, cwd=Path(args.exe).resolve().parent, timeout=3600)
+                           stdout=log, stderr=log, cwd=Path(args.exe).resolve().parent, timeout=3600, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         traces.append(det_check.read_trace(out))
         print(f"demo check: replay {index}: {len(traces[-1])} retraces", flush=True)
     recorded = DEMOS / f"{args.name}.trace"

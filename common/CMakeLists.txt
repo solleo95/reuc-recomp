@@ -1,6 +1,8 @@
 add_library(uc_common STATIC dol.cpp dol_scan.cpp ppc/isa.cpp analyzer/config.cpp analyzer/analyzer.cpp translator/emit.cpp sig/dsy.cpp ppc/format.cpp)
 target_include_directories(uc_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_input STATIC input_bindings.cpp)
+add_library(uc_cpu_topology STATIC cpu_topology.cpp)
+target_include_directories(uc_cpu_topology PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(uc_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_input_prompts STATIC input_prompts.cpp)
 target_include_directories(uc_input_prompts PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

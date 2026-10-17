@@ -6,6 +6,7 @@
 #include <chrono>
 #include <bit>
 #include <thread>
+#include <future>
 using namespace std::chrono_literals;
 void hle_GXBegin(ppc::Ctx&); void hle_GXSetArray(ppc::Ctx&);
 void hle_GXSetDrawDone(ppc::Ctx&); void hle_GXWaitDrawDone(ppc::Ctx&);
@@ -57,6 +58,8 @@ int main() {
     gx::Packets packets;
     sched.set_shutdown_hook([&] { packets.cancel(); });
     uc::gx_hle_init(sched, c.mem, &packets);
+    std::promise<void> pending_checked;
+    auto pending_ready=pending_checked.get_future();
     auto* main = sched.create(0, 16, [&](ppc::Ctx& ctx) {
         ppc::wr32(ctx,0x80007600,0x80007620); ppc::wr8(ctx,0x806A0041,2);
         for(uint32_t channel=0;channel<2;++channel) {
@@ -369,6 +372,7 @@ int main() {
         for(auto word:data) uc::gx_fifo_write(4,word);
         hle_GXSetDrawDone(ctx);
         CHECK(ppc::rd8(ctx, ctx.r[13] - 25328) == 0);
+        pending_checked.set_value();
         hle_GXWaitDrawDone(ctx);
         CHECK(calls == 1);
         ppc::wr32(ctx,0x80006000,0x204060FF);
@@ -422,6 +426,7 @@ int main() {
         CHECK(packet->draws[6].texture->levels[0].rgba[0]==0x44);
         CHECK(packet->draws[7].texture->levels[0].rgba[0]==0x99);
         CHECK(packet->draws[8].texture->levels[0].rgba[0]==0xAA);
+        CHECK(pending_ready.wait_for(2s)==std::future_status::ready);
         CHECK(packets.complete(packet->serial));
         uc::gx_completed(packet->serial); uc::gx_completed(packet->serial);
         until=std::chrono::steady_clock::now()+2s;

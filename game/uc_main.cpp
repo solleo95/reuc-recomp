@@ -1,4 +1,5 @@
 #include "clock.h"
+#include "cpu_topology.h"
 #include "compile_screen.h"
 #include "dispatch.h"
 #include "dol.h"
@@ -290,9 +291,14 @@ static int real_main(int argc, char** argv) {
     if (options.guest_cpu >= 0) {
         DWORD_PTR process_mask = 0, system_mask = 0;
         if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
-            const DWORD_PTR own = DWORD_PTR(1) << options.guest_cpu, sibling = DWORD_PTR(1) << (options.guest_cpu ^ 1);
-            if ((process_mask & own) && !SetProcessAffinityMask(GetCurrentProcess(), process_mask & ~sibling)) std::fprintf(stderr, "cannot free the SMT sibling of CPU %d\n", options.guest_cpu);
-            sched.pin_guest_threads(options.guest_cpu);
+            const DWORD_PTR own = DWORD_PTR(1) << options.guest_cpu;
+            if(process_mask & own) {
+                try {
+                    const auto mask=uc::cpu_worker_mask(uc::cpu_topology().cores,options.guest_cpu,process_mask);
+                    if(mask!=process_mask && !SetProcessAffinityMask(GetCurrentProcess(),mask))std::fprintf(stderr,"cannot free the SMT siblings of CPU %d\n",options.guest_cpu);
+                } catch(const std::exception& error) {std::fprintf(stderr,"cannot inspect SMT siblings: %s\n",error.what());}
+                sched.pin_guest_threads(options.guest_cpu);
+            } else std::fprintf(stderr,"guest CPU %d unavailable; using Windows scheduling\n",options.guest_cpu);
         }
     }
     uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
@@ -405,6 +411,8 @@ static int real_main(int argc, char** argv) {
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
+    auto last_profile_time=start;
+    uint64_t last_profile_retrace=0;
     uint64_t last_retraces = 0;
     uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,render_ns=0;
     uint64_t loop_wait_ns=0,profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
@@ -655,6 +663,10 @@ static int real_main(int argc, char** argv) {
         if (now >= next_watch) {
             if ((options.gx_audit || options.profile) && !options.headless) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
+                const auto profile_retrace=uc::vi_stats().retraces;
+                const double profile_ms=std::chrono::duration<double,std::milli>(now-last_profile_time).count();
+                std::fprintf(stderr,"[fps] window_ms %.3f retraces %llu:%llu presents %llu fps %.3f\n",profile_ms,(unsigned long long)last_profile_retrace,(unsigned long long)profile_retrace,(unsigned long long)(presents-last_profile_presents),1000.0*(presents-last_profile_presents)/profile_ms);
+                last_profile_time=now; last_profile_retrace=profile_retrace;
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws());
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
                 if(!present_intervals.empty()) {

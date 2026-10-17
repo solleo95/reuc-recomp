@@ -2,7 +2,7 @@
 import random
 import unittest
 
-from . import bench
+from . import bench, demo
 
 
 def fake_run(rng, factor, seconds=20, noise=0.01):
@@ -17,10 +17,119 @@ def fake_run(rng, factor, seconds=20, noise=0.01):
 
 
 class BenchStatistics(unittest.TestCase):
+    def test_demo_local_cpu_profile_and_explicit_override(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as folder, patch.object(demo, "ROOT", Path(folder)), \
+                patch("os.cpu_count", return_value=32):
+            config = Path(folder) / "build" / "bench-machine.json"
+            config.parent.mkdir()
+            args = demo.replay_args("game", "fight", 100, "saves")
+            self.assertEqual(args[args.index("--guest-cpu")+1], "4")
+            config.write_text(json.dumps({"guest_cpu": 26}))
+            args = demo.replay_args("game", "fight", 100, "saves")
+            self.assertEqual(args[args.index("--guest-cpu")+1], "26")
+            args = demo.replay_args("game", "fight", 100, "saves", ["--guest-cpu", "2"])
+            self.assertEqual(args.count("--guest-cpu"), 1)
+            self.assertEqual(args[-2:], ["--guest-cpu", "2"])
+            for invalid in (32, -2, True, "26"):
+                config.write_text(json.dumps({"guest_cpu": invalid}))
+                with self.assertRaises(ValueError):
+                    demo.replay_args("game", "fight", 100, "saves")
+
+    def test_demo_replay_records_binary_demo_and_launch_arguments(self):
+        import hashlib
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            exe, recording, meta = root/"game.exe", root/"fight.demo", root/"fight.json"
+            exe.write_bytes(b"test executable"); recording.write_bytes(b"test demo")
+            meta.write_text(json.dumps({"from": 0, "to": 60}))
+            source, run = root/"source", root/"run"
+            source.mkdir(); run.mkdir()
+            with patch.object(demo, "paths", return_value=(recording, meta)), \
+                    patch("uctest.client.SAVE_SOURCE", source), patch.object(demo.subprocess, "run") as launch:
+                demo.replay_once(f"{exe}|--guest-cpu|26", "fight", run)
+            manifest = json.loads((run/"launch.json").read_text())
+            self.assertEqual(manifest["command"], launch.call_args.args[0])
+            self.assertEqual(launch.call_args.kwargs.get("creationflags"), getattr(demo.subprocess,"CREATE_NO_WINDOW",0))
+            self.assertEqual(manifest["command"][-2:], ["--guest-cpu", "26"])
+            self.assertEqual(manifest["exe_sha256"], hashlib.sha256(exe.read_bytes()).hexdigest())
+            self.assertEqual(manifest["demo_sha256"], hashlib.sha256(recording.read_bytes()).hexdigest())
+
+    def test_demo_peak_fps_uses_elapsed_wall_time_and_complete_fight_intervals(self):
+        log = "\n".join([
+            "[fps] window_ms 1000.000 retraces 0:60 presents 500 fps 500.000",
+            "[fps] window_ms 1000.000 retraces 6800:6900 presents 300 fps 300.000",
+            "[fps] window_ms 1005.000 retraces 6900:6960 presents 150 fps 149.254",
+            "[fps] window_ms 1200.000 retraces 6960:7020 presents 180 fps 150.000",
+            "[fps] window_ms 1000.000 retraces 8400:8500 presents 250 fps 250.000",
+        ])
+        self.assertEqual(demo.read_peak_fps(log, {"from": 6843, "to": 8463}), 150.0)
+
+    def test_demo_peak_fps_excludes_short_bursts(self):
+        log = "[fps] window_ms 20.000 retraces 6900:6902 presents 100 fps 5000.000"
+        self.assertIsNone(demo.read_peak_fps(log, {"from": 6843, "to": 8463}))
+
+    def test_demo_peak_fps_missing_in_old_logs_is_unavailable(self):
+        self.assertIsNone(demo.read_peak_fps("[perf] presents 160", {"from": 0, "to": 60}))
+
+    def test_demo_slower_wall_with_higher_peak_is_marked_for_investigation(self):
+        import contextlib
+        import io
+        import tempfile
+        import types
+        from pathlib import Path
+        from unittest.mock import patch
+
+        def replay(exe, name, folder):
+            frames = 150 if exe == "a" else 160
+            (folder / "run.log").write_text(f"[fps] window_ms 1000.000 retraces 6900:6960 presents {frames} fps {frames}.000")
+            rows = [(6900 + i * 60, 100, 1, 1000 if exe == "a" else 1100) for i in range(27)]
+            return rows, {"from": 6843, "to": 8463}
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(output):
+            root = Path(folder)
+            with patch.object(demo, "ROOT", root), patch.object(demo, "DEMOS", root / "demos"), \
+                    patch.object(demo, "replay_once", side_effect=replay), patch.object(demo.time, "time", side_effect=[1, 2]):
+                self.assertEqual(demo.bench(types.SimpleNamespace(exes=["a", "b"], runs=1, demo="fight3")), 0)
+        self.assertIn("150.0 -> 160.0", output.getvalue())
+        self.assertIn("mixed result: retain for investigation", output.getvalue())
+
     def test_a_five_percent_faster_build_is_found_despite_scene_drift(self):
         rng = random.Random(1)
         report = bench.analyse({"a": [fake_run(rng, 1.00) for _ in range(3)], "b": [fake_run(rng, 0.95) for _ in range(3)]})
         self.assertIn("FASTER", report)
+
+    def test_demo_rejects_different_work_even_with_equal_total_draws(self):
+        import contextlib
+        import io
+        import tempfile
+        import types
+        from pathlib import Path
+        from unittest.mock import patch
+
+        def replay(exe, name, folder):
+            (folder / "run.log").write_text("")
+            rows = [(6900 + i*60, 100 + (1 if i==0 else -1 if i==1 else 0)*(exe=="b"), 1, 1000) for i in range(27)]
+            return rows, {"from": 6843, "to": 8463}
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(output):
+            root = Path(folder)
+            with patch.object(demo, "ROOT", root), patch.object(demo, "DEMOS", root / "demos"), \
+                    patch.object(demo, "replay_once", side_effect=replay), patch.object(demo.time, "time", side_effect=[1, 2]):
+                self.assertEqual(demo.bench(types.SimpleNamespace(exes=["a", "b"], runs=1, demo="fight3")), 1)
+        self.assertIn("INVALID: guest work differs", output.getvalue())
+        self.assertNotIn("-> FASTER", output.getvalue())
 
     def test_identical_builds_show_no_difference(self):
         rng = random.Random(2)
