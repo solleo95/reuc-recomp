@@ -19,6 +19,9 @@ int main(int argc,char** argv) {
     }
     bool failed=false;try {uc::launch_game(L"Z:/missing/uc.exe",L"Z:/missing/config.json");}catch(const std::exception&){failed=true;}CHECK(failed);
     failed=false;try {uc::quote_windows_arg(std::wstring_view(L"a\0b",3));}catch(const std::invalid_argument&){failed=true;}CHECK(failed);
+    CHECK(uc::last_json_line("File 'sl.dlss.dll' is signed by NVIDIA\r\n{\"a\":1}\r\n{\"dlss\":true}\r\n")=="{\"dlss\":true}");   // the report, not Streamline's chatter
+    CHECK(uc::last_json_line("no report here\n").empty() && uc::last_json_line("").empty() && uc::last_json_line("{unterminated").empty());
+    CHECK(uc::query_features(L"Z:/missing/uc.exe",L"Z:/missing/config.json").empty());
     const auto directory=std::filesystem::temp_directory_path()/("uc-launch-test-"+std::to_string(GetCurrentProcessId()));
     std::filesystem::create_directories(directory/"DATA/sys");
     {std::ofstream dol(directory/"DATA/sys/main.dol");dol<<"fixture";}

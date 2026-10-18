@@ -1,6 +1,10 @@
 #pragma once
 #include "gx_packets.h"
+#include "scene_boundary.h"
+#include <algorithm>
 #include <cstdio>
+#include <fstream>
+#include <vector>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -13,7 +17,7 @@ class PacketDump {
 public:
     PacketDump() {
         const char* spec=std::getenv("UC_PACKET_DUMP");
-        enable_stats();enable_motion();
+        enable_stats();enable_motion();enable_scene();
         if(!spec) return;
         std::string text(spec);
         if(const auto bar=text.find('|'); bar!=std::string::npos) {   // path|skip|count
@@ -69,6 +73,34 @@ public:
         if(packet.present && ++motion_frame_>=motion_frames_) {motion_done_=true;std::fclose(motion_file_);motion_file_=nullptr;}
     }
     void enable_stats() { if(const char* path=std::getenv("UC_PACKET_STATS")) stats_path_=path; }
+    // UC_SCENE_DUMP=<file>|<every>|<frames>: every `every`-th presented frame (up to `frames` of them) is written as scene summaries
+    // (renderer/scene_boundary.h text) after an "F <presented index> <serial of the presenting packet>" line; scene_sampled() tells
+    // the caller to capture that frame, so each summary has a screenshot (frame-...-<serial>.png).
+    void enable_scene() {
+        const char* spec=std::getenv("UC_SCENE_DUMP");
+        if(!spec) return;
+        std::string text(spec);
+        if(const auto bar=text.find('|'); bar!=std::string::npos) {
+            scene_every_=std::max(1ul,std::strtoul(text.c_str()+bar+1,nullptr,10));
+            if(const auto second=text.find('|',bar+1); second!=std::string::npos) scene_frames_=std::strtoul(text.c_str()+second+1,nullptr,10);
+            text.resize(bar);
+        }
+        scene_file_.open(text);
+    }
+    void scene(const gx::FramePacket& packet) {
+        scene_sampled_=false;
+        if(!scene_file_.is_open() || scene_written_>=scene_frames_) return;
+        if(scene_presented_%scene_every_==0) {
+            scene_frame_.push_back(gx::summarize(packet));
+            if(packet.present) {
+                scene_file_<<"F "<<scene_presented_<<' '<<packet.serial<<'\n';
+                for(const auto& summary:scene_frame_) gx::write_packet(scene_file_,summary);
+                scene_file_.flush(); scene_sampled_=true; ++scene_written_;
+            }
+        }
+        if(packet.present) { ++scene_presented_; scene_frame_.clear(); }
+    }
+    bool scene_sampled() const { return scene_sampled_; }
     ~PacketDump() {
         if(file_) std::fclose(file_);
         if(!stats_path_.empty()) if(std::FILE* out=std::fopen(stats_path_.c_str(),"w")) {
@@ -83,6 +115,7 @@ public:
     PacketDump& operator=(const PacketDump&)=delete;
     void packet(const gx::FramePacket& packet) {
         motion(packet);
+        scene(packet);
         if(!stats_path_.empty()) {
             std::string copy="-";
             if(packet.texture_copy) copy=std::to_string(packet.texture_copy->target->levels[0].width)+"x"+std::to_string(packet.texture_copy->target->levels[0].height);
@@ -126,5 +159,10 @@ private:
     std::map<std::tuple<uint32_t,std::string,uint32_t,std::string,std::string>,uint64_t> stats_;
     bool armed_=false;
     unsigned long long frame_=0;
+    std::ofstream scene_file_;
+    std::vector<gx::PacketSummary> scene_frame_;
+    unsigned long scene_every_=600,scene_frames_=100,scene_written_=0;
+    unsigned long long scene_presented_=0;
+    bool scene_sampled_=false;
 };
 }

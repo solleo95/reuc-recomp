@@ -1,6 +1,6 @@
 set(UC_GENERATED_DIR ${CMAKE_SOURCE_DIR}/generated CACHE PATH "translator output")
 add_library(uc_options STATIC options.cpp window_mode.cpp)
-target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
 target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts)
 add_library(uc_options_config STATIC options_config.cpp)
 target_include_directories(uc_options_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -59,7 +59,8 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm)
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.vert.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.frag.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.uber.spv $<TARGET_FILE_DIR:uc>/data/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} $<TARGET_FILE_DIR:uc>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed $<TARGET_FILE_DIR:uc>/data
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:uc> VERBATIM)
   # Linker map lets crash reports (exe offsets) be resolved to runtime function names offline.
@@ -67,7 +68,9 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   install(TARGETS uc RUNTIME DESTINATION .)
   install(FILES $<TARGET_FILE_DIR:uc>/uc.map DESTINATION data)
   install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION .)
-  install(FILES ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.vert.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.frag.spv ${CMAKE_BINARY_DIR}/renderer/shaders/smoke.uber.spv DESTINATION data/shaders)
+  install(FILES ${UC_SHADER_FILES} DESTINATION data/shaders)
+  install(FILES ${UC_UPSCALER_RUNTIME} DESTINATION .)
+  install(FILES ${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md DESTINATION .)   # credits and trademark line; the licence texts go to licenses/ (renderer, cmake/upscaler_sdks.cmake)
   install(FILES ${CMAKE_SOURCE_DIR}/project/identified_sdk.txt ${CMAKE_SOURCE_DIR}/project/symbols.txt ${CMAKE_SOURCE_DIR}/project/gx_symbols.txt ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed DESTINATION data)
 else()
   message(STATUS "active generation manifest not found: skipping uc_game (build.bat runs the translator first)")

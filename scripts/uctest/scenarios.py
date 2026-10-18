@@ -176,6 +176,12 @@ def fight(g, args):
     with g.step("measure_fps"):
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
     result["demo_window"] = {"from": window_from, "to": g.frame.get("retraces", 0)}   # retrace range a demo replay measures (uctest demo / bench --demo)
+    burst = int(os.environ.get("UC_CAPTURE_BURST", "0"))   # UC_CAPTURE_BURST=N: N captures one game tick apart after the measurement (ghosting and smear checks of the upscalers)
+    if burst:
+        result["burst"] = []
+        for _ in range(burst):
+            result["burst"].append(g.capture())
+            g.advance(1)
     return result
 
 

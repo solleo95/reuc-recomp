@@ -27,6 +27,11 @@ inline PipelineKey uber_key(PipelineKey key) {
     return key;
 }
 
+// Write mask of the motion attachment (upscaling): only draws that write depth (compare + update, key word 68) write their vectors.
+inline VkColorComponentFlags motion_write_mask(const PipelineKey& key) {
+    return (key[68]&17)==17 ? VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT : 0;
+}
+
 inline std::vector<PipelineKey> load_pipeline_keys(const std::filesystem::path& path) {
     std::vector<PipelineKey> keys;
     std::unique_ptr<FILE,int(*)(FILE*)> file(std::fopen(path.string().c_str(),"rb"),std::fclose);

@@ -54,12 +54,12 @@ def compare(a, b):
     return "\n".join(lines), False
 
 
-def run(exe, out, frames, saves, timeout):
+def run(exe, out, frames, saves, timeout, extra=()):
     if saves.exists():
         shutil.rmtree(saves)
     shutil.copytree(SAVE_SOURCE, saves)
     args = [str(exe), "--det-out", str(out), "--det-frames", str(frames), "--save-root", str(saves), "--seconds", str(timeout),
-            "--mute", "--no-vulkan-layers", "--width", "1280", "--height", "720", "--fps-limit", "0", "--game-hz", "120"]
+            "--mute", "--no-vulkan-layers", "--width", "1280", "--height", "720", "--fps-limit", "0", "--game-hz", "120", *extra]
     start = time.monotonic()
     log = open(out.with_suffix(".log"), "wb")
     process = subprocess.run(args, stdout=log, stderr=log, cwd=Path(exe).parent, timeout=timeout + 60)
@@ -73,13 +73,14 @@ def main():
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--b-args", default="", help="extra game arguments for runs 1.. (e.g. \"--upscaler blit\"): the guest must not see renderer settings")
     args = parser.parse_args()
     folder = ROOT / "build" / "det"
     folder.mkdir(parents=True, exist_ok=True)
     traces = []
     for index in range(args.runs):
         out = folder / f"run{index}.bin"
-        code, seconds = run(args.exe, out, args.frames, folder / f"saves{index}", args.timeout)
+        code, seconds = run(args.exe, out, args.frames, folder / f"saves{index}", args.timeout, args.b_args.split() if index else ())
         traces.append(read_trace(out))
         print(f"run {index}: exit {code}, {len(traces[-1])} retraces in {seconds:.1f} s (log {out.with_suffix('.log')})", flush=True)
     status = 0

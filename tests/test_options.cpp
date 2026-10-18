@@ -95,4 +95,19 @@ int main() {
         "v2 1 key 26 1 0 0 0 junk","v2 1 wheel 1 1.5 0 0 0"}) CHECK(!uc::parse_test_command(invalid));
     CHECK(!uc::parse_test_command(std::string(257,' ')));
     for(auto invalid:{"1 2 0 0 1","1 nan 0 0 1","1 0 0 1 1","1 0 0 0 2","1 0 0 0 1 junk","-1 0 0 0 1"," -1 0 0 0 1"}) CHECK(!uc::parse_test_command(invalid));
+    {   // upscaling, sharpening and frame generation
+        const auto& d=std::get<uc::Options>(defaults);
+        CHECK(d.upscaler==uc::UpscalerKind::off && d.upscale_mode==uc::UpscaleMode::quality && !d.sharpening && d.sharpness==0.5 && !d.frame_generation && d.frame_generation_multiplier==2);
+        auto o=std::get<uc::Options>(parse(std::array<std::string_view,8>{"--upscaler","dlss","--upscale-mode","ultra_performance","--sharpness","0.35","--frame-generation","3"}));
+        CHECK(o.upscaler==uc::UpscalerKind::dlss && o.upscale_mode==uc::UpscaleMode::ultra_performance);
+        CHECK(o.sharpening && o.sharpness==0.35 && o.frame_generation && o.frame_generation_multiplier==3);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscaler","blit"})).upscaler==uc::UpscalerKind::blit);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscaler","fsr"})).upscaler==uc::UpscalerKind::fsr);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscale-mode","native"})).upscale_mode==uc::UpscaleMode::native);
+        CHECK(!d.features && std::get<uc::Options>(parse(std::array<std::string_view,1>{"--features"})).features);   // launcher's support query
+        auto off=std::get<uc::Options>(parse(std::array<std::string_view,5>{"--sharpness","1","--no-sharpening","--frame-generation","0"}));
+        CHECK(!off.sharpening && off.sharpness==1 && !off.frame_generation);
+        for(auto bad:{std::array<std::string_view,2>{"--sharpness","0"},{"--sharpness","1.01"},{"--sharpness","nan"},{"--frame-generation","1"},{"--frame-generation","7"},
+                      {"--upscale-mode","dlaa"},{"--upscaler","xess"}}) CHECK(std::holds_alternative<std::string>(parse(bad)));
+    }
 }

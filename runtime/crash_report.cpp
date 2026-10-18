@@ -84,7 +84,19 @@ bool crash_report_write(std::string_view reason, const _CONTEXT* context) noexce
     std::fprintf(out, "Umbrella Chronicles native port crash report\nreason: %.*s\nthread: %lu\n", int(reason.size()), reason.data(), GetCurrentThreadId());
     if (context) std::fprintf(out, "faulting rip: %p\n", reinterpret_cast<void*>(context->Rip));
     std::fprintf(out, "\nhost stack (guest = translated function containing the frame):\n");
-    if (context) write_frame(out, reinterpret_cast<void*>(context->Rip));
+    if (context) {   // the faulting thread's own frames, unwound from the exception context (a call through a null pointer: start at [rsp])
+        CONTEXT walk = *context;
+        if (!walk.Rip && walk.Rsp) { walk.Rip = *reinterpret_cast<const DWORD64*>(walk.Rsp); walk.Rsp += 8; }
+        for (int i = 0; i < 32 && walk.Rip; ++i) {
+            write_frame(out, reinterpret_cast<void*>(walk.Rip));
+            DWORD64 image = 0;
+            auto* function = RtlLookupFunctionEntry(walk.Rip, &image, nullptr);
+            if (!function) { walk.Rip = *reinterpret_cast<const DWORD64*>(walk.Rsp); walk.Rsp += 8; continue; }   // leaf function
+            void* handler_data = nullptr; DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, walk.Rip, function, &walk, &handler_data, &frame, nullptr);
+        }
+        std::fprintf(out, "  -- handler stack --\n");
+    }
     std::array<void*, 64> frames{};
     const auto count = RtlCaptureStackBackTrace(1, ULONG(frames.size()), frames.data(), nullptr);
     for (USHORT i = 0; i < count; ++i) write_frame(out, frames[i]);

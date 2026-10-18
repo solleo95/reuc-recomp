@@ -1,9 +1,27 @@
 #include "options.h"
 #include <charconv>
+#include <array>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 namespace uc {
+namespace {
+constexpr std::array<std::string_view,4> kUpscalerNames{"off","dlss","fsr","blit"};
+constexpr std::array<std::string_view,5> kUpscaleModeNames{"native","quality","balanced","performance","ultra_performance"};
+}
+std::optional<UpscalerKind> upscaler_from_name(std::string_view name, bool allow_test) {
+    for (size_t i = 0; i < kUpscalerNames.size(); ++i)
+        if (name == kUpscalerNames[i] && (allow_test || UpscalerKind(i) != UpscalerKind::blit)) return UpscalerKind(i);
+    return std::nullopt;
+}
+std::optional<UpscaleMode> upscale_mode_from_name(std::string_view name) {
+    for (size_t i = 0; i < kUpscaleModeNames.size(); ++i) if (name == kUpscaleModeNames[i]) return UpscaleMode(i);
+    return std::nullopt;
+}
+std::string_view upscaler_name(UpscalerKind kind) { return size_t(kind) < kUpscalerNames.size() ? kUpscalerNames[size_t(kind)] : std::string_view{}; }
+std::string_view upscale_mode_name(UpscaleMode mode) { return size_t(mode) < kUpscaleModeNames.size() ? kUpscaleModeNames[size_t(mode)] : std::string_view{}; }
+bool valid_sharpness(double sharpness) { return std::isfinite(sharpness) && sharpness >= 0.01 && sharpness <= 1.0; }
+bool valid_frame_generation_multiplier(uint64_t multiplier) { return multiplier >= 2 && multiplier <= 6; }
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options) {
     for (size_t i = 0; i < arguments.size(); ++i) {
         auto arg = arguments[i];
@@ -31,6 +49,30 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--god") options.god = true;
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
+        else if (arg == "--no-sharpening") options.sharpening = false;
+        else if (arg == "--features") options.features = true;
+        else if (arg == "--upscaler" || arg == "--upscale-mode" || arg == "--sharpness" || arg == "--frame-generation") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
+            const auto value = arguments[i];
+            if (arg == "--upscaler") {
+                if (auto kind = upscaler_from_name(value, true)) options.upscaler = *kind;
+                else return "invalid value for --upscaler";
+            } else if (arg == "--upscale-mode") {
+                if (auto mode = upscale_mode_from_name(value)) options.upscale_mode = *mode;
+                else return "invalid value for --upscale-mode";
+            } else if (arg == "--sharpness") {
+                double sharpness = 0;
+                auto parsed = std::from_chars(value.data(), value.data() + value.size(), sharpness);
+                if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || !valid_sharpness(sharpness)) return "invalid value for --sharpness";
+                options.sharpness = sharpness; options.sharpening = true;
+            } else {
+                uint32_t multiplier = 0;
+                auto parsed = std::from_chars(value.data(), value.data() + value.size(), multiplier);
+                if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || (multiplier != 0 && !valid_frame_generation_multiplier(multiplier))) return "invalid value for --frame-generation";
+                options.frame_generation = multiplier != 0;
+                if (multiplier) options.frame_generation_multiplier = multiplier;
+            }
+        }
         else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];

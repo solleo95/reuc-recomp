@@ -16,14 +16,25 @@ struct TextureBank { float4 rows[126 * 3]; };
 // Position and normal matrices of a draw: 64 rows each (gx::PaletteBlock). A vertex stores only its row.
 struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; };   // alphaPass: ubershader only
+// alphaPass: ubershader only. motion/jitter/viewport: the MOTION variant (upscaling) only; jitter in target pixels, viewport = the draw's
+// Vulkan viewport (x, y, width, height) in target pixels.
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
+// Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
+// (prevRows = clip_to_prev_clip applied to the current clip position).
+struct MotionBlock { float4 prevRows[4]; uint prevPalette; uint kind; uint2 unused; };
+[[vk::binding(5, 0)]] StructuredBuffer<MotionBlock> motions;
 struct Output {
     float4 position : SV_Position;
     [[vk::location(0)]] float4 color : COLOR0;
     [[vk::location(1)]] float3 texcoords[8] : TEXCOORD0;
     [[vk::location(9)]] float4 color1 : COLOR1;
+#ifdef MOTION
+    [[vk::location(10)]] float4 currentClip : TEXCOORD8;    // unjittered
+    [[vk::location(11)]] float4 previousClip : TEXCOORD9;
+#endif
 };
+float4 clipOf(float4 rows[4], float4 v) { return float4(dot(rows[0], v), dot(rows[1], v), dot(rows[2], v), dot(rows[3], v)); }
 float4 lightControl(float4 base, uint channel, uint control, float3 position, float3 normal) {
     int4 material = int4(round(((control & 1) != 0 ? base : drawState.materials[channel]) * 255.0));
     if((control & 2) == 0) return float4(material) / 255.0;
@@ -94,6 +105,18 @@ Output vertexMain(Input input) {
     float4 row2 = palettes[projection.palette].position[row + 2];
     float4 viewPosition = float4(dot(row0, objectPosition), dot(row1, objectPosition), dot(row2, objectPosition), 1.0);
     output.position = float4(dot(projection.rows[0], viewPosition), dot(projection.rows[1], viewPosition), dot(projection.rows[2], viewPosition), dot(projection.rows[3], viewPosition));
+#ifdef MOTION
+    output.currentClip = output.position;
+    output.previousClip = output.position;
+    if (projection.motion != 0xFFFFFFFF) {
+        MotionBlock m = motions[projection.motion];
+        if (m.kind == 1) {
+            float4 p0 = palettes[m.prevPalette].position[row], p1 = palettes[m.prevPalette].position[row + 1], p2 = palettes[m.prevPalette].position[row + 2];
+            output.previousClip = clipOf(m.prevRows, float4(dot(p0, objectPosition), dot(p1, objectPosition), dot(p2, objectPosition), 1.0));
+        } else if (m.kind == 2) output.previousClip = clipOf(m.prevRows, output.position);
+    }
+    output.position.xy += projection.jitter * 2.0 / projection.viewport.zw * output.position.w;
+#endif
     // View-space normal: the loaded normal matrix applied to the object normal; without a loaded matrix the object normal stays (position-only fixtures).
     uint normalRow = row & 31;
     uint4 loaded = palettes[projection.palette].loaded;
@@ -138,7 +161,22 @@ float3 applyFog(float3 color, float depth) {
     int3 prev=int3(round(saturate(color)*255.0));
     return float3((prev*(256-ifog)+fogColor*ifog)>>8)/255.0;
 }
-float4 fragmentMain(Output input) : SV_Target0 {
+struct Targets {
+    float4 color : SV_Target0;
+#ifdef MOTION
+    float4 motion : SV_Target1;   // rg: previous minus current position in target pixels (unjittered); written only by depth-writing draws
+#endif
+};
+float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }
+Targets fragmentMain(Output input) {
+    Targets targets;
+#ifdef MOTION
+    targets.motion = float4(pixelOf(input.previousClip) - pixelOf(input.currentClip), 0.0, 0.0);
+#endif
+    targets.color = shadeFragment(input);
+    return targets;
+}
+float4 shadeFragment(Output input) {
 #ifdef UBER
     loadTevKey();
     destinationAlphaPass = projection.alphaPass;

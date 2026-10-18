@@ -5,7 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 namespace uc {
-struct RenderExtent { uint32_t width,height; };
+struct RenderExtent { uint32_t width,height; bool operator==(const RenderExtent&) const=default; };
 inline RenderExtent manual_render_extent(double scale,double aspect=16.0/9) {
     if(!std::isfinite(scale) || scale<0.5 || scale>6 || !std::isfinite(aspect) || aspect<0.25 || aspect>8) throw std::invalid_argument("invalid720p render multiplier/aspect");
     const RenderExtent extent{uint32_t(std::llround(720*aspect*scale)),uint32_t(std::llround(720*scale))};

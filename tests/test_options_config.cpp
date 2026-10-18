@@ -31,6 +31,21 @@ int main() {
     CHECK(document.properties["graphics"]["fps_limit"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fps_limit==0u);
     options.fps_limit.reset();uc::store_options(document,options);
     CHECK(!document.properties["graphics"].contains("fps_limit"));
+    CHECK(options.upscaler==uc::UpscalerKind::off && !options.frame_generation);   // absent: no upscaling
+    {
+        auto c=uc::options_from_config(uc::parse_config(R"({"graphics":{"upscaler":"fsr","upscale_mode":"balanced","sharpening":true,"sharpness":0.01,"frame_generation":true,"frame_generation_multiplier":2}})"));
+        CHECK(c.upscaler==uc::UpscalerKind::fsr && c.upscale_mode==uc::UpscaleMode::balanced && c.sharpening && c.sharpness==0.01 && c.frame_generation && c.frame_generation_multiplier==2);
+        options.upscaler=uc::UpscalerKind::dlss;options.upscale_mode=uc::UpscaleMode::ultra_performance;options.sharpening=true;options.sharpness=0.42;
+        options.frame_generation=true;options.frame_generation_multiplier=4;uc::store_options(document,options);
+        CHECK(document.properties["graphics"]["upscaler"]=="dlss" && document.properties["graphics"]["upscale_mode"]=="ultra_performance");
+        auto back=uc::options_from_config(uc::parse_config(uc::serialize_config(document)));
+        CHECK(back.upscaler==uc::UpscalerKind::dlss && back.upscale_mode==uc::UpscaleMode::ultra_performance && back.sharpening && back.sharpness==0.42 && back.frame_generation && back.frame_generation_multiplier==4);
+        options.upscaler=uc::UpscalerKind::blit;   // test-only kind is never written
+        bool rejected=false;try{uc::store_options(document,options);}catch(const std::invalid_argument&){rejected=true;}
+        CHECK(rejected);
+        options.upscaler=uc::UpscalerKind::off;options.upscale_mode=uc::UpscaleMode::quality;options.sharpening=false;options.sharpness=0.5;
+        options.frame_generation=false;options.frame_generation_multiplier=2;uc::store_options(document,options);
+    }
     const auto before=uc::serialize_config(document);
     options.prompt_style=uc::PromptStyle(99);
     bool invalid_style=false;try{uc::store_options(document,options);}catch(const std::invalid_argument&){invalid_style=true;}
@@ -38,7 +53,10 @@ int main() {
     for(auto text:{R"({"skip_intro":1})",R"({"game":null})",R"({"game":"a\u0000b"})",R"({"graphics":{"render_scale":8}})",
         R"({"graphics":{"render_scale":-1}})",R"({"graphics":{"width":-1}})",R"({"graphics":{"window_mode":"bad"}})",
         R"({"graphics":{"bloom":"off"}})",R"({"graphics":{"bloom":0}})",R"({"graphics":{"bloom":null}})",R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})",R"({"graphics":{"fps_limit":-1}})",R"({"graphics":{"fps_limit":10}})",
-        R"({"graphics":{"fps_limit":2000}})",R"({"graphics":{"fps_limit":"fast"}})",R"({"graphics":{"fps_limit":144.5}})"}) {
+        R"({"graphics":{"fps_limit":2000}})",R"({"graphics":{"fps_limit":"fast"}})",R"({"graphics":{"fps_limit":144.5}})",
+        R"({"graphics":{"upscaler":"blit"}})",R"({"graphics":{"upscaler":1}})",R"({"graphics":{"upscale_mode":"dlaa"}})",R"({"graphics":{"sharpness":0}})",
+        R"({"graphics":{"sharpness":1.5}})",R"({"graphics":{"sharpening":1}})",R"({"graphics":{"frame_generation":"on"}})",
+        R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})"}) {
         bool caught=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){caught=true;}CHECK(caught);
     }
     return 0;

@@ -2,6 +2,7 @@
 #include "launch.h"
 #include "cpu_calibration.h"
 #include "options_config.h"
+#include "feature_report.h"
 #include "render_scale.h"
 #include "prompt_icons.h"
 #include "localization.h"
@@ -12,9 +13,13 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <future>
+#include <memory>
+#include <thread>
 #include <map>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -133,7 +138,9 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom;
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom
+        && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -169,6 +176,14 @@ int run(int argc,wchar_t** argv) {
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
     reload();std::string game_path=utf8(options.game);
+    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
+    uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
+    struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
+    if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
+    if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
+        query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
+        query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path] {promise->set_value(uc::query_features(exe,config));});
+    }
     Ui ui;ui.init(!smoke.empty());
     const auto* monitor=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     if(!monitor || monitor->w<=0 || monitor->h<=0)throw std::runtime_error("monitor mode unavailable");
@@ -197,6 +212,7 @@ int run(int argc,wchar_t** argv) {
             }
         }
         if(calibration && calibration->ready()) {cpu_choice=calibration->get();calibration.reset();cpu_ready=true;}
+        if(features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) {features=uc::feature_report_from_json(features_query.get());features_ready=true;}
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();
         if(!smoke.empty()) {
             auto& io=ImGui::GetIO();io.AddFocusEvent(true);
@@ -204,7 +220,7 @@ int run(int argc,wchar_t** argv) {
             std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{48,"clear1"},
                 {80,"controls"},{84,"style"},{88,"style3"},{98,"style"},{102,"style2"},{110,"general"},
                 {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
-                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},
+                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"upscaling"},{430,"upscaler-dlss"},
                 {434,"controls"},{440,"replace2"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
@@ -328,13 +344,13 @@ int run(int argc,wchar_t** argv) {
         const char* hints[]={"game_hint","graphics_hint","controls_hint","audio_hint"};
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
         ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
-        auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false) {
+        auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false,const char* why=nullptr) {
             ImGui::BeginDisabled(disabled);ImGui::PushID(id);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{6*unit,6*unit});
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,3*unit);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,{12*unit,0});
             ImGui::Checkbox(label,&value);track(id);
-            if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("unavailable"));
+            if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",why ? why : tr("unavailable"));
             ImGui::PopStyleVar(3);ImGui::PopID();ImGui::EndDisabled();
         };
         const float footer=((page==2 ? 140.f : 212.f)+(error.empty() ? 0.f : 100.f))*unit;
@@ -389,12 +405,75 @@ int run(int argc,wchar_t** argv) {
             ImGui::SameLine(0,column_gap);
             ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_None);ImGui::PushItemWidth(-1);
             ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
-            ImGui::BeginDisabled();if(combo("##upscaling",tr("unavailable")))ImGui::EndCombo();ImGui::EndDisabled();
+            const bool checking=features_query.valid();
+            const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : tr("off");};
+            const bool upscaler_open=combo("##upscaling",kind_label(options.upscaler));track("upscaling");
+            if(upscaler_open) {
+                for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
+                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::dlss ? features.dlss : features.fsr);
+                    const auto& reason=kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
+                    ImGui::BeginDisabled(!supported && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left, not re-picked
+                    if(ImGui::Selectable(kind_label(kind),options.upscaler==kind))options.upscaler=kind;
+                    track(std::string("upscaler-")+std::string(uc::upscaler_name(kind)));
+                    ImGui::EndDisabled();
+                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
+                }
+                ImGui::EndCombo();
+            }
+            const bool upscaling=options.upscaler!=uc::UpscalerKind::off;
             ImGui::PopFont();ImGui::Dummy({0,10*unit});
             ImGui::TextUnformatted(tr("quality"));push_font(ui.sans,22);
-            ImGui::BeginDisabled();if(combo("##quality","—"))ImGui::EndCombo();ImGui::EndDisabled();
+            const auto mode_label=[&](uc::UpscaleMode mode) -> std::string {
+                switch(mode) {
+                case uc::UpscaleMode::native: return options.upscaler==uc::UpscalerKind::fsr ? "Native AA" : "DLAA";
+                case uc::UpscaleMode::quality: return tr("quality");
+                case uc::UpscaleMode::balanced: return tr("balanced");
+                case uc::UpscaleMode::performance: return tr("performance");
+                case uc::UpscaleMode::ultra_performance: return tr("ultra_performance");
+                }
+                return {};
+            };
+            ImGui::BeginDisabled(!upscaling);
+            const auto current_mode=upscaling ? mode_label(options.upscale_mode) : std::string("—");
+            const bool mode_open=combo("##quality",current_mode.c_str());track("upscale-mode");
+            if(mode_open) {
+                for(const auto mode:{uc::UpscaleMode::native,uc::UpscaleMode::quality,uc::UpscaleMode::balanced,uc::UpscaleMode::performance,uc::UpscaleMode::ultra_performance}) {
+                    if(ImGui::Selectable(mode_label(mode).c_str(),options.upscale_mode==mode))options.upscale_mode=mode;
+                    track(std::string("upscale-")+std::string(uc::upscale_mode_name(mode)));
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
             ImGui::PopFont();ImGui::Dummy({0,16*unit});
-            bool framegen=false;toggle("##framegen",tr("framegen"),framegen,true);
+            toggle("##sharpening",tr("sharpening"),options.sharpening,!upscaling);
+            ImGui::BeginDisabled(!upscaling || !options.sharpening);
+            float sharpness=float(options.sharpness);
+            ImGui::SetNextItemWidth(-1);
+            if(ImGui::SliderFloat("##sharpness",&sharpness,0.01f,1.0f,"%.2f"))options.sharpness=std::clamp(std::round(double(sharpness)*100)/100,0.01,1.0);
+            track("sharpness");
+            ImGui::EndDisabled();
+            ImGui::Dummy({0,16*unit});
+            const bool framegen_supported=options.upscaler==uc::UpscalerKind::dlss ? features.dlss_g : options.upscaler==uc::UpscalerKind::fsr ? features.fsr_fg : false;
+            const char* framegen_why=!upscaling ? tr("unavailable") : checking ? tr("checking") : options.upscaler==uc::UpscalerKind::dlss && !features.dlss_g_reason.empty() ? features.dlss_g_reason.c_str() :
+                options.upscaler==uc::UpscalerKind::fsr && !features.fsr_fg_reason.empty() ? features.fsr_fg_reason.c_str() : tr("unsupported");
+            toggle("##framegen",tr("framegen"),options.frame_generation,!framegen_supported && !options.frame_generation,framegen_why);
+            if(options.frame_generation && upscaling) {
+                const uint32_t most=options.upscaler==uc::UpscalerKind::dlss ? std::clamp<uint32_t>(features.dlss_g_max_multiplier,2,6) : 2;   // FSR FG: one generated frame
+                if(features_ready)options.frame_generation_multiplier=std::clamp<uint32_t>(options.frame_generation_multiplier,2,most);   // the saved choice survives until the report says what the PC allows
+                ImGui::TextUnformatted(tr("multiplier"));push_font(ui.sans,22);
+                const auto current_multiplier=std::to_string(options.frame_generation_multiplier)+"×";
+                const bool multiplier_open=combo("##multiplier",current_multiplier.c_str());track("multiplier");
+                if(multiplier_open) {
+                    for(uint32_t value=2;value<=most;++value) {if(ImGui::Selectable((std::to_string(value)+"×").c_str(),options.frame_generation_multiplier==value))options.frame_generation_multiplier=value;track("multiplier"+std::to_string(value));}
+                    ImGui::EndCombo();
+                }
+                ImGui::PopFont();
+                if(options.fps_limit.value_or(options.unlock_60fps ? 60 : 30)) {
+                    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextWrapped("%s: %u FPS",tr("output_fps"),options.fps_limit.value_or(options.unlock_60fps ? 60 : 30)*options.frame_generation_multiplier);
+                    ImGui::PopStyleColor();
+                }
+            }
             ImGui::Dummy({0,8*unit});toggle("##bloom",tr("bloom"),options.bloom);
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);
@@ -558,6 +637,10 @@ int run(int argc,wchar_t** argv) {
             }
             if(frame==428) {
                 if(uc::options_from_config(uc::load_config(config_path)).fps_limit!=144u || options.fps_limit!=144u)throw std::runtime_error("frame rate limit select/save UI failed");
+            }
+            if(frame==432) {
+                if(uc::options_from_config(uc::load_config(config_path)).upscaler!=uc::UpscalerKind::dlss || options.upscaler!=uc::UpscalerKind::dlss)throw std::runtime_error("upscaler select/save UI failed");
+                ui.capture(smoke/L"upscaling.bmp");
             }
             if(frame==452) {
                 if(uc::load_config(config_path).input[size_t(uc::Action::weapon_previous)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,26},{}}})throw std::runtime_error("grid replacement/save failed");

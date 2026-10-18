@@ -48,6 +48,29 @@ Options options_from_config(const ConfigDocument& document) {
             else if(style=="sculpted")options.prompt_style=PromptStyle::sculpted;
             else invalid("unknown prompt_style");
         }
+        if(graphics.contains("upscaler")) {
+            if(!graphics["upscaler"].is_string())invalid("upscaler must be a string");
+            const auto kind=upscaler_from_name(graphics["upscaler"].get<std::string>(),false);
+            if(!kind)invalid("unknown upscaler");
+            options.upscaler=*kind;
+        }
+        if(graphics.contains("upscale_mode")) {
+            if(!graphics["upscale_mode"].is_string())invalid("upscale_mode must be a string");
+            const auto mode=upscale_mode_from_name(graphics["upscale_mode"].get<std::string>());
+            if(!mode)invalid("unknown upscale_mode");
+            options.upscale_mode=*mode;
+        }
+        if(graphics.contains("sharpening"))options.sharpening=boolean(graphics["sharpening"]);
+        if(graphics.contains("sharpness")) {
+            if(!graphics["sharpness"].is_number() || !valid_sharpness(graphics["sharpness"].get<double>()))invalid("sharpness must be 0.01..1");
+            options.sharpness=graphics["sharpness"].get<double>();
+        }
+        if(graphics.contains("frame_generation"))options.frame_generation=boolean(graphics["frame_generation"]);
+        if(graphics.contains("frame_generation_multiplier")) {
+            const auto& value=graphics["frame_generation_multiplier"];
+            if(!value.is_number_unsigned() || !valid_frame_generation_multiplier(value.get<uint64_t>()))invalid("frame_generation_multiplier must be 2..6");
+            options.frame_generation_multiplier=value.get<uint32_t>();
+        }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
             const auto mode=graphics["window_mode"].get<std::string>();
@@ -62,6 +85,8 @@ Options options_from_config(const ConfigDocument& document) {
 void store_options(ConfigDocument& document,const Options& options) {
     if(options.prompt_style!=PromptStyle::monochrome && options.prompt_style!=PromptStyle::sculpted)invalid("unknown prompt_style");
     if(options.window_mode!=WindowMode::windowed && options.window_mode!=WindowMode::borderless && options.window_mode!=WindowMode::exclusive)invalid("unknown window_mode");
+    if(!upscaler_from_name(upscaler_name(options.upscaler),false))invalid("unknown upscaler");
+    if(upscale_mode_name(options.upscale_mode).empty())invalid("unknown upscale_mode");
     auto replacement=document;
     replacement.properties["game"]=utf8_path(options.game);
     replacement.properties["skip_intro"]=options.skip_intro;
@@ -77,6 +102,12 @@ void store_options(ConfigDocument& document,const Options& options) {
     else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";
     graphics["window_mode"]=options.window_mode==WindowMode::windowed ? "windowed" : options.window_mode==WindowMode::borderless ? "borderless" : "exclusive";
+    graphics["upscaler"]=std::string(upscaler_name(options.upscaler));
+    graphics["upscale_mode"]=std::string(upscale_mode_name(options.upscale_mode));
+    graphics["sharpening"]=options.sharpening;
+    graphics["sharpness"]=options.sharpness;
+    graphics["frame_generation"]=options.frame_generation;
+    graphics["frame_generation_multiplier"]=options.frame_generation_multiplier;
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

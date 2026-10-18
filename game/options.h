@@ -1,5 +1,6 @@
 #pragma once
 #include "input_prompts.h"
+#include "upscale_mode.h"
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -15,6 +16,13 @@ struct Options {
     WindowMode window_mode=WindowMode::windowed;
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool bloom=true;   // the game's glow around lights (graphics.bloom); off skips the bloom composite draw
+    UpscalerKind upscaler=UpscalerKind::off;
+    UpscaleMode upscale_mode=UpscaleMode::quality;
+    bool sharpening=false;   // RCAS after the upscale (graphics.sharpening, --sharpness / --no-sharpening)
+    double sharpness=0.5;    // 0.01..1
+    bool frame_generation=false;   // DLSS-G with DLSS, FSR FG with FSR; forced off in deterministic runs
+    uint32_t frame_generation_multiplier=2;   // presented frames per rendered frame, 2..6
+    bool features=false;   // --features: print what DLSS/FSR/frame generation this machine supports (JSON, for the launcher) and exit
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
     int guest_cpu = -1;   // benchmarks: pin the guest threads to this logical CPU and keep its SMT sibling (cpu ^ 1) free of every other thread
@@ -42,5 +50,12 @@ struct Options {
     bool skip_tutorials = false;   // tutorial pages never open (launcher "Skip tutorials", config skip_tutorials, --skip-tutorials)
     uint32_t speed = 1;     // test-mode virtual clock factor 1..32, needs test_server
 };
+// Names used by the CLI and config.json; blit is accepted only with allow_test (CLI).
+std::optional<UpscalerKind> upscaler_from_name(std::string_view name, bool allow_test);
+std::optional<UpscaleMode> upscale_mode_from_name(std::string_view name);
+std::string_view upscaler_name(UpscalerKind);
+std::string_view upscale_mode_name(UpscaleMode);
+bool valid_sharpness(double);   // 0.01..1
+bool valid_frame_generation_multiplier(uint64_t);   // 2..6
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});
 }

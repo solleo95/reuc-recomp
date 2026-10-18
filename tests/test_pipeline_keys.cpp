@@ -27,6 +27,12 @@ int main() {
     CHECK(uc::uber_key(c)[0]==0x1234 && uc::uber_key(c)[68]==9 && uc::uber_key(c)[69]==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST && uc::uber_key(c)[1]==0 && uc::uber_key(c)[67]==0);
     CHECK(uc::uber_key(c)!=uc::uber_key([&]{ auto e=c; e[0]^=1; return e; }()));
 
+    // Motion vectors are written only by draws that write depth (compare + update), so blended effects keep the vectors underneath.
+    uc::PipelineKey z=a; z[68]=17|(3<<1);
+    CHECK(uc::motion_write_mask(z)==(VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT));
+    z[68]=16; CHECK(uc::motion_write_mask(z)==0);   // update without compare: Vulkan writes no depth either
+    z[68]=1; CHECK(uc::motion_write_mask(z)==0);
+    z[68]=5; CHECK(uc::motion_write_mask(z)==0);    // destination-alpha second pass
     CHECK(uc::valid_pipeline_key(a,false));
     auto bad=a; bad[69]=0; CHECK(!uc::valid_pipeline_key(bad,false));
     bad=a; bad[1]=17; CHECK(!uc::valid_pipeline_key(bad,false));

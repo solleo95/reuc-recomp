@@ -34,6 +34,8 @@
 #include "test_state.h"
 #include "test_draws.h"
 #include "packet_dump.h"
+#include "feature_report.h"
+#include "upscaler_probe.h"
 #include "intro.h"
 #include "game_pacing.h"
 #include "render_scale.h"
@@ -200,6 +202,12 @@ static int real_main(int argc, char** argv) {
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
     if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
     options=std::get<uc::Options>(std::move(parsed));
+    if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
+        const auto support=uc::probe_upscalers(exe_dir());
+        uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason};
+        std::printf("%s\n",uc::to_json(report).c_str());
+        return 0;
+    }
     const bool server_mode=!options.test_server.empty();
     if(server_mode && !options.test_control.empty()) throw std::invalid_argument("--test-server replaces --test-control; use only one");
     const bool controlled=!options.test_control.empty() || server_mode;
@@ -286,6 +294,7 @@ static int real_main(int argc, char** argv) {
     if (deterministic) {
         uc::set_deterministic_clock(true);
         sched.set_deterministic(true);
+        if (options.frame_generation) { options.frame_generation = false; std::fprintf(stderr, "Frame generation: off in deterministic runs\n"); }
     }
     if (!options.det_out.empty()) det_trace = std::make_unique<uc::DetTrace>(options.det_out, boot.mem, options.det_frames);
     std::atomic<bool> det_stop{false};
@@ -383,6 +392,7 @@ static int real_main(int argc, char** argv) {
         }
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+        renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom);
@@ -436,6 +446,7 @@ static int real_main(int argc, char** argv) {
     uint64_t audit_capture_serial=0;
     uint64_t debug_capture_serial=0;
     uint64_t scene_capture_serial=0;
+    uint64_t scene_dump_serial=0;   // UC_SCENE_DUMP: screenshot of the sampled frame (scene-<serial>.png in the capture directory)
     uc::PacketDump packet_dump;
     uint32_t scene_capture_pass=0;
     bool scene_capture_started=false;
@@ -452,7 +463,7 @@ static int real_main(int argc, char** argv) {
         bool progressed = false;
         if (!pending) pending = packets.try_take();
         // Keep the captured slot alive until its fence completes and readback finishes.
-        if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
+        if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
             const auto render_start=std::chrono::steady_clock::now();
             const bool rendered=renderer.render(*pending);
             profile_retries+=!rendered;
@@ -507,6 +518,7 @@ static int real_main(int argc, char** argv) {
                 } else if (frame_log) frame_cpu_last=thread_cycles();
                 last_present_at=presented_at; frame_limit.presented(presented_at);
             }
+            if (packet_dump.scene_sampled()) scene_dump_serial=pending->serial;
             if (pending->present && debug_capture_requested) {
                 debug_capture_serial=pending->serial;
                 debug_capture_requested=false;
@@ -528,6 +540,13 @@ static int real_main(int argc, char** argv) {
                     std::fprintf(stderr,"[scene-pass-capture] %s\n",path.string().c_str());
                 } catch(const std::exception& error) { std::fprintf(stderr,"scene pass capture failed: %s\n",error.what()); }
                 scene_capture_serial=0;
+            }
+            if (serial==scene_dump_serial) {
+                const auto pixels=renderer.capture(serial);
+                const auto directory=options.capture_dir.empty() ? fs::path(L"S:\\Games\\Umbrella Chronicles\\debug") : options.capture_dir;
+                try { fs::create_directories(directory); uc::save_png(pixels,directory/("scene-"+std::to_string(serial)+".png")); }
+                catch(const std::exception& error) { std::fprintf(stderr,"scene dump screenshot failed: %s\n",error.what()); }
+                scene_dump_serial=0;
             }
             if (serial==debug_capture_serial) {
                 const auto pixels=renderer.capture(serial);

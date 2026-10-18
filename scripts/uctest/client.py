@@ -126,7 +126,10 @@ class Game:
         if self.skip_tutorials:
             args.append("--skip-tutorials")
         log = open(self.run_dir / "run.log", "wb")
-        self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        env = dict(os.environ)
+        if "--frame-generation" in self.game_args:
+            env["UC_FG_UNFOCUSED"] = "1"   # Streamline's frame generation only runs for a focused window: tell it the game's window is, without focusing it
+        self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         log.close()
 
     def _cleanup(self):

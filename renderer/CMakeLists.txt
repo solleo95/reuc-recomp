@@ -1,9 +1,10 @@
-add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp prompt_draw.cpp)
+add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp prompt_draw.cpp scene_boundary.cpp motion_tracker.cpp)
 target_include_directories(uc_gx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gx PUBLIC uc_input_prompts)
 
 enable_language(C)
 find_package(Vulkan 1.3 REQUIRED)
+include(${CMAKE_SOURCE_DIR}/cmake/upscaler_sdks.cmake)
 find_program(UC_SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" "C:/VulkanSDK/1.4.363.0/Bin" REQUIRED)
 include(FetchContent)
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
@@ -41,23 +42,48 @@ add_custom_command(OUTPUT ${shader_dir}/smoke.uber.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
   COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DUBER -target spirv -profile spirv_1_5 -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o ${shader_dir}/smoke.uber.spv
   DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
-add_custom_target(uc_smoke_shaders DEPENDS ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv)
+# Upscaling variants: jitter in the vertex shader, motion vectors as a second color output.
+foreach(stage vert frag uber)
+  if(stage STREQUAL "vert")
+    set(motion_args -entry vertexMain -stage vertex)
+  elseif(stage STREQUAL "frag")
+    set(motion_args -entry fragmentMain -stage fragment)
+  else()
+    set(motion_args -DUBER -entry fragmentMain -stage fragment)
+  endif()
+  add_custom_command(OUTPUT ${shader_dir}/smoke.motion.${stage}.spv
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DMOTION ${motion_args} -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/smoke.motion.${stage}.spv
+    DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
+endforeach()
+add_custom_command(OUTPUT ${shader_dir}/rcas.comp.spv
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
+  COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rcas.slang -entry main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/rcas.comp.spv
+  DEPENDS shaders/rcas.slang VERBATIM)
+set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv
+  ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv CACHE INTERNAL "")
+add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp)
-target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp blit_upscaler.cpp rcas_pass.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp)
+target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons PRIVATE uc_streamline_sdk uc_fidelityfx_sdk)
 add_dependencies(uc_vulkan uc_smoke_shaders)
-set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS
-  ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv)
+set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
 target_include_directories(renderer_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_smoke PRIVATE uc_vulkan windowscodecs)
 add_custom_command(TARGET renderer_smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:renderer_smoke> VERBATIM)
+add_executable(renderer_upscale_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_upscale_smoke.cpp)
+target_include_directories(renderer_upscale_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(renderer_upscale_smoke PRIVATE uc_vulkan)
+add_dependencies(renderer_upscale_smoke renderer_smoke)   # shares its data/shaders and SDL copy
+add_custom_command(TARGET renderer_upscale_smoke POST_BUILD   # --dlss: Streamline and DLSS next to the test
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} $<TARGET_FILE_DIR:renderer_upscale_smoke> VERBATIM)
 install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
 install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION tools)
-install(FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv DESTINATION tools/data/shaders)
+install(FILES ${UC_SHADER_FILES} DESTINATION tools/data/shaders)
 install(FILES ${sdl3_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/SDL3)
