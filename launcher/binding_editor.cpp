@@ -31,6 +31,9 @@ void BindingEditor::restore_defaults() {bindings_=default_bindings();cancel_capt
 void BindingEditor::begin_capture(Action action,bool replace) {index(action);cancel_capture();capture_=action;replace_=replace;}
 void BindingEditor::cancel_capture() {capture_.reset();replace_=false;modifiers_.clear();error_.reset();}
 void BindingEditor::capture(PhysicalInput input) {
+    if(input.kind==PhysicalKind::key && (input.code==73 || input.code==19)) {   // SDL Insert / P: the game's settings menu and pause keys
+        error_="Insert and P are reserved for the in-game menu and pause"; return;
+    }
     auto modifiers=modifiers_; std::erase(modifiers,input);
     auto replacement=bindings_;auto& entries=replacement[index(*capture_)];
     if(replace_)entries.clear();

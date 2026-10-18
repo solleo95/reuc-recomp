@@ -90,7 +90,7 @@ void SettingsMenu::main_tab(float unit) {
     ImGui::BeginGroup(); ImGui::PushItemWidth(column);
     const auto supported=[&](UpscalerKind kind,bool generation,std::string& why) {
         if(kind==UpscalerKind::off) return true;
-        if(failed_.contains(kind)) { why=tr("launcher_only"); return false; }
+        if(failed_.contains(kind) || (generation && failed_generation_.contains(kind))) { why=tr("launcher_only"); return false; }
         if(!features) { why=tr("checking"); return false; }
         const bool ok=kind==UpscalerKind::dlss ? (generation ? features->dlss_g : features->dlss) : (generation ? features->fsr_fg : features->fsr);
         const auto& reason=kind==UpscalerKind::dlss ? (generation ? features->dlss_g_reason : features->dlss_reason) : (generation ? features->fsr_fg_reason : features->fsr_reason);
@@ -103,7 +103,11 @@ void SettingsMenu::main_tab(float unit) {
         for(const auto kind:{UpscalerKind::off,UpscalerKind::dlss,UpscalerKind::fsr}) {
             std::string why; const bool ok=supported(kind,false,why);
             ImGui::BeginDisabled(!ok && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left
-            if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) options=with_upscaler(options,kind);
+            if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {
+                options=with_upscaler(options,kind);
+                std::string ignored;   // frame generation moves along only where the new kind has a generator
+                if(options.frame_generation && !supported(kind,true,ignored)) options.frame_generation=false;
+            }
             ImGui::EndDisabled();
             if(!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",why.c_str());
         }

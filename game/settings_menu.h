@@ -21,6 +21,7 @@ public:
     void capture_event(const SDL_Event&);   // key/mouse events while a binding is being captured
     void focus_lost() { editor_.focus(false); }
     void upscaler_failed(UpscalerKind kind) { failed_.insert(kind); }   // could not start in this process: greyed out, changed in the launcher
+    void frame_generation_failed(UpscalerKind kind) { failed_generation_.insert(kind); }
 private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
@@ -33,6 +34,6 @@ private:
     uint32_t monitor_width_, monitor_height_;
     BindingEditor editor_;
     ui::Fonts fonts_;
-    std::set<UpscalerKind> failed_;
+    std::set<UpscalerKind> failed_, failed_generation_;
 };
 }

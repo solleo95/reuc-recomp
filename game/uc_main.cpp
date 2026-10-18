@@ -612,7 +612,10 @@ static int real_main(int argc, char** argv) {
         const auto* desktop=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
         const uint32_t monitor_width=desktop ? uint32_t(desktop->w) : options.width, monitor_height=desktop ? uint32_t(desktop->h) : options.height;
         uc::SettingsTargets targets;
-        targets.render_scale=[&renderer,monitor_width,monitor_height](double scale) { renderer.set_render_scale(scale ? scale : uc::monitor_render_scale(monitor_width,monitor_height)); };
+        targets.render_scale=[&renderer,&options,monitor_width,monitor_height](double scale) {
+            options.render_scale=scale ? scale : uc::monitor_render_scale(monitor_width,monitor_height);   // a renderer restart starts from it
+            renderer.set_render_scale(options.render_scale);
+        };
         targets.upscaling=[&](const uc::Options& next) {
             restart_pending|=next.upscaler!=options.upscaler || next.frame_generation!=options.frame_generation || next.sharpening!=options.sharpening
                 || next.frame_generation_multiplier!=options.frame_generation_multiplier;
@@ -643,7 +646,8 @@ static int real_main(int argc, char** argv) {
         if (options.headless) return;
         renderer.set_menu(host_keys.menu_open ? std::function<void()>([&] { settings_menu->build(); }) : std::function<void()>(),[&] { settings_menu->setup(); });
         uc::game_pacing_set_paused(host_keys.paused);
-        if (audio) audio->pause(host_keys.paused);
+        static bool audio_paused=false;   // only a real change: resuming drops the queued audio (a click when the menu merely opens)
+        if (audio && audio_paused!=host_keys.paused) { audio->pause(host_keys.paused); audio_paused=host_keys.paused; }
         const bool playing=!host_keys.menu_open && !host_keys.paused;
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),!host_keys.menu_open)) throw std::runtime_error(SDL_GetError());   // the menu needs the cursor
         input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
@@ -779,11 +783,12 @@ static int real_main(int argc, char** argv) {
             // A game frame is ~23 packets: do not pay a wait per packet. A pending renderer restart stops at the end of a frame.
             for (int drained = 0; drained < 64 && !close && !(restart_pending && at_frame_boundary) && render_pending(); ++drained) {}
             if (settings_menu) settings_menu->commit();   // the menu's picks, applied outside rendering
-            if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested) {
+            if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial) {
                 restart_pending=false;
                 restart_renderer();
                 apply_host_keys();   // the new renderer gets the menu back
                 if (options.upscaler!=uc::UpscalerKind::off && renderer.active_upscaler()!=options.upscaler) settings_menu->upscaler_failed(options.upscaler);
+                else if (options.frame_generation && !renderer.frame_generation_active()) settings_menu->frame_generation_failed(options.upscaler);
             }
         }
         auto now = std::chrono::steady_clock::now();

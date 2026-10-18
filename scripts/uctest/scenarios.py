@@ -255,8 +255,12 @@ def resize(g, args):
 
 
 def _same_picture(a, b):
+    """Equal up to 0.05% of the pixels: a paused zombie's hand can still creep by a sub-pixel (some per-call bone update), invisible on screen."""
     from .overlay import read_png
-    return read_png(a)[3] == read_png(b)[3]
+    w, h, ch, rows_a = read_png(a)
+    rows_b = read_png(b)[3]
+    changed = sum(1 for y in range(h) if rows_a[y] != rows_b[y] for x in range(w) if rows_a[y][x * ch:x * ch + 3] != rows_b[y][x * ch:x * ch + 3])
+    return changed <= w * h // 2000
 
 
 def _scene(f):
@@ -342,7 +346,7 @@ def overlay(g, args):
         g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
         g.advance(10)
         result["menu"] = g.capture()
-    changes = [dict(render_scale=1), dict(render_scale=2), dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
+    changes = [dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
                dict(fps_limit=60), dict(fps_limit=144), dict(fps_limit=0), dict(upscaler="fsr"), dict(upscale_mode="performance"), dict(upscale_mode="native"),
                dict(upscaler="dlss"), dict(frame_generation=True), dict(upscaler="fsr"), dict(frame_generation=False), dict(upscaler="off")]
     for change in changes:
@@ -362,6 +366,10 @@ def overlay(g, args):
             if not g.frame.get("menu_open") or g.frame.get("context") != "gameplay":
                 g.fail(f"{name}: the menu closed or gameplay ended", "settings")
             result["settings"].append({"change": name, "seconds": round(time.monotonic() - began, 2), "ticks": g.frame["retraces"] - ticks, "capture": g.capture()})
+    with g.step("scale_after_restarts"):   # the 1.5x render scale picked before the upscaler switches survives every renderer replacement
+        renders = [line for line in (g.run_dir / "run.log").read_text(encoding="utf-8", errors="replace").splitlines() if line.startswith("Native render:")]
+        if not renders or "multiplier 1.5x" not in renders[-1]:
+            g.fail(f"render scale lost after the renderer restarts: {renders[-1] if renders else 'no render line'}", "settings")
     with g.step("close_menu"):
         g.host_key(g.ESCAPE)
         g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")

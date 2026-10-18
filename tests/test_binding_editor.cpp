@@ -40,5 +40,15 @@ int main() {
     CHECK(editor.bindings()[size_t(Action::weapon_next)]==std::vector<Binding>({{BindingKind::physical,key(41),{}}}));
     editor.begin_capture(Action::weapon_next);editor.event(key(9),true);
     CHECK(editor.bindings()[size_t(Action::weapon_next)].size()==2);
+    {   // Insert (settings menu) and P (pause) belong to the port: a capture refuses them and keeps waiting
+        const auto before=editor.bindings();
+        editor.begin_capture(Action::reload,true);
+        for(uint16_t reserved:{uint16_t(73),uint16_t(19)}) {
+            editor.event(key(reserved),true);
+            CHECK(editor.capturing() && editor.error() && editor.bindings()==before);
+        }
+        editor.event(key(21),true);
+        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)].back().input==key(21));
+    }
     return 0;
 }
