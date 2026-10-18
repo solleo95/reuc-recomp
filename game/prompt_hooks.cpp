@@ -3,13 +3,18 @@
 #include "game_input.h"
 #include "test_state.h"
 #include <algorithm>
+#include <atomic>
 #include <exception>
+#include <mutex>
 #include <set>
 #include <cstdio>
 namespace uc {
 namespace {
 PromptRegistry registry;
-Bindings assignments;
+Bindings assignments;   // guest baton owns it; a menu change arrives through `pending`
+std::mutex pending_mutex;
+std::optional<Bindings> pending;
+std::atomic<bool> has_pending{false};
 bool initialized=false;
 bool trace_owners=false;
 std::set<std::string> owners_seen,decisions_seen;
@@ -31,8 +36,13 @@ void prompt_hooks_init(const Bindings& bindings,bool trace) {
     registry={};assignments=bindings;initialized=true;
     trace_owners=trace;owners_seen.clear();decisions_seen.clear();invalid_owners=0;glyphs_seen.clear();rejected_prompts=0;
 }
+void prompt_hooks_set_bindings(const Bindings& bindings) {
+    if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
+    std::lock_guard lock(pending_mutex);pending=bindings;has_pending=true;
+}
 PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),exceptions_(std::uncaught_exceptions()) {
     if(!initialized || !c.mem)return;
+    if(has_pending.exchange(false)) {std::lock_guard lock(pending_mutex);if(pending)assignments=std::move(*pending);pending.reset();}
     if(entry==0x8024F280) {object_=c.r[3];gate_=test_state_skip_tutorial(c);return;}   // original tutorial opener, r3 = tutorial object
     if(entry==0x8038AD94) {registry.unregister_layout(c.r[3]);return;}
     if(entry==0x80389B20) {registry.unregister_pane(c.r[3]);return;}

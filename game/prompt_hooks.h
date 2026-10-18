@@ -4,6 +4,7 @@
 #include "hle/gx.h"
 namespace uc {
 void prompt_hooks_init(const Bindings&,bool trace=false);
+void prompt_hooks_set_bindings(const Bindings&);   // any thread (in-game menu); prompts built from the next hook on use them
 class PromptScope {
 public:
     PromptScope(ppc::Ctx&,uint32_t entry);
