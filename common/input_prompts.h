@@ -12,4 +12,6 @@ struct PromptDescription {Action action;std::vector<PromptAlternative> alternati
 PromptDescription describe_prompt(const Bindings&,Action);
 // Inline text glyphs: first assignment of each action, first input of each choice.
 PromptDescription primary_prompt(const Bindings&,std::initializer_list<Action>);
+// Two buttons pressed together (A+B prompt): first assignment of each, one alternative; no alternative while either action is cleared.
+PromptDescription chord_prompt(const Bindings&,Action first,Action second);
 }

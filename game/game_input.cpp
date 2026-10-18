@@ -236,11 +236,11 @@ void hle_GameActionOwnerUpdate(ppc::Ctx& c) {
     const bool held=(native_holds&bit(uc::Action::knife))!=0;
     if(!gesture && !held)return;
     if(!(ppc::rdf32(c,object+0xF4)<=0)) { if(gesture)action_log("Knife",object,false); return; }
-    const float x=gesture ? gesture->direction_x : 1.f,y=gesture ? gesture->direction_y : 0.f;
+    const float x=gesture ? gesture->direction_x : uc::kKnifeKeyDirectionX,y=gesture ? gesture->direction_y : uc::kKnifeKeyDirectionY;
     if(!std::isfinite(x) || !std::isfinite(y) || (x==0 && y==0))throw std::invalid_argument("invalid native knife direction");
     // Native semantic direction/state consumed by801ABA00; no sensor samples.
     const auto processed=object+4;
-    ppc::wrf32(c,processed+0xC,-y); ppc::wrf32(c,processed+0x10,x); ppc::wr32(c,processed+0x70,2);
+    ppc::wrf32(c,processed+0xC,x); ppc::wrf32(c,processed+0x10,y); ppc::wr32(c,processed+0x70,2);
     invoke(c,0x801ABA00,{object,0}); action_log("Knife",object,ppc::rdf32(c,object+0xF4)>0);
 }
 void hle_GameMotionCount(ppc::Ctx& c) {

@@ -36,26 +36,26 @@ std::string physical_name(PhysicalInput input) {
 std::vector<std::vector<Token>> tokens(const PromptDescription& description,bool compact) {
     std::vector<std::vector<Token>> rows;
     if(description.alternatives.empty())return {{{compact ? "—" : "Не назначено",{},false}}};
+    // Only the first assigned input of an action is shown: no "or" rows, no alternative bindings. Mouse and wheel are an icon without a caption.
     for(const auto& alternative:description.alternatives) {
-        if(compact && !rows.empty())rows.back().push_back({"/",{},false});
-        else if(!rows.empty())rows.push_back({{"или",{},false}});
+        if(compact && !rows.empty())rows.back().push_back({"/",{},false});   // only the weapon pair (wheel up / wheel down) reaches this
+        else if(!rows.empty())break;
         auto& row=compact && !rows.empty() ? rows.back() : rows.emplace_back();
         for(const auto& choice:alternative.choices) {
             if(!row.empty() && row.back().label!="/")row.push_back({"+",{},false});
-            if(choice.held && !compact)row.push_back({"Удерживать",{},false});
-            for(size_t i=0;i<choice.bindings.size();++i) {
+            for(size_t i=0;i<choice.bindings.size() && (i==0 || compact);++i) {
                 if(i)row.push_back({"/",{},false});
                 const auto& binding=choice.bindings[i];
                 for(const auto& modifier:binding.modifiers) {
-                    row.push_back({physical_name(modifier),modifier,true});row.push_back({"+",{},false});
+                    row.push_back({modifier.kind!=PhysicalKind::key ? "" : physical_name(modifier),modifier,true});row.push_back({"+",{},false});
                 }
                 const bool icon=binding.input.kind!=PhysicalKind::key;
-                row.push_back({compact && icon ? "" : physical_name(binding.input),binding.input,true});
+                row.push_back({icon ? "" : physical_name(binding.input),binding.input,true});
             }
         }
-        if(alternative.gesture) {
+        if(alternative.gesture) {   // a mouse picture stands in for the Wii Remote of the shake/swing prompts and moves with its pane
             if(!row.empty() && row.back().label!="/")row.push_back({"+",{},false});
-            row.push_back({*alternative.gesture==PromptGesture::shake ? "Встряхнуть мышью" : "Взмах мышью",{},true});
+            row.push_back({"",PhysicalInput{PhysicalKind::mouse,0},true});
         }
     }
     // "Control Pad up/down" bound to wheel up and wheel down reads as one two-way wheel icon.
@@ -77,12 +77,12 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,con
     const float pad=prompt.compact ? 1 : 4;
     auto* font=ImGui::GetFont();
     const float density=float(extent.height)/720;
-    float font_size=prompt.compact ? height*.6f : std::min(24.f*density,std::min(width/5,height/3));
+    float font_size=height*.6f;   // icons fill the pane of the original picture; the fit loop below shrinks wide combinations
     auto has_icon=[](const Token& token){return token.cap && (!token.input || token.input->kind!=PhysicalKind::key);};
     auto mouse=[](const Token& token){return token.input && token.input->kind!=PhysicalKind::key;};
     auto token_width=[&](const Token& token) {
         const float label=font->CalcTextSizeA(font_size,FLT_MAX,0,token.label.c_str()).x;
-        if(mouse(token))return label+font_size*(prompt.compact ? .85f : 1.1f);
+        if(mouse(token))return label+font_size*.85f;
         return label+(token.cap ? font_size*.8f : 0)+(has_icon(token) ? font_size : 0);
     };
     float used_width=0;
@@ -130,7 +130,7 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,VkExtent2D extent,con
     const float content_height=layout(false);
     float offset_x=(width-used_width)/2;
     const float offset_y=(height-content_height)/2;
-    if(prompt.compact && rows.size()==1 && rows[0].size()==1 && mouse(rows[0][0]) &&
+    if(rows.size()==1 && rows[0].size()==1 && mouse(rows[0][0]) &&
        corners[0].y==corners[1].y && corners[0].x==corners[3].x && corners[1].x>corners[0].x && corners[3].y>corners[0].y) {
         // A pixel-aligned mouse center keeps mirrored button coverage equal at HUD sizes.
         const float center=corners[0].x+pad+font_size*.425f+offset_x;

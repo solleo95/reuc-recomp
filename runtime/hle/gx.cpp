@@ -51,6 +51,7 @@ using TextureMatrix=std::array<std::array<float,4>,3>;
 using TextureMatrices=std::array<std::optional<TextureMatrix>,126>;
 using TextureSelectors=std::array<uint32_t,8>;
 TextureMatrices texture_matrices;
+uint32_t known_sdk=0;   // SDK block address last seen by a snapshot; raw display list calls write the texgen words there
 std::array<uint32_t,16> indirect_stages{};
 // Versions of the host-side inputs of snapshot() / material_snapshot() (the rest of their input is the SDK block in guest memory, compared by bytes).
 // Every write to `state`, the recorded input state, `color_uniforms`, `texture_matrices` or `indirect_stages` bumps one (guest baton only).
@@ -221,6 +222,15 @@ void resolve_texture_matrices(gx::DrawUniform& uniforms,const TextureSelectors& 
         for(size_t row=0;row<3;++row) { uniforms.tex_rows[i*3+row]=rows[row]; uniforms.post_rows[i*3+row]=post_rows[row]; }
     }
 }
+// The bank a draw with per-vertex texture matrix indices reads (null for every other draw). Draws whose matrices did not change share one.
+std::shared_ptr<const gx::TextureBank> texture_bank(const gx::State& state,const TextureMatrices& matrices) {
+    if(!gx::has_texture_matrix_index(state)) return nullptr;
+    thread_local std::shared_ptr<const gx::TextureBank> last;
+    gx::TextureBank bank;
+    for(size_t id=0;id<matrices.size();++id) if(id!=60 && matrices[id]) std::copy(matrices[id]->begin(),matrices[id]->end(),bank.rows.begin()+id*3);
+    if(!last || !(*last==bank)) last=std::make_shared<const gx::TextureBank>(bank);
+    return last;
+}
 struct MaterialSnapshot { gx::TevMaterial material; gx::DrawUniform uniforms; };
 // The SDK block span both snapshots read (the highest word is the viewport at +0x55C). A snapshot is a pure function of these bytes and the host-side
 // state versioned above, so the last result is reused while neither changed: consecutive meshes of one model draw with identical GX state.
@@ -231,7 +241,7 @@ MaterialCache material_cache;
 const bool cache_verify=std::getenv("UC_GX_CACHE_VERIFY")!=nullptr;
 uint32_t cache_mismatches=0;
 MaterialSnapshot material_snapshot(ppc::Ctx& c,bool use_cache=true) {
-    const auto sdk=read32(c.r[2]-8968);
+    const auto sdk=read32(c.r[2]-8968); known_sdk=sdk;
     const auto block=memory.read(sdk,0x600);
     if(use_cache && material_cache.valid && material_cache.sdk==sdk && material_cache.epoch==material_epoch && std::memcmp(block.data(),material_cache.raw.data(),kSdkSpan)==0) {
         if(cache_verify) {
@@ -514,6 +524,7 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             uniforms.pixel[3]=colors.pixel[3];
             resolve_texture_matrices(uniforms,source->texture_selectors,matrices);
             draw.uniforms=gx::share(import_uniforms,uniforms);
+            draw.texture_bank=texture_bank(*draw.state,matrices);
             draw.texture_wrap=wraps(textures);
             draw.blend=blend;
             if(source->prompt)if(auto prompt=uc::prompt_from_quad(draw,*source->prompt)) {
@@ -663,6 +674,39 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     bound_textures={}; palettes.clear(); live_texture.reset(); live_texture_maps={};
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
+static void store_guest_word(uint32_t address,uint32_t value) {
+    const size_t physical=address & 0x3FFFFFFF;
+    if(physical+4>memory.mem1.size()) return;
+    auto* host=const_cast<std::byte*>(memory.mem1.data())+physical;
+    for(int i=0;i<4;++i) host[i]=std::byte(uint8_t(value>>(24-i*8)));
+    gx::note_write_range(address,4);
+}
+// A raw "call display list" command (0x40, address, length) written straight to the FIFO, as the game's texgen/setup appliers do instead of GXCallDisplayList.
+// The hardware executes it; here the XF texgen words it loads (0x1040+n control, 0x1050+n dual-texture post) are written into the SDK block, which the native
+// texgen reads, so the display list wins until the guest sets that texgen again. Other commands of the list are not interpreted (counted for the log).
+static void raw_display_list(uint32_t address,uint32_t length) {
+    static uint32_t ignored_reports=0;
+    if(!known_sdk || length>4096 || (address&3)) return;
+    const auto bytes=memory.read(address,length);
+    auto word=[&](size_t at) { uint32_t value=0; for(size_t i=0;i<4;++i) value=value<<8|std::to_integer<uint8_t>(bytes[at+i]); return value; };
+    for(size_t at=0;at<bytes.size();) {
+        const auto op=std::to_integer<uint8_t>(bytes[at++]);
+        if(op==0) continue;
+        if(op==0x61 && at+4<=bytes.size()) { at+=4; continue; }
+        if(op==0x10 && at+4<=bytes.size()) {
+            const uint32_t header=word(at),count=(header>>16)+1,reg=header&0xFFFF; at+=4;
+            if(at+4*size_t(count)>bytes.size()) return;
+            for(uint32_t i=0;i<count;++i,at+=4) {
+                const uint32_t r=reg+i;
+                if(r>=0x1040 && r<=0x1047) store_guest_word(known_sdk+0xC8+(r-0x1040)*4,word(at));
+                else if(r>=0x1050 && r<=0x1057) store_guest_word(known_sdk+0xE8+(r-0x1050)*4,word(at));
+            }
+            continue;
+        }
+        if(ignored_reports++<4) std::fprintf(stderr,"[raw-display-list] %08X: unhandled opcode %02X, rest ignored\n",address,op);
+        return;
+    }
+}
 void gx_fifo_write(int size, uint32_t value) {
     if (size != 1 && size != 2 && size != 4) throw std::invalid_argument("invalid native GX write width");
     if (recording) {
@@ -679,14 +723,26 @@ void gx_fifo_write(int size, uint32_t value) {
         recording->bytes.insert(recording->bytes.end(),bytes,bytes+size);
         return;
     }
-    if (!capture || !capture->active()) { add_guest_stat(outside_bytes,uint64_t(size)); return; } // existing TD-014; all state bytes need owners before game-picture acceptance
+    if (!capture || !capture->active()) {
+        static int raw_state=0; static uint32_t raw_address=0;   // a raw display list call is three writes: 0x40, address, length
+        if (raw_state==0) { if (size==1 && value==0x40) raw_state=1; }
+        else if (raw_state==1) { if (size==4) { raw_address=value; raw_state=2; } else raw_state=0; }
+        else {
+            if (size==4) {
+                try { raw_display_list(raw_address,value); }
+                catch(const std::exception& error) { static bool reported=false; if(!reported) { reported=true; std::fprintf(stderr,"[raw-display-list] %08X length %u: %s\n",raw_address,value,error.what()); } }
+            }
+            raw_state=0;
+        }
+        add_guest_stat(outside_bytes,uint64_t(size)); return;
+    } // existing TD-014; all state bytes need owners before game-picture acceptance
     std::byte bytes[4];
     for (int i = 0; i < size; ++i) bytes[i] = std::byte(uint8_t(value >> ((size - 1 - i) * 8)));
     capture->write_attribute(producer(), {bytes, size_t(size)});
     if (!capture->active()) {
         auto draw = capture->take_draw(); draw.transforms=live_transforms; add_guest_stat(vertex_count,draw.vertices.size()); add_guest_stat(draw_count,1);
         draw.texture=live_texture;
-        draw.material=live_material; draw.uniforms=live_uniforms;
+        draw.material=live_material; draw.uniforms=live_uniforms; draw.texture_bank=texture_bank(*draw.state,texture_matrices);
         draw.texture_maps=live_texture_maps;
         draw.texture_wrap=live_texture_wrap;
         draw.blend=live_blend;
@@ -1404,7 +1460,7 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
                 auto& draw=draws.emplace_back();
                 draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=mesh_state;
                 draw.mesh=geometry.buffers;
-                draw.transforms=gx::share(mesh_transforms_block,transforms); draw.material=material; draw.uniforms=mesh_uniforms_block; draw.blend=blend_state; draw.texture=textures[0];
+                draw.transforms=gx::share(mesh_transforms_block,transforms); draw.material=material; draw.uniforms=mesh_uniforms_block; draw.texture_bank=texture_bank(*draw.state,texture_matrices); draw.blend=blend_state; draw.texture=textures[0];
                 draw.texture_wrap=texture_wrap;
                 std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
             }

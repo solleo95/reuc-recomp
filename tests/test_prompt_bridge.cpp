@@ -3,6 +3,8 @@
 #include "prompt_bridge.h"
 #include <cstring>
 #include <limits>
+static float prompt_center_x(const gx::PromptDraw& p){return (p.efb_corners[0]+p.efb_corners[2]+p.efb_corners[4]+p.efb_corners[6])/4;}
+static float prompt_center_y(const gx::PromptDraw& p){return (p.efb_corners[1]+p.efb_corners[3]+p.efb_corners[5]+p.efb_corners[7])/4;}
 int main() {
     Fix f;auto& c=f.c;
     gx::Memory mem{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{},{}};
@@ -23,9 +25,34 @@ int main() {
     CHECK(registry.action(mem,pane,uc::InputContext::menu)==uc::Action::back);
     registry.register_layout(mem,layout,"other.brlyt");CHECK(!registry.action(mem,pane,uc::InputContext::menu));
     registry.register_layout(mem,layout,"ACT_AB_Press.brlyt");CHECK(!registry.action(mem,pane,uc::InputContext::qte));
+    CHECK(registry.actions(mem,pane,uc::InputContext::qte)==(std::vector<uc::Action>{uc::Action::interact,uc::Action::fire}));
+    CHECK(registry.actions(mem,pane,uc::InputContext::gameplay)==(std::vector<uc::Action>{uc::Action::interact,uc::Action::fire}));
+    CHECK(registry.actions(mem,pane,uc::InputContext::menu)==(std::vector<uc::Action>{uc::Action::interact,uc::Action::fire}) && registry.actions(mem,pane,uc::InputContext::inactive).empty());
+    for(const char* layout_name:{"ACT_R_Hshake.brlyt","ACT_N_Hshake.brlyt"}) {
+        registry.register_layout(mem,layout,layout_name);
+        CHECK(registry.action(mem,pane,uc::InputContext::gameplay)==uc::Action::qte_shake);
+        CHECK(registry.action(mem,pane,uc::InputContext::qte)==uc::Action::qte_shake);
+        CHECK(registry.action(mem,pane,uc::InputContext::menu)==uc::Action::qte_shake && !registry.action(mem,pane,uc::InputContext::inactive));
+    }
     registry.register_layout(mem,layout,"ACT_R_Hshake.brlyt");
-    CHECK(!registry.action(mem,pane,uc::InputContext::gameplay));
-    CHECK(registry.action(mem,pane,uc::InputContext::qte)==uc::Action::qte_shake);
+    // The in-game prompts live in ACT_All, whose panes carry the button name.
+    registry.register_layout(mem,layout,"ACT_All.brlyt");
+    const auto in_all=[&](const char* name,uc::InputContext context) {
+        std::memcpy(c.mem+0x4000+0xB8,name,std::strlen(name)+1);return registry.action(mem,pane,context);
+    };
+    CHECK(in_all("tex_A_Press",uc::InputContext::gameplay)==uc::Action::interact);
+    CHECK(in_all("tex_A_Repeat",uc::InputContext::qte)==uc::Action::interact);
+    CHECK(in_all("tex_A_Press",uc::InputContext::menu)==uc::Action::confirm);
+    CHECK(in_all("tex_B_Press",uc::InputContext::gameplay)==uc::Action::fire);
+    CHECK(in_all("tex_B_Repeat",uc::InputContext::menu)==uc::Action::back);
+    CHECK(in_all("tex_R_Hshake",uc::InputContext::qte)==uc::Action::qte_shake);
+    CHECK(in_all("tex_N_Hshake",uc::InputContext::gameplay)==uc::Action::qte_shake);
+    CHECK(in_all("tex_R_Hshake",uc::InputContext::menu)==uc::Action::qte_shake && !in_all("tex_R_Hshake",uc::InputContext::inactive));
+    for(const char* name:{"tex_Z_Press","tex_C_Press","tex_Z_Repeat","tex_C_Repeat","pointer_A","tex_Normal","tex_Success","tex","other"})
+        CHECK(!in_all(name,uc::InputContext::gameplay));
+    CHECK(!registry.actions(mem,pane,uc::InputContext::gameplay).size());
+    std::memcpy(c.mem+0x4000+0xB8,"tex1",5);
+    registry.register_layout(mem,layout,"ACT_R_Hshake.brlyt");
     ppc::wr32(c,pane+0x0C,pane);CHECK(!registry.action(mem,pane,uc::InputContext::qte));
     ppc::wr32(c,pane+0x0C,root);ppc::wr32(c,layout+0x10,0x80006000);
     CHECK(!registry.action(mem,pane,uc::InputContext::qte));
@@ -51,6 +78,18 @@ int main() {
     draw.transforms=gx::Transforms{};draw.vertices[0].position[0]=std::numeric_limits<float>::quiet_NaN();
     CHECK(!uc::prompt_from_quad(draw,description));
     draw.vertices[0].position[0]=-.5f;draw.indices={0,1,2};CHECK(!uc::prompt_from_quad(draw,description));
+    // A shake prompt is a mouse picture on the Wii Remote's pane: it keeps the pane's own quad, so the picture's rotation animation stays.
+    draw.indices={0,1,2,0,2,3};draw.vertices[0].position={-.5f,-.5f,0};
+    const auto shake=uc::describe_prompt(uc::default_bindings(),uc::Action::qte_shake);
+    auto shaken=uc::prompt_from_quad(draw,shake);
+    CHECK(shaken && shaken->efb_corners==(std::array<float,8>{160,120,480,120,480,360,160,360}));
+    const float turn=0.7071f;   // the same quad turned by 45 degrees stays turned
+    draw.vertices[0].position={-.5f*turn-(-.5f)*turn,-.5f*turn+(-.5f)*turn,0};draw.vertices[1].position={.5f*turn+.5f*turn,.5f*turn-.5f*turn,0};
+    draw.vertices[2].position={.5f*turn-.5f*turn,.5f*turn+.5f*turn,0};draw.vertices[3].position={-.5f*turn-.5f*turn,-.5f*turn+.5f*turn,0};
+    shaken=uc::prompt_from_quad(draw,shake);
+    CHECK(shaken && shaken->efb_corners[1]!=shaken->efb_corners[3]);
+    draw.vertices[0].position={-.5f,-.5f,0};draw.vertices[1].position={.5f,-.5f,0};draw.vertices[2].position={.5f,.5f,0};draw.vertices[3].position={-.5f,.5f,0};
+    CHECK(uc::prompt_from_quad(draw,uc::describe_prompt(uc::default_bindings(),uc::Action::interact))->efb_corners[0]==160);   // button prompts keep the picture's own quad
     CHECK(ppc::rd32(c,pane+0x0C)==root);
     using uc::Action;
     CHECK(uc::glyph_actions(0x391,false)==std::vector<Action>{Action::interact});

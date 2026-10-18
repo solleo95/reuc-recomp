@@ -35,8 +35,9 @@ struct GpuMeshVertex {
     std::array<float,3> object_normal;
     std::array<uint8_t,4> color1;
     uint32_t row;
+    std::array<uint8_t,8> texture_matrix;   // per-vertex texture matrix ids (TexNMtxIdx); read only when the draw has a texture bank
 };
-static_assert(sizeof(GpuMeshVertex)==100);
+static_assert(sizeof(GpuMeshVertex)==108);
 GpuMeshVertex mesh_vertex(const Vertex& vertex);
 // A Transforms block as the vertex shader reads it from a storage buffer (std430, 2064 bytes). `loaded` = bit mask of the loaded normal rows.
 struct alignas(16) PaletteBlock {

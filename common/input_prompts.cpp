@@ -35,4 +35,18 @@ PromptDescription primary_prompt(const Bindings& bindings,std::initializer_list<
     }
     return result;
 }
+PromptDescription chord_prompt(const Bindings& bindings,Action first,Action second) {
+    PromptDescription result{first,{}};
+    PromptAlternative alternative;
+    for(Action action:{first,second}) {
+        auto full=describe_prompt(bindings,action);
+        if(full.alternatives.empty() || full.alternatives.front().choices.empty())return result;
+        auto choice=std::move(full.alternatives.front().choices.front());
+        choice.held=false;
+        if(choice.bindings.size()>1)choice.bindings.resize(1);
+        alternative.choices.push_back(std::move(choice));
+    }
+    result.alternatives.push_back(std::move(alternative));
+    return result;
+}
 }

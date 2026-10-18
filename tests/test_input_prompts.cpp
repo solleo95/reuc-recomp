@@ -51,5 +51,17 @@ int main() {
     primary=primary_prompt(bindings,{Action::interact,Action::fire});
     CHECK(primary.alternatives.size()==1 && primary.alternatives[0].choices[0].bindings[0].input.kind==PhysicalKind::mouse);
     failed=false;try {primary_prompt(bindings,{});}catch(const std::invalid_argument&){failed=true;}CHECK(failed);
+    // A+B button prompt: one alternative holding both first bindings, empty when either action is cleared.
+    bindings=default_bindings();
+    auto chord=chord_prompt(bindings,Action::interact,Action::fire);
+    CHECK(chord.action==Action::interact && chord.alternatives.size()==1 && chord.alternatives[0].choices.size()==2 && !chord.alternatives[0].gesture);
+    CHECK(chord.alternatives[0].choices[0].bindings==std::vector<Binding>{bindings[size_t(Action::interact)][0]});
+    CHECK(chord.alternatives[0].choices[1].bindings==std::vector<Binding>{bindings[size_t(Action::fire)][0]});
+    CHECK(!chord.alternatives[0].choices[0].held && !chord.alternatives[0].choices[1].held);
+    bindings[size_t(Action::fire)]={key(5),key(6)};
+    chord=chord_prompt(bindings,Action::interact,Action::fire);
+    CHECK(chord.alternatives[0].choices[1].bindings==std::vector<Binding>{key(5)});
+    bindings[size_t(Action::fire)].clear();CHECK(chord_prompt(bindings,Action::interact,Action::fire).alternatives.empty());
+    bindings=default_bindings();bindings[size_t(Action::interact)].clear();CHECK(chord_prompt(bindings,Action::interact,Action::fire).alternatives.empty());
     return 0;
 }

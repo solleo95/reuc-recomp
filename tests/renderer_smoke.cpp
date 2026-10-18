@@ -718,8 +718,20 @@ int main(int argc, char** argv) {
         submit(work,&portrait);sampled=portrait.capture(10);
         CHECK(sampled.rgba[center]==0 && sampled.rgba[center+1]==0 && sampled.rgba[center+2]==0);
         work.black_output=false;
+        // Per-vertex texture matrix id 5 (S += 0.5, bank rows 15..17) replaces texgen 0's own identity matrix: S 0.25 -> 0.75 picks the right texel.
+        work.serial=11; work.draws[0].uniforms=gx::DrawUniform{}; work.draws[0].material.stage[0]={0x8FFF8,0x8FF80,0x40,0,0};
+        work.draws[0].state.edit().descriptors[1]=gx::Mode::direct;
+        auto bank=std::make_shared<gx::TextureBank>(); bank->rows[15]={1,0,0,0.5f};
+        work.draws[0].texture_bank=bank;
+        for(auto& vertex:work.draws[0].vertices) vertex.texture_matrix[0]=5;
+        submit(work,&portrait);sampled=portrait.capture(11);
+        CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
+        work.serial=12; for(auto& vertex:work.draws[0].vertices) vertex.texture_matrix[0]=255;   // no index for this vertex: the texgen keeps its own matrix
+        submit(work,&portrait);sampled=portrait.capture(12);
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+2]==0);
+        work.draws[0].state.edit().descriptors[1]=gx::Mode::none; work.draws[0].texture_bank=nullptr;
         // Reused slots must rewrite textures and uniforms after descriptor growth and shrinkage.
-        uint64_t descriptor_serial=11;
+        uint64_t descriptor_serial=13;
         for(size_t count:{32u,33u,65u,2u,65u}) for(size_t repeat=0;repeat<6;++repeat) {
             work=packet; work.serial=descriptor_serial++; work.draws.assign(count,quad);
             const gx::Shared<gx::DrawUniform> shared_uniforms;

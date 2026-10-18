@@ -22,6 +22,7 @@ Options options_from_config(const ConfigDocument& document) {
         options.game=std::filesystem::path(std::u8string(path.begin(),path.end()));
     }
     if(root.contains("skip_intro"))options.skip_intro=boolean(root["skip_intro"]);
+    if(root.contains("skip_tutorials"))options.skip_tutorials=boolean(root["skip_tutorials"]);
     if(root.contains("graphics")) {
         const auto& graphics=root["graphics"];if(!graphics.is_object())invalid("graphics must be an object");
         if(graphics.contains("render_scale")) {
@@ -39,6 +40,7 @@ Options options_from_config(const ConfigDocument& document) {
             options.fps_limit=uint32_t(limit);
         }
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
+        if(graphics.contains("bloom"))options.bloom=boolean(graphics["bloom"]);
         if(graphics.contains("prompt_style")) {
             if(!graphics["prompt_style"].is_string())invalid("prompt_style must be a string");
             const auto style=graphics["prompt_style"].get<std::string>();
@@ -63,12 +65,14 @@ void store_options(ConfigDocument& document,const Options& options) {
     auto replacement=document;
     replacement.properties["game"]=utf8_path(options.game);
     replacement.properties["skip_intro"]=options.skip_intro;
+    replacement.properties["skip_tutorials"]=options.skip_tutorials;
     auto& graphics=replacement.properties["graphics"];
     if(graphics.is_null())graphics=nlohmann::ordered_json::object();
     if(!graphics.is_object())invalid("graphics must be an object");
     graphics["render_scale"]=options.render_scale;
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;
+    graphics["bloom"]=options.bloom;
     if(options.fps_limit)graphics["fps_limit"]=*options.fps_limit;
     else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";

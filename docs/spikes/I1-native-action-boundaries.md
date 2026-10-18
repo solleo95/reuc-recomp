@@ -84,3 +84,11 @@ Original HUD manager+94 child+22B8 =804B5CC8+234C calls8024FD6C. Resource string
 Snapshot now reads this object's ready/state fields from its validated UI span; context is Menu while a loaded tutorial is busy. Fixtures reproduce active40000000 versus terminal00100000 and prove correct object offsets. Native action requests cancel when tutorials open; the diagnostic route waits on this context instead of a guessed number of page clicks. Live verification pending.
 
 Live update2026-10-14: state20000000 accepts confirmation; route now waits for that exact state. Pause/Back and tutorial transitions verified in1791932770890224300 and subsequent routes.1791964017664063800 moves beyond restaurant carriage with original shooting/reloads. Motion-QTE encounter was not reached in1791964760864676800; no live success is claimed.
+
+## Knife stroke direction and mouse threshold (2026-10-18)
+
+Owner report: V swung vertically, mouse swings were mirrored, and any 1-pixel motion with interact held started a swing. Live check (harness, frames 1 apart): the slash follows the processed
+vector `owner+4+0xC` / `+0x10` as a SCREEN direction (x right, y down) with `(a,b)=(dx,dy)`; the old `(-dy,dx)` rotated every swing by 90 degrees (the earlier 'rightward = pi/2' reading of
+80394548 was wrong). `hle_GameActionOwnerUpdate` now writes `(dx,dy)`. V is `kKnifeKeyDirection` = lower left to upper right (0.7071,-0.7071), verified: the slash starts at the lower left
+and ends at the upper right. A mouse swing needs `kKnifeStrokeLength` = 40 raw counts accumulated in one stroke (pauses over 150 ms or releasing interact reset it), direction = accumulated vector.
+Tests: test_input_bindings (`knife_key_direction_and_mouse_threshold`), test_game_input. The threshold is not configurable yet; the harness `motion` command did not start a swing in the live check (not investigated).

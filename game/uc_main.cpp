@@ -33,6 +33,7 @@
 #include "test_server.h"
 #include "test_state.h"
 #include "test_draws.h"
+#include "packet_dump.h"
 #include "intro.h"
 #include "game_pacing.h"
 #include "render_scale.h"
@@ -384,6 +385,7 @@ static int real_main(int argc, char** argv) {
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
         renderer.set_prompt_style(options.prompt_style);
+        renderer.set_bloom(options.bloom);
         {   // compile every known pipeline now, so no pipeline is built while the game runs
             uc::CompileScreen screen;
             renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
@@ -434,6 +436,7 @@ static int real_main(int argc, char** argv) {
     uint64_t audit_capture_serial=0;
     uint64_t debug_capture_serial=0;
     uint64_t scene_capture_serial=0;
+    uc::PacketDump packet_dump;
     uint32_t scene_capture_pass=0;
     bool scene_capture_started=false;
     bool debug_capture_requested=false;
@@ -457,6 +460,7 @@ static int real_main(int argc, char** argv) {
             render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6; frame_busy_ns+=uint64_t(render_elapsed);
             if (rendered) {
             progressed = true;
+            packet_dump.packet(*pending);
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
                 scene_capture_serial=pending->serial; ++scene_capture_pass;

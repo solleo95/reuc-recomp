@@ -35,6 +35,13 @@ struct alignas(16) DrawUniform {
     }
 };
 static_assert(sizeof(DrawUniform)==1840);
+// Texture matrices by GX matrix id (0..125; 60 identity): 3 rows each, what a per-vertex texture matrix index (VCD TexNMtxIdx) selects from.
+// Attached to a draw only when its vertex format carries those indices.
+struct TextureBank {
+    std::array<std::array<float,4>,126*3> rows;
+    TextureBank() { for(size_t i=0;i<rows.size();++i) rows[i]={float(i%3==0),float(i%3==1),float(i%3==2),0}; }
+    bool operator==(const TextureBank&) const = default;
+};
 struct PixelMaterial { uint32_t alpha,depth,blend,destination_alpha; };
 PixelMaterial import_pixel_material(std::span<const std::byte> bytes);
 struct ColorMaterial {

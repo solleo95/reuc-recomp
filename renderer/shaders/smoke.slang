@@ -8,11 +8,15 @@ struct Input {
     [[vk::location(5)]] float2 texcoords[8] : TEXCOORD3;
     [[vk::location(14)]] float4 color1 : COLOR1;
     [[vk::location(15)]] float3 objectNormal : NORMAL1;
+    [[vk::location(3)]] uint2 texMatrixIds : BLENDINDICES1;   // eight per-vertex texture matrix ids, a byte each
 };
+// Texture matrices by id (gx::TextureBank), 3 rows each; read only when the draw has a bank (projection.bank != 0xFFFFFFFF).
+struct TextureBank { float4 rows[126 * 3]; };
+[[vk::binding(4, 0)]] StructuredBuffer<TextureBank> textureBanks;
 // Position and normal matrices of a draw: 64 rows each (gx::PaletteBlock). A vertex stores only its row.
 struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; };   // alphaPass: ubershader only
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; };   // alphaPass: ubershader only
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 struct Output {
     float4 position : SV_Position;
@@ -70,8 +74,13 @@ float3 generateTexcoord(uint id, Input input) {
     else if (source == 1) value.xyz = input.objectNormal;
     else if (source >= 5 && source <= 12) value.xy = input.texcoords[source - 5];
     if ((gen & 4) == 0) value.z = 1.0;
-    float3 stq = float3(dot(drawState.texRows[3 * id], value), dot(drawState.texRows[3 * id + 1], value),
-                        (gen & 2) != 0 ? dot(drawState.texRows[3 * id + 2], value) : 1.0);
+    float4 row0 = drawState.texRows[3 * id], row1 = drawState.texRows[3 * id + 1], row2 = drawState.texRows[3 * id + 2];
+    uint matrixId = (input.texMatrixIds[id / 4] >> ((id % 4) * 8)) & 255;   // 255: this vertex has no index for the texgen
+    if (projection.bank != 0xFFFFFFFF && matrixId < 126) {
+        uint at = 3 * matrixId;
+        row0 = textureBanks[projection.bank].rows[at]; row1 = textureBanks[projection.bank].rows[at + 1]; row2 = textureBanks[projection.bank].rows[at + 2];
+    }
+    float3 stq = float3(dot(row0, value), dot(row1, value), (gen & 2) != 0 ? dot(row2, value) : 1.0);
     if ((drawState.texPosts[id / 4][id % 4] & 256) != 0 && dot(stq, stq) > 0.0) stq = normalize(stq);
     float4 post = float4(stq, 1.0);
     return float3(dot(drawState.postRows[3 * id], post), dot(drawState.postRows[3 * id + 1], post), dot(drawState.postRows[3 * id + 2], post));

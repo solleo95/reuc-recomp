@@ -8,6 +8,7 @@ struct ReplayStats { uint64_t draws=0,vertices=0,display_lists=0; };
 class GxStream {
 public:
     GxStream(const Dff& capture,size_t frame);
+    bool allow_unresolved=false;   // replace textures the log never uploads (an EFB copy from before the recording) with mid-gray instead of failing
     std::vector<gx::FramePacket> packets();
     ReplayStats stats;
 private:

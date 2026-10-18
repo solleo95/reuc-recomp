@@ -47,6 +47,7 @@ gx::State GxStream::layout() const {
             (fp(xf_[0x101F])-fp(xf_[0x101C]))/16777216.f,fp(xf_[0x101F])/16777216.f};
         for(auto f:vp) if(!std::isfinite(f)) throw std::runtime_error("nonfinite viewport");
         if(width<=0 || height<=0) throw std::runtime_error("invalid viewport extent");
+        for(size_t i=4;i<6;++i) if(vp[i]<0 && vp[i]>-1e-4f) vp[i]=0;   // z range written as -0.00001 by the game
         s.viewport=vp;
     }
     return s;
@@ -147,7 +148,8 @@ std::vector<gx::FramePacket> GxStream::packets() {
         const auto& f=capture_.frames[frame_];walk(capture_.data(f.fifo),0,0);advance_memory(frame_,f.fifo.size);
     }
     if(!pending_.draws.empty()) {pending_.serial=result_.size()+1;result_.push_back(std::move(pending_));}
-    if(!deferred_.empty()) {
+    if(allow_unresolved) for(const auto& t:deferred_) t.target->levels={{t.desc.width,t.desc.height,std::vector<uint8_t>(size_t(t.desc.width)*t.desc.height*4,128)}};
+    else if(!deferred_.empty()) {
         std::ostringstream s;s<<"DFF: "<<deferred_.size()<<" unresolved texture(s) at frame "<<target_;
         for(const auto& t:deferred_)s<<" [0x"<<std::hex<<t.address<<std::dec<<" "<<t.desc.width<<"x"<<t.desc.height<<" format "<<unsigned(t.desc.format)<<" levels "<<unsigned(t.desc.levels)<<" first frame "<<t.first_frame<<" draw 0x"<<std::hex<<t.first_callsite<<std::dec<<" cull "<<t.cull<<"]";
         s<<"; first EFB copies";for(const auto& [address,where]:first_copies_)s<<" [0x"<<std::hex<<address<<" frame "<<std::dec<<where.first<<" at 0x"<<std::hex<<where.second<<"]";

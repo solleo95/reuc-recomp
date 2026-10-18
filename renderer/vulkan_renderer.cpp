@@ -1,4 +1,5 @@
 #include "late_aim.h"
+#include "post_effects.h"
 #include "vulkan_renderer.h"
 #include "render_scale.h"
 #include "rebuild_gate.h"
@@ -171,8 +172,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (requested_.width && requested_.height) rebuild();
 }
 // Push constants of every draw: clip matrix plus where to find this draw's matrices (see smoke.slang).
-struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass; };
-static_assert(sizeof(DrawPush)==80);
+constexpr uint32_t kNoBank=UINT32_MAX;
+struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank; };   // bank: texture bank index, kNoBank = the texgen's own matrix
+static_assert(sizeof(DrawPush)==84);
 uint32_t VulkanRenderer::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
     for (uint32_t i = 0; i < memory_.memoryTypeCount; ++i)
         if ((mask & (1u << i)) && (memory_.memoryTypes[i].propertyFlags & properties) == properties) return i;
@@ -389,8 +391,8 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
     {
         if (!layout_) {
         VkPushConstantRange projection{VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof(DrawPush))};
-        VkDescriptorSetLayoutBinding texture_bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_SAMPLER,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{2,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}};
-        VkDescriptorSetLayoutCreateInfo texture_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; texture_layout.bindingCount=4; texture_layout.pBindings=texture_bindings;
+        VkDescriptorSetLayoutBinding texture_bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_SAMPLER,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{2,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr},{4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}};
+        VkDescriptorSetLayoutCreateInfo texture_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; texture_layout.bindingCount=5; texture_layout.pBindings=texture_bindings;
         vk_check(vkCreateDescriptorSetLayout(device,&texture_layout,nullptr,&texture_layout_),"texture descriptor layout");
         VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; sampler.magFilter=sampler.minFilter=VK_FILTER_NEAREST;
         sampler.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -417,15 +419,16 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         for(uint32_t i=0;i<spec_entries.size();++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
         VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
         if (!uber) stages[1].pSpecializationInfo=&specialization;
-        static_assert(sizeof(gx::GpuMeshVertex)==100 && sizeof(gx::Projection)==64);
+        static_assert(sizeof(gx::GpuMeshVertex)==108 && sizeof(gx::Projection)==64);
         VkVertexInputBindingDescription binding{0, uint32_t(sizeof(gx::GpuMeshVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
-        std::array<VkVertexInputAttributeDescription,13> attributes{{
+        std::array<VkVertexInputAttributeDescription,14> attributes{{
             {0,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,position))},
             {1,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color))},
             {2,0,VK_FORMAT_R32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,row))},
+            {3,0,VK_FORMAT_R32G32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,texture_matrix))},
             {14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color1))},
             {15,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,object_normal))}}};
-        for(uint32_t i=0;i<8;++i) attributes[5+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,texcoords)+i*8)};
+        for(uint32_t i=0;i<8;++i) attributes[6+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,texcoords)+i*8)};
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
@@ -660,6 +663,10 @@ void VulkanRenderer::set_render_scale(double scale) {
     manual_render_extent(scale,render_aspect_);
     if(configured_scale_!=scale) { configured_scale_=scale; resized_=true; }
 }
+void VulkanRenderer::set_bloom(bool enabled) {
+    owner();
+    bloom_=enabled;
+}
 void VulkanRenderer::set_prompt_style(PromptStyle style) {
     owner();
     if(style!=PromptStyle::monochrome && style!=PromptStyle::sculpted)throw std::invalid_argument("invalid native prompt style");
@@ -721,7 +728,7 @@ void VulkanRenderer::retire_images() {
     swapchain_ = VK_NULL_HANDLE;
     for (auto& slot : slots_) {
         retire_textures(slot);
-        destroy_buffer(slot.vertices); destroy_buffer(slot.indices); destroy_buffer(slot.pixels); destroy_buffer(slot.uniforms); destroy_buffer(slot.palettes); slot.mesh_refs.clear();
+        destroy_buffer(slot.vertices); destroy_buffer(slot.indices); destroy_buffer(slot.pixels); destroy_buffer(slot.uniforms); destroy_buffer(slot.palettes); destroy_buffer(slot.banks); slot.mesh_refs.clear();
         if (slot.view) vkDestroyImageView(device, slot.view, nullptr);
         if (slot.image) vkDestroyImage(device, slot.image, nullptr);
         if (slot.memory) vkFreeMemory(device, slot.memory, nullptr);
@@ -876,8 +883,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         else { if (it->initialized) destroy_buffer(it->upload); ++it; }
     }
     // Per draw: where its vertices live (a persistent mesh buffer, or this frame's dynamic buffer for non-mesh draws) and which palette it reads.
-    struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0; };
+    struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0, bank=kNoBank; };
     std::vector<DrawGpu> gpu_draws; gpu_draws.reserve(packet.draws.size());
+    std::unordered_map<const gx::TextureBank*,uint32_t> bank_of;   // one bank per distinct texture matrix set
+    std::vector<const gx::TextureBank*> banks;
     std::unordered_map<const gx::Transforms*,uint32_t> palette_of;   // one palette per distinct transform block
     std::vector<const gx::Transforms*> palette_blocks;
     size_t vertex_count = 0, index_count = 0;   // dynamic (non-mesh) draws only
@@ -911,6 +920,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         const auto [palette,inserted]=palette_of.try_emplace(draw.transforms.block().get(),uint32_t(palette_blocks.size()));
         if (inserted) palette_blocks.push_back(palette->first);
         info.palette=palette->second;
+        static const bool no_banks=std::getenv("UC_NO_TMI")!=nullptr;   // debug: ignore per-vertex texture matrix ids (A/B against the old behaviour)
+        if (!no_banks && gx::has_texture_matrix_index(*draw.state)) {
+            if (!draw.texture_bank) throw std::invalid_argument("native draw has per-vertex texture matrix indices but no texture bank");
+            const auto [bank,added]=bank_of.try_emplace(draw.texture_bank.get(),uint32_t(banks.size()));
+            if (added) banks.push_back(bank->first);
+            info.bank=bank->second;
+        }
         gpu_draws.push_back(info);
     }
     if (vertex_count && index_count) {
@@ -934,6 +950,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if (slot.palettes.size < palette_bytes) { destroy_buffer(slot.palettes); slot.palettes = make_buffer(palette_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); }
         for (size_t i=0;i<palette_blocks.size();++i) gx::fill_palette(static_cast<gx::PaletteBlock*>(slot.palettes.mapped)[i], *palette_blocks[i]);
     }
+    {   // the descriptor always has a bank bound; a frame without per-vertex texture matrices binds one unused entry
+        const VkDeviceSize bank_bytes=VkDeviceSize(std::max<size_t>(banks.size(),1))*sizeof(gx::TextureBank);
+        if (slot.banks.size < bank_bytes) { destroy_buffer(slot.banks); slot.banks = make_buffer(bank_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); }
+        for (size_t i=0;i<banks.size();++i) std::memcpy(static_cast<gx::TextureBank*>(slot.banks.mapped)+i,banks[i],sizeof(gx::TextureBank));
+    }
     if (!packet.draws.empty()) {
         if (packet.draws.size()>UINT32_MAX) throw std::invalid_argument("too many native texture descriptors");
         if(packet.draws.size()>UINT32_MAX/8) throw std::invalid_argument("native texture descriptor count overflows");
@@ -942,7 +963,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if(count>slot.descriptor_capacity) {
             if(slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
             slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0; slot.texture_sets.clear();
-            VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,count*8},{VK_DESCRIPTOR_TYPE_SAMPLER,count*8},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,count},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,count}};
+            VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,count*8},{VK_DESCRIPTOR_TYPE_SAMPLER,count*8},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,count},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,count*2}};
             VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=count; pool.poolSizeCount=4; pool.pPoolSizes=sizes;
             vk_check(vkCreateDescriptorPool(device,&pool,nullptr,&slot.texture_pool),"texture descriptor pool");
             std::vector<VkDescriptorSetLayout> layouts(count,texture_layout_);
@@ -991,13 +1012,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 samplers[map]={texture_samplers_[wrap],VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
             }
             VkDescriptorBufferInfo palette{slot.palettes.buffer,0,VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[4]{};
-            for (uint32_t binding=0;binding<4;++binding) { writes[binding].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[binding].dstSet=slot.texture_sets[i]; writes[binding].dstBinding=binding; writes[binding].descriptorCount=1; }
+            VkDescriptorBufferInfo bank{slot.banks.buffer,0,VK_WHOLE_SIZE};
+            VkWriteDescriptorSet writes[5]{};
+            for (uint32_t binding=0;binding<5;++binding) { writes[binding].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[binding].dstSet=slot.texture_sets[i]; writes[binding].dstBinding=binding; writes[binding].descriptorCount=1; }
             writes[0].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[0].descriptorCount=8; writes[0].pImageInfo=image.data();
             writes[1].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER; writes[1].descriptorCount=8; writes[1].pImageInfo=samplers.data();
             writes[2].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[2].pBufferInfo=&uniform;
             writes[3].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo=&palette;
-            vkUpdateDescriptorSets(device,4,writes,0,nullptr);
+            writes[4].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[4].pBufferInfo=&bank;
+            vkUpdateDescriptorSets(device,5,writes,0,nullptr);
         }
     }
     uint32_t image_index = 0;
@@ -1062,6 +1085,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
             const size_t set_index=texture_index++;
             if (!info.index_count) continue;
+            if (!bloom_ && gx::bloom_composite(draw)) continue;
             const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
             const auto area=uc::efb_viewport(v,efb_extent_.width,efb_extent_.height);
             VkViewport draw_viewport{area.x,area.y,area.width,area.height,v[4],v[5]};
@@ -1086,7 +1110,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (&index_buffer!=bound_indices || info.index_offset!=bound_index_offset) { vkCmdBindIndexBuffer(slot.command,index_buffer.buffer,info.index_offset,VK_INDEX_TYPE_UINT32); bound_indices=&index_buffer; bound_index_offset=info.index_offset; }
             vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,info.choice.pipeline);
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[set_index],0,nullptr);
-            DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0};
+            DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0,info.bank};
             vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push);
             vkCmdDrawIndexed(slot.command, info.index_count, 1, info.first_index, info.first_vertex, 0);
             const auto depth=draw.uniforms->pixel[1]&31;

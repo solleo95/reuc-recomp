@@ -14,6 +14,7 @@ struct Options {
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.
     WindowMode window_mode=WindowMode::windowed;
     PromptStyle prompt_style=PromptStyle::monochrome;
+    bool bloom=true;   // the game's glow around lights (graphics.bloom); off skips the bloom composite draw
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
     int guest_cpu = -1;   // benchmarks: pin the guest threads to this logical CPU and keep its SMT sibling (cpu ^ 1) free of every other thread
@@ -38,7 +39,7 @@ struct Options {
     std::filesystem::path test_control,save_root,config,capture_dir;
     std::string test_server; // agent test server pipe name [A-Za-z0-9_-]{1,32}
     bool god = false;        // test-mode cheat: health and ammo stay at their maxima, needs test_server
-    bool skip_tutorials = false;   // test-mode: tutorial pages never open, needs test_server
+    bool skip_tutorials = false;   // tutorial pages never open (launcher "Skip tutorials", config skip_tutorials, --skip-tutorials)
     uint32_t speed = 1;     // test-mode virtual clock factor 1..32, needs test_server
 };
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options={});

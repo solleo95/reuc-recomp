@@ -134,6 +134,7 @@ void BindingResolver::finish_motion() {
         for(size_t i=0;i<frame_.count;++i) if(frame_.events[i].action==Action::knife)
             (frame_.events[i].down ? frame_.pressed : frame_.released)|=bit(Action::knife);
     }
+    if(motion_event_)motion_x_=motion_y_=0;   // the stroke became a swing (or was cancelled): the next one starts from zero
     motion_event_.reset();
 }
 void BindingResolver::button(PhysicalInput input,bool down) {
@@ -155,10 +156,11 @@ void BindingResolver::button(PhysicalInput input,bool down) {
     const auto active=next & ~(suppress_fire_ ? bit(Action::fire) : 0);
     const auto changed=frame_.held^active;
     frame_.held=active; raw_actions_=next;
+    if(!(active&bit(Action::interact)))motion_x_=motion_y_=0;
     if(chord)pulse(Action::grenade);
     for(size_t a=0;a<bindings_.size();++a) if(changed&bit(Action(a))) {
         const bool pressed=(active&bit(Action(a)))!=0;
-        emit(Action(a),pressed,pressed && Action(a)==Action::knife ? 1.0f : 0.0f);
+        emit(Action(a),pressed,pressed && Action(a)==Action::knife ? kKnifeKeyDirectionX : 0.0f,pressed && Action(a)==Action::knife ? kKnifeKeyDirectionY : 0.0f);
     }
 }
 void BindingResolver::wheel(int steps) {
@@ -172,7 +174,7 @@ void BindingResolver::wheel(int steps) {
         const auto action=Action(a);
         if(action==Action::fire && (frame_.held&bit(Action::interact)) && special(Action::grenade,BindingKind::interact_fire))pulse(Action::grenade);
         else if((action!=Action::fire && action!=Action::interact && action!=Action::knife) || !(frame_.held&bit(action)))
-            pulse(action,action==Action::knife ? 1.0f : 0.0f);
+            pulse(action,action==Action::knife ? kKnifeKeyDirectionX : 0.0f,action==Action::knife ? kKnifeKeyDirectionY : 0.0f);
     }
 }
 void BindingResolver::qte_motion(float x,float y,uint64_t time) {
@@ -196,9 +198,15 @@ void BindingResolver::motion(float x,float y,uint64_t timestamp_ns) {
     if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid mouse motion");
     if(x!=0 || y!=0)qte_motion(x,y,timestamp_ns);
     if((x==0 && y==0) || !(frame_.held&bit(Action::interact)) || !special(Action::knife,BindingKind::interact_motion))return;
-    if(!motion_event_) {motion_x_=motion_y_=0;motion_event_=frame_.count;pulse(Action::knife);}
+    // One stroke = motion accumulated while interact is held; pauses and releases end it. Short jitter never swings.
+    if(timestamp_ns && stroke_time_ && timestamp_ns>stroke_time_ && timestamp_ns-stroke_time_>kKnifeStrokePauseNs && !motion_event_) motion_x_=motion_y_=0;
+    if(timestamp_ns)stroke_time_=timestamp_ns;
     motion_x_+=x;motion_y_+=y;
     const auto length=std::hypot(motion_x_,motion_y_);
+    if(!motion_event_) {
+        if(length<kKnifeStrokeLength)return;
+        motion_event_=frame_.count;pulse(Action::knife);
+    }
     auto& event=frame_.events[*motion_event_];
     event.direction_x=length ? float(motion_x_/length) : 0;
     event.direction_y=length ? float(motion_y_/length) : 0;

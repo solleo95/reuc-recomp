@@ -42,6 +42,7 @@ public:
     void set_uber_only(bool enabled) { owner(); uber_only_=enabled; }   // tests: draw everything with the ubershader
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
+    void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
     RenderPixels capture(uint64_t serial, bool efb = false);
@@ -77,7 +78,7 @@ private:
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
-        Buffer vertices, indices, pixels, uniforms, palettes;   // vertices/indices: this frame's non-mesh draws
+        Buffer vertices, indices, pixels, uniforms, palettes, banks;   // vertices/indices: this frame's non-mesh draws
         std::vector<std::shared_ptr<const gx::MeshBuffers>> mesh_refs;   // keeps the meshes this submission draws alive until its fence completed
         std::vector<Texture> textures;
         std::vector<std::shared_ptr<const gx::TexturePixels>> copy_sources;
@@ -130,6 +131,7 @@ private:
     SDL_Window* window_ = nullptr;
     PromptOverlay prompt_overlay_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
+    bool bloom_=true;
     std::thread::id owner_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;

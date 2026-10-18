@@ -12,10 +12,16 @@ PromptRegistry registry;
 Bindings assignments;
 bool initialized=false;
 bool trace_owners=false;
-std::set<std::string> owners_seen;
+std::set<std::string> owners_seen,decisions_seen;
 uint32_t invalid_owners=0;
 std::set<uint32_t> glyphs_seen;
 uint32_t rejected_prompts=0;
+// Tutorial pages pause gameplay but describe gameplay controls, so their prompts follow the gameplay bindings.
+InputContext prompt_context(const ppc::Ctx& c) {
+    const auto state=input_probe_snapshot(c);
+    const auto context=game_input_context(state);
+    return context==InputContext::menu && state.tutorial_loaded && state.tutorial_state!=0x00100000 ? InputContext::gameplay : context;
+}
 gx::Memory memory(const ppc::Ctx& c) {
     return {{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}};
 }
@@ -23,7 +29,7 @@ gx::Memory memory(const ppc::Ctx& c) {
 void prompt_hooks_init(const Bindings& bindings,bool trace) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
     registry={};assignments=bindings;initialized=true;
-    trace_owners=trace;owners_seen.clear();invalid_owners=0;glyphs_seen.clear();rejected_prompts=0;
+    trace_owners=trace;owners_seen.clear();decisions_seen.clear();invalid_owners=0;glyphs_seen.clear();rejected_prompts=0;
 }
 PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),exceptions_(std::uncaught_exceptions()) {
     if(!initialized || !c.mem)return;
@@ -66,9 +72,25 @@ PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),excepti
             }
             } catch(const gx::Error& error) {if(++invalid_owners<=4)std::fprintf(stderr,"[pane-owner] unreadable picture: %s\n",error.what());}
         }
-        if(!registry.action(memory(c),c.r[28],InputContext::qte))return;
-        const auto action=registry.action(memory(c),c.r[28],game_input_context(input_probe_snapshot(c)));
-        if(action) {description_=describe_prompt(assignments,*action);checkpoint_=gx_prompt_checkpoint();}
+        if(trace_owners && decisions_seen.size()<256) {
+            try {
+                if(const auto layout=registry.layout_name(memory(c),c.r[28]); layout && layout->starts_with("ACT_")) {
+                    const auto picture=memory(c).read(c.r[28],0xEC);
+                    const auto bytes=picture.subspan(0xB8,16);
+                    const std::string pane(reinterpret_cast<const char*>(bytes.data()),size_t(std::find(bytes.begin(),bytes.end(),std::byte{})-bytes.begin()));
+                    const auto context=prompt_context(c);
+                    const auto found=registry.actions(memory(c),c.r[28],context);
+                    std::string actions;for(Action action:found)actions+=std::to_string(int(action))+",";
+                    if(decisions_seen.insert(*layout+":"+pane+":"+std::to_string(unsigned(context))+":"+actions).second)
+                        std::fprintf(stderr,"[prompt-decision] layout %s pane %s context %u actions %s\n",layout->c_str(),pane.c_str(),unsigned(context),actions.empty() ? "-" : actions.c_str());
+                }
+            } catch(const gx::Error&) {}
+        }
+        if(registry.actions(memory(c),c.r[28],InputContext::qte).empty())return;
+        const auto found=registry.actions(memory(c),c.r[28],prompt_context(c));
+        if(found.size()==1)description_=primary_prompt(assignments,{found[0]});   // the first assigned input only, never "X or Y"
+        else if(found.size()==2)description_=chord_prompt(assignments,found[0],found[1]);
+        if(description_)checkpoint_=gx_prompt_checkpoint();
     }
 }
 PromptScope::~PromptScope() noexcept(false) {

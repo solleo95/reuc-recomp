@@ -1,6 +1,9 @@
 #include "gx_stream.h"
 #include <bit>
 #include <cmath>
+#include <cstdlib>
+#include <map>
+#include <cstdio>
 
 namespace fifo_replay {
 namespace {
@@ -43,6 +46,7 @@ void GxStream::material(gx::DrawPacket& draw) const {
         // Texgen runs in the game's vertex shader: hand it the XF words and the matrices they select.
         const bool dual=xf_[0x1012]&1; // without dual-texture transform the post stage is identity
         u.tex_gens[i]=xf_[0x1040+i];u.tex_posts[i]=dual?xf_[0x1050+i]:0;
+        if(std::getenv("UC_REPLAY_DEFAULT_GENS")) {u.tex_gens[i]=uint32_t(5+i)<<7;u.tex_posts[i]=0x3D;}   // what the live game has: UVi through the default matrices
         auto selector=i<4?(xf_[0x1018]>>(6+i*6))&63:(xf_[0x1019]>>((i-4)*6))&63;
         if(selector!=60) {
             if(selector>61)throw std::runtime_error("invalid texture matrix selector");
@@ -52,6 +56,11 @@ void GxStream::material(gx::DrawPacket& draw) const {
             auto post=xf_[0x1050+i]&63;
             for(size_t row=0;row<3;++row)for(size_t j=0;j<4;++j)u.post_rows[i*3+row][j]=fp(xf_[0x500+((post+row)&63)*4+j]);
         }
+    }
+    if(gx::has_texture_matrix_index(*draw.state)) { // per-vertex ids select any loaded XF matrix, not only the texgen's own
+        auto bank=std::make_shared<gx::TextureBank>();
+        for(size_t id=0;id<62;++id)if(id!=60)for(size_t row=0;row<3;++row)for(size_t j=0;j<4;++j)bank->rows[id*3+row][j]=fp(xf_[(id+row)*4+j]);
+        draw.texture_bank=std::move(bank);
     }
     auto blend=bp_[0x41];
     draw.blend={uint8_t(blend&0x800?3:blend&2?2:blend&1?1:0),uint8_t((blend>>8)&7),uint8_t((blend>>5)&7),uint8_t((blend>>12)&15),bool(blend&8),bool(blend&16)};
@@ -69,7 +78,6 @@ void GxStream::check_texgen(gx::DrawPacket& draw) const {
         auto control=xf_[0x1040+slot],source=(control>>7)&31;
         if((control>>4)&7)throw std::runtime_error("unsupported nonregular texgen");
         if(!(source<=1 || (source>=5 && source<=12)))throw std::runtime_error("unsupported texgen source");
-        if(draw.state->descriptors[slot+1]!=gx::Mode::none)throw std::runtime_error("per-vertex texture matrix index unsupported");
     }
 }
 }

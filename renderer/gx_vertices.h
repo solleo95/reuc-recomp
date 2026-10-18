@@ -34,6 +34,10 @@ struct State {
     std::optional<std::array<float,6>> viewport;
     std::optional<std::array<int32_t,4>> scissor;
 };
+inline bool has_texture_matrix_index(const State& state) {
+    for (size_t a = 1; a < 9; ++a) if (state.descriptors[a] != Mode::none) return true;
+    return false;
+}
 struct Memory {
     std::span<const std::byte> mem1, mem2, locked_cache;
     std::span<const std::byte> read(uint32_t address, size_t size) const;
@@ -45,7 +49,7 @@ struct Vertex {
     std::array<std::array<uint8_t, 4>, 2> color{{{255, 255, 255, 255}, {255, 255, 255, 255}}};
     std::array<std::array<float, 2>, 8> texcoord{};
     uint8_t position_matrix = 0;
-    std::array<uint8_t, 8> texture_matrix{};
+    std::array<uint8_t, 8> texture_matrix{255, 255, 255, 255, 255, 255, 255, 255};   // per-vertex TexNMtxIdx; 255 = absent (the texgen keeps its own matrix)
 };
 struct BlendState {
     uint8_t mode=0,source=1,destination=0,logic=3;
@@ -63,6 +67,7 @@ struct DrawPacket {
     std::array<std::shared_ptr<const TexturePixels>,7> texture_maps;
     TevMaterial material;
     Shared<DrawUniform> uniforms;
+    std::shared_ptr<const TextureBank> texture_bank;   // set only for draws whose format has per-vertex texture matrix indices
     BlendState blend;
     std::array<uint8_t,8> texture_wrap{}; // SDK mode: S0..1,T2..3,mag4,mip5..6,min7
     std::optional<PromptDraw> native_prompt;

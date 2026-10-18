@@ -1,4 +1,5 @@
 #include "gx_vertices.h"
+#include <algorithm>
 #include <cmath>
 namespace uc {
 std::optional<gx::PromptDraw> prompt_from_quad(const gx::DrawPacket& draw,const PromptDescription& description) {

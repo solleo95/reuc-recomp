@@ -133,7 +133,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style;
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -341,6 +341,7 @@ int run(int argc,wchar_t** argv) {
         ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},ImGuiChildFlags_None);
         if(page==0) {
             toggle("##skip-game",tr("skip"),options.skip_intro);
+            ImGui::Dummy({0,8*unit});toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
             ImGui::Dummy({0,25*unit});ImGui::TextWrapped("%s",tr("alt"));
         } else if(page==1) {
             const float column_gap=88*unit;
@@ -394,7 +395,9 @@ int run(int argc,wchar_t** argv) {
             ImGui::BeginDisabled();if(combo("##quality","—"))ImGui::EndCombo();ImGui::EndDisabled();
             ImGui::PopFont();ImGui::Dummy({0,16*unit});
             bool framegen=false;toggle("##framegen",tr("framegen"),framegen,true);
+            ImGui::Dummy({0,8*unit});toggle("##bloom",tr("bloom"),options.bloom);
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
+            ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {
             push_font(ui.sans,22);

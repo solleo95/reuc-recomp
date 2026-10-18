@@ -69,6 +69,18 @@ int main() {
     CHECK((draw.vertices[1].position == std::array<float,3>({4,5,6})));
     CHECK(draw.vertices[0].position_matrix == 3 && draw.vertices[1].position_matrix == 6);
     CHECK(draw.indices == std::vector<uint32_t>({0,1}));
+    // Per-vertex texture matrix ids (TexNMtxIdx) follow the position matrix index; absent ones stay 255.
+    state.descriptors[1] = state.descriptors[3] = gx::Mode::direct;
+    CHECK(gx::has_texture_matrix_index(state));
+    capture.begin(state, 0xA8, 1, 2, 8, 0x80010000);
+    const std::vector<uint8_t> with_ids{3,30,33,0,0, 6,57,60,0,1};
+    capture.write_attribute(8, bytes(with_ids));
+    draw = capture.take_draw();
+    CHECK((draw.vertices[0].texture_matrix == std::array<uint8_t,8>({30,255,33,255,255,255,255,255})));
+    CHECK((draw.vertices[1].texture_matrix == std::array<uint8_t,8>({57,255,60,255,255,255,255,255})));
+    CHECK(draw.vertices[1].position_matrix == 6);
+    state.descriptors[1] = state.descriptors[3] = gx::Mode::none;
+    CHECK(!gx::has_texture_matrix_index(state));
     // Winding differs on alternating strip triangles; quads keep SDK order.
     state.descriptors[0] = gx::Mode::none; state.descriptors[9] = gx::Mode::direct;
     state.formats[0][9] = {gx::Type::u8, 2, 0};

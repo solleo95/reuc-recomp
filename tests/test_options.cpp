@@ -77,7 +77,7 @@ int main() {
     CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--no-vulkan-layers"})).no_vulkan_layers);
     CHECK(!std::get<uc::Options>(defaults).skip_tutorials);
     CHECK(std::get<uc::Options>(parse(std::array<std::string_view,3>{"--test-server","a","--skip-tutorials"})).skip_tutorials);
-    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--skip-tutorials"})));   // test mode only
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--skip-tutorials"})).skip_tutorials);   // a player option too, not only for the test server
     for(auto bad:{"bad/name","","a b","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","\\\\x"}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--test-server",bad})));
     auto command=uc::parse_test_command("1 -0.5 0.25 2048 1");
     CHECK(command && command->sequence==1 && command->held==2048 && command->capture);

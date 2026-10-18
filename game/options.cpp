@@ -25,6 +25,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
+        else if (arg == "--no-bloom") options.bloom = false;
         else if (arg == "--input-probe") options.input_probe = true;
         else if (arg == "--gx-gaps") options.gx_gaps = true;
         else if (arg == "--audio-audit") options.audio_audit = true;
@@ -80,7 +81,6 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
     if (!options.demo_play.empty() && !options.deterministic && options.det_out.empty()) return "--demo-play requires --deterministic";
     if (options.speed != 1 && options.test_server.empty()) return "--speed requires --test-server";
     if (options.god && options.test_server.empty()) return "--god requires --test-server";
-    if (options.skip_tutorials && options.test_server.empty()) return "--skip-tutorials requires --test-server";
     return options;
 }
 }

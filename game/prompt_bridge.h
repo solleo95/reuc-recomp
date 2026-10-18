@@ -11,6 +11,8 @@ public:
     void unregister_layout(uint32_t layout);
     void unregister_pane(uint32_t pane);
     std::optional<std::string> layout_name(const gx::Memory&,uint32_t pane) const;
+    // Host actions a proven prompt picture stands for: one, two for a button chord (A+B), none for anything the port does not cover.
+    std::vector<Action> actions(const gx::Memory&,uint32_t pane,InputContext) const;
     std::optional<Action> action(const gx::Memory&,uint32_t pane,InputContext) const;
 private:
     struct Owner {uint32_t root;std::string name;};

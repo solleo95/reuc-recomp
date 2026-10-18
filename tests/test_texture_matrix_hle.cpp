@@ -67,6 +67,14 @@ int main() {
         CHECK((u->tex_rows[2]==std::array<float,4>{9,10,11,12}) && u->tex_gens[0]==6 && u->tex_posts[0]==0x103);
         CHECK((u->post_rows[0]==std::array<float,4>{1,2,3,4}) && (u->post_rows[2]==std::array<float,4>{9,10,11,12}));
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
+        // A raw call-display-list command (0x40, address, length) written to the FIFO loads texgen 1 and its post word from the list's XF loads.
+        const uint8_t texgen_list[]={0x10,0,0,0x10,0x41,0,0,0x50,0x86, 0x10,0,0,0x10,0x51,0,0,0x01,0x03};   // XF 0x1041 = 0x5086, XF 0x1051 = 0x103
+        for(size_t i=0;i<sizeof texgen_list;++i) ppc::wr8(c,0x80009000+uint32_t(i),texgen_list[i]);
+        uc::gx_fifo_write(1,0x40); uc::gx_fifo_write(4,0x80009000); uc::gx_fifo_write(4,sizeof texgen_list);
+        draw(); c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto raw_packet=packets.try_take(); CHECK(raw_packet && raw_packet->draws.size()==1);
+        CHECK(raw_packet->draws[0].uniforms->tex_gens[1]==0x5086 && raw_packet->draws[0].uniforms->tex_posts[1]==0x103 && raw_packet->draws[0].uniforms->tex_gens[0]==6);
+        CHECK(packets.complete(raw_packet->serial)); uc::gx_completed(raw_packet->serial);
     });
     sched.run(thread);
 }

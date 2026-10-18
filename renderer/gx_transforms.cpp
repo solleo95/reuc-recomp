@@ -30,7 +30,7 @@ GpuMeshVertex mesh_vertex(const Vertex& vertex) {
     GpuMeshVertex result;
     result.position=vertex.position; result.color=vertex.color[0]; result.texcoords=vertex.texcoord;
     result.object_normal={vertex.normal[0],vertex.normal[1],vertex.normal[2]};
-    result.color1=vertex.color[1]; result.row=vertex.position_matrix;
+    result.color1=vertex.color[1]; result.row=vertex.position_matrix; result.texture_matrix=vertex.texture_matrix;
     return result;
 }
 void fill_palette(PaletteBlock& block,const Transforms& transforms) {
