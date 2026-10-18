@@ -19,6 +19,8 @@ namespace {
 constexpr uint32_t kClock=0x804D3318;
 bool unlock_60fps; // Initialized before scheduler startup; guest baton owns later access.
 uint32_t game_hz;  // same ownership
+std::atomic<uint64_t> requested_mode{0};   // game_pacing_set_mode: 1<<63 | unlock<<32 | hz, 0 = none pending
+std::atomic<bool> paused{false};
 uint64_t deadline_ticks,last_boundary_ticks;
 // Experimental --game-hz: the game clock waits for a wall-clock (virtual clock) deadline instead of a VI retrace and gets the real elapsed time as its timestep.
 // shortcut: coarse scheduler sleep (1 ms granularity) plus a 2 ms spin; replace with a waitable timer if the spin shows up in CPU use.
@@ -46,8 +48,18 @@ std::unordered_map<uint32_t,float> owed_frames;
 namespace uc {
 void game_pacing_init(bool unlock,uint32_t hz) {
     unlock_60fps=unlock; game_hz=hz; deadline_ticks=last_boundary_ticks=0; calls=retraces=timestep_ns=threshold_two=adjusted=wait_ns=0;
-    step_scale=1.f; owed_frames.clear();
+    step_scale=1.f; owed_frames.clear(); requested_mode=0;
 }
+PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit,uint32_t game_hz_override,bool unlock_60fps) {
+    if(game_hz_override) return {unlock_60fps,game_hz_override};
+    if(!fps_limit) return {unlock_60fps,0};
+    const uint32_t limit=*fps_limit;
+    if(limit==0 || limit>60) return {unlock_60fps,limit ? std::min(limit,480u) : 480u};
+    return {limit>30,0};
+}
+void game_pacing_set_mode(PacingMode mode) { requested_mode=(uint64_t(1)<<63)|(uint64_t(mode.unlock_60)<<32)|mode.game_hz; }
+void game_pacing_set_paused(bool on) { paused=on; }
+bool game_pacing_paused() { return paused.load(); }
 float game_step_scale() { return step_scale; }
 GamePacingStats game_pacing_stats() { return {calls.load(),retraces.load(),timestep_ns.load(),threshold_two.load(),adjusted.load(),wait_ns.load()}; }
 }
@@ -59,6 +71,10 @@ void hle_GameFrameWait(ppc::Ctx& c) {
     // Native lowering of prologue/wait;80158208 keeps original counter/timestep/return math.
     ppc::wr32(c,stack-32,stack); ppc::wr32(c,stack+4,c.lr); ppc::wr32(c,stack-4,c.r[31]);
     c.r[1]=stack-32; c.r[31]=object;
+    if(object==kClock) if(const uint64_t mode=requested_mode.exchange(0)) {   // a new frame rate limit from the in-game menu
+        unlock_60fps=(mode>>32)&1; game_hz=uint32_t(mode);
+        deadline_ticks=last_boundary_ticks=0;
+    }
     uint32_t target; bool change;
     const auto ready=[&] {
         c.r[3]=ppc::rd32(c,object+0x20); c.r[0]=target=ppc::rd32(c,object+0x28);
@@ -88,6 +104,9 @@ void hle_GameFrameWait(ppc::Ctx& c) {
         const float step=timed_step(); uint32_t bits; std::memcpy(&bits,&step,4);
         ppc::wr32(c,object+4,bits); ppc::wr32(c,object+8,bits); ppc::wr32(c,object+0x20,0);   // callback increments during the frame are ignored
     }
+    // Pause: the game clock steps by zero; the game keeps looping and rendering a still picture (probe: identical frames, actors, camera).
+    const bool zero_step=object==kClock && paused.load(std::memory_order_relaxed);
+    if(zero_step) { ppc::wr32(c,object+4,0); ppc::wr32(c,object+8,0); }
     if(object==kClock) {
         const float step=ppc::rdf32(c,object+8);
         if(!std::isfinite(step) || step<0 || step>1) throw std::invalid_argument("invalid native game timestep");
@@ -95,6 +114,7 @@ void hle_GameFrameWait(ppc::Ctx& c) {
             const float rate=ppc::rdf32(c,object+0x1C);
             step_scale=1.f;
             if(native_step && std::isfinite(rate) && rate>0 && target>0) step_scale=std::clamp(step/(float(target)/rate),0.001f,20.f);
+            if(zero_step) step_scale=0.f;
         }
         uc::counter_probe_step(c,step);
         uc::state_dump_step(c,step);

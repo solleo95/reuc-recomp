@@ -11,6 +11,7 @@ public:
     AudioOutput(const AudioOutput&)=delete;
     AudioOutput& operator=(const AudioOutput&)=delete;
     void write(std::span<const int16_t> pcm);
+    void pause(bool on);   // game pause: silence the device
     Stats stats() const { return {blocks_.load(),overruns_.load(),max_queued_.load()}; }
 private:
     SDL_AudioStream* stream_=nullptr;

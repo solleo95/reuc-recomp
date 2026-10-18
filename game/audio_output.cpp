@@ -12,6 +12,10 @@ AudioOutput::AudioOutput(bool muted) {
     }
 }
 AudioOutput::~AudioOutput() { SDL_DestroyAudioStream(stream_); SDL_QuitSubSystem(SDL_INIT_AUDIO); }
+void AudioOutput::pause(bool on) {
+    // The guest keeps mixing while paused (write() caps the queue at 100 ms); what piled up meanwhile is dropped on resume.
+    if (!(on ? SDL_PauseAudioStreamDevice(stream_) : SDL_ClearAudioStream(stream_) && SDL_ResumeAudioStreamDevice(stream_))) throw std::runtime_error(SDL_GetError());
+}
 void AudioOutput::write(std::span<const int16_t> pcm) {
     const auto queued=SDL_GetAudioStreamQueued(stream_);
     if (queued<0) throw std::runtime_error(SDL_GetError());

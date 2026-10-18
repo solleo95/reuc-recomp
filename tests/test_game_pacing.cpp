@@ -92,4 +92,36 @@ int main() {
     c.r[1]=0x817FFFFC; c.r[3]=0x804D3318;
     rejected=false; try { hle_GameFrameWait(c); } catch(const std::exception&) { rejected=true; }
     CHECK(rejected && c.r[1]==0x817FFFFC);
+    fail=false;
+    {   // the frame rate limit picks the update mode (startup and the in-game menu)
+        const auto is=[](uc::PacingMode m,bool unlock,uint32_t hz) { return m.unlock_60==unlock && m.game_hz==hz; };
+        CHECK(is(uc::pacing_for_limit(std::nullopt,0,false),false,0));   // no limit chosen: the original 30 Hz
+        CHECK(is(uc::pacing_for_limit(std::nullopt,0,true),true,0));     // the old "60 FPS game update" toggle
+        CHECK(is(uc::pacing_for_limit(30,0,false),false,0));
+        CHECK(is(uc::pacing_for_limit(60,0,false),true,0));               // 31..60: retrace-locked 60 Hz
+        CHECK(is(uc::pacing_for_limit(144,0,false),false,144));           // above 60: timer step at the limit
+        CHECK(is(uc::pacing_for_limit(0,0,false),false,480));             // unlimited: the 480 Hz ceiling
+        CHECK(is(uc::pacing_for_limit(1000,0,false),false,480));
+        CHECK(is(uc::pacing_for_limit(144,240,false),false,240));         // --game-hz wins
+    }
+    {   // live mode change: picked up at the next frame wait
+        uc::game_pacing_init(false);
+        uc::game_pacing_set_mode({true,0});
+        run(0x804D3318,2,1);
+        CHECK(uc::game_pacing_stats().adjusted==1);
+        uc::game_pacing_set_mode({false,0});
+        run(0x804D3318,2,2);
+        CHECK(uc::game_pacing_stats().adjusted==1 && uc::game_step_scale()==1.f);
+    }
+    {   // pause: the game clock steps by zero, so everything scaled by the step stands still; resume restores the step
+        CHECK(!uc::game_pacing_paused());
+        uc::game_pacing_set_paused(true); CHECK(uc::game_pacing_paused());
+        run(0x804D3318,2,2);
+        CHECK(ppc::rdf32(c,0x804D3318+8)==0.f && ppc::rdf32(c,0x804D3318+4)==0.f && uc::game_step_scale()==0.f && actor()==0.f);
+        run(0x80003000,2,2);   // other clocks are left alone
+        CHECK(std::fabs(ppc::rdf32(c,0x80003000+8)-2.f/60)<1e-6f);
+        uc::game_pacing_set_paused(false);
+        run(0x804D3318,2,2);
+        CHECK(std::fabs(ppc::rdf32(c,0x804D3318+8)-2.f/60)<1e-6f && uc::game_step_scale()==1.f);
+    }
 }
