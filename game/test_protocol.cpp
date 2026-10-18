@@ -30,7 +30,11 @@ struct Reader {
         ws();
         if (p >= s.size()) throw std::runtime_error("unexpected end");
         if (s[p] == '"') return {Value::Type::string, 0, false, string(), {}};
-        if (s[p] == '{') { if (depth >= 2) throw std::runtime_error("nesting too deep"); return {Value::Type::object, 0, false, {}, std::make_shared<Object>(object(depth + 1))}; }
+        if (s[p] == '{') {   // text: the object's own JSON (the options command hands it on as is)
+            if (depth >= 2) throw std::runtime_error("nesting too deep");
+            const size_t begin = p; auto parsed = std::make_shared<Object>(object(depth + 1));
+            return {Value::Type::object, 0, false, std::string(s.substr(begin, p - begin)), std::move(parsed)};
+        }
         if (s.substr(p, 4) == "true") { p += 4; return {Value::Type::boolean, 0, true, {}, {}}; }
         if (s.substr(p, 5) == "false") { p += 5; return {Value::Type::boolean, 0, false, {}, {}}; }
         double d = 0; auto r = std::from_chars(s.data() + p, s.data() + s.size(), d);
@@ -97,6 +101,13 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
         } else if (name == "peek") {   // read-only guest memory window for diagnostics and reverse engineering
             only(root, {"id", "cmd", "addr", "size"}); r.kind = TestRequestKind::peek;
             r.addr = uint32_t(number(root, "addr", 0, 4294967295.0, true)); r.size = uint32_t(number(root, "size", 1, 262144, true));
+        } else if (name == "host_key") {   // a key of the port itself (SDL scancode): Insert opens the settings menu, P pauses
+            only(root, {"id", "cmd", "code"}); r.kind = TestRequestKind::host_key; r.input.code = uint32_t(number(root, "code", 1, 511, true));
+        } else if (name == "options") {    // graphics settings to apply live, as the in-game menu does (config.json "graphics" keys)
+            only(root, {"id", "cmd", "graphics"}); r.kind = TestRequestKind::options;
+            auto it = root.find("graphics");
+            if (it == root.end() || it->second.type != Value::Type::object) throw std::runtime_error("graphics must be an object");
+            r.text = it->second.text;
         } else if (name == "input") {
             only(root, {"id", "cmd", "at_frame", "hold_frames", "kpad", "key", "mouse", "wheel", "motion"});
             r.kind = TestRequestKind::input; auto& in = r.input;

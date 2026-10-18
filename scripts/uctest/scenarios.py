@@ -254,4 +254,120 @@ def resize(g, args):
     return {"idle": idle, "storm": storm, "after": after}
 
 
-SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize}
+def _same_picture(a, b):
+    from .overlay import read_png
+    return read_png(a)[3] == read_png(b)[3]
+
+
+def _scene(f):
+    return {"view": f.get("view"), "enemies": [(e["id"], e["root"], e["hp"]) for e in f.get("enemies") or []], "life": (f.get("player") or {}).get("life")}
+
+
+def _check_frozen(g, where):
+    """While paused: the picture and the actors stand still although the game keeps looping (retraces advance)."""
+    g.advance(20)
+    first, scene, ticks = g.capture(), _scene(g.frame), g.frame["retraces"]
+    g.advance(180)
+    second = g.capture()
+    if g.frame["retraces"] - ticks < 180:
+        g.fail(f"{where}: the game stopped looping while paused", "pause")
+    if _scene(g.frame) != scene:
+        g.fail(f"{where}: actors or camera moved while paused: {scene} -> {_scene(g.frame)}", "pause")
+    if not _same_picture(first, second):
+        g.fail(f"{where}: the picture changed while paused", "pause")
+    return [first, second]
+
+
+def pause(g, args):
+    """P pauses by stepping the game by zero: on the title screen and in gameplay the picture and actors freeze while the game keeps looping;
+    the menu (Insert) opens over the paused game, P does nothing there, Escape closes it; P again resumes."""
+    result = {}
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    with g.step("pause_title"):
+        g.host_key(g.P)
+        g.wait(lambda f: f.get("paused"), seconds=5, awaited="paused")
+        result["title"] = _check_frozen(g, "title")
+        g.host_key(g.P)
+        g.wait(lambda f: not f.get("paused"), seconds=5, awaited="resumed")
+    g.set_speed(8)
+    for target in route(args.chapter):
+        with g.step(target):
+            steps.select(g, target)
+    with g.step("wait_gameplay"):
+        steps.wait_gameplay(g)
+    g.set_speed(1)
+    g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
+    g.advance(120)
+    with g.step("pause_gameplay"):
+        g.host_key(g.P)
+        g.wait(lambda f: f.get("paused"), seconds=5, awaited="paused")
+        result["gameplay"] = _check_frozen(g, "gameplay")
+        frozen = _scene(g.frame)
+    with g.step("menu_over_pause"):
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(10)
+        result["menu"] = g.capture()
+        g.host_key(g.P)
+        g.advance(10)
+        if not g.frame.get("paused"):
+            g.fail("P toggled the pause while the menu was open", "menu")
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+        if _scene(g.frame) != frozen:
+            g.fail("the game moved while paused under the menu", "menu")
+    with g.step("resume"):
+        g.host_key(g.P)
+        g.wait(lambda f: not f.get("paused"), seconds=5, awaited="resumed")
+        g.advance(120)
+        if _scene(g.frame) == frozen:
+            g.fail("the game did not move after resuming", "resume")
+        result["resumed"] = g.capture()
+    return result
+
+
+def overlay(g, args):
+    """Insert opens the settings menu over the running game; every setting applies live (the renderer is replaced for upscaler / frame
+    generation switches), the game keeps running and the run's config.json has each value; Escape closes the menu."""
+    import json
+    import time
+    g.set_speed(8)
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
+    result = {"plain": g.capture(), "settings": []}
+    with g.step("open_menu"):
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(10)
+        result["menu"] = g.capture()
+    changes = [dict(render_scale=1), dict(render_scale=2), dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
+               dict(fps_limit=60), dict(fps_limit=144), dict(fps_limit=0), dict(upscaler="fsr"), dict(upscale_mode="performance"), dict(upscale_mode="native"),
+               dict(upscaler="dlss"), dict(frame_generation=True), dict(upscaler="fsr"), dict(frame_generation=False), dict(upscaler="off")]
+    for change in changes:
+        name = ",".join(f"{k}={v}" for k, v in change.items())
+        with g.step(f"set_{name}"):
+            ticks, began = g.frame["retraces"], time.monotonic()
+            g.set_options(**change)
+            if "upscaler" in change:   # the device depends on it: the renderer is replaced (a few seconds for DLSS)
+                g.wait(lambda f: f.get("upscaler") == change["upscaler"], seconds=15, awaited=f"active upscaler {change['upscaler']}")
+            if "frame_generation" in change:
+                g.wait(lambda f: f.get("frame_generation") == change["frame_generation"], seconds=15, awaited=f"frame generation {change['frame_generation']}")
+            g.advance(60)
+            saved = json.loads(g.config_path.read_text(encoding="utf-8"))["graphics"]
+            wrong = {k: saved.get(k) for k, v in change.items() if saved.get(k) != v}
+            if wrong:
+                g.fail(f"{name}: config.json has {wrong}", "settings")
+            if not g.frame.get("menu_open") or g.frame.get("context") != "gameplay":
+                g.fail(f"{name}: the menu closed or gameplay ended", "settings")
+            result["settings"].append({"change": name, "seconds": round(time.monotonic() - began, 2), "ticks": g.frame["retraces"] - ticks, "capture": g.capture()})
+    with g.step("close_menu"):
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+        result["closed"] = g.capture()
+    return result
+
+
+SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
+             "pause": pause, "overlay": overlay}

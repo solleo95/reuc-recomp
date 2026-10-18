@@ -77,6 +77,8 @@ void TestServer::handle(const std::string& line, uint64_t frame, const std::stri
         else draw_requests_.push_back(r.id);
         break;
     case TestRequestKind::quit: pipes_.send(test_reply_ok(r.id), false); out.quit = true; break;
+    case TestRequestKind::host_key: out.host_keys.push_back(r.input.code); pipes_.send(test_reply_ok(r.id), false); break;   // applied by the main loop this iteration
+    case TestRequestKind::options: out.options.push_back(r.text); pipes_.send(test_reply_ok(r.id), false); break;
     case TestRequestKind::input:
         if (open_requests_.size() >= kMaxOpenRequests) pipes_.send(test_reply_error(r.id, "too many queued commands"), false);
         else if (open_requests_.count(r.id)) pipes_.send(test_reply_error(r.id, "duplicate id"), false);

@@ -618,8 +618,7 @@ static int real_main(int argc, char** argv) {
                 || next.frame_generation_multiplier!=options.frame_generation_multiplier;
             options.upscaler=next.upscaler; options.upscale_mode=next.upscale_mode; options.sharpening=next.sharpening; options.sharpness=next.sharpness;
             options.frame_generation=next.frame_generation && !deterministic; options.frame_generation_multiplier=next.frame_generation_multiplier;
-            if (!restart_pending) renderer.set_upscale_mode(options.upscale_mode,options.sharpness);
-        };
+            if (!restart_pending) renderer.set_upscale_mode(options.upscale_mode,options.sharpness);        };
         targets.fps_limit=[&](std::optional<uint32_t> limit) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
@@ -663,8 +662,19 @@ static int real_main(int argc, char** argv) {
     auto service_frame = [&] {
         if(test_server) {
             const auto state=uc::test_state_latest();
-            const auto pumped=test_server->pump(state.frame,uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped()));
+            auto frame_json=uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped());
+            frame_json.pop_back(); frame_json+=std::string(",\"menu_open\":")+(host_keys.menu_open ? "true" : "false")+",\"paused\":"+(host_keys.paused ? "true" : "false")
+                +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")+"}";
+            const auto pumped=test_server->pump(state.frame,frame_json);
             debug_capture_requested|=pumped.capture; draws_wanted|=pumped.draws;
+            for (const auto code : pumped.host_keys) host_key_pressed(SDL_Scancode(code));
+            for (const auto& graphics : pumped.options) if (live_settings) {   // the in-game menu's path: merged over the saved settings, applied and saved
+                try {
+                    uc::ConfigDocument document; uc::store_options(document,live_settings->options());
+                    document.properties["graphics"].update(nlohmann::ordered_json::parse(graphics));
+                    live_settings->apply(uc::options_from_config(document));
+                } catch (const std::exception& error) { std::fprintf(stderr,"[test-server] options rejected: %s\n",error.what()); }
+            }
             close|=pumped.quit;
             if(test_pipes->disconnected() && !test_released) { test_released=true; test_server->release_all(); }
         }
@@ -766,7 +776,8 @@ static int real_main(int argc, char** argv) {
             if (frame_log) frame_events_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-events_start).count());
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();
-            for (int drained = 0; drained < 64 && !close && render_pending(); ++drained) {}   // a game frame is ~23 packets: do not pay a wait per packet
+            // A game frame is ~23 packets: do not pay a wait per packet. A pending renderer restart stops at the end of a frame.
+            for (int drained = 0; drained < 64 && !close && !(restart_pending && at_frame_boundary) && render_pending(); ++drained) {}
             if (settings_menu) settings_menu->commit();   // the menu's picks, applied outside rendering
             if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested) {
                 restart_pending=false;

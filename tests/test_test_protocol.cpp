@@ -20,6 +20,15 @@ int main() {
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"peek","addr":-1,"size":4})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"peek","addr":4294967296,"size":4})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"peek","addr":2152422600})")).empty());
+    // Host keys of the port (Insert menu, P pause) and live settings changes, the paths the in-game menu takes.
+    const auto host=ok(parse_test_request(R"({"id":14,"cmd":"host_key","code":73})"));
+    CHECK(host.kind==TestRequestKind::host_key && host.input.code==73);
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"host_key"})")).empty());
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"host_key","code":0})")).empty());
+    const auto options=ok(parse_test_request(R"({"id":15,"cmd":"options","graphics":{"bloom":false,"upscaler":"fsr","render_scale":2}})"));
+    CHECK(options.kind==TestRequestKind::options && options.text==R"({"bloom":false,"upscaler":"fsr","render_scale":2})");
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options"})")).empty());
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options","graphics":5})")).empty());
     // Rejections change nothing and name the problem.
     CHECK(!err(parse_test_request("not json")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":2,"y":0,"buttons":0}})")).empty());     // out of range

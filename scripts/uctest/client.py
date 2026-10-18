@@ -109,8 +109,13 @@ class Game:
         saves = self.run_dir / "saves"
         if not saves.exists():
             shutil.copytree(self.saves or SAVE_SOURCE, saves)
+        config = self.run_dir / "config.json"   # the in-game menu saves settings: a run writes its own copy, never the dist config
+        if not config.exists() and (self.exe.parent / "config.json").exists():
+            shutil.copyfile(self.exe.parent / "config.json", config)
         args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),
                 "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
+        if "--config" not in self.game_args:   # no dist config: the game starts from defaults and saves its first change here
+            args.extend(["--config", str(config)])
         if self.skip_intro:
             args.append("--skip-intro")
         if "--fps-limit" not in self.game_args:
@@ -267,6 +272,20 @@ class Game:
 
     def set_speed(self, factor):
         self.request({"cmd": "speed", "factor": factor})
+
+    INSERT, P, ESCAPE = 73, 19, 41   # SDL scancodes of the port's host keys
+
+    def host_key(self, code):
+        """A key of the port itself (Insert: settings menu, P: pause), handled in the main loop's next iteration."""
+        self.request({"cmd": "host_key", "code": code})
+
+    def set_options(self, **graphics):
+        """Change graphics settings live, as the in-game menu does (config.json "graphics" keys); saved to the run's config copy."""
+        self.request({"cmd": "options", "graphics": graphics})
+
+    @property
+    def config_path(self):
+        return self.run_dir / "config.json"
 
     def actions(self):
         with self._cond:

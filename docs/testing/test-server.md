@@ -24,6 +24,8 @@ Every command carries an integer `id` (≥ 1, unique among open commands) and ge
 | `speed` | `factor` 1..32 | `factor` |
 | `draws` | — | `draws`: one `{pass,callsite,vertices,tex:[w,h,id],bbox:[x0,y0,x1,y1]}` per draw of the packets rendered since the request (bbox in NDC, y down), `projection`: the scene's 4x4 perspective projection row-major (`[]` if none) |
 | `peek` | `addr` (MEM1 `0x80000000`+24 MB or MEM2 `0x90000000`+64 MB), `size` 1..262144 | `hex` (uppercase) — read-only diagnostics / reverse engineering |
+| `host_key` | `code`: SDL scancode 1..511 — the port's own keys: 73 Insert (settings menu), 19 P (pause), 41 Escape (closes the menu) | — (applied in the main loop's next iteration; frame fields `menu_open`, `paused`) |
+| `options` | `graphics`: object of `config.json` graphics keys (`render_scale`, `upscaler`, `upscale_mode`, `frame_generation`, `fps_limit`, `bloom`, `prompt_style`, ...) | — merged over the saved settings, applied live and saved, as the in-game menu does; frame fields `upscaler`, `frame_generation` show what the renderer runs. The harness passes `--config <run dir>/config.json` (a copy of the dist config), so saves never touch it |
 | `quit` | — | process exits normally after the reply |
 
 A `kpad` press holds its buttons for `hold_frames` and then releases them keeping the aim; key/mouse `down:true` releases after `hold_frames`. A later kpad command owns the pad state, an earlier command's release is then skipped. When the client disconnects the game releases every held input and keeps running until `--seconds`.
