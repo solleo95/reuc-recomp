@@ -140,12 +140,12 @@ int main() {
     input.host_motion(0,-60); uc::game_input_sample(c,raw); owner_update(); CHECK(knives==2);
     input.host_button({uc::PhysicalKind::mouse,1},true);
     input.host_button({uc::PhysicalKind::key,25},true);
-    input.host_motion(0,-60); uc::game_input_sample(c,raw);
+    input.host_motion(0,-600); uc::game_input_sample(c,raw);
     knife_x=0; knife_y=-1; owner_update(); CHECK(knives==3); // Gesture direction wins simultaneous held V.
     input.focus(false); input.focus(true);
     ppc::wrf32(c,actor+0x4F8+0xF4,0);
     input.host_button({uc::PhysicalKind::mouse,1},false); input.host_button({uc::PhysicalKind::key,25},false);
-    input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(30,40);
+    input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(240,320);
     uc::game_input_sample(c,raw); owner_update(0); CHECK(knives==3);
     owner_update(); CHECK(knives==3); // Unavailable one-shot must never fire after the modal gate opens.
     input.focus(false); input.focus(true); grenade_count=3;
@@ -174,7 +174,7 @@ int main() {
     owner_update(); CHECK(grenades==2); // QTE transition cancels published gameplay actions.
     ppc::wr32(c,actor+0x630,0); uc::game_input_sample(c,raw); owner_update(); CHECK(grenades==2);
     input.host_button({uc::PhysicalKind::key,25},false); input.host_button({uc::PhysicalKind::mouse,1},false);
-    input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(-60,0);
+    input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(-600,0);
     input.host_button({uc::PhysicalKind::key,25},true); uc::game_input_sample(c,raw);
     knife_x=-1; knife_y=0; owner_update(); CHECK(knives==4); // Gesture wins even when V arrives after motion.
     input.focus(false); input.focus(true);

@@ -523,6 +523,7 @@ int run(int argc,wchar_t** argv) {
             if(save(options)) {
                 try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu);}
                 catch(const std::exception& e) {error=e.what();}
+                if(process && smoke.empty() && smoke_exe.empty())done=true;   // the launcher closes once the game has started; smoke runs keep it to watch the game
             }
         }
         if(check_capture_wait) {

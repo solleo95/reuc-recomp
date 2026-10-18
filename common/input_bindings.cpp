@@ -198,13 +198,19 @@ void BindingResolver::motion(float x,float y,uint64_t timestamp_ns) {
     if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid mouse motion");
     if(x!=0 || y!=0)qte_motion(x,y,timestamp_ns);
     if((x==0 && y==0) || !(frame_.held&bit(Action::interact)) || !special(Action::knife,BindingKind::interact_motion))return;
-    // One stroke = motion accumulated while interact is held; pauses and releases end it. Short jitter never swings.
-    if(timestamp_ns && stroke_time_ && timestamp_ns>stroke_time_ && timestamp_ns-stroke_time_>kKnifeStrokePauseNs && !motion_event_) motion_x_=motion_y_=0;
-    if(timestamp_ns)stroke_time_=timestamp_ns;
+    // Speed, not distance: motion inside a short window is summed and divided by the window's age. Slow drags and jitter never reach the speed.
+    if(!timestamp_ns)return;   // no clock, no speed
+    // The first event of a window has no start to measure from: it is credited the time since the previous event, at most one mouse report interval.
+    const uint64_t since_last=last_motion_time_ && timestamp_ns>last_motion_time_ ? timestamp_ns-last_motion_time_ : kKnifeReportNs;
+    last_motion_time_=timestamp_ns;
+    if(!motion_event_ && (!stroke_time_ || timestamp_ns<stroke_time_ || timestamp_ns-stroke_time_>kKnifeWindowNs)) {
+        stroke_time_=timestamp_ns;stroke_lead_=std::clamp<uint64_t>(since_last,1000000,kKnifeReportNs);motion_x_=motion_y_=0;
+    }
     motion_x_+=x;motion_y_+=y;
     const auto length=std::hypot(motion_x_,motion_y_);
     if(!motion_event_) {
-        if(length<kKnifeStrokeLength)return;
+        const double seconds=double(timestamp_ns-stroke_time_+stroke_lead_)/1e9;
+        if(length<kKnifeMinLength || length/seconds<kKnifeSpeed)return;
         motion_event_=frame_.count;pulse(Action::knife);
     }
     auto& event=frame_.events[*motion_event_];

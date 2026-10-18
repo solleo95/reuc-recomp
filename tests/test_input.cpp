@@ -41,7 +41,7 @@ static void host_actions_have_separate_consumers() {
     auto game=input.consume_actions();
     CHECK(game.pressed==action_bit(uc::Action::fire) && game.held==action_bit(uc::Action::fire));
     CHECK(input.consume_actions().pressed==0);
-    input.host_wheel(2); input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(0,-60);
+    input.host_wheel(2); input.host_button({uc::PhysicalKind::mouse,1},true); input.host_motion(0,-600);
     game=input.consume_actions(); CHECK(game.count>=5 && game.pressed&action_bit(uc::Action::knife));
     CHECK(input.consume().pressed==0); // Legacy KPAD consumes a separate stream.
     auto binds=uc::default_bindings(); binds[size_t(uc::Action::fire)].push_back({uc::BindingKind::physical,{uc::PhysicalKind::key,9},{}});

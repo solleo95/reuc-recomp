@@ -58,7 +58,7 @@ static void clear_special_and_remap() {
     auto r=game(); r.replace(binds); r.button(mouse(1),true); r.button(mouse(3),true); auto f=r.consume();
     CHECK(downs(f,Action::fire)==1 && downs(f,Action::grenade)==0);
     binds[size_t(Action::grenade)].clear(); binds[size_t(Action::knife)].clear(); r.replace(binds); r.consume();
-    r.button(key(10),true); r.button(key(25),true); r.motion(100,0); f=r.consume();
+    r.button(key(10),true); r.button(key(25),true); r.motion(700,0,1000000000ull); f=r.consume();
     CHECK(!(f.pressed&(bit(Action::grenade)|bit(Action::knife))));
     binds=default_bindings(); binds[size_t(Action::interact)]={physical(key(27))}; binds[size_t(Action::fire)]={physical(key(9))};
     r=game(); r.replace(binds); r.button(key(27),true); r.button(key(9),true); f=r.consume();
@@ -103,24 +103,27 @@ static void knife_key_direction_and_mouse_threshold() {
     // V swings from the lower left to the upper right (screen y points down), whatever the mouse does.
     auto r=game(); r.button(key(25),true); auto f=r.consume();
     CHECK(downs(f,Action::knife)==1 && std::fabs(f.events[0].direction_x-0.70710678f)<1e-4f && std::fabs(f.events[0].direction_y+0.70710678f)<1e-4f);
-    // A held interact button needs a real stroke: sub-threshold jitter, even over many frames, starts no swing.
+    // A held interact button needs a FAST movement. Slow drags never swing, however far they go: 1 count/ms, 5 counts per 8 ms, 20 counts per 20 ms.
     auto m=game(); m.button({PhysicalKind::mouse,1},true); m.consume();
-    for(int i=0;i<20;++i) {m.motion(1,0,1000000000ull+i*8000000ull); CHECK(downs(m.consume(),Action::knife)==0);}
-    // The stroke accumulates across frames; the swing starts when it is long enough and points along the stroke.
+    for(int i=0;i<3000;++i) {m.motion(1,0,1000000000ull+i*1000000ull); CHECK(downs(m.consume(),Action::knife)==0);}
+    for(int i=0;i<500;++i) {m.motion(5,0,5000000000ull+i*8000000ull); CHECK(downs(m.consume(),Action::knife)==0);}
+    for(int i=0;i<200;++i) {m.motion(20,0,9000000000ull+i*20000000ull); CHECK(downs(m.consume(),Action::knife)==0);}
+    // A tiny quick twitch is below the length floor; a pause starts a new window, so two slow halves never add up.
+    m.motion(8,0,20000000000ull); CHECK(downs(m.consume(),Action::knife)==0);
+    m.motion(8,0,21000000000ull); m.motion(8,0,21300000000ull); CHECK(downs(m.consume(),Action::knife)==0);
+    // A quick stroke swings along its accumulated direction, whether it arrives in one event or several within the window.
     auto s=game(); s.button({PhysicalKind::mouse,1},true); s.consume();
-    s.motion(20,0,2000000000ull); CHECK(downs(s.consume(),Action::knife)==0);
-    s.motion(0,-40,2020000000ull); f=s.consume();
+    s.motion(30,0,2000000000ull); s.motion(0,-60,2005000000ull); f=s.consume();
     CHECK(downs(f,Action::knife)==1);
     for(size_t i=0;i<f.count;++i) if(f.events[i].action==Action::knife && f.events[i].down) {
-        CHECK(std::fabs(f.events[i].direction_x-20/std::hypot(20.f,40.f))<1e-3f && std::fabs(f.events[i].direction_y+40/std::hypot(20.f,40.f))<1e-3f);
+        CHECK(std::fabs(f.events[i].direction_x-30/std::hypot(30.f,60.f))<1e-3f && std::fabs(f.events[i].direction_y+60/std::hypot(30.f,60.f))<1e-3f);
     }
-    // One stroke is one swing; a pause lets leftover jitter expire; releasing interact clears it.
+    auto t=game(); t.button({PhysicalKind::mouse,1},true); t.consume();
+    t.motion(40,0,3000000000ull); CHECK(downs(t.consume(),Action::knife)==1);
+    // One stroke is one swing: slow follow-up motion in the next frame starts nothing.
     s.motion(0,-1,2040000000ull); CHECK(downs(s.consume(),Action::knife)==0);
-    auto p=game(); p.button({PhysicalKind::mouse,1},true); p.consume();
-    p.motion(30,0,3000000000ull); p.consume(); p.motion(30,0,3500000000ull); CHECK(downs(p.consume(),Action::knife)==0); // 0.5 s apart: two strokes of 30, not one of 60
-    auto q=game(); q.button({PhysicalKind::mouse,1},true); q.consume(); q.motion(30,0,4000000000ull); q.consume();
-    q.button({PhysicalKind::mouse,1},false); q.consume(); q.button({PhysicalKind::mouse,1},true); q.consume();
-    q.motion(30,0,4010000000ull); CHECK(downs(q.consume(),Action::knife)==0);
+    // Without a clock there is no speed.
+    auto n=game(); n.button({PhysicalKind::mouse,1},true); n.consume(); n.motion(500,0); CHECK(downs(n.consume(),Action::knife)==0);
 }
 static void knife_direction_bursts_and_overflow() {
     auto r=game(); r.motion(3,4); CHECK(downs(r.consume(),Action::knife)==0);
@@ -128,11 +131,11 @@ static void knife_direction_bursts_and_overflow() {
     CHECK(f.count==1 && f.events[0].direction_x==kKnifeKeyDirectionX && f.events[0].direction_y==kKnifeKeyDirectionY);
     CHECK(r.consume().held==bit(Action::knife)); // Game cooldown, not resolver, repeats held V.
     r.button(key(25),false); r.consume(); r.button(mouse(1),true); r.consume();
-    r.motion(30,40); f=r.consume(); CHECK(downs(f,Action::knife)==1);
+    r.motion(240,320,5000000000ull); f=r.consume(); CHECK(downs(f,Action::knife)==1);
     CHECK(std::abs(f.events[0].direction_x-.6f)<1e-6f && std::abs(f.events[0].direction_y-.8f)<1e-6f);
-    for(int i=0;i<10000;++i)r.motion(1,0); f=r.consume(); CHECK(downs(f,Action::knife)==1 && f.events[0].direction_x==1);
-    r.motion(30,40); r.motion(-30,-40); f=r.consume(); CHECK(downs(f,Action::knife)==0 && !(f.pressed&bit(Action::knife)));
-    r.motion(50,0); r.button(key(21),true); r.motion(0,50); f=r.consume();
+    for(int i=0;i<10000;++i)r.motion(1,0,6000000000ull+i*1000ull); f=r.consume(); CHECK(downs(f,Action::knife)==1 && f.events[0].direction_x==1);
+    r.motion(240,320,7000000000ull); r.motion(-240,-320,7001000000ull); f=r.consume(); CHECK(downs(f,Action::knife)==0 && !(f.pressed&bit(Action::knife)));
+    r.motion(400,0,8000000000ull); r.button(key(21),true); r.motion(0,400,8001000000ull); f=r.consume();
     CHECK(downs(f,Action::knife)==2 && downs(f,Action::reload)==1);
     fails<std::overflow_error>([&]{r.wheel(129);}); f=r.consume(); CHECK(f.held==0 && f.pressed==0 && f.count==0);
     fails<std::invalid_argument>([&]{r.motion(std::numeric_limits<float>::infinity(),0);});

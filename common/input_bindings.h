@@ -6,10 +6,10 @@
 #include <string>
 #include <vector>
 namespace uc {
-// Knife stroke tuning: V swings from the lower left to the upper right (screen y points down); a mouse swing needs this much motion (raw counts) in one stroke,
-// and a pause longer than kKnifeStrokePauseNs starts a new stroke.
-constexpr float kKnifeKeyDirectionX=0.70710678f,kKnifeKeyDirectionY=-0.70710678f,kKnifeStrokeLength=40.f;
-constexpr uint64_t kKnifeStrokePauseNs=150000000ull;
+// Knife tuning: V swings from the lower left to the upper right (screen y points down). A mouse swing is a fast mouse movement: the motion of the last kKnifeWindowNs
+// (raw counts) must move at kKnifeSpeed counts per second or more and be at least kKnifeMinLength long (a floor against timer noise on single events).
+constexpr float kKnifeKeyDirectionX=0.70710678f,kKnifeKeyDirectionY=-0.70710678f,kKnifeSpeed=4000.f,kKnifeMinLength=12.f;
+constexpr uint64_t kKnifeWindowNs=60000000ull,kKnifeReportNs=8000000ull;
 enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,count };
 enum class InputContext:uint8_t { inactive,menu,gameplay,qte };
 enum class PhysicalKind:uint8_t { key,mouse,wheel };
@@ -51,7 +51,7 @@ private:
     ActionFrame frame_;
     std::optional<size_t> motion_event_;
     double motion_x_=0,motion_y_=0;
-    uint64_t stroke_time_=0;
+    uint64_t stroke_time_=0,stroke_lead_=0,last_motion_time_=0;
     uint64_t shake_start_=0,shake_previous_=0;
     double shake_x_=0,shake_y_=0,shake_previous_x_=0,shake_previous_y_=0;
 };
