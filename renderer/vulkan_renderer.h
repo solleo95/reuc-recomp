@@ -2,6 +2,7 @@
 #include "gx_packets.h"
 #include "pipeline_keys.h"
 #include "prompt_overlay.h"
+#include "menu_overlay.h"
 #include "motion_tracker.h"
 #include "rcas_pass.h"
 #include "streamline.h"
@@ -52,6 +53,10 @@ public:
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
     void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
+    // In-game menu: build() lays out the ImGui widgets of each presented frame (empty = closed, no ImGui work at all); setup() loads fonts and
+    // style once into the menu's ImGui context.
+    void set_menu(std::function<void()> build, std::function<void()> setup = {});
+    bool menu_event(const SDL_Event& event) { owner(); return menu_overlay_.event(event); }   // true when the menu wants the event
     // Upscaling and frame generation settings; called before initialize(). Another kind or frame generation needs a new renderer (the device
     // depends on them): the game destroys this one and initializes a fresh one, see lost_copies().
     void configure_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
@@ -154,6 +159,8 @@ private:
     void collect();
     SDL_Window* window_ = nullptr;
     PromptOverlay prompt_overlay_;
+    MenuOverlay menu_overlay_;
+    std::function<void()> menu_build_, menu_setup_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
     bool bloom_=true;
     UpscalerKind upscaler_kind_=UpscalerKind::off;

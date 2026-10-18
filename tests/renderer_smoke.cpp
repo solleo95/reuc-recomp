@@ -1,6 +1,7 @@
 #include "check.h"
 #include "vulkan_renderer.h"
 #include "rebuild_gate.h"
+#include "imgui.h"
 #include <SDL3/SDL_vulkan.h>
 #include <chrono>
 #include <algorithm>
@@ -754,6 +755,19 @@ int main(int argc, char** argv) {
             submit(work,&portrait); sampled=portrait.capture(work.serial);
             CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
         }
+        // In-game menu: drawn over the presented frame while set, nothing at all once cleared.
+        work=packet; work.serial=descriptor_serial++; submit(work,&portrait); const auto plain=portrait.capture(work.serial);
+        portrait.set_menu([] { ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({120,80}); ImGui::Begin("menu"); ImGui::TextUnformatted("menu"); ImGui::End(); });
+        work.serial=descriptor_serial++; submit(work,&portrait); CHECK(portrait.capture(work.serial).rgba!=plain.rgba);
+        portrait.set_menu({});
+        work.serial=descriptor_serial++; submit(work,&portrait); CHECK(portrait.capture(work.serial).rgba==plain.rgba);
+        // A renderer that replaced another draws the EFB copies the old one held (lost_copies) blank instead of failing.
+        auto lost=std::make_shared<gx::TexturePixels>(); lost->gpu_only=true; lost->levels={{4,4,{}}};
+        work.serial=descriptor_serial++; work.draws[0].texture=lost;
+        bool unknown_copy=false;
+        try { portrait.render(work); } catch(const std::invalid_argument&) { unknown_copy=true; }
+        CHECK(unknown_copy);
+        portrait.lost_copies({lost.get()}); submit(work,&portrait);
         portrait.shutdown(); CHECK(portrait.validation_errors()==0);
         SDL_DestroyWindow(window); window = nullptr; SDL_Quit();
         std::printf("Vulkan smoke passed: triangle pixels, resize, zero extent, completion once, clean shutdown\n");

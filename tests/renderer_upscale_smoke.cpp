@@ -114,6 +114,12 @@ int main(int argc, char** argv) {
         frame(0); frame(0);
         CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{960,720}));
         CHECK(renderer.whole_frame_upscales()==0);   // every frame had the scene copy
+        // Quality mode switch in place (in-game menu): the upscaler and scene targets are rebuilt at the new internal size.
+        renderer.set_upscale_mode(uc::UpscaleMode::quality,0.5);
+        std::this_thread::sleep_for(300ms);   // the rebuild gate
+        frame(0); frame(0);
+        CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{1280,960}));   // quality: 1/1.5 of the 1920x1440 EFB
+        CHECK(renderer.active_upscaler()==uc::UpscalerKind::blit && !renderer.frame_generation_active());
         renderer.shutdown();
         CHECK(renderer.validation_errors()==0);
         // RCAS after the upscale (our pass for DLSS and the blit): a 2-pixel white stripe on gray, native mode (1:1 blit).

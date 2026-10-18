@@ -778,6 +778,10 @@ void VulkanRenderer::lost_copies(std::vector<const gx::TexturePixels*> keys) {
     lost_copies_.insert(keys.begin(), keys.end());
     if (!blank_) { auto blank=std::make_shared<gx::TexturePixels>(); blank->levels.push_back({1,1,{0,0,0,0}}); blank_=std::move(blank); }
 }
+void VulkanRenderer::set_menu(std::function<void()> build, std::function<void()> setup) {
+    owner();
+    menu_build_=std::move(build); menu_setup_=std::move(setup);
+}
 void VulkanRenderer::set_bloom(bool enabled) {
     owner();
     bloom_=enabled;
@@ -1540,7 +1544,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,copy_target->mip_levels);
     }
     if (packet.present) {
-        if(!packet.prompts.empty())prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
+        const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
+        if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
+        if(menu)menu_overlay_.initialize(window_,instance_,physical_,device,queue_,family_,uint32_t(slots_.size()),menu_setup_);
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 slot.initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE,slot.initialized ? VK_ACCESS_2_TRANSFER_READ_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
@@ -1551,12 +1557,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const VkClearColorValue black{}; const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
             vkCmdClearColorImage(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&black,1,&range);
         } else vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_NEAREST);
-        if(!packet.prompts.empty() && !packet.black_output) {
+        if(prompts || menu) {
             barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=slot.view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
             vkCmdBeginRendering(slot.command,&ui);
-            prompt_overlay_.record(slot.command,packet.prompts,extent_,display,prompt_style_);
+            if(prompts)prompt_overlay_.record(slot.command,packet.prompts,extent_,display,prompt_style_);
+            if(menu)menu_overlay_.record(slot.command,extent_,menu_build_);
             vkCmdEndRendering(slot.command);
             barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
         } else
@@ -1644,6 +1651,7 @@ void VulkanRenderer::shutdown() {
         retire_images();
         sweep_meshes(true);
         prompt_overlay_.shutdown();
+        menu_overlay_.shutdown();
         for(auto& [source,texture]:copy_textures_) destroy_texture(texture);
         copy_textures_.clear();
         for(auto& texture:recycled_copies_) destroy_texture(texture);
