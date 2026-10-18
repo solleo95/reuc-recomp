@@ -38,5 +38,5 @@ Without the DLLs or on a GPU that lacks a feature the game logs why and starts w
 
 ## Licences
 
-The approach follows the bloodborne_pc port (github.com/Supermedo/bloodborne_pc): the game ships NVIDIA's runtime DLLs together with NVIDIA's licence texts (`licenses/Streamline`), names the components and carries the trademark line in `THIRD_PARTY_NOTICES.md` (installed next to `uc.exe`); nothing is added to the splash screen, the launcher or any credits screen. FidelityFX is MIT (`licenses/FidelityFX`).
+The game ships NVIDIA's runtime DLLs together with NVIDIA's licence texts (`licenses/Streamline`), names the components and carries the trademark line in `THIRD_PARTY_NOTICES.md` (installed next to `uc.exe`); nothing is added to the splash screen, the launcher or any credits screen. FidelityFX is MIT (`licenses/FidelityFX`).
 Known gap, accepted by the owner: the DLSS SDK licence (`nvngx_dlss.license.txt`, exhibit on NVIDIA marks) asks for the NVIDIA marks on splash screens, in the about box and in credits, and for a notice to NVIDIA before a commercial release. This port is free and non-commercial; revisit if that changes.
