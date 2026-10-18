@@ -28,6 +28,11 @@ int main() {
     }
     CHECK(text("ru","play")=="ИГРАТЬ");
     CHECK(text("ja","play")=="プレイ");
+    // Checked = no glow (the option disables bloom), in the launcher and the in-game menu.
+    CHECK(text("en","bloom")=="Disable glow around light sources (bloom)");
+    CHECK(text("ru","bloom")=="Выключить свечение вокруг источников света (bloom)");
+    CHECK(text("ru","menu_main")=="Основное" && text("ru","menu_controls")=="Управление" && text("ru","other")=="Прочее");
+    CHECK(text("en","launcher_only")=="Changed in the launcher" && text("ru","launcher_only")=="Меняется в лаунчере");
     CHECK(document.properties["launcher"]["future"]==42);
     CHECK(document.properties["graphics"]["future"]==7);
     store_language(document,"system");

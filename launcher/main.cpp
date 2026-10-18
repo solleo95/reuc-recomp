@@ -7,6 +7,7 @@
 #include "prompt_icons.h"
 #include "localization.h"
 #include "graphite.h"
+#include "ui_fonts.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "imgui_impl_sdl3.h"
@@ -37,7 +38,7 @@ fs::path executable_dir() {
 struct Ui {
     SDL_Window* window=nullptr;SDL_Renderer* renderer=nullptr;
     bool context=false,platform=false,backend=false;
-    std::vector<std::vector<char>> fonts;
+    uc::ui::Fonts fonts;
     SDL_Texture* banner=nullptr;
     ImFont* sans=nullptr;
     ImFont* serif=nullptr;
@@ -68,30 +69,7 @@ struct Ui {
         if(diagnostic)io.ConfigInputTrickleEventQueue=false;
         uc::launcher::graphite_style();
         ImGui::GetStyle().FontScaleDpi=1;
-        wchar_t windows[32768];const auto length=GetWindowsDirectoryW(windows,32768);
-        if(!length || length>=32768)throw std::runtime_error("Windows font directory unavailable");
-        // Windows fonts keep the distribution small; ImGui rasterizes glyphs on demand.
-        for(const auto* filename:{L"segoeui.ttf",L"msyh.ttc",L"malgun.ttf",L"msgothic.ttc"}) {
-            std::ifstream source(fs::path(windows)/L"Fonts"/filename,std::ios::binary);
-            std::vector<char> data(std::istreambuf_iterator<char>(source),{});
-            if(data.empty()) {if(fonts.empty())throw std::runtime_error("Segoe UI font unavailable");continue;}
-            if(data.size()>64*1024*1024)throw std::runtime_error("launcher font too large");
-            ImFontConfig config;config.FontDataOwnedByAtlas=false;config.MergeMode=!fonts.empty();
-            fonts.push_back(std::move(data));auto& bytes=fonts.back();
-            if(!io.Fonts->AddFontFromMemoryTTF(bytes.data(),int(bytes.size()),16,&config))throw std::runtime_error("cannot load launcher font");
-        }
-        sans=io.Fonts->Fonts[0];
-        std::ifstream serif_source(fs::path(windows)/L"Fonts"/L"georgia.ttf",std::ios::binary);
-        std::vector<char> serif_data(std::istreambuf_iterator<char>(serif_source),{});
-        if(serif_data.empty())throw std::runtime_error("Georgia font unavailable");
-        const size_t fallback_count=fonts.size();fonts.push_back(std::move(serif_data));
-        ImFontConfig serif_config;serif_config.FontDataOwnedByAtlas=false;
-        serif=io.Fonts->AddFontFromMemoryTTF(fonts.back().data(),int(fonts.back().size()),22,&serif_config);
-        if(!serif)throw std::runtime_error("cannot load launcher serif font");
-        for(size_t i=1;i<fallback_count;++i) {
-            ImFontConfig fallback;fallback.FontDataOwnedByAtlas=false;fallback.MergeMode=true;
-            if(!io.Fonts->AddFontFromMemoryTTF(fonts[i].data(),int(fonts[i].size()),22,&fallback))throw std::runtime_error("cannot merge serif fallback");
-        }
+        fonts=uc::ui::load_fonts(*io.Fonts);sans=fonts.sans;serif=fonts.serif;
         platform=ImGui_ImplSDL3_InitForSDLRenderer(window,renderer);
         backend=ImGui_ImplSDLRenderer3_Init(renderer);
         if(!platform || !backend)throw std::runtime_error("ImGui backend initialization failed");
@@ -349,7 +327,12 @@ int run(int argc,wchar_t** argv) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{6*unit,6*unit});
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,3*unit);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,{12*unit,0});
-            ImGui::Checkbox(label,&value);track(id);
+            if(ImGui::CalcTextSize(label).x<=ImGui::GetContentRegionAvail().x-ImGui::GetFrameHeight()-12*unit) {ImGui::Checkbox(label,&value);track(id);}
+            else {   // a label wider than the column wraps beside the box and toggles it too
+                ImGui::Checkbox("##box",&value);track(id);ImGui::SameLine();
+                ImGui::BeginGroup();ImGui::TextWrapped("%s",label);ImGui::EndGroup();
+                if(ImGui::IsItemClicked())value=!value;
+            }
             if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",why ? why : tr("unavailable"));
             ImGui::PopStyleVar(3);ImGui::PopID();ImGui::EndDisabled();
         };
@@ -474,7 +457,8 @@ int run(int argc,wchar_t** argv) {
                     ImGui::PopStyleColor();
                 }
             }
-            ImGui::Dummy({0,8*unit});toggle("##bloom",tr("bloom"),options.bloom);
+            ImGui::Dummy({0,8*unit});
+            bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);
             ImGui::PopItemWidth();ImGui::EndChild();
