@@ -27,6 +27,7 @@
 #include <set>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace uc {
 struct RenderPixels { uint64_t serial = 0; uint32_t width = 0, height = 0; std::vector<uint8_t> rgba; };
@@ -51,8 +52,16 @@ public:
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
     void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
-    // Upscaling and frame generation settings; called before initialize(), fixed for the process (launcher → config → uc.exe).
+    // Upscaling and frame generation settings; called before initialize(). Another kind or frame generation needs a new renderer (the device
+    // depends on them): the game destroys this one and initializes a fresh one, see lost_copies().
     void configure_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
+    // Same kind and frame generation, another quality mode or sharpness: the upscaler and the scene targets are rebuilt before the next frame.
+    void set_upscale_mode(UpscaleMode mode, double sharpness);
+    UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
+    bool frame_generation_active() const { return dlss_g_ || (fsr_g_ && fsr_g_->has_context()); }
+    // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
+    std::vector<const gx::TexturePixels*> copy_keys() const;
+    void lost_copies(std::vector<const gx::TexturePixels*> keys);
     RenderExtent upscale_internal_extent() const { return {scene_extent_.width, scene_extent_.height}; }   // {0,0} without an upscaler
     uint64_t whole_frame_upscales() const { return whole_frame_upscales_; }   // frames without the game's scene copy: upscaled whole at present
     struct MotionPixels { uint32_t width=0, height=0; std::vector<float> rg; std::array<float,2> at(uint32_t x, uint32_t y) const { const size_t i=(size_t(y)*width+x)*2; return {rg.at(i), rg.at(i+1)}; } };
@@ -225,6 +234,8 @@ private:
     std::vector<PipelineKey> warm_keys_;
     std::vector<std::thread> compilers_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
+    std::unordered_set<const gx::TexturePixels*> lost_copies_;   // EFB copies made by a previous renderer (lost_copies)
+    std::shared_ptr<const gx::TexturePixels> blank_;             // what a lost copy is drawn as
     std::unordered_map<const gx::MeshBuffers*,GpuMesh> meshes_;
     std::vector<std::unique_ptr<MeshSlab>> mesh_slabs_;   // the last one is the one being filled
     uint64_t renders_=0;

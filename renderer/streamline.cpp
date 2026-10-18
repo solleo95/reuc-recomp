@@ -117,12 +117,12 @@ void Streamline::marker(Marker marker) const {
     if (!initialized_ || !frame_generation_ || !api_->frame) return;
     static constexpr sl::PCLMarker kMarkers[]={sl::PCLMarker::eSimulationStart,sl::PCLMarker::eSimulationEnd,sl::PCLMarker::eRenderSubmitStart,
         sl::PCLMarker::eRenderSubmitEnd,sl::PCLMarker::ePresentStart,sl::PCLMarker::ePresentEnd};
-    slPCLSetMarker(kMarkers[size_t(marker)],*api_->frame);
+    UC_SL_CALL(sl::kFeaturePCL,slPCLSetMarker,kMarkers[size_t(marker)],*api_->frame);
 }
 void Streamline::enable_reflex() const {
     if (!initialized_ || !frame_generation_) return;
     sl::ReflexOptions options{}; options.mode=sl::ReflexMode::eLowLatency;
-    if (const auto result=slReflexSetOptions(options); result!=sl::Result::eOk) std::fprintf(stderr,"Reflex: options failed: %s\n",sl::getResultAsStr(result));
+    if (const auto result=UC_SL_CALL(sl::kFeatureReflex,slReflexSetOptions,options); result!=sl::Result::eOk) std::fprintf(stderr,"Reflex: options failed: %s\n",sl::getResultAsStr(result));
 }
 PresentFunctions Streamline::present_functions(VkDevice device) const {
     PresentFunctions f;

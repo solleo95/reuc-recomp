@@ -63,14 +63,14 @@ DlssFrameGeneration::DlssFrameGeneration(const Streamline& streamline, uint32_t 
     }
     sl::DLSSGState state{};
     uint32_t most=1;
-    if (slDLSSGGetState(kViewport,state,nullptr)==sl::Result::eOk && state.numFramesToGenerateMax>=1) most=state.numFramesToGenerateMax;
+    if (UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)==sl::Result::eOk && state.numFramesToGenerateMax>=1) most=state.numFramesToGenerateMax;
     multiplier_=std::clamp<uint32_t>(multiplier,2,most+1);
     if (multiplier_!=multiplier) std::fprintf(stderr,"DLSS Frame Generation: %ux requested, this GPU allows %ux\n",multiplier,multiplier_);
     std::fprintf(stderr,"DLSS Frame Generation: %ux\n",multiplier_);
 }
 DlssFrameGeneration::~DlssFrameGeneration() {
     sl::DLSSGOptions options{}; options.mode=sl::DLSSGMode::eOff;
-    slDLSSGSetOptions(kViewport,options);
+    UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGSetOptions,kViewport,options);
     streamline_.api().free_resources(sl::kFeatureDLSS_G,kViewport);
 }
 void DlssFrameGeneration::set_active(bool active, bool reset) {
@@ -80,7 +80,7 @@ void DlssFrameGeneration::set_active(bool active, bool reset) {
     options.mode=active ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     options.numFramesToGenerate=multiplier_-1;
     options.flags=sl::DLSSGFlags::eRetainResourcesWhenOff;   // menus and movies come and go: no reallocation stutter
-    if (const auto result=slDLSSGSetOptions(kViewport,options); result!=sl::Result::eOk) {
+    if (const auto result=UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGSetOptions,kViewport,options); result!=sl::Result::eOk) {
         std::fprintf(stderr,"DLSS Frame Generation: options failed: %s\n",sl::getResultAsStr(result)); return;
     }
     active_=active; configured_=true;
@@ -98,7 +98,7 @@ void DlssFrameGeneration::tag_hudless(VkCommandBuffer command, const UpscaleImag
 }
 void DlssFrameGeneration::after_present() {
     sl::DLSSGState state{};
-    if (slDLSSGGetState(kViewport,state,nullptr)!=sl::Result::eOk) return;
+    if (UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)!=sl::Result::eOk) return;
     fence_=static_cast<VkSemaphore>(state.inputsProcessingCompletionFence);
     fence_value_=state.lastPresentInputsProcessingCompletionFenceValue;
     presented_+=state.numFramesActuallyPresented; ++rendered_;

@@ -48,7 +48,7 @@ void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support
         support.dlss_g_max_multiplier=2;   // single frame generation unless the state reports more
         if (family<families && sl->create_device(instance, chosen, device_info, device)==VK_SUCCESS) {
             sl::DLSSGState state{};
-            if (slDLSSGGetState(sl::ViewportHandle(0), state, nullptr)==sl::Result::eOk && state.numFramesToGenerateMax>=1)
+            if (UC_SL_CALL(sl::kFeatureDLSS_G, slDLSSGGetState, sl::ViewportHandle(0), state, nullptr)==sl::Result::eOk && state.numFramesToGenerateMax>=1)
                 support.dlss_g_max_multiplier=state.numFramesToGenerateMax+1;
             sl->shutdown();
             vkDestroyDevice(device, nullptr);

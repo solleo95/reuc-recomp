@@ -50,7 +50,7 @@ public:
         if (!token) throw std::runtime_error("DLSS: no frame token");
         if (options_.outputWidth!=in.output_size.width || options_.outputHeight!=in.output_size.height) {
             options_.outputWidth=in.output_size.width; options_.outputHeight=in.output_size.height;
-            check(slDLSSSetOptions(viewport_,options_),"options");
+            check(UC_SL_CALL(sl::kFeatureDLSS,slDLSSSetOptions,viewport_,options_),"options");
             std::fprintf(stderr,"DLSS: %ux%u <- %ux%u preset %c\n",in.output_size.width,in.output_size.height,in.render_size.width,in.render_size.height,
                 char('A'+dlss_preset(mode_)-1));
         }
@@ -97,7 +97,7 @@ public:
     RenderExtent minimum_internal(RenderExtent output) const override {
         auto options=options_; options.outputWidth=output.width; options.outputHeight=output.height;
         sl::DLSSOptimalSettings settings{};
-        if (slDLSSGetOptimalSettings(options,settings)!=sl::Result::eOk || !settings.renderWidthMin) return {1,1};
+        if (UC_SL_CALL(sl::kFeatureDLSS,slDLSSGetOptimalSettings,options,settings)!=sl::Result::eOk || !settings.renderWidthMin) return {1,1};
         // shortcut: the minimum is the scene viewport's; the EFB target is 4/3 taller (640x480 logical for a 640x360 scene), so it is conservative.
         return {settings.renderWidthMin,settings.renderHeightMin};
     }

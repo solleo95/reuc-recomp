@@ -346,9 +346,22 @@ static int real_main(int argc, char** argv) {
 
     std::optional<VideoSession> video;
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
-    uc::VulkanRenderer renderer;
+    std::optional<uc::VulkanRenderer> renderer_storage; renderer_storage.emplace();
+    uc::VulkanRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
     uc::NativeInput input;
-    renderer.set_aim_source([&input] { return input.latest_aim(); });
+    double render_aspect=16.0/9;
+    // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
+    const auto init_renderer=[&](bool compile_screen) {
+        renderer.set_aim_source([&input] { return input.latest_aim(); });
+        renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
+        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
+        renderer.set_prompt_style(options.prompt_style);
+        renderer.set_bloom(options.bloom);
+        if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
+            uc::CompileScreen screen;
+            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
+        } else renderer.warm_pipelines([](size_t,size_t) {});   // a restart: the pipelines come from the disk cache
+    };
     if (!options.demo_record.empty()) input.demo_record(options.demo_record);
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
@@ -361,7 +374,7 @@ static int real_main(int argc, char** argv) {
         const auto display=SDL_GetPrimaryDisplay();
         const auto* mode=display ? SDL_GetDesktopDisplayMode(display) : nullptr;
         if(!mode || mode->w<=0 || mode->h<=0) throw std::runtime_error("monitor display mode unavailable: "+std::string(SDL_GetError()));
-        const double aspect=double(mode->w)/mode->h;
+        const double aspect=double(mode->w)/mode->h; render_aspect=aspect;
         const bool monitor_window=!options.width && !options.height;
         if(!options.width) options.width=uint32_t(mode->w);
         if(!options.height) options.height=uint32_t(mode->h);
@@ -392,14 +405,7 @@ static int real_main(int argc, char** argv) {
         }
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
-        renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
-        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,aspect);
-        renderer.set_prompt_style(options.prompt_style);
-        renderer.set_bloom(options.bloom);
-        {   // compile every known pipeline now, so no pipeline is built while the game runs
-            uc::CompileScreen screen;
-            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
-        }
+        init_renderer(true);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);
@@ -459,6 +465,7 @@ static int real_main(int argc, char** argv) {
     auto next_control=start;
     // Takes the next guest frame, renders it and retires finished ones. Called from the loop and, while Windows runs its modal
     // move/resize loop inside SDL_PollEvent, from the event watch below, so the guest keeps running while the window is dragged.
+    bool at_frame_boundary=false;   // the last rendered packet presented: a renderer restart starts the next frame cleanly
     auto render_pending = [&]() -> bool {
         bool progressed = false;
         if (!pending) pending = packets.try_take();
@@ -526,6 +533,7 @@ static int real_main(int argc, char** argv) {
             audit_seen_geometry |= !pending->draws.empty();
             const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
             if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
+            at_frame_boundary=pending->present;
             pending.reset();
             }
         }
@@ -577,6 +585,19 @@ static int real_main(int argc, char** argv) {
             }
         }
         return progressed;
+    };
+    // Upscaler kind or frame generation switch: the device depends on them, so the renderer is replaced between two frames. Every submitted packet
+    // is completed first (the guest waits for them); the EFB copies the old renderer held are drawn blank until the game copies them again.
+    const auto restart_renderer=[&] {
+        const auto began=std::chrono::steady_clock::now();
+        do { for (uint64_t serial : renderer.poll_completions()) if (packets.complete(serial)) uc::gx_completed(serial); }
+        while (renderer.wait_for_pending(1000000000ull));
+        auto lost=renderer.copy_keys();
+        renderer_storage.reset(); renderer_storage.emplace();
+        init_renderer(false);
+        renderer.lost_copies(std::move(lost));
+        std::fprintf(stderr,"Renderer restarted in %.0f ms: upscaler %s, frame generation %s\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count(),
+            std::string(uc::upscaler_name(renderer.active_upscaler())).c_str(),renderer.frame_generation_active() ? "on" : "off");
     };
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.

@@ -759,6 +759,25 @@ void VulkanRenderer::configure_upscaling(UpscalerKind kind, UpscaleMode mode, bo
     upscaler_kind_=kind; upscale_mode_=mode; sharpening_=sharpening; sharpness_=sharpness;
     frame_generation_=frame_generation && kind!=UpscalerKind::off; frame_generation_multiplier_=multiplier;
 }
+void VulkanRenderer::set_upscale_mode(UpscaleMode mode, double sharpness) {
+    owner();
+    if (mode==upscale_mode_ && sharpness==sharpness_) return;
+    upscale_mode_=mode; sharpness_=sharpness;
+    if (!device || !upscaler_) return;
+    vk_check(vkDeviceWaitIdle(device), "upscale mode switch");
+    dlss_g_.reset(); upscaler_.reset();   // rebuild() makes both again (and the scene targets at the new internal size)
+    resized_=true;
+}
+std::vector<const gx::TexturePixels*> VulkanRenderer::copy_keys() const {
+    std::vector<const gx::TexturePixels*> keys;
+    for (const auto& [key,texture] : copy_textures_) keys.push_back(key);
+    keys.insert(keys.end(), lost_copies_.begin(), lost_copies_.end());
+    return keys;
+}
+void VulkanRenderer::lost_copies(std::vector<const gx::TexturePixels*> keys) {
+    lost_copies_.insert(keys.begin(), keys.end());
+    if (!blank_) { auto blank=std::make_shared<gx::TexturePixels>(); blank->levels.push_back({1,1,{0,0,0,0}}); blank_=std::move(blank); }
+}
 void VulkanRenderer::set_bloom(bool enabled) {
     owner();
     bloom_=enabled;
@@ -1286,14 +1305,18 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         for (size_t i=0;i<count;++i) {
             std::array<VkDescriptorImageInfo,8> image{};
             for(size_t map=0;map<8;++map) {
-                const auto& source=draw_texture(packet.draws[i],map);
-                if(source && source->gpu_only) {
-                    auto copied=copy_textures_.find(source.get());
-                    if(copied==copy_textures_.end() || !copied->second.initialized) throw std::invalid_argument("native EFB texture used before its copy");
-                    slot.copy_sources.push_back(source);
-                    image[map]={VK_NULL_HANDLE,copied->second.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    continue;
+                const auto* chosen=&draw_texture(packet.draws[i],map);
+                if(*chosen && (*chosen)->gpu_only) {
+                    auto copied=copy_textures_.find(chosen->get());
+                    if(copied!=copy_textures_.end() && copied->second.initialized) {
+                        slot.copy_sources.push_back(*chosen);
+                        image[map]={VK_NULL_HANDLE,copied->second.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        continue;
+                    }
+                    if(!lost_copies_.contains(chosen->get())) throw std::invalid_argument("native EFB texture used before its copy");
+                    chosen=&blank_;
                 }
+                const auto& source=*chosen;
                 auto found=texture_indices.find(source.get());
                 if (found==texture_indices.end()) {
                     auto texture=make_texture(source.get()); texture.source=source;
