@@ -48,7 +48,14 @@
 #include "frame_log.h"
 #include "audio_gap_audit.h"
 #include "vulkan_renderer.h"
+#include "host_keys.h"
+#include "launch.h"
+#include "live_settings.h"
+#include "localization.h"
+#include "prompt_hooks.h"
+#include "settings_menu.h"
 #include <algorithm>
+#include <future>
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -137,11 +144,12 @@ void print_stats() {
         (unsigned long long)gx.draws, (unsigned long long)gx.vertices, (unsigned long long)gx.submitted, (unsigned long long)gx.completed, (unsigned long long)gx.outside_bytes, (unsigned long long)gx.copies);
 }
 
-fs::path exe_dir() {
+fs::path exe_path() {
     wchar_t buf[MAX_PATH];
     GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    return fs::path(buf).parent_path();
+    return fs::path(buf);
 }
+fs::path exe_dir() { return exe_path().parent_path(); }
 std::vector<uint8_t> slurp(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -198,7 +206,8 @@ static int real_main(int argc, char** argv) {
     auto parsed = uc::parse_options(arguments);
     if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
-    const auto input_config=uc::load_config(options.config.empty() ? exe_dir()/"config.json" : options.config);
+    const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
+    const auto input_config=uc::load_config(config_path);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
     if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
     options=std::get<uc::Options>(std::move(parsed));
@@ -593,6 +602,62 @@ static int real_main(int argc, char** argv) {
         std::fprintf(stderr,"Renderer restarted in %.0f ms: upscaler %s, frame generation %s\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count(),
             std::string(uc::upscaler_name(renderer.active_upscaler())).c_str(),renderer.frame_generation_active() ? "on" : "off");
     };
+    // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
+    uc::HostKeys host_keys;
+    bool restart_pending=false;   // an upscaler / frame generation pick: the renderer is replaced at the next frame boundary
+    std::optional<uc::LiveSettings> live_settings;
+    std::optional<uc::SettingsMenu> settings_menu;
+    std::shared_ptr<std::promise<std::string>> features_promise; std::shared_future<std::string> features_query; std::optional<uc::FeatureReport> features;
+    if (!options.headless) {
+        const auto* desktop=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+        const uint32_t monitor_width=desktop ? uint32_t(desktop->w) : options.width, monitor_height=desktop ? uint32_t(desktop->h) : options.height;
+        uc::SettingsTargets targets;
+        targets.render_scale=[&renderer,monitor_width,monitor_height](double scale) { renderer.set_render_scale(scale ? scale : uc::monitor_render_scale(monitor_width,monitor_height)); };
+        targets.upscaling=[&](const uc::Options& next) {
+            restart_pending|=next.upscaler!=options.upscaler || next.frame_generation!=options.frame_generation || next.sharpening!=options.sharpening
+                || next.frame_generation_multiplier!=options.frame_generation_multiplier;
+            options.upscaler=next.upscaler; options.upscale_mode=next.upscale_mode; options.sharpening=next.sharpening; options.sharpness=next.sharpness;
+            options.frame_generation=next.frame_generation && !deterministic; options.frame_generation_multiplier=next.frame_generation_multiplier;
+            if (!restart_pending) renderer.set_upscale_mode(options.upscale_mode,options.sharpness);
+        };
+        targets.fps_limit=[&](std::optional<uint32_t> limit) {
+            options.fps_limit=limit; frame_limit.set_limit(limit);
+            uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
+        };
+        targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
+        targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
+        targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
+        live_settings.emplace(config_path,input_config,std::move(targets));
+        if (controlled) features=uc::FeatureReport{true,true,true,true,4};   // test runs exercise every choice whatever this PC has
+        else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
+            features_promise=std::make_shared<std::promise<std::string>>(); features_query=features_promise->get_future().share();
+            std::thread([promise=features_promise,exe=exe_path(),config=config_path] { promise->set_value(uc::query_features(exe,config)); }).detach();
+        }
+        const auto config_language=uc::launcher::config_language(input_config);
+        settings_menu.emplace(*live_settings,config_language=="system" ? uc::launcher::system_language() : config_language,[&]() -> const uc::FeatureReport* {
+            if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
+            return features ? &*features : nullptr;
+        },monitor_width,monitor_height);
+    }
+    // Menu / pause state → renderer, mouse, game input, audio. Called after every host key and after a renderer restart.
+    const auto apply_host_keys=[&] {
+        if (options.headless) return;
+        renderer.set_menu(host_keys.menu_open ? std::function<void()>([&] { settings_menu->build(); }) : std::function<void()>(),[&] { settings_menu->setup(); });
+        uc::game_pacing_set_paused(host_keys.paused);
+        if (audio) audio->pause(host_keys.paused);
+        const bool playing=!host_keys.menu_open && !host_keys.paused;
+        if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),!host_keys.menu_open)) throw std::runtime_error(SDL_GetError());   // the menu needs the cursor
+        input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
+    };
+    const auto host_key_pressed=[&](SDL_Scancode key) {   // true when the key belongs to the port (never to the game)
+        const auto result=uc::host_key(host_keys,key,settings_menu && settings_menu->capturing());
+        if (result==uc::HostKeyResult::none) return false;
+        if (result!=uc::HostKeyResult::consumed) {
+            if (result==uc::HostKeyResult::pause_toggled) std::fprintf(stderr,"Game %s\n",host_keys.paused ? "paused" : "resumed");
+            apply_host_keys();
+        }
+        return true;
+    };
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
     auto service_frame = [&] {
@@ -682,6 +747,14 @@ static int real_main(int argc, char** argv) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
                 if(controlled) continue;
+                if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && host_key_pressed(event.key.scancode)) continue;
+                if(event.type==SDL_EVENT_KEY_UP && (event.key.scancode==SDL_SCANCODE_INSERT || event.key.scancode==SDL_SCANCODE_P) && !settings_menu->capturing()) continue;   // the releases of host keys
+                if(host_keys.menu_open) {
+                    if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) settings_menu->focus_lost();
+                    if(settings_menu->capturing()) settings_menu->capture_event(event); else renderer.menu_event(event);
+                    continue;
+                }
+                if(host_keys.paused) continue;   // nothing reaches the game while paused
                 int width=0,height=0;
                 if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
                 host_input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
@@ -694,6 +767,13 @@ static int real_main(int argc, char** argv) {
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();
             for (int drained = 0; drained < 64 && !close && render_pending(); ++drained) {}   // a game frame is ~23 packets: do not pay a wait per packet
+            if (settings_menu) settings_menu->commit();   // the menu's picks, applied outside rendering
+            if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested) {
+                restart_pending=false;
+                restart_renderer();
+                apply_host_keys();   // the new renderer gets the menu back
+                if (options.upscaler!=uc::UpscalerKind::off && renderer.active_upscaler()!=options.upscaler) settings_menu->upscaler_failed(options.upscaler);
+            }
         }
         auto now = std::chrono::steady_clock::now();
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;

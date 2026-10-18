@@ -1,0 +1,238 @@
+#include "settings_menu.h"
+#include "graphite.h"
+#include "localization.h"
+#include "prompt_icons.h"
+#include "render_scale.h"
+#include <intrin.h>
+#include <SDL3/SDL.h>
+#include "imgui.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+namespace uc {
+namespace {
+constexpr UpscaleMode kModes[]={UpscaleMode::native,UpscaleMode::quality,UpscaleMode::balanced,UpscaleMode::performance,UpscaleMode::ultra_performance};
+constexpr uint32_t kLimits[]={30,60,90,120,144,165,240,360,0};   // the launcher's list; 0 = unlimited
+}
+SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height)
+    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),editor_(live.bindings()) {}
+const char* SettingsMenu::tr(std::string_view key) const { return launcher::text(language_,key).data(); }
+void SettingsMenu::setup() {
+    fonts_=ui::load_fonts(*ImGui::GetIO().Fonts);   // the previous menu context (if any) is gone: its atlas no longer reads the old bytes
+}
+void SettingsMenu::capture_event(const SDL_Event& event) {
+    if((event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) && !event.key.repeat) editor_.event({PhysicalKind::key,uint16_t(event.key.scancode)},event.key.down);
+    else if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) editor_.event({PhysicalKind::mouse,event.button.button},event.button.down);
+    else if(event.type==SDL_EVENT_MOUSE_WHEEL) editor_.wheel(event.wheel.y==0 ? 0 : ((event.wheel.y>0)!=(event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED) ? 1 : -1));
+    else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) editor_.focus(false);
+}
+void SettingsMenu::commit() {
+    if(pending_) { const auto next=*pending_; pending_.reset(); live_.apply(next); }
+    if(!editor_.capturing() && editor_.bindings()!=live_.bindings()) live_.apply(editor_.bindings());
+}
+void SettingsMenu::build() {
+    const auto& io=ImGui::GetIO();
+    const float unit=std::max(.75f,io.DisplaySize.y/1080.f);
+    launcher::graphite_style(); ImGui::GetStyle().ScaleAllSizes(unit);
+    ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;   // ScaleAllSizes floors thin borders to zero below 1x
+    ImGui::GetStyle().WindowPadding={28*unit,22*unit};
+    const ImVec2 size{std::min(io.DisplaySize.x-40*unit,900*unit),std::min(io.DisplaySize.y-40*unit,720*unit)};
+    ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+    ImGui::SetNextWindowSize(size,ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(.94f);
+    ImGui::PushFont(fonts_.sans,std::round(22*unit));
+    ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PushFont(fonts_.serif,std::round(32*unit));ImGui::TextUnformatted(tr("graphics_title"));ImGui::PopFont();
+    ImGui::Dummy({0,6*unit});
+    if(ImGui::BeginTabBar("tabs")) {
+        if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
+        ImGui::EndTabBar();
+    }
+    if(const auto& error=live_.error()) {
+        ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1});
+        ImGui::TextWrapped("%s",tr(error->find("changed since loading")!=std::string::npos ? "stale" : "error"));
+        ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",error->c_str());
+    }
+    ImGui::End();
+    ImGui::PopFont();
+}
+void SettingsMenu::main_tab(float unit) {
+    auto options=current();
+    const auto* features=features_();
+    const float column=(ImGui::GetContentRegionAvail().x-40*unit)/2;
+    ImGui::Dummy({0,8*unit});
+    ImGui::BeginChild("graphics",{0,0});
+    ImGui::BeginGroup(); ImGui::PushItemWidth(column);
+    ImGui::TextUnformatted(tr("scale"));
+    const auto scale_label=[&](double scale) {
+        const double effective=scale ? scale : monitor_render_scale(monitor_width_,monitor_height_);
+        const auto extent=manual_render_extent(effective,double(monitor_width_)/monitor_height_);
+        char value[100]; std::snprintf(value,sizeof value,"%.2g× · %u × %u",effective,extent.width,extent.height);
+        return scale ? (scale==1 ? "1× (Native) · "+std::to_string(extent.width)+" × "+std::to_string(extent.height) : std::string(value))
+                     : std::string(tr("monitor"))+" · "+std::to_string(extent.width)+" × "+std::to_string(extent.height);
+    };
+    if(ImGui::BeginCombo("##scale",scale_label(options.render_scale).c_str())) {
+        for(const double scale:{0.,1.,1.5,2.,3.}) if(ImGui::Selectable(scale_label(scale).c_str(),options.render_scale==scale)) options.render_scale=scale;
+        ImGui::EndCombo();
+    }
+    ImGui::Dummy({0,6*unit});
+    ImGui::TextUnformatted(tr("fps_limit"));
+    const uint32_t current_limit=options.fps_limit.value_or(options.unlock_60fps ? 60 : 30);
+    const auto limit_label=[&](uint32_t value) { return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited")); };
+    if(ImGui::BeginCombo("##fps",limit_label(current_limit).c_str(),ImGuiComboFlags_HeightLarge)) {
+        for(const uint32_t value:kLimits) if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value)) options.fps_limit=value;
+        ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth(); ImGui::EndGroup();
+    ImGui::SameLine(0,40*unit);
+    ImGui::BeginGroup(); ImGui::PushItemWidth(column);
+    const auto supported=[&](UpscalerKind kind,bool generation,std::string& why) {
+        if(kind==UpscalerKind::off) return true;
+        if(failed_.contains(kind)) { why=tr("launcher_only"); return false; }
+        if(!features) { why=tr("checking"); return false; }
+        const bool ok=kind==UpscalerKind::dlss ? (generation ? features->dlss_g : features->dlss) : (generation ? features->fsr_fg : features->fsr);
+        const auto& reason=kind==UpscalerKind::dlss ? (generation ? features->dlss_g_reason : features->dlss_reason) : (generation ? features->fsr_fg_reason : features->fsr_reason);
+        if(!ok) why=reason.empty() ? tr("unsupported") : reason;
+        return ok;
+    };
+    const auto kind_label=[&](UpscalerKind kind) { return kind==UpscalerKind::dlss ? "DLSS" : kind==UpscalerKind::fsr ? "FSR" : tr("off"); };
+    ImGui::TextUnformatted(tr("upscaling"));
+    if(ImGui::BeginCombo("##upscaling",kind_label(options.upscaler))) {
+        for(const auto kind:{UpscalerKind::off,UpscalerKind::dlss,UpscalerKind::fsr}) {
+            std::string why; const bool ok=supported(kind,false,why);
+            ImGui::BeginDisabled(!ok && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left
+            if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) options=with_upscaler(options,kind);
+            ImGui::EndDisabled();
+            if(!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",why.c_str());
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Dummy({0,6*unit});
+    ImGui::TextUnformatted(tr("quality"));
+    const bool upscaling=options.upscaler!=UpscalerKind::off;
+    const auto mode_label=[&](UpscaleMode mode) -> std::string {
+        switch(mode) {
+        case UpscaleMode::native: return options.upscaler==UpscalerKind::fsr ? "Native AA" : "DLAA";
+        case UpscaleMode::quality: return tr("quality");
+        case UpscaleMode::balanced: return tr("balanced");
+        case UpscaleMode::performance: return tr("performance");
+        case UpscaleMode::ultra_performance: return tr("ultra_performance");
+        }
+        return {};
+    };
+    ImGui::BeginDisabled(!upscaling);
+    if(ImGui::BeginCombo("##quality",upscaling ? mode_label(options.upscale_mode).c_str() : "—")) {
+        for(const auto mode:kModes) if(ImGui::Selectable(mode_label(mode).c_str(),options.upscale_mode==mode)) options.upscale_mode=mode;
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    ImGui::Dummy({0,6*unit});
+    ImGui::TextUnformatted(tr("framegen"));
+    const auto choice=frame_generation_choice(options);
+    const auto choice_label=[&](FrameGenChoice value) -> std::string {
+        if(value==FrameGenChoice::off) return tr("off");
+        const uint32_t multiplier=value==frame_generation_choice(options) ? options.frame_generation_multiplier : 2;
+        return std::string(value==FrameGenChoice::dlss ? "DLSS" : "FSR")+" X"+std::to_string(multiplier);
+    };
+    if(ImGui::BeginCombo("##framegen",choice_label(choice).c_str())) {
+        for(const auto value:{FrameGenChoice::off,FrameGenChoice::dlss,FrameGenChoice::fsr}) {
+            std::string why;
+            const bool ok=value==FrameGenChoice::off || (supported(value==FrameGenChoice::dlss ? UpscalerKind::dlss : UpscalerKind::fsr,false,why) &&
+                                                         supported(value==FrameGenChoice::dlss ? UpscalerKind::dlss : UpscalerKind::fsr,true,why));
+            ImGui::BeginDisabled(!ok && value!=choice);
+            if(ImGui::Selectable(choice_label(value).c_str(),choice==value)) options=with_frame_generation(options,value);
+            ImGui::EndDisabled();
+            if(!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",why.c_str());
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth(); ImGui::EndGroup();
+    ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
+    bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow
+    if(ImGui::Checkbox("##bloom",&no_bloom)) options.bloom=!no_bloom;
+    ImGui::SameLine();   // the label wraps beside the box (Russian is wider than the menu at small sizes) and toggles it too
+    ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextWrapped("%s",tr("bloom")); ImGui::EndGroup();
+    if(ImGui::IsItemClicked()) options.bloom=!options.bloom;
+    ImGui::EndChild();
+    pending_=options;
+}
+void SettingsMenu::controls_tab(float unit) {
+    auto options=current();
+    ImGui::Dummy({0,8*unit});
+    ImGui::TextUnformatted(tr("style"));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.45f);
+    const char* styles[]={tr("gray"),tr("cyan")};
+    if(ImGui::BeginCombo("##style",styles[size_t(options.prompt_style)])) {
+        for(size_t i=0;i<2;++i) if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i)) options.prompt_style=PromptStyle(i);
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine(0,25*unit);
+    {   // the three mouse pictures of the chosen style
+        const float ph=ImGui::GetFrameHeight(); const auto p=ImGui::GetCursorScreenPos(); auto* draw=ImGui::GetWindowDrawList();
+        for(int i=0;i<3;++i) draw_mouse_icon(*draw,{p.x+i*ph,p.y},{ph*.65f,ph},{i==2 ? PhysicalKind::wheel : PhysicalKind::mouse,uint16_t(i==1 ? 3 : 1)},false,options.prompt_style);
+        ImGui::Dummy({ph*3,ph});
+    }
+    pending_=options;
+    ImGui::Dummy({0,6*unit});
+    const auto physical_name=[&](PhysicalInput input) -> std::string {
+        if(input.kind==PhysicalKind::key) {
+            const auto* name=SDL_GetScancodeName(SDL_Scancode(input.code));
+            return name && *name ? name : std::string(tr("key"))+" "+std::to_string(input.code);
+        }
+        if(input.kind==PhysicalKind::wheel) return tr(input.code==1 ? "wheel_up" : "wheel_down");
+        if(input.code==1) return tr("lmb"); if(input.code==3) return tr("rmb"); if(input.code==2) return tr("mmb");
+        return std::string(tr("mouse"))+" "+std::to_string(input.code);
+    };
+    const auto binding_name=[&](const Binding& binding) -> std::string {
+        if(binding.kind==BindingKind::interact_fire) return tr("interact_fire");
+        if(binding.kind==BindingKind::interact_motion) return tr("interact_motion");
+        if(binding.kind==BindingKind::qte_motion) return tr("rapid");
+        std::string text; for(auto modifier:binding.modifiers) text+=physical_name(modifier)+" + ";
+        return text+physical_name(binding.input);
+    };
+    if(ImGui::Button(tr("defaults"))) editor_.restore_defaults();
+    if(editor_.capturing()) { ImGui::SameLine(); ImGui::TextWrapped("%s",tr("capture")); }
+    if(editor_.error()) ImGui::TextWrapped("%s: %s",tr("rejected"),editor_.error()->c_str());
+    ImGui::BeginDisabled(editor_.capturing().has_value());
+    if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_RowBg,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
+        ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);
+        ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
+        ImGui::TableSetupColumn("+",ImGuiTableColumnFlags_WidthFixed,46*unit);
+        ImGui::TableSetupColumn(tr("clear"),ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(tr("clear")).x+28*unit);
+        for(size_t i=0;i<size_t(Action::count);++i) {
+            const auto action=Action(i); ImGui::PushID(int(i)); ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextWrapped("%s",tr(action_names[i]));
+            ImGui::TableSetColumnIndex(1);
+            const auto& entries=editor_.bindings()[i];
+            std::string names; for(const auto& entry:entries) { if(!names.empty()) names+=", "; names+=binding_name(entry); }
+            if(names.empty()) names=tr("unbound");
+            if(ImGui::Button(names.c_str(),{-1,0})) editor_.begin_capture(action,true);
+            if(ImGui::BeginPopupContextItem("binding-menu")) {
+                for(size_t j=0;j<entries.size();++j) {
+                    ImGui::PushID(int(j)); const auto label=std::string(tr("remove"))+": "+binding_name(entries[j]);
+                    const bool remove=ImGui::MenuItem(label.c_str()); ImGui::PopID();
+                    if(remove) { editor_.remove(action,j); break; }
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::TableSetColumnIndex(2);
+            const bool special=action==Action::grenade || action==Action::knife || action==Action::qte_shake;
+            if(ImGui::Button("+",{-1,0})) { if(special) ImGui::OpenPopup("add-binding"); else editor_.begin_capture(action); }
+            if(ImGui::BeginPopup("add-binding")) {
+                if(ImGui::MenuItem(tr("add"))) editor_.begin_capture(action);
+                if(action==Action::grenade && ImGui::MenuItem(tr("chord"))) editor_.add(action,{BindingKind::interact_fire,{},{}});
+                if(action==Action::knife && ImGui::MenuItem(tr("gesture"))) editor_.add(action,{BindingKind::interact_motion,{},{}});
+                if(action==Action::qte_shake && ImGui::MenuItem(tr("motion"))) editor_.add(action,{BindingKind::qte_motion,{},{}});
+                ImGui::EndPopup();
+            }
+            ImGui::TableSetColumnIndex(3);
+            if(ImGui::Button(tr("clear"),{-1,0})) editor_.clear(action);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndDisabled();
+}
+}

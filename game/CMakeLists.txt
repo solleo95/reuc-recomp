@@ -58,8 +58,9 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(uc_smoke smoke.cpp)
   target_link_libraries(uc_smoke PRIVATE uc_game uc_common test_support)
   install(TARGETS uc_smoke RUNTIME DESTINATION tools)
-  add_executable(uc uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm)
+  add_executable(uc uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm
+    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch)
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders

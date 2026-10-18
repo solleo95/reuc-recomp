@@ -21,7 +21,8 @@ void LiveSettings::apply(const Options& next) {
 }
 void LiveSettings::apply(const Bindings& next) {
     if(next==document_.input) return;
-    targets_.bindings(next);   // validates (NativeInput::bindings throws on an invalid set) before anything is stored
+    // The target validates (NativeInput::bindings throws on an invalid set) before anything is stored.
+    try { targets_.bindings(next); } catch(const std::exception& error) { error_=error.what(); return; }
     document_.input=next;
     save();
 }
