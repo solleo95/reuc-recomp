@@ -3,6 +3,7 @@
 #include "localization.h"
 #include "prompt_icons.h"
 #include "render_scale.h"
+#include "rt_ui.h"
 #include <intrin.h>
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -222,11 +223,31 @@ void SettingsMenu::effects_tab(float unit) {
     };
     level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
     level_combo("##blur","motion_blur",options.effects.motion_blur);
+    const auto rt=rt_ui(options.effects,features!=nullptr,features && features->ray_tracing);
     ImGui::Dummy({0,6*unit});
-    ImGui::BeginDisabled(!path && !options.effects.contact_shadows);
+    ImGui::BeginDisabled((!path && !options.effects.contact_shadows) || rt.contact_replaced);
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
     ImGui::EndDisabled();
-    if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
+    if((!path || rt.contact_replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(rt.contact_replaced ? "replaced_by_rt" : "effects_unavailable"));
+    // Ray tracing: the master checkbox, then the levels of the effects that work (RT shadows replace the shadow map and the contact shadows above).
+    ImGui::Dummy({0,6*unit});
+    ImGui::BeginDisabled(!rt.master_enabled);
+    compact_checkbox("##rt",tr("ray_tracing"),options.effects.ray_tracing,unit);
+    ImGui::EndDisabled();
+    if(!rt.master_enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        const std::string why=std::string(tr("rt_unavailable"))+(features && !features->ray_tracing_reason.empty() ? " ("+features->ray_tracing_reason+")" : "");
+        ImGui::SetTooltip("%s",why.c_str());
+    }
+    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows}}) {
+        ImGui::Dummy({0,6*unit});
+        ImGui::TextUnformatted(tr(title));
+        ImGui::BeginDisabled(!rt.levels_enabled);
+        if(ImGui::BeginCombo(id,preset_label(*value).c_str())) {
+            for(const auto level:{EffectLevel::off,EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) if(ImGui::Selectable(preset_label(level).c_str(),*value==level)) *value=level;
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+    }
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

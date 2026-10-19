@@ -4,6 +4,7 @@
 #include "options_config.h"
 #include "feature_report.h"
 #include "render_scale.h"
+#include "rt_ui.h"
 #include "prompt_icons.h"
 #include "localization.h"
 #include "graphite.h"
@@ -501,8 +502,8 @@ int run(int argc,wchar_t** argv) {
             ImGui::Dummy({0,8*unit});
             {   // effects with off and four presets; greyed out on a GPU without the screen-space path (a saved choice stays visible and can be left)
                 const auto level_label=[&](uc::EffectLevel level) -> std::string {return level==uc::EffectLevel::off ? tr("off") : tr(level==uc::EffectLevel::low ? "level_low" : level==uc::EffectLevel::medium ? "level_medium" : level==uc::EffectLevel::high ? "level_high" : "level_ultra");};
-                const auto level_combo=[&](const char* id,const char* title,const std::string& tracked,uc::EffectLevel& value) {
-                    const bool blocked=features_ready && !features.effects && value==uc::EffectLevel::off;
+                const auto level_combo=[&](const char* id,const char* title,const std::string& tracked,uc::EffectLevel& value,bool locked=false,const char* locked_why=nullptr) {
+                    const bool blocked=(features_ready && !features.effects && value==uc::EffectLevel::off) || locked;   // locked: the ray tracing levels wait for their master switch
                     ImGui::TextUnformatted(tr(title));push_font(ui.sans,22);
                     ImGui::BeginDisabled(blocked);
                     const bool open=combo(id,level_label(value).c_str());track(tracked);
@@ -514,17 +515,27 @@ int run(int argc,wchar_t** argv) {
                         ImGui::EndCombo();
                     }
                     ImGui::EndDisabled();
-                    if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("effects_unavailable"));
+                    if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)ImGui::SetTooltip("%s",hint);}
                     ImGui::PopFont();
                 };
                 level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
+                // Ray tracing: the master checkbox, then the levels of the effects that work (RT shadows replace the shadow map and the contact shadows).
+                const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
+                const std::string rt_why=std::string(tr("rt_unavailable"))+(features.ray_tracing_reason.empty() ? "" : " ("+features.ray_tracing_reason+")");
+                ImGui::Dummy({0,8*unit});
+                toggle("##rt",tr("ray_tracing"),options.effects.ray_tracing,!rt.master_enabled,rt_why.c_str());
+                ImGui::Dummy({0,8*unit});
+                level_combo("##rt-shadows","rt_shadows","rt-shadows",options.effects.rt_shadows,!rt.levels_enabled);
+                ImGui::Dummy({0,8*unit});
+                level_combo("##rt-local-shadows","rt_local_shadows","rt-local-shadows",options.effects.rt_local_shadows,!rt.levels_enabled);
             }
+            const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
             ImGui::Dummy({0,8*unit});
             toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
-            toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,features_ready && !features.effects && !options.effects.contact_shadows,tr("effects_unavailable"));
+            toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,(features_ready && !features.effects && !options.effects.contact_shadows) || rt.contact_replaced,rt.contact_replaced ? tr("replaced_by_rt") : tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,20*unit});
