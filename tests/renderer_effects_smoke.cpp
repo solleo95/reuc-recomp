@@ -707,6 +707,9 @@ int main(int argc, char** argv) {
                     return light;
                 };
                 float shell=0.f;   // half size of a static box around the point light (its fixture), 0 = none
+                bool vertical_plate=true, roof=false;   // the standing plate of the fixture; a horizontal plate above the floor (the overhead light's occluder)
+                float roof_y=0.2f;
+                const auto roof_corners=[&]() { return std::array<std::array<float,3>,4>{{{-1,roof_y,-5},{1,roof_y,-5},{1,roof_y,-3},{-1,roof_y,-3}}}; };
                 bool plate_skinned=true;   // only skinned draws (per-vertex matrices: characters) occlude; the game's static level geometry does not (see below)
                 auto surface=[&](const std::array<std::array<float,3>,4>& corners,std::array<float,3> normal,bool plate,Light kind,bool lit) {
                     auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
@@ -729,7 +732,8 @@ int main(int argc, char** argv) {
                     gx::FramePacket scene; scene.present=false;
                     auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
                     auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
-                    scene.draws.push_back(std::move(floor)); scene.draws.push_back(std::move(plate));
+                    scene.draws.push_back(std::move(floor)); if(vertical_plate) scene.draws.push_back(std::move(plate));
+                    if(roof) { auto draw=surface(roof_corners(),{0,-1,0},true,kind,lit); draw.state.edit().descriptors[0]=gx::Mode::none; draw.transforms.edit().projection[0][0]=zoom; scene.draws.push_back(std::move(draw)); }   // static: a level ceiling
                     if(shell>0) {   // a static box around the point light (its fixture): six faces
                         const float cx=1.5f, cy=1.5f, cz=-3.f, h=shell;
                         const std::array<std::array<std::array<float,3>,4>,6> faces{{
@@ -856,6 +860,38 @@ int main(int argc, char** argv) {
                 }
                 CHECK(blocked(shadowed_sun,Light::directional) && blocked(shadowed_point,Light::point));   // the two points exercise a blocked rig and a blocked lamp
                 dual=false; ambient={0.35f,0.35f,0.35f,1.f};
+                // (b4) the synthetic overhead light (rt_shadow_math.h): under rt_local_shadows a static roof above the floor shadows it by the softened strength, on top of the lamps'
+                // own shadows; the sun level alone does not run it
+                {
+                    vertical_plate=false; roof=true;
+                    const auto& toward=uc::kRtOverheadDirection;
+                    const double reach=1.2/toward[1];   // from the floor (y = -1) up to the roof (y = 0.2)
+                    const Vec under{-0.3,-1,-3.8}, aside{3.0,-1,-3.8};
+                    const auto inside=[&](const Vec& p) { const double x=p[0]+toward[0]*reach, z=p[2]+toward[2]*reach; return x>=-1 && x<=1 && z>=-5 && z<=-3; };
+                    CHECK(inside(under) && !inside(aside));
+                    frame(local_only,Light::point); frame(local_only,Light::point);
+                    signal=renderer.capture_rt_shadow_signal();
+                    // the fixture's point lamp (3.67 units from the eye, so a lamp, not the headlamp) is blocked by the roof too: its share goes (blocked_lamp), the overhead light takes its strength on top
+                    const float lamp_share=uc::gx_light_contribution(light_uniform(Light::point),3,2,{float(under[0]),float(under[1]),float(under[2])},{0,1,0});
+                    const float lamp_blocked[]={0.f};
+                    const double blocked_lamp=uc::shadow_factor(ambient[0],std::array<float,1>{lamp_share},lamp_blocked);
+                    const double roofed=signal_at(signal,under,2), open=signal_at(signal,aside,2);
+                    std::fprintf(stderr,"rt-shadows: overhead light under a roof %.3f (expected %.3f), in the open %.3f\n",roofed,blocked_lamp*(1.0-uc::kRtOverheadStrength),open);
+                    CHECK(std::abs(roofed-blocked_lamp*(1.0-uc::kRtOverheadStrength))<=0.05 && std::abs(open-1.0)<=0.01);
+                    frame(sun_only,Light::point); frame(sun_only,Light::point);
+                    signal=renderer.capture_rt_shadow_signal();
+                    CHECK(std::abs(signal_at(signal,under,2)-1.0)<=0.01);   // rt_local_shadows is off: neither the lamp nor the overhead light is traced
+                    // a roof beyond the light's reach (the car's own roof above a seat) does not shadow the floor under it
+                    roof_y=5.f;
+                    const double far_reach=(roof_y+1.0)/toward[1];
+                    CHECK(far_reach>uc::kRtOverheadReach);
+                    frame(local_only,Light::point); frame(local_only,Light::point);
+                    signal=renderer.capture_rt_shadow_signal();
+                    std::fprintf(stderr,"rt-shadows: roof beyond the reach: %.3f\n",signal_at(signal,under,2));
+                    CHECK(std::abs(signal_at(signal,under,2)-1.0)<=0.01);
+                    roof_y=0.2f;
+                    vertical_plate=true; roof=false;
+                }
                 // (c) nothing is lit: every factor is 1 (Review Focus 1)
                 frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
                 signal=renderer.capture_rt_shadow_signal();

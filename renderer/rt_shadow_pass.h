@@ -21,6 +21,7 @@ struct RtShadowInputs {
     std::array<float,6> viewport{};       // x, y, width, height in target pixels, then the viewport's near and far depth
     ViewParams view{};
     EffectLevel sun=EffectLevel::off, local=EffectLevel::off;   // the rt_shadows and rt_local_shadows levels
+    bool level_light=false;               // trace the synthetic overhead light and skip the headlamp (rt_shadow_math.h): the level's shadows; renderer: rt_local_shadows is on
     uint32_t frame=0;                     // noise frame for the soft-shadow jitter (0 keeps it fixed)
     uint32_t slot=0;                      // the frame slot: its descriptor sets are rewritten here (its previous frame has completed)
 };

@@ -17,7 +17,10 @@ struct Params {
     float sunCone;        // half angle of the soft-shadow cone, radians (0: hard)
     float lightRadius;    // soft-shadow disc radius as a fraction of the distance to a local light (0: hard)
     float lampClearance;  // a lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced
-    uint reserved;
+    float eyeRadius;      // a point light within this many view units of the eye is the headlamp and is not traced (0: every light is)
+    float4 overhead;      // the synthetic overhead light: xyz = unit direction toward it (view space), w = the shadow strength (0: none), rt_shadow_math.h
+    float overheadCone;   // its soft-shadow cone half angle, radians
+    float overheadReach;  // its rays are blocked only within this many view units
 };
 [[vk::push_constant]] ConstantBuffer<Params> params;
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
@@ -79,10 +82,10 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
         const float3 position = viewPositionAt(pixel, stored);
         const float3 normal = decodeGBufferNormal(texel.xy);
         const uint attenuation = (record.flags >> 8) & 3, diffuse = (record.flags >> 10) & 3;
-        float contribution[8]; float3 toLight[8]; float distanceTo[8]; bool directional[8];
+        float contribution[8]; float3 toLight[8]; float distanceTo[8]; bool directional[8], headlamp[8];
         float total = dot(record.ambientColor.rgb, float3(0.299, 0.587, 0.114));
         for (uint i = 0; i < 8; ++i) {
-            contribution[i] = 0.0; toLight[i] = float3(0.0, 0.0, 1.0); distanceTo[i] = 1e4; directional[i] = false;
+            contribution[i] = 0.0; toLight[i] = float3(0.0, 0.0, 1.0); distanceTo[i] = 1e4; directional[i] = false; headlamp[i] = false;
             if ((record.lightMask & (1u << i)) == 0 || attenuation == 1) continue;   // the specular function is not a diffuse light
             const NativeLight light = lights[record.lightsOffset + i];
             const float3 delta = light.position.xyz - position;
@@ -98,6 +101,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             contribution[i] = max(strength, 0.0) * dot(light.color.rgb, float3(0.299, 0.587, 0.114)) / 255.0;   // signed diffuse can go negative: that is no light to remove
             toLight[i] = direction; distanceTo[i] = dist;
             directional[i] = dot(light.position.xyz, light.position.xyz) > 1e10;
+            headlamp[i] = params.eyeRadius > 0.0 && dot(light.position.xyz, light.position.xyz) < params.eyeRadius * params.eyeRadius;   // rt_shadow_math.h rt_is_eye_light
             total += contribution[i];
         }
         if (total > 0.0) {
@@ -107,7 +111,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             for (uint i = 0; i < 8; ++i) picked[i] = false;
             for (uint n = 0; n < params.localLights; ++n) {   // the strongest local lights
                 int best = -1; float bestValue = 0.0;
-                for (uint i = 0; i < 8; ++i) if (!directional[i] && !picked[i] && contribution[i] > bestValue) { best = int(i); bestValue = contribution[i]; }
+                for (uint i = 0; i < 8; ++i) if (!directional[i] && !headlamp[i] && !picked[i] && contribution[i] > bestValue) { best = int(i); bestValue = contribution[i]; }
                 if (best < 0) break;
                 picked[best] = true;
             }
@@ -130,6 +134,15 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 removed += contribution[i] * (blocked / float(rays));
             }
             factor = saturate(min(total - removed, 1.0) / min(total, 1.0));   // GX clamps ambient + lights at 1 before the material (rt_shadow_math.h shadow_factor)
+        }
+        if (params.overhead.w > 0.0) {   // the synthetic overhead light: one soft ray up, a softened shadow on the surfaces that face it (rt_shadow_math.h rt_overhead_*)
+            const float facing = smoothstep(0.05, 0.3, dot(normal, params.overhead.xyz));
+            if (facing > 0.0) {
+                const float2 u = float2(interleavedGradientNoise(float2(pixel), params.frame * 7u + 5u), interleavedGradientNoise(float2(pixel.yx) + 29.0, params.frame * 7u + 5u));
+                const float3 up = params.overheadCone > 0.0 ? jitter(params.overhead.xyz, params.overheadCone, u) : params.overhead.xyz;
+                const float3 start = position + normal * (1e-3 * length(position) + 1e-3);
+                factor *= 1.0 - params.overhead.w * facing * (occluded(start, up, params.overheadReach, 3u) ? 1.0 : 0.0);
+            }
         }
     }
     signalOut[id.xy] = factor;

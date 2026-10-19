@@ -58,5 +58,18 @@ int main() {
     CHECK(uc::rt_light_class(rig,0)==uc::RtLightClass::rig);
     CHECK(uc::rt_light_class(spot,3)==uc::RtLightClass::lamp);
     CHECK(uc::rt_light_class(lamp,1)==uc::RtLightClass::specular && uc::rt_light_class(rig,1)==uc::RtLightClass::specular);   // the specular function wins over the position
+    // The light of the first scene's seats is a point light at the eye (view position (0.1, 2.8, 0.1)): its shadows move with the camera, so it is not traced.
+    // The synthetic overhead light (a direction fixed in view space, constant under camera translation) casts the level's shadows instead.
+    gx::LightUniform eye; eye.position={0.1f,2.8f,0.1f,0.f};
+    CHECK(uc::rt_is_eye_light(eye) && !uc::rt_is_eye_light(lamp) && !uc::rt_is_eye_light(rig));
+    CHECK(uc::kRtEyeLightRadius>2.9f && uc::kRtEyeLightRadius<5.f);   // covers the headlamp (2.8 units from the eye), not the ceiling lamps (5+ units)
+    const auto& toward=uc::kRtOverheadDirection;
+    CHECK(near(toward[0]*toward[0]+toward[1]*toward[1]+toward[2]*toward[2],1.f,1e-4f) && toward[1]>0.9f);   // a unit vector, mostly up (view +y)
+    CHECK(near(uc::rt_overhead_factor(0.f,1.f),1.f) && near(uc::rt_overhead_factor(1.f,1.f),1.f-uc::kRtOverheadStrength));   // unblocked: nothing; blocked: the softened strength, not black
+    CHECK(uc::kRtOverheadStrength>0.3f && uc::kRtOverheadStrength<0.7f);
+    CHECK(uc::kRtOverheadReach>1.5f && uc::kRtOverheadReach<6.f);   // inside the room: well short of the roof (7 units above a seat top)
+    CHECK(near(uc::rt_overhead_factor(0.5f,1.f),1.f-0.5f*uc::kRtOverheadStrength));            // a soft edge: half of the rays blocked
+    CHECK(near(uc::rt_overhead_factor(1.f,0.f),1.f));                                          // a surface turned away from the light takes no shadow of it (its own shading already shows that)
+    CHECK(near(uc::rt_overhead_facing(-0.5f),0.f) && near(uc::rt_overhead_facing(1.f),1.f) && uc::rt_overhead_facing(0.15f)>0.f && uc::rt_overhead_facing(0.15f)<1.f);
     return 0;
 }

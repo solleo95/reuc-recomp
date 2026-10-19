@@ -41,6 +41,24 @@ inline RtLightClass rt_light_class(const gx::LightUniform& light, uint32_t atten
 // would block every ray to it. View units are the game's (one unit is about 0.4 m: the cars' lamps hang 5 units above the eye). Tuned on the first scene.
 constexpr float kRtLampClearance=1.0f;
 inline float rt_lamp_tmax(float distance) { return std::fmax(distance-kRtLampClearance,0.f); }   // 0: the surface is inside the clearance, no ray
+// The level has no physical lamps among the GX lights that matter (the seats of the first scene are lit by a point light at the eye plus lamps 40 to 70 units
+// away), and a light that moves with the camera casts shadows that swim across the scene. Level shadows come from a synthetic overhead light instead: a direction
+// fixed in view space (up, slightly aside and away from the camera so that the shadows fall where they are visible), so a camera translation does not move
+// its shadows. It lowers the lit colour by kRtOverheadStrength where it is blocked (a softened shadow: the game's own shading is baked into the colour).
+constexpr float kRtEyeLightRadius=3.5f;       // a point light within this many view units of the eye is the headlamp (2.8 in the first scene; its lamps hang 5+ units away): not traced
+inline bool rt_is_eye_light(const gx::LightUniform& light) {
+    const float x=light.position[0], y=light.position[1], z=light.position[2];
+    return x*x+y*y+z*z<kRtEyeLightRadius*kRtEyeLightRadius;
+}
+constexpr std::array<float,3> kRtOverheadDirection{0.280899f,0.936330f,-0.210674f};   // (0.3, 1.0, -0.225) normalised: toward the light
+constexpr float kRtOverheadStrength=0.5f;
+// The light sits inside the room, not above its roof: a ray longer than this (view units) is not blocked, or the ceiling would shadow everything (a seat top is 7 units
+// below the car's roof). What blocks within the reach: luggage racks, seat backs, tables, characters, the chandelier.
+constexpr float kRtOverheadReach=3.0f;
+constexpr float kRtOverheadConeRadians=0.06f; // half angle of its soft-shadow cone
+// A surface faces the overhead light when the cosine between its normal and the direction is above ~0.05, fully from ~0.3.
+inline float rt_overhead_facing(float n_dot_l) { const float t=std::fmin(std::fmax((n_dot_l-0.05f)/0.25f,0.f),1.f); return t*t*(3.f-2.f*t); }
+inline float rt_overhead_factor(float blocked_fraction, float facing) { return 1.f-kRtOverheadStrength*blocked_fraction*facing; }
 constexpr float kRtSunConeRadians=0.02f;      // half angle of the sun's soft-shadow cone
 constexpr float kRtLightRadiusFraction=0.03f; // a point light's soft-shadow disc radius as a fraction of the distance to it
 // The factor that removes the shadowed lights' contribution from a pixel's light: GX clamps ambient + lights at 1 before it multiplies the material
