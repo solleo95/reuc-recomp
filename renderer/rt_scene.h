@@ -24,7 +24,10 @@ struct RtGeometry {
     uint32_t palette=0, current=0, indexed=0;
     bool opaque=true;
     VkDeviceAddress palettes=0;
+    bool skinned=false;   // per-vertex matrices (a character or an enemy): its instance carries kRtSkinned, a static draw's kRtStatic
 };
+// Instance masks of the two occluder classes (docs/superpowers/specs/2026-10-19-rt-level-shadows-design.md): a lamp's ray sees both, a rig light's only the skinned one.
+constexpr uint32_t kRtStatic=1, kRtSkinned=2;
 // Per-frame acceleration structures (docs/superpowers/plans/2026-10-19-ray-tracing-p0-1.md, Ruling 1): every scene packet's instances go through a transform pass
 // into view space and one BLAS in that packet's command buffer; the scene boundary builds the TLAS over the frame's BLASes (identity transforms, view space).
 // Buffers live per frame-in-flight slot, grow geometrically and never shrink.
@@ -37,7 +40,7 @@ public:
     bool build_tlas(VkCommandBuffer command);   // false when the frame has no BLAS (nothing recorded)
     VkAccelerationStructureKHR tlas() const;
     uint64_t buffer_growths() const { return growths_; }   // tests: how often a buffer was (re)allocated
-    struct Stats { uint32_t blas=0, geometries=0; uint64_t triangles=0; };
+    struct Stats { uint32_t blas=0, static_blas=0, skinned_blas=0, geometries=0; uint64_t triangles=0; };
     Stats stats() const { return frame_ ? frame_->stats : Stats{}; }
     void shutdown();
 private:
@@ -47,10 +50,12 @@ private:
         VkDeviceSize blas_used=0;
         std::vector<VkAccelerationStructureKHR> blas;
         std::vector<VkDeviceAddress> blas_addresses;
+        std::vector<uint32_t> blas_masks;   // the instance mask of each BLAS (kRtStatic or kRtSkinned)
         VkAccelerationStructureKHR tlas=VK_NULL_HANDLE;
         std::vector<Buffer> retired;   // replaced by a growth during the frame: earlier packets of the frame may still read them
         Stats stats;
     };
+    void build_blas(VkCommandBuffer command, std::span<const RtGeometry> items, uint32_t mask);   // one BLAS over `items` (positions_out assigned), after their positions were allocated
     bool ensure(Frame& frame, Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage, bool host);   // true when it was (re)allocated
     Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host);
     void destroy(Buffer& buffer);

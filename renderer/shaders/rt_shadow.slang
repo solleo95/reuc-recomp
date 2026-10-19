@@ -53,13 +53,14 @@ float3 jitter(float3 d, float radius, float2 u) {
     float r = radius * sqrt(u.x), a = 6.2831853 * u.y;
     return normalize(d + t * (r * cos(a)) + b * (r * sin(a)));
 }
-bool occluded(float3 origin, float3 direction, float tMax) {
+// mask: the instance classes the ray sees (renderer/rt_scene.h kRtStatic = 1 level geometry, kRtSkinned = 2 characters)
+bool occluded(float3 origin, float3 direction, float tMax, uint mask) {
     RayDesc ray;
     ray.Origin = origin; ray.Direction = direction;
     ray.TMin = 1e-3 * length(origin) + 1e-3;   // past the surface the depth was reconstructed from (as the phase 0 probe)
     ray.TMax = tMax;
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
-    query.TraceRayInline(scene, 0, 0xFF, ray);
+    query.TraceRayInline(scene, 0, mask, ray);
     query.Proceed();
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
@@ -121,7 +122,8 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                         const float2 u = float2(interleavedGradientNoise(float2(pixel), params.frame * 7u + r * 3u + i), interleavedGradientNoise(float2(pixel.yx) + 17.0, params.frame * 7u + r * 3u + i));
                         direction = jitter(direction, radius, u);
                     }
-                    blocked += occluded(origin, direction, directional[i] ? 1e4 : max(distanceTo[i] - 1e-3, 1e-3)) ? 1.0 : 0.0;
+                    // a rig light follows a character and ignores the level: only characters block it; a lamp is in the level: the whole scene blocks it
+                    blocked += occluded(origin, direction, directional[i] ? 1e4 : max(distanceTo[i] - 1e-3, 1e-3), directional[i] ? 2u : 3u) ? 1.0 : 0.0;
                 }
                 removed += contribution[i] * (blocked / float(rays));
             }

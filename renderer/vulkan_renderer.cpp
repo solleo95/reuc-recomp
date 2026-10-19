@@ -1993,11 +1993,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         for (size_t d=first;d<last;++d) {
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
             const auto opaque=rt_instance_opaque(draw.mesh && info.vertices,info.index_count!=0,summary.draws[d].perspective,summary.draws[d].z_write,draw.uniforms->pixel[0],VkPrimitiveTopology(info.key[69]));
-            if (!opaque || !info.indexed) continue;   // only skinned draws (per-vertex matrices: characters, enemies) occlude: GX lights are art-directed rigs that ignore the level, so tracing them through walls and ceilings blackens every character indoors
+            if (!opaque) continue;
             RtGeometry geometry;
             geometry.vertices=address(*info.vertices)+info.vertex_offset; geometry.indices=address(*info.indices)+info.index_offset;
             geometry.vertex_count=uint32_t(draw.mesh->vertices.size()); geometry.index_count=info.index_count; geometry.first_index=info.first_index; geometry.first_vertex=info.first_vertex;
             geometry.palette=info.palette; geometry.current=info.current; geometry.indexed=info.indexed; geometry.opaque=*opaque; geometry.palettes=address(slot.palettes);
+            geometry.skinned=info.indexed!=0;   // characters and enemies: a rig light's rays see only these (the instance mask), a lamp's rays see the whole scene
             geometries.push_back(geometry);
         }
         if (geometries.empty()) return;

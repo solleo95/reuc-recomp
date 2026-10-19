@@ -666,9 +666,9 @@ int main(int argc, char** argv) {
                 frame(0); frame(0);   // the first frame decides scene mode for the next one
                 const auto stats=renderer.rt_stats();
                 std::fprintf(stderr,"rt-as: %u BLAS, %u geometries, %llu triangles; as %.3f ms\n",stats.blas,stats.geometries,(unsigned long long)stats.triangles,renderer.pass_ms(uc::GpuPass::rt_as));
-                CHECK(stats.blas==1 && stats.geometries==3 && stats.triangles==6);   // the three skinned box faces; the floor (a static draw) is no occluder
+                CHECK(stats.blas==2 && stats.static_blas==1 && stats.skinned_blas==1 && stats.geometries==4 && stats.triangles==8);   // the floor (static) and the three box faces (skinned) are one BLAS each
                 frame(30); frame(30);   // the box far right: the structures follow the geometry
-                CHECK(renderer.rt_stats().blas==1 && renderer.rt_stats().triangles==6);
+                CHECK(renderer.rt_stats().blas==2 && renderer.rt_stats().triangles==8);
                 auto as_runs=renderer.pass_runs(uc::GpuPass::rt_as), shadow_runs=renderer.pass_runs(uc::GpuPass::rt_shadows);
                 frame(0,true);   // no scene this frame: nothing built, no shadows (Review Focus 1)
                 CHECK(renderer.rt_stats().blas==0 && renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_shadows)==shadow_runs);
@@ -729,11 +729,6 @@ int main(int argc, char** argv) {
                     auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
                     auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
                     scene.draws.push_back(std::move(floor)); scene.draws.push_back(std::move(plate));
-                    if(!plate_skinned) {   // a skinned decoy far off to the side keeps the acceleration structure (and the pass) alive while the plate is static
-                        auto decoy=surface({{{30,-1,-6},{31,-1,-6},{31,-0.9f,-6},{30,-0.9f,-6}}},{0,0,1},false,kind,lit);
-                        decoy.state.edit().descriptors[0]=gx::Mode::direct; decoy.transforms.edit().projection[0][0]=zoom;
-                        scene.draws.push_back(std::move(decoy));
-                    }
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -795,6 +790,12 @@ int main(int argc, char** argv) {
                 frame(sun_only,Light::directional); frame(sun_only,Light::directional);
                 signal=renderer.capture_rt_shadow_signal();
                 CHECK(std::abs(signal_at(signal,shadowed_sun,2)-1.0)<=0.01);
+                // (a3) the level's own lamps are in the level: a static plate does occlude a lamp (rt_local_shadows), the lamp's ray sees the whole scene
+                frame(local_only,Light::point); frame(local_only,Light::point);
+                signal=renderer.capture_rt_shadow_signal();
+                const double static_lamp=signal_at(signal,shadowed_point,2);
+                std::fprintf(stderr,"rt-shadows: static plate under a lamp: signal %.3f, expected %.3f\n",static_lamp,expected(shadowed_point,Light::point));
+                CHECK(expected(shadowed_point,Light::point)<0.6 && std::abs(static_lamp-expected(shadowed_point,Light::point))<=0.05);
                 plate_skinned=true;
                 frame(sun_only,Light::directional); frame(sun_only,Light::directional);
                 signal=renderer.capture_rt_shadow_signal();

@@ -94,7 +94,7 @@ void RtScene::begin_frame(uint32_t frame_slot) {
     slot_=frame_slot%uint32_t(frames_.size());
     frame_=&frames_[slot_];
     for (auto blas : frame_->blas) destroy_as_(device_,blas,nullptr);
-    frame_->blas.clear(); frame_->blas_addresses.clear(); frame_->blas_used=0;
+    frame_->blas.clear(); frame_->blas_addresses.clear(); frame_->blas_masks.clear(); frame_->blas_used=0;
     for (auto& buffer : frame_->retired) destroy(buffer);
     frame_->retired.clear();
     frame_->stats={};
@@ -106,12 +106,19 @@ void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry>
     VkDeviceSize positions_bytes=0;
     for (auto& item : items) { item.positions_out=positions_bytes; positions_bytes+=align(VkDeviceSize(item.vertex_count)*12,16); }
     ensure(frame,frame.positions,positions_bytes,VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,false);
+    for (auto& item : items) item.positions_out+=frame.positions.address;
+    // One BLAS per occluder class: the instance masks keep the level out of the rays of a rig light
+    const auto middle=std::stable_partition(items.begin(),items.end(),[](const RtGeometry& item) { return !item.skinned; });
+    if (middle!=items.begin()) build_blas(command,std::span<const RtGeometry>(items.begin(),middle),kRtStatic);
+    if (middle!=items.end()) build_blas(command,std::span<const RtGeometry>(middle,items.end()),kRtSkinned);
+}
+void RtScene::build_blas(VkCommandBuffer command, std::span<const RtGeometry> items, uint32_t mask) {
+    Frame& frame=*frame_;
     std::vector<VkAccelerationStructureGeometryKHR> triangles(items.size());
     std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges(items.size());
     std::vector<uint32_t> counts(items.size());
     for (size_t i=0;i<items.size();++i) {
-        auto& item=items[i];
-        item.positions_out+=frame.positions.address;
+        const auto& item=items[i];
         auto& geometry=triangles[i];
         geometry.sType=VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR; geometry.geometryType=VK_GEOMETRY_TYPE_TRIANGLES_KHR;
         geometry.flags=item.opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
@@ -136,7 +143,7 @@ void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry>
     VkAccelerationStructureKHR blas; check(create_as_(device_,&create,nullptr,&blas),"BLAS");
     frame.blas.push_back(blas); frame.blas_used=offset+sizes.accelerationStructureSize;
     VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR}; address.accelerationStructure=blas;
-    frame.blas_addresses.push_back(as_address_(device_,&address));
+    frame.blas_addresses.push_back(as_address_(device_,&address)); frame.blas_masks.push_back(mask);
     build.dstAccelerationStructure=blas; build.scratchData.deviceAddress=align(frame.scratch.address,scratch_alignment_);
     // The previous build (this frame's earlier packet) is done with the positions and the scratch before they are written again.
     memory_barrier(command,VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -150,7 +157,7 @@ void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry>
     memory_barrier(command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,VK_ACCESS_2_SHADER_READ_BIT);
     const VkAccelerationStructureBuildRangeInfoKHR* range_pointer=ranges.data();
     build_(command,1,&build,&range_pointer);
-    ++frame.stats.blas; frame.stats.geometries+=uint32_t(items.size());
+    ++frame.stats.blas; (mask==kRtStatic ? frame.stats.static_blas : frame.stats.skinned_blas)++; frame.stats.geometries+=uint32_t(items.size());
 }
 bool RtScene::build_tlas(VkCommandBuffer command) {
     if (!frame_ || frame_->blas.empty()) return false;
@@ -161,7 +168,7 @@ bool RtScene::build_tlas(VkCommandBuffer command) {
     for (uint32_t i=0;i<count;++i) {
         VkAccelerationStructureInstanceKHR instance{};
         instance.transform.matrix[0][0]=instance.transform.matrix[1][1]=instance.transform.matrix[2][2]=1;   // the BLASes are in view space already
-        instance.instanceCustomIndex=i; instance.mask=0xFF;
+        instance.instanceCustomIndex=i; instance.mask=frame.blas_masks[i];
         instance.flags=VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         instance.accelerationStructureReference=frame.blas_addresses[i];
         instances[i]=instance;
