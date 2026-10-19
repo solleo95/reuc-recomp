@@ -2,10 +2,14 @@
 // flag so a failing effect names itself. --validation turns the Vulkan validation layer on and fails on any error.
 #include "check.h"
 #include "gbuffer.h"
+#include "rt_denoiser.h"
 #include "vulkan_renderer.h"
 #include <SDL3/SDL_vulkan.h>
+#include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <random>
 #include <set>
 #include <string>
 #include <thread>
@@ -724,6 +728,162 @@ int main(int argc, char** argv) {
                 frame(0); frame(0);   // probe off: nothing RT runs
                 CHECK(renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_probe)==probe_runs);
             }
+        }
+        if (wanted("rt-denoise")) {
+            // The own denoiser (rt_denoiser.h) on synthetic signals, outside the frame: two planes facing a still camera (view depth 2 on the left half,
+            // 10 on the right), no motion. Noise averages out, a signal edge on the depth edge stays sharp, a reset (camera cut) drops the history.
+            constexpr uint32_t width=256, height=128, edge=width/2;
+            const VkDevice device=renderer.device;
+            const auto& memory=renderer.memory_properties();
+            const auto memory_type=[&](uint32_t mask,VkMemoryPropertyFlags flags) {
+                for(uint32_t i=0;i<memory.memoryTypeCount;++i) if((mask&(1u<<i)) && (memory.memoryTypes[i].propertyFlags&flags)==flags) return i;
+                throw std::runtime_error("rt-denoise: no memory type");
+            };
+            const auto full_barrier=[](VkCommandBuffer command) {
+                VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                barrier.srcStageMask=barrier.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                barrier.srcAccessMask=barrier.dstAccessMask=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+                VkDependencyInfo info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; info.memoryBarrierCount=1; info.pMemoryBarriers=&barrier;
+                vkCmdPipelineBarrier2(command,&info);
+            };
+            // Staging memory for uploads and the readback (the largest texel is 16 bytes).
+            VkBuffer staging=VK_NULL_HANDLE; VkDeviceMemory staging_memory=VK_NULL_HANDLE; void* mapped=nullptr;
+            {
+                VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=VkDeviceSize(width)*height*16; info.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                CHECK(vkCreateBuffer(device,&info,nullptr,&staging)==VK_SUCCESS);
+                VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device,staging,&requirements);
+                VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size;
+                allocate.memoryTypeIndex=memory_type(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                CHECK(vkAllocateMemory(device,&allocate,nullptr,&staging_memory)==VK_SUCCESS);
+                CHECK(vkBindBufferMemory(device,staging,staging_memory,0)==VK_SUCCESS);
+                CHECK(vkMapMemory(device,staging_memory,0,VK_WHOLE_SIZE,0,&mapped)==VK_SUCCESS);
+            }
+            struct Image { VkImage image=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; VkImageView view=VK_NULL_HANDLE; };
+            const auto make_image=[&](VkFormat format) {   // sampled, in VK_IMAGE_LAYOUT_GENERAL, as the renderer's scene targets are
+                Image result;
+                VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; info.imageType=VK_IMAGE_TYPE_2D; info.format=format; info.extent={width,height,1};
+                info.mipLevels=info.arrayLayers=1; info.samples=VK_SAMPLE_COUNT_1_BIT; info.tiling=VK_IMAGE_TILING_OPTIMAL;
+                info.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT; info.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+                CHECK(vkCreateImage(device,&info,nullptr,&result.image)==VK_SUCCESS);
+                VkMemoryRequirements requirements; vkGetImageMemoryRequirements(device,result.image,&requirements);
+                VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size; allocate.memoryTypeIndex=memory_type(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                CHECK(vkAllocateMemory(device,&allocate,nullptr,&result.memory)==VK_SUCCESS);
+                CHECK(vkBindImageMemory(device,result.image,result.memory,0)==VK_SUCCESS);
+                VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image=result.image; view.viewType=VK_IMAGE_VIEW_TYPE_2D; view.format=format; view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                CHECK(vkCreateImageView(device,&view,nullptr,&result.view)==VK_SUCCESS);
+                renderer.run_commands([&](VkCommandBuffer command) {
+                    VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    barrier.srcStageMask=barrier.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    barrier.srcAccessMask=barrier.dstAccessMask=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    barrier.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; barrier.newLayout=VK_IMAGE_LAYOUT_GENERAL;
+                    barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED; barrier.image=result.image; barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dependency.imageMemoryBarrierCount=1; dependency.pImageMemoryBarriers=&barrier;
+                    vkCmdPipelineBarrier2(command,&dependency);
+                });
+                return result;
+            };
+            const auto upload=[&](const Image& image,const void* data,size_t bytes) {
+                std::memcpy(mapped,data,bytes);
+                renderer.run_commands([&](VkCommandBuffer command) {
+                    full_barrier(command);
+                    VkBufferImageCopy copy{}; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={width,height,1};
+                    vkCmdCopyBufferToImage(command,staging,image.image,VK_IMAGE_LAYOUT_GENERAL,1,&copy);
+                    full_barrier(command);
+                });
+            };
+            // Projection near 1, far 100 (the other sections' fixture): stored depth for a view distance d is depth_b/d - depth_a.
+            const uc::ViewParams view{1,1,0,0,-100.f/99,-100.f/99};
+            const auto distance_at=[&](uint32_t x) { return x<edge ? 2.f : 10.f; };
+            Image noisy=make_image(VK_FORMAT_R32G32B32A32_SFLOAT), depth=make_image(VK_FORMAT_R32_SFLOAT), motion=make_image(VK_FORMAT_R32G32_SFLOAT), gbuffer=make_image(VK_FORMAT_R16G16B16A16_UNORM);
+            {
+                std::vector<float> depths(size_t(width)*height), motions(size_t(width)*height*2,0.f);
+                std::vector<uint16_t> texels; texels.reserve(size_t(width)*height*4);
+                for(uint32_t y=0;y<height;++y) for(uint32_t x=0;x<width;++x) {
+                    depths[size_t(y)*width+x]=view.depth_b/distance_at(x)-view.depth_a;
+                    for(auto value:uc::encode_gbuffer({0,0,1},0,uc::kGBufferHasNormal)) texels.push_back(value);
+                }
+                upload(depth,depths.data(),depths.size()*4); upload(motion,motions.data(),motions.size()*4); upload(gbuffer,texels.data(),texels.size()*2);
+            }
+            uc::DenoiseInputs inputs; inputs.depth=depth.view; inputs.motion=motion.view; inputs.gbuffer=gbuffer.view; inputs.region={width,height}; inputs.view=view;
+            constexpr uint32_t iterations=4;
+            const auto half=[](uint16_t h) {   // IEEE half to float (the denoiser's images are RGBA16F)
+                const uint32_t sign=uint32_t(h>>15)<<31, exponent=(h>>10)&31, mantissa=h&1023;
+                if (!exponent) return (sign ? -1.f : 1.f)*std::ldexp(float(mantissa),-24);
+                if (exponent==31) return std::bit_cast<float>(sign|0x7F800000u|(mantissa<<13));
+                return std::bit_cast<float>(sign|((exponent+112)<<23)|(mantissa<<13));
+            };
+            // One frame: the signal (rgb = value) through the denoiser; returns the red channel of its output.
+            const auto run=[&](uc::RtDenoiser& denoiser,uc::RtSignal signal,const std::vector<float>& values) {
+                std::vector<float> rgba; rgba.reserve(values.size()*4);
+                for(float v:values) rgba.insert(rgba.end(),{v,v,v,1.f});
+                upload(noisy,rgba.data(),rgba.size()*4);
+                renderer.run_commands([&](VkCommandBuffer command) { denoiser.denoise(command,signal,noisy.view,inputs,iterations); });
+                renderer.run_commands([&](VkCommandBuffer command) {
+                    full_barrier(command);
+                    VkBufferImageCopy copy{}; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={width,height,1};
+                    vkCmdCopyImageToBuffer(command,denoiser.output_image(),VK_IMAGE_LAYOUT_GENERAL,staging,1,&copy);
+                    full_barrier(command);
+                });
+                std::vector<float> red(values.size());
+                const auto* halves=static_cast<const uint16_t*>(mapped);
+                for(size_t i=0;i<red.size();++i) red[i]=half(halves[i*4]);
+                return red;
+            };
+            const auto statistics=[](const std::vector<float>& values) {
+                double sum=0,sum2=0; for(float v:values) { sum+=v; sum2+=double(v)*v; }
+                const double mean=sum/values.size(); return std::array<double,2>{mean,std::sqrt(std::max(0.0,sum2/values.size()-mean*mean))};
+            };
+            std::mt19937 random(1234);
+            std::uniform_real_distribution<float> uniform(-1.f,1.f);
+            const auto noise_frame=[&]() { std::vector<float> values(size_t(width)*height); for(auto& v:values) v=0.5f+0.5f*uniform(random); return values; };
+            const auto shaders=executable_dir()/"data"/"shaders";
+            uc::RtDenoiser denoiser;
+            denoiser.initialize(device,memory,shaders);
+            denoiser.resize({width,height});
+            const auto first_input=noise_frame();
+            const auto first=run(denoiser,uc::RtSignal::visibility,first_input);
+            std::vector<float> latest;
+            for(int frame=1;frame<16;++frame) latest=run(denoiser,uc::RtSignal::visibility,noise_frame());
+            const auto input_stats=statistics(first_input), first_stats=statistics(first), stats=statistics(latest);
+            std::fprintf(stderr,"rt-denoise: input mean %.4f sd %.4f; first frame mean %.4f sd %.4f; after 16 frames mean %.4f sd %.4f\n",input_stats[0],input_stats[1],first_stats[0],first_stats[1],stats[0],stats[1]);
+            CHECK(stats[1]<0.05 && std::abs(stats[0]-0.5)<0.02);
+            // Camera cut: the history goes. A constant 0.9 right after the reset comes out as 0.9 (the old history would pull it toward 0.5), and the
+            // first noisy frame again gives exactly its single-frame result.
+            denoiser.reset();
+            const auto cut=run(denoiser,uc::RtSignal::visibility,std::vector<float>(size_t(width)*height,0.9f));
+            float cut_error=0; for(float v:cut) cut_error=std::max(cut_error,std::abs(v-0.9f));
+            std::fprintf(stderr,"rt-denoise: after the cut largest difference from 0.9 %.4f\n",cut_error);
+            CHECK(cut_error<0.01f);
+            denoiser.reset();
+            CHECK(run(denoiser,uc::RtSignal::visibility,first_input)==first);
+            // A hard signal edge on the depth edge (shadowed near plane, lit far plane): no blur across it.
+            denoiser.reset();
+            std::vector<float> step(size_t(width)*height);
+            for(uint32_t y=0;y<height;++y) for(uint32_t x=0;x<width;++x) step[size_t(y)*width+x]=x<edge ? 0.f : 1.f;
+            std::vector<float> stepped;
+            for(int frame=0;frame<4;++frame) stepped=run(denoiser,uc::RtSignal::visibility,step);
+            uint32_t widest=0;   // the farthest pixel from the edge that is neither dark nor lit
+            for(uint32_t y=0;y<height;++y) for(uint32_t x=0;x<width;++x) {
+                const float v=stepped[size_t(y)*width+x];
+                if(v>0.05f && v<0.95f) widest=std::max(widest,x<edge ? edge-x : x-edge+1);
+                if(v<=0.05f && x>=edge+2) widest=std::max(widest,x-edge+1);   // a dark pixel more than 2 px inside the lit side
+                if(v>=0.95f && x+2<edge) widest=std::max(widest,edge-x);
+            }
+            std::fprintf(stderr,"rt-denoise: edge spread %u px\n",widest);
+            CHECK(widest<=2);
+            // Radiance (variance-guided luminance weights): the same noise also averages out.
+            uc::RtDenoiser radiance;
+            radiance.initialize(device,memory,shaders);
+            radiance.resize({width,height});
+            std::vector<float> lit;
+            for(int frame=0;frame<16;++frame) lit=run(radiance,uc::RtSignal::radiance,noise_frame());
+            const auto radiance_stats=statistics(lit);
+            std::fprintf(stderr,"rt-denoise: radiance after 16 frames mean %.4f sd %.4f\n",radiance_stats[0],radiance_stats[1]);
+            CHECK(radiance_stats[1]<0.05 && std::abs(radiance_stats[0]-0.5)<0.02);
+            radiance.shutdown();
+            denoiser.shutdown();
+            for(Image* image:{&noisy,&depth,&motion,&gbuffer}) { vkDestroyImageView(device,image->view,nullptr); vkDestroyImage(device,image->image,nullptr); vkFreeMemory(device,image->memory,nullptr); }
+            vkUnmapMemory(device,staging_memory); vkDestroyBuffer(device,staging,nullptr); vkFreeMemory(device,staging_memory,nullptr);
         }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();

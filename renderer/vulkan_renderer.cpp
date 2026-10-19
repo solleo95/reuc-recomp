@@ -1127,6 +1127,21 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     efb_initialized_=true;
     reset_next_=false; scene_phase_=false; ++upscale_frame_; last_upscale_=now;
 }
+void VulkanRenderer::run_commands(const std::function<void(VkCommandBuffer)>& record) {
+    owner();
+    vk_check(present_.wait_idle(device),"run commands idle");
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool=pool_; allocation.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount=1;
+    VkCommandBuffer command=VK_NULL_HANDLE; vk_check(vkAllocateCommandBuffers(device,&allocation,&command),"run commands buffer");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vk_check(vkBeginCommandBuffer(command,&begin),"begin run commands");
+    try { record(command); } catch (...) { vkEndCommandBuffer(command); vkFreeCommandBuffers(device,pool_,1,&command); throw; }
+    vk_check(vkEndCommandBuffer(command),"end run commands");
+    VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command_info.commandBuffer=command;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.commandBufferInfoCount=1; submit.pCommandBufferInfos=&command_info;
+    vk_check(vkQueueSubmit2(queue_,1,&submit,VK_NULL_HANDLE),"submit run commands");
+    vk_check(vkQueueWaitIdle(queue_),"run commands wait");
+    vkFreeCommandBuffers(device,pool_,1,&command);
+}
 VulkanRenderer::MotionPixels VulkanRenderer::capture_motion() {
     owner();
     if (!scene_motion_ || !motion_initialized_) throw std::logic_error("no motion target to capture");

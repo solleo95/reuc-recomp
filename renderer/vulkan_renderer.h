@@ -121,6 +121,8 @@ public:
     uint64_t texture_creations() const { owner(); return texture_creations_; }
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
     bool ray_tracing_supported() const { return ray_tracing_; }   // the device was created with ray query, acceleration structures and descriptor indexing, and the effects path
+    const VkPhysicalDeviceMemoryProperties& memory_properties() const { return memory_; }
+    void run_commands(const std::function<void(VkCommandBuffer)>& record);   // tests/tools: records a one-time command buffer on the render queue, submits it and waits for the GPU
     VkDevice device = VK_NULL_HANDLE;
 private:
     FrameTimings timings_;
