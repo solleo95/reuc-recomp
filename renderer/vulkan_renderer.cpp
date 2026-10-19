@@ -1024,7 +1024,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
-    if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
+    if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.screen_space_shadows!=EffectLevel::off || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
         OcclusionInputs occlusion;
@@ -1033,7 +1033,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion.region=in.render_size;
         occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
         occlusion.view=view_params(*frame_projection_);
-        occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.contact_shadows; occlusion.light=dominant_light_; occlusion.slot=timer_slot;
+        occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.screen_space_shadows; occlusion.light=dominant_light_; occlusion.slot=timer_slot;
         if (shadow_cleared_ && shadow_fit_ && dominant_light_) {
             const auto& p=dominant_light_->position; const float length=std::sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]);
             occlusion.shadow=ShadowInputs{shadow_map_.view(),shadow_map_.generation(),*shadow_fit_,shadow_preset(effects_.shadows),{p[0]/length,p[1]/length,p[2]/length}};

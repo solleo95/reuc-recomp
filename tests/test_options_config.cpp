@@ -64,10 +64,12 @@ int main() {
             bool bad_level=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){bad_level=true;}
             CHECK(bad_level);
         }
-        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":true}})")).effects.contact_shadows);
-        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.contact_shadows);
-        bool contact_not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":"on"}})"));}catch(const std::invalid_argument&){contact_not_boolean=true;}
-        CHECK(contact_not_boolean);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"screen_space_shadows":"medium"}})")).effects.screen_space_shadows==uc::EffectLevel::medium);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.screen_space_shadows==uc::EffectLevel::off);
+        auto sss_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto sss_options=uc::options_from_config(sss_doc);sss_options.effects.screen_space_shadows=uc::EffectLevel::high;uc::store_options(sss_doc,sss_options);
+        CHECK(uc::options_from_config(sss_doc).effects.screen_space_shadows==uc::EffectLevel::high && uc::serialize_config(sss_doc).find("\"screen_space_shadows\": \"high\"")!=std::string::npos);
+        bool sss_not_level=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"screen_space_shadows":true}})"));}catch(const std::invalid_argument&){sss_not_level=true;}
+        CHECK(sss_not_level);
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"motion_blur":"ultra"}})")).effects.motion_blur==uc::EffectLevel::ultra);
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.motion_blur==uc::EffectLevel::off);
         auto blur_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto blur_options=uc::options_from_config(blur_doc);blur_options.effects.motion_blur=uc::EffectLevel::low;uc::store_options(blur_doc,blur_options);

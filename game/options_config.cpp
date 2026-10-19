@@ -77,7 +77,11 @@ Options options_from_config(const ConfigDocument& document) {
             options.effects.anisotropy=value.get<uint32_t>();
         }
         if(graphics.contains("per_pixel_lighting"))options.effects.per_pixel_lighting=boolean(graphics["per_pixel_lighting"]);
-        if(graphics.contains("contact_shadows"))options.effects.contact_shadows=boolean(graphics["contact_shadows"]);
+        if(graphics.contains("screen_space_shadows")) {
+            const auto level=graphics["screen_space_shadows"].is_string() ? effect_level_from_name(graphics["screen_space_shadows"].get<std::string>()) : std::nullopt;
+            if(!level)invalid("graphics.screen_space_shadows must be off, low, medium, high or ultra");
+            options.effects.screen_space_shadows=*level;
+        }
         if(graphics.contains("ambient_occlusion")) {
             const auto level=graphics["ambient_occlusion"].is_string() ? effect_level_from_name(graphics["ambient_occlusion"].get<std::string>()) : std::nullopt;
             if(!level)invalid("graphics.ambient_occlusion must be off, low, medium, high or ultra");
@@ -127,7 +131,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["frame_generation_multiplier"]=options.frame_generation_multiplier;
     graphics["anisotropy"]=options.effects.anisotropy;
     graphics["per_pixel_lighting"]=options.effects.per_pixel_lighting;
-    graphics["contact_shadows"]=options.effects.contact_shadows;
+    if(effect_level_name(options.effects.screen_space_shadows).empty())invalid("unknown screen_space_shadows");
+    graphics["screen_space_shadows"]=std::string(effect_level_name(options.effects.screen_space_shadows));
     if(effect_level_name(options.effects.ambient_occlusion).empty())invalid("unknown ambient_occlusion");
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
     if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");

@@ -23,7 +23,7 @@ struct OcclusionInputs {
     std::array<float,6> viewport{};       // x, y, width, height in target pixels, then the viewport's near and far depth
     ViewParams view{};
     EffectLevel ao=EffectLevel::off;
-    bool contact=false;                   // contact shadows toward `light` (nothing happens without one)
+    EffectLevel contact=EffectLevel::off; // screen-space shadows toward `light` (nothing happens without one)
     std::optional<gx::CollectedLight> light;  // the scene's dominant directional or spot light
     std::optional<ShadowInputs> shadow;   // shadow maps: multiplied into the colour together with the occlusion
     uint32_t slot=0;                      // the frame slot: picks this frame's shadow parameter block (frames overlap on the GPU)
@@ -33,6 +33,9 @@ struct OcclusionInputs {
 // The slices, steps and resolution of a preset.
 struct AoPreset { uint32_t slices, steps; bool full_resolution; };
 AoPreset ao_preset(EffectLevel level);
+// The screen-space shadow ray: at least `min_length` metres (and always 3% of the pixel's distance), `steps` samples.
+struct ContactPreset { float min_length; uint32_t steps; };
+ContactPreset contact_preset(EffectLevel level);
 // Ground-truth ambient occlusion on the scene colour (shaders/gtao.slang): a horizon search at the preset's resolution, a depth-aware blur, and a
 // composite that multiplies the colour of every pixel a depth-writing draw covered, faded by its GX fog. Compute only.
 class OcclusionPass {

@@ -16,10 +16,12 @@ struct Params {
     uint noise;          // frame index for the noise pattern (0: a fixed pattern)
     uint flags;
     float strength;
+    float contactLength; // screen-space shadows: the ray is at least this long in view units
     float2 depthRange;   // the viewport's near and far depth
     float4 light;        // contact shadows: the dominant light, xyz = view-space position (a directional light's far point is its direction), w = 1 for a spot light
     uint2 contactSize;   // size of the contact-shadow image
-    uint2 reserved;
+    uint contactSteps;   // screen-space shadows: samples along the ray
+    uint reserved;
 };
 // flags: bit 0 = ambient occlusion on, bit 1 = contact shadows on
 [[vk::push_constant]] ConstantBuffer<Params> params;
@@ -181,13 +183,14 @@ void contactMain(uint3 id : SV_DispatchThreadID) {
     float facing = dot(normal, toLight);
     if (facing <= 0.05) { contactOut[id.xy] = 1.0; return; }   // facing away from (or grazing) the light: the lighting already darkened it, and a grazing ray starts inside its own surface
     float distanceHere = -position.z;
-    float maxLength = 0.03 * distanceHere;     // the ray is short: contact only
-    float thickness = 0.005 * distanceHere;    // what counts as a blocker in front of the ray
+    float maxLength = max(0.03 * distanceHere, params.contactLength);   // contact only, or as far as the preset reaches
+    float count = float(params.contactSteps);
+    float thickness = max(0.005 * distanceHere, 2.0 * maxLength / count);   // what counts as a blocker in front of the ray (a step apart at least)
     float lift = (0.002 + 0.006 * (1.0 - facing)) * distanceHere;   // the start moves off the surface more the more the surface grazes the light (no self-shadowing speckle)
     float jitter = interleavedGradientNoise(float2(pixel), params.noise);
     float shadow = 0.0;
-    [loop] for (uint step = 0; step < 16; ++step) {
-        float t = (float(step) + 0.5 + 0.5 * jitter) / 16.0 * maxLength;
+    [loop] for (uint step = 0; step < params.contactSteps; ++step) {
+        float t = (float(step) + 0.5 + 0.5 * jitter) / count * maxLength;
         float3 sampled = position + toLight * t + normal * lift;
         float2 ndc = float2(params.viewA.x * sampled.x / -sampled.z - params.viewA.z, params.viewA.y * sampled.y / -sampled.z - params.viewA.w);
         float2 samplePixel = params.viewport.xy + (ndc * 0.5 + 0.5) * params.viewport.zw;
@@ -196,7 +199,7 @@ void contactMain(uint3 id : SV_DispatchThreadID) {
         if (stored >= 1.0 || cutoutAt(samplePixel)) continue;
         float sceneDistance = params.viewB.y / (projectionDepth(stored) + params.viewB.x);   // -z of the surface at that pixel
         float sampleDistance = -sampled.z;
-        if (sceneDistance < sampleDistance - 0.1 * thickness && sampleDistance - sceneDistance < thickness) shadow += (1.0 - 0.5 * float(step) / 16.0) / 5.0;   // every blocked step adds a little: a thin ridge hit by one or two steps stays faint, a real contact adds up
+        if (sceneDistance < sampleDistance - 0.1 * thickness && sampleDistance - sceneDistance < thickness) shadow += (1.0 - 0.5 * float(step) / count) / (count * 0.3125);   // every blocked step adds a little: a thin ridge hit by one or two steps stays faint, a real contact adds up
     }
     contactOut[id.xy] = 1.0 - saturate(shadow) * smoothstep(0.05, 0.35, facing);
 }
