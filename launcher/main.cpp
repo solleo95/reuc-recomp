@@ -118,7 +118,7 @@ std::string binding_name(const uc::Binding& binding) {
 bool same_options(const uc::Options& a,const uc::Options& b) {
     return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -157,7 +157,7 @@ int run(int argc,wchar_t** argv) {
     // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
-    if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
+    if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
     if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
         query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
         query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path] {promise->set_value(uc::query_features(exe,config));});
@@ -473,6 +473,25 @@ int run(int argc,wchar_t** argv) {
                     ImGui::PopStyleColor();
                 }
             }
+            ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("effects"));
+            ImGui::TextUnformatted(tr("anisotropy"));push_font(ui.sans,22);
+            {
+                const uint32_t most=features_ready ? features.anisotropy_max : 16;   // until the report arrives the renderer's own clamp decides
+                const auto level_label=[&](uint32_t level) {return level==1 ? std::string(tr("off")) : std::to_string(level)+"×";};
+                const bool anisotropy_open=combo("##anisotropy",level_label(options.effects.anisotropy).c_str());track("anisotropy");
+                if(anisotropy_open) {
+                    for(const uint32_t level:{1u,2u,4u,8u,16u}) {
+                        const bool supported=level<=most;
+                        ImGui::BeginDisabled(!supported && level!=options.effects.anisotropy);   // a saved level this GPU cannot run stays visible and can be left
+                        if(ImGui::Selectable(level_label(level).c_str(),options.effects.anisotropy==level))options.effects.anisotropy=level;
+                        track("anisotropy-"+std::to_string(level));
+                        ImGui::EndDisabled();
+                        if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("unsupported"));
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            ImGui::PopFont();
             ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);

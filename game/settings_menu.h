@@ -26,6 +26,7 @@ private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
     void controls_tab(float unit);
+    void effects_tab(float unit);
     const Options& current() const { return pending_ ? *pending_ : live_.options(); }
     LiveSettings& live_;
     std::optional<Options> pending_;   // picked by build(), applied by commit()

@@ -62,6 +62,7 @@ void SettingsMenu::build() {
     if(ImGui::BeginTabBar("tabs")) {
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     if(const auto& error=live_.error()) {
@@ -176,6 +177,29 @@ void SettingsMenu::main_tab(float unit) {
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
     bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow
     if(compact_checkbox("##bloom",tr("bloom"),no_bloom,unit)) options.bloom=!no_bloom;
+    ImGui::EndChild();
+    pending_=options;
+}
+void SettingsMenu::effects_tab(float unit) {
+    auto options=current();
+    const auto* features=features_();
+    ImGui::Dummy({0,8*unit});
+    ImGui::BeginChild("effects",{0,0});
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    ImGui::TextUnformatted(tr("anisotropy"));
+    const uint32_t most=features ? features->anisotropy_max : 16;   // until the report arrives the renderer's own clamp decides
+    const auto level_label=[&](uint32_t level) { return level==1 ? std::string(tr("off")) : std::to_string(level)+"×"; };
+    if(ImGui::BeginCombo("##anisotropy",level_label(options.effects.anisotropy).c_str())) {
+        for(const uint32_t level:{1u,2u,4u,8u,16u}) {
+            const bool ok=level<=most;
+            ImGui::BeginDisabled(!ok && level!=options.effects.anisotropy);   // a saved level this GPU cannot run stays visible and can be left
+            if(ImGui::Selectable(level_label(level).c_str(),options.effects.anisotropy==level)) options.effects.anisotropy=level;
+            ImGui::EndDisabled();
+            if(!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("unsupported"));
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;
 }

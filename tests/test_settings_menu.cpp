@@ -20,8 +20,8 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     CHECK(context.TabBars.GetAliveCount()==1);
     auto* tabs=context.TabBars.GetByIndex(0);
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
-    CHECK(tabs->Tabs.Size==2);
-    CHECK(tabs->Tabs[1].Offset+tabs->Tabs[1].Width<=tabs->BarRect.GetWidth());
+    CHECK(tabs->Tabs.Size==3);
+    CHECK(tabs->Tabs[2].Offset+tabs->Tabs[2].Width<=tabs->BarRect.GetWidth());
     // Open the first combo through ImGui input, then inspect the actual popup geometry.
     ImGuiWindow* graphics=nullptr;
     for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow)) graphics=candidate;
@@ -76,6 +76,22 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
     CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
     capture("controls");
+    {   // the Effects tab: pick 4x anisotropic filtering through the combo
+        click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});
+        CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
+        ImGuiWindow* effects=nullptr;
+        for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow) && std::string_view(candidate->Name).find("effects")!=std::string_view::npos) effects=candidate;
+        CHECK(effects);
+        capture("effects");
+        CHECK(live.options().effects.anisotropy==16);
+        click({effects->Pos.x+40,effects->Pos.y+first+height*.5f});
+        popup=ImGui::FindWindowByName("##Combo_00"); CHECK(popup && popup->Active);
+        click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+2*(text+style.ItemSpacing.y)+text*.5f});
+        menu.commit(); CHECK(live.options().effects.anisotropy==4 && !live.error());
+        CHECK(context.OpenPopupStack.empty());
+        click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
+        CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
+    }
     const ImVec2 before=window->Pos;
     io.AddMousePosEvent(before.x+60,before.y+35); frame();
     io.AddMouseButtonEvent(0,true); frame();
@@ -97,7 +113,7 @@ int main(int argc,char** argv) {
     targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](bool){}; targets.effects=[](const uc::GraphicsEffects&){};
     targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
-    uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;
+    uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16;
     uc::SettingsMenu menu(live,"ru",[&]{return &features;},2560,1440);
     if(gpu) {
         std::filesystem::create_directories(argv[3]);
@@ -131,6 +147,6 @@ int main(int argc,char** argv) {
         ImGui::DestroyContext();
     }
     const auto saved=uc::options_from_config(uc::load_config(folder/"config.json"));
-    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65);
+    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4);
     std::filesystem::remove(folder/"config.json"); std::filesystem::remove(folder);
 }
