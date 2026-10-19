@@ -16,7 +16,7 @@
 
 - No guest-side work, no packet change; RT applies only to draws before the scene boundary in a frame with a scene (`SceneBoundary::frame_had_scene`).
 - RT off (master off or every RT level off) costs nothing: `python -m uctest bench <before> <after> --demo fight2 --runs 3` within 1%, `render_ns` unchanged.
-- Targets (owner): all five RT options on High ≈ 120 FPS, all on Ultra ≥ 60 FPS, RTX 4080, reference output 1440p DLSS Quality. FPS targets win over the ms budgets (High ≤ 3.5 ms all RT work, Ultra ≤ 10 ms, Low ≤ 0.6 ms, Medium ≤ 1.2 ms on the 4080).
+- Targets (owner): all five RT options on High ≈ 100 FPS (lowered from 120 by the owner after S8), all on Ultra ≥ 60 FPS, RTX 4080, reference output 1440p DLSS Quality. FPS targets win over the ms budgets (High ≤ 2.9 ms all RT work, Ultra ≤ 9.5 ms, Low ≤ 0.6 ms, Medium ≤ 1.2 ms on the 4080).
 - Scene colour stays RGBA8; no HDR target.
 - Device requirements: `VK_KHR_acceleration_structure`, `VK_KHR_ray_query`, `VK_KHR_deferred_host_operations`, `bufferDeviceAddress`, descriptor indexing, plus the effects path. Missing any: RT unavailable with a reason, never a crash, the rest of the renderer unchanged.
 - Config names: `graphics.ray_tracing` (bool), `graphics.rt_reflections`, `graphics.rt_lighting`, `graphics.rt_shadows`, `graphics.rt_local_shadows`, `graphics.rt_ambient_occlusion` (off/low/medium/high/ultra); CLI `--ray-tracing`, `--rt-reflections`, `--rt-lighting`, `--rt-shadows`, `--rt-local-shadows`, `--rt-ambient-occlusion`. All default off.

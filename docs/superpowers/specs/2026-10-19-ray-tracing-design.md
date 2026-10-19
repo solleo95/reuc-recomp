@@ -9,7 +9,7 @@ The port already has raster enhancements on top of the Wii picture (`docs/superp
 wants a ray-traced tier on top: five ray-traced effects with quality presets, one master switch, and NVIDIA DLSS Ray Reconstruction as the
 denoiser where it runs. Plain ray tracing only (no path tracing).
 
-The owner's goal on the owner's RTX 4080: every ray-traced option on **High** at about **120 FPS**; everything on **Ultra** at no less than **60 FPS**.
+The owner's goal on the owner's RTX 4080: every ray-traced option on **High** at about **100 FPS** (first stated as 120; lowered by the owner after the phase 0 measurement, 2026-10-19); everything on **Ultra** at no less than **60 FPS**.
 
 ## Options (owner's decisions)
 
@@ -73,18 +73,20 @@ be built from live captures.
 
   | Setting | Target | RT GPU budget (all RT work: AS build, rays, denoise/RR, composite) |
   |---|---|---|
-  | All five on High | ≈ 120 FPS | ≤ 3.5 ms |
-  | All five on Ultra | ≥ 60 FPS | ≤ 10 ms |
+  | All five on High | ≈ 100 FPS (owner lowered it from 120 after phase 0, 2026-10-19) | ≤ 2.9 ms |
+  | All five on Ultra | ≥ 60 FPS | ≤ 9.5 ms |
   | Low / Medium | RTX 3060 class (≈ 2.5x slower than the 4080) | Low ≤ 0.6 ms, Medium ≤ 1.2 ms total on the 4080 |
 
-  Budget split for High (this design's estimate, to be confirmed in phase 0): AS build 0.5, shadows 0.4, local shadows 0.6, AO 0.4,
-  reflections 0.7, lighting 0.7, denoise 0.2 (RR replaces denoise and upscale; its cost replaces the DLSS SR cost and is counted separately).
+  Phase 0 (`docs/spikes/S8-ray-tracing.md`, fight3 demo) measured the RT-off frame at 7.11 ms (137 FPS), the AS build at 0.45 ms and the probe
+  (one full-resolution shadow ray per pixel) at 1.0 ms GPU / 2.1 ms end to end; the measured internal resolution was 1707x1280, the 960p reference has
+  about half the pixels, so the budgets are re-measured at the reference before presets are fixed.
+  Budget split for High (this design's estimate, to be confirmed per effect): AS build 0.45, shadows 0.3, local shadows 0.4, AO 0.3,
+  reflections 0.5, lighting 0.5, denoise 0.2 (RR replaces denoise and upscale; its cost replaces the DLSS SR cost and is counted separately).
   A preset that misses its budget gives up rays or resolution, never the target.
-- **The FPS targets win over the ms budgets** (the owner stated them as "ideally"). The ms budgets are derived from the RT-off frame time, which
-  phase 0 measures on the owner's settings (fight, 1440p DLSS Quality); phase 0 rewrites the budget table from that measurement. If the RT-off frame
-  leaves less than ~2 ms for High at 120 FPS, phase 0 reports to the owner with the numbers and the options (lower High, or a lower FPS target)
-  before phase 1 starts (this design's call).
-- "120 FPS" means rendered guest frames on `main`. The 240 Hz interpolation experiment (`experiment/fps-interpolation`) is not on `main` and is
+- **The FPS targets win over the ms budgets** (the owner stated them as "ideally"). The ms budgets are derived from the RT-off frame time (7.11 ms,
+  phase 0); a later phase that finds a High preset cannot fit gives up rays or resolution first and reports to the owner with numbers before it lowers
+  the target again (this design's call).
+- "100 FPS" means rendered guest frames on `main`. The 240 Hz interpolation experiment (`experiment/fps-interpolation`) is not on `main` and is
   out of scope; if it lands later, RT runs on real frames only and interpolated frames reuse the composited result.
 - Everything stays in the renderer: no guest code, guest timing or packet change; the guest never waits for RT work.
 - With the master switch off (or every option off) the cost is nil: the deterministic bench (`python -m uctest bench … --demo fight2 --runs 3`) shows
@@ -225,7 +227,7 @@ motion capture for shimmer/ghosting.
 ## Calls made in this design (owner to check)
 
 - "Освещение" = one-bounce diffuse indirect light; "Глобальное затенение" = ray-traced AO.
-- Output 1440p DLSS Quality is the reference for the 120/60 FPS goals.
+- Output 1440p DLSS Quality is the reference for the 100/60 FPS goals.
 - RR is automatic (no option); own denoiser elsewhere, no third-party library.
 - Inline ray queries in compute; AS in view space, rebuilt every frame.
 - Shadows/AO are applied through a per-pixel estimate of each light's share, not exact per-light terms.
