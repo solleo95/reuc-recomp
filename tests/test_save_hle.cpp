@@ -10,7 +10,9 @@ static int32_t completion;
 static void done(ppc::Ctx& c) { CHECK(!uc::os_sched().interrupts_enabled()); CHECK(c.r[4]==0xBEEF); completion=int32_t(c.r[3]); ++callbacks; }
 int main() {
     Fix fixture; auto& c=fixture.c; c.r[13]=0x80400000;
-    uc::SaveFs fs(std::filesystem::temp_directory_path()/("uc-save-hle-"+std::to_string(GetCurrentProcessId())));
+    const auto root=std::filesystem::temp_directory_path()/("uc-save-hle-"+std::to_string(GetCurrentProcessId()));
+    std::error_code ignored; std::filesystem::remove_all(root,ignored);   // an earlier run's folder under a reused process id would make "test.bin" exist already (ISFS_Open -106 below)
+    uc::SaveFs fs(root);
     uc::save_hle_init(fs);
     hle_NANDInit(c); CHECK(c.r[3]==0 && ppc::rd32(c,c.r[13]-25056)==2);
     CHECK(std::strcmp(reinterpret_cast<char*>(c.mem+0x004291C0),"/title/00010000/52425545/data")==0);

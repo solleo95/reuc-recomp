@@ -13,10 +13,6 @@ void check(VkResult result, const char* what) { if (result!=VK_SUCCESS) throw st
 // shaders/rt_transform.slang Push
 struct TransformPush { VkDeviceAddress vertices, positions, palettes; uint32_t count; int32_t first_vertex; uint32_t palette, current, indexed; };
 static_assert(sizeof(TransformPush)==48);
-// shaders/rt_probe.slang Params
-struct ProbeParams { float viewport[4]; float view_a[4]; float view_b[2]; float depth_range[2]; float to_light[4]; uint32_t region[2]; uint32_t reserved[2]; };
-static_assert(sizeof(ProbeParams)==80);
-constexpr VkDeviceSize kCounterStride=256;   // >= minStorageBufferOffsetAlignment everywhere
 constexpr VkDeviceSize kMinimumBuffer=VkDeviceSize(1)<<16;
 VkDeviceSize align(VkDeviceSize value, VkDeviceSize alignment) { return (value+alignment-1)/alignment*alignment; }
 void memory_barrier(VkCommandBuffer command, VkPipelineStageFlags2 source, VkAccessFlags2 source_access, VkPipelineStageFlags2 destination, VkAccessFlags2 destination_access) {
@@ -49,37 +45,15 @@ void RtScene::initialize(VkDevice device, VkPhysicalDevice physical, const VkPhy
         VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; properties.pNext=&as_properties;
         vkGetPhysicalDeviceProperties2(physical,&properties);
         scratch_alignment_=std::max<VkDeviceSize>(as_properties.minAccelerationStructureScratchOffsetAlignment,1);
-        transform_module_=load_module(device,shaders/"rt_transform.spv"); probe_module_=load_module(device,shaders/"rt_probe.spv");
-        {
-            const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(TransformPush)};
-            VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout.pushConstantRangeCount=1; layout.pPushConstantRanges=&push;
-            check(vkCreatePipelineLayout(device,&layout,nullptr,&transform_layout_),"transform layout");
-        }
-        {
-            const VkDescriptorSetLayoutBinding bindings[3]{{0,VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
-                {1,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},{2,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr}};
-            VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=3; set.pBindings=bindings;
-            check(vkCreateDescriptorSetLayout(device,&set,nullptr,&probe_set_layout_),"probe set layout");
-            const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ProbeParams)};
-            VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout.setLayoutCount=1; layout.pSetLayouts=&probe_set_layout_; layout.pushConstantRangeCount=1; layout.pPushConstantRanges=&push;
-            check(vkCreatePipelineLayout(device,&layout,nullptr,&probe_layout_),"probe layout");
-        }
-        for (auto [module,layout,pipeline] : {std::tuple{transform_module_,transform_layout_,&transform_},std::tuple{probe_module_,probe_layout_,&probe_}}) {
-            VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-            info.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,module,"main",nullptr};
-            info.layout=layout;
-            check(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&info,nullptr,pipeline),"pipeline");
-        }
+        transform_module_=load_module(device,shaders/"rt_transform.spv");
+        const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(TransformPush)};
+        VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout.pushConstantRangeCount=1; layout.pPushConstantRanges=&push;
+        check(vkCreatePipelineLayout(device,&layout,nullptr,&transform_layout_),"transform layout");
+        VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        info.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,transform_module_,"main",nullptr};
+        info.layout=transform_layout_;
+        check(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&transform_),"pipeline");
         frames_.resize(frames_in_flight);
-        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,frames_in_flight},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,frames_in_flight},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,frames_in_flight}};
-        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=frames_in_flight; pool.poolSizeCount=3; pool.pPoolSizes=sizes;
-        check(vkCreateDescriptorPool(device,&pool,nullptr,&pool_),"descriptor pool");
-        const std::vector<VkDescriptorSetLayout> layouts(frames_in_flight,probe_set_layout_);
-        std::vector<VkDescriptorSet> sets(frames_in_flight);
-        VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; allocate.descriptorPool=pool_; allocate.descriptorSetCount=frames_in_flight; allocate.pSetLayouts=layouts.data();
-        check(vkAllocateDescriptorSets(device,&allocate,sets.data()),"descriptor sets");
-        for (uint32_t i=0;i<frames_in_flight;++i) frames_[i].probe_set=sets[i];
-        counters_=make_buffer(kCounterStride*frames_in_flight,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
     } catch (...) { shutdown(); throw; }
 }
 RtScene::Buffer RtScene::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host) {
@@ -216,41 +190,6 @@ bool RtScene::build_tlas(VkCommandBuffer command) {
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     return true;
 }
-void RtScene::record_probe(VkCommandBuffer command, const RtProbeInputs& in) {
-    if (!frame_ || !frame_->tlas || !in.region.width || !in.region.height) return;
-    Frame& frame=*frame_;
-    {   // the slot's set: its previous frame has completed, so it can be rewritten
-        VkWriteDescriptorSetAccelerationStructureKHR tlas{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR}; tlas.accelerationStructureCount=1; tlas.pAccelerationStructures=&frame.tlas;
-        const VkDescriptorImageInfo depth{VK_NULL_HANDLE,in.depth,VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorBufferInfo counter{counters_.buffer,kCounterStride*slot_,sizeof(uint32_t)};
-        VkWriteDescriptorSet writes[3]{};
-        for (uint32_t i=0;i<3;++i) { writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet=frame.probe_set; writes[i].dstBinding=i; writes[i].descriptorCount=1; }
-        writes[0].descriptorType=VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; writes[0].pNext=&tlas;
-        writes[1].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[1].pImageInfo=&depth;
-        writes[2].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo=&counter;
-        vkUpdateDescriptorSets(device_,3,writes,0,nullptr);
-    }
-    vkCmdFillBuffer(command,counters_.buffer,kCounterStride*slot_,sizeof(uint32_t),0);
-    memory_barrier(command,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    ProbeParams params{};
-    std::copy(in.viewport.begin(),in.viewport.begin()+4,params.viewport);
-    params.view_a[0]=in.view.x_scale; params.view_a[1]=in.view.y_scale; params.view_a[2]=in.view.x_offset; params.view_a[3]=in.view.y_offset;
-    params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
-    params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
-    std::copy(in.to_light.begin(),in.to_light.end(),params.to_light);
-    params.region[0]=in.region.width; params.region[1]=in.region.height;
-    vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,probe_);
-    vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,probe_layout_,0,1,&frame.probe_set,0,nullptr);
-    vkCmdPushConstants(command,probe_layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
-    vkCmdDispatch(command,(in.region.width+7)/8,(in.region.height+7)/8,1);
-    memory_barrier(command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_HOST_BIT,VK_ACCESS_2_HOST_READ_BIT);
-    probe_slot_=slot_;
-}
-uint32_t RtScene::probe_occluded() const {
-    if (probe_slot_==UINT32_MAX) return 0;
-    uint32_t value; std::memcpy(&value,static_cast<const char*>(counters_.mapped)+kCounterStride*probe_slot_,sizeof value);
-    return value;
-}
 VkAccelerationStructureKHR RtScene::tlas() const { return frame_ ? frame_->tlas : VK_NULL_HANDLE; }
 void RtScene::shutdown() {
     if (!device_) return;
@@ -261,12 +200,9 @@ void RtScene::shutdown() {
         for (auto& buffer : frame.retired) destroy(buffer);
         for (Buffer* buffer : {&frame.positions,&frame.scratch,&frame.blas_storage,&frame.tlas_storage,&frame.instances}) destroy(*buffer);
     }
-    destroy(counters_);
-    if (pool_) vkDestroyDescriptorPool(device_,pool_,nullptr);
-    for (auto pipeline : {transform_,probe_}) if (pipeline) vkDestroyPipeline(device_,pipeline,nullptr);
-    for (auto layout : {transform_layout_,probe_layout_}) if (layout) vkDestroyPipelineLayout(device_,layout,nullptr);
-    if (probe_set_layout_) vkDestroyDescriptorSetLayout(device_,probe_set_layout_,nullptr);
-    for (auto module : {transform_module_,probe_module_}) if (module) vkDestroyShaderModule(device_,module,nullptr);
+    if (transform_) vkDestroyPipeline(device_,transform_,nullptr);
+    if (transform_layout_) vkDestroyPipelineLayout(device_,transform_layout_,nullptr);
+    if (transform_module_) vkDestroyShaderModule(device_,transform_module_,nullptr);
     *this=RtScene{};
 }
 }

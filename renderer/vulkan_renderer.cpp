@@ -67,7 +67,6 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (instance_) throw std::logic_error("renderer already initialized");
     owner_ = std::this_thread::get_id(); window_ = window;
     render_aspect_=render_aspect;
-    if (const char* probe=std::getenv("UC_RT_PROBE")) rt_probe_=std::strcmp(probe,"1")==0;
     set_render_scale(render_scale);
     if (!window) throw std::invalid_argument("Vulkan requires an SDL window");
     uint32_t version = 0; vk_check(vkEnumerateInstanceVersion(&version), "vkEnumerateInstanceVersion");
@@ -566,17 +565,6 @@ void VulkanRenderer::force_scene_targets(bool on) {
     force_scene_targets_=on;
     apply_scene_path(false,path_before);
 }
-void VulkanRenderer::set_rt_probe(bool on) {
-    owner();
-    const bool path_before=scene_path_wanted();
-    rt_probe_=on;
-    apply_scene_path(false,path_before);
-}
-uint32_t VulkanRenderer::rt_probe_occluded() {
-    owner();
-    vk_check(present_.wait_idle(device),"probe readback");
-    return rt_.probe_occluded();
-}
 // The samplers and the scene targets follow a change of the anisotropy level or of whether the scene-target path is needed (both only once the device exists).
 void VulkanRenderer::apply_scene_path(bool anisotropy_changed, bool path_before) {
     const bool path_changed=scene_path_wanted()!=path_before;
@@ -1064,7 +1052,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
     bool rt_shadow_ran=false;
-    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows and the debug probe
+    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
         const bool tlas_built=rt_.build_tlas(command);
@@ -1090,14 +1078,6 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             rt_shadow_.composite(shadow,rt_shadow_denoiser_.denoise(command,RtSignal::visibility,noisy,denoise,high ? 3 : 2));
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
             rt_shadow_traced_=rt_shadow_ran=true;
-        }
-        if (rt_probe_active() && frame_projection_ && dominant_light_ && dominant_light_->kind==gx::LightKind::directional) {
-            const auto& p=dominant_light_->position; const float length=std::sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]);
-            RtProbeInputs probe; probe.depth=scene_depth_view_; probe.region=in.render_size; probe.viewport=scene_viewport; probe.view=view_params(*frame_projection_);
-            probe.to_light={p[0]/length,p[1]/length,p[2]/length};
-            pass_timer_.begin(command,timer_slot,GpuPass::rt_probe);
-            rt_.record_probe(command,probe);
-            pass_timer_.end(command,timer_slot,GpuPass::rt_probe);
         }
     }
     rt_shadow_ran_last_=rt_shadow_ran;

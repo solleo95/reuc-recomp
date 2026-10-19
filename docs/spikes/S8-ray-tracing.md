@@ -1,6 +1,6 @@
 # S8: ray tracing cost on a real fight frame
 
-Date 2026-10-19, branch `feature/ray-tracing` (HEAD a64816d: phase 0-1 tasks 1-2, device support, per-frame acceleration structures, `UC_RT_PROBE=1` debug probe).
+Date 2026-10-19, branch `feature/ray-tracing` (HEAD a64816d: phase 0-1 tasks 1-2, device support, per-frame acceleration structures, `UC_RT_PROBE=1` debug probe). The probe was removed in phase 2 (plan p2, Task 12) once the ray-traced shadow pass replaced it; the numbers below stay as measured with it.
 Machine: RTX 4080, harness `uctest`, game unlocked (`--fps-limit 0`), guest pinned to CPU 26, implicit Vulkan layers off, `--profile`, per-frame CSV via `UC_FRAME_LOG`.
 
 This document replaces an earlier version whose numbers came from a stale `fight2` demo (recorded before the 120 Hz pacing commit 67c5eb6, so it replayed the loadout menu) and from a desktop-sized window. Everything below is measured on the re-recorded `fight2` / the valid `fight3` / the live bot, with a 1280x720 window.

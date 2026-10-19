@@ -77,7 +77,7 @@ public:
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // SMAA works on the finished frame at the output size, whatever the quality setting says.
     UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
-    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || rt_probe_active()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
+    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_)); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
@@ -91,28 +91,23 @@ public:
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
     void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
-    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active() || any_rt_active(effects_,true)); }
+    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || any_rt_active(effects_,true)); }
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
-    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active() || any_rt_active(effects_,true)); }
+    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || any_rt_active(effects_,true)); }
     // RT effects' albedo and material-record targets (rt_material.h): written by the scene pass while any RT effect is active, absent otherwise.
     bool rt_material_active() const { return motion_outputs_ && any_rt_active(effects_,true); }   // effects_ has the RT levels masked by device support
     bool rt_material_targets() const { return scene_material_!=VK_NULL_HANDLE; }
     struct RtMaterialPixels { uint32_t width=0, height=0; std::vector<uint32_t> records; std::vector<uint8_t> albedo; };   // albedo: rgba8 per texel
     RtMaterialPixels capture_rt_material();   // tests/tools: both targets of the last scene (waits for the GPU); throws when no scene wrote them
     std::vector<RtMaterialRecord> rt_material_records() const;   // tests/tools: the material records of the latest frame with a scene
-    // Ray tracing debug probe (UC_RT_PROBE=1, phase 0): per-frame acceleration structures and one shadow ray per scene pixel, counted, nothing drawn.
-    // Off, nothing ray tracing runs or allocates. set_rt_probe: tests (what the variable sets at initialize).
-    bool rt_probe_active() const { return rt_probe_ && ray_tracing_; }
     // Ray-traced shadows (docs/superpowers/plans/2026-10-19-ray-tracing-p2.md): the sun and the local lights trace rays through the frame's TLAS. effects_ has the RT
-    // levels masked by device support. rt_scene_active: the acceleration structures are built this frame (shadows or the probe).
+    // levels masked by device support. rt_scene_active: the acceleration structures are built this frame; off, nothing ray tracing runs or allocates.
     bool rt_shadows_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off); }
-    bool rt_scene_active() const { return rt_probe_active() || rt_shadows_active(); }
+    bool rt_scene_active() const { return rt_shadows_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
     RtShadowPixels capture_rt_shadow_signal();   // tests/tools: the noisy signal of the latest traced frame (waits for the GPU); throws when none was traced
     uint32_t rt_shadow_signal_images() const { return rt_shadow_.signal_images_created(); }
-    void set_rt_probe(bool on);
-    uint32_t rt_probe_occluded();   // tests/tools: the occluded pixels the latest probe counted (waits for the GPU)
     RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
     uint64_t rt_buffer_growths() const { return rt_.buffer_growths(); }
     double take_pass_total_ms(GpuPass pass) { return pass_timer_.take_total_ms(pass); }   // summed GPU time of a pass over the submissions retired since the last call (frame log)
@@ -227,7 +222,7 @@ private:
     double sharpness_=0.5;
     uint32_t frame_generation_multiplier_=2;
     bool ray_tracing_=false;
-    bool rt_probe_=false, rt_frame_=false, rt_as_open_=false;   // rt_frame_: the probe was on at this frame's start; rt_as_open_: the rt_as timer runs on to the TLAS
+    bool rt_frame_=false, rt_as_open_=false;   // rt_frame_: ray tracing was active at this frame's start; rt_as_open_: the rt_as timer runs on to the TLAS
     RtScene rt_;
     RtShadowPass rt_shadow_;
     RtDenoiser rt_shadow_denoiser_;

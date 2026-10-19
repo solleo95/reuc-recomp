@@ -79,15 +79,11 @@ foreach(gtao_pass ao denoise contact composite)
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gtao.slang -entry ${gtao_pass}Main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/gtao.${gtao_pass}.spv
     DEPENDS shaders/gtao.slang shaders/gbuffer.slang shaders/view_space.slang VERBATIM)
 endforeach()
-# Ray tracing: the BLAS transform pass and the UC_RT_PROBE debug probe (ray query).
+# Ray tracing: the BLAS transform pass.
 add_custom_command(OUTPUT ${shader_dir}/rt_transform.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
   COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rt_transform.slang -entry main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/rt_transform.spv
   DEPENDS shaders/rt_transform.slang VERBATIM)
-add_custom_command(OUTPUT ${shader_dir}/rt_probe.spv
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-  COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rt_probe.slang -entry main -stage compute -target spirv -profile spirv_1_5 -capability spvRayQueryKHR -fvk-use-entrypoint-name -o ${shader_dir}/rt_probe.spv
-  DEPENDS shaders/rt_probe.slang shaders/view_space.slang VERBATIM)
 # The own denoiser of ray-traced signals: temporal accumulation and one à-trous pass, two entry points of one shader.
 foreach(denoise_pass temporal atrous)
   add_custom_command(OUTPUT ${shader_dir}/rt_denoise.${denoise_pass}.spv
@@ -112,7 +108,7 @@ set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${
   ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv
   ${shader_dir}/smaa.edges.spv ${shader_dir}/smaa.weights.spv ${shader_dir}/smaa.blend.spv
   ${shader_dir}/smoke.shadow.vert.spv ${shader_dir}/gtao.ao.spv ${shader_dir}/gtao.denoise.spv ${shader_dir}/gtao.contact.spv ${shader_dir}/gtao.composite.spv
-  ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/rt_transform.spv ${shader_dir}/rt_probe.spv
+  ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/rt_transform.spv
   ${shader_dir}/rt_denoise.temporal.spv ${shader_dir}/rt_denoise.atrous.spv ${shader_dir}/rt_shadow.trace.spv ${shader_dir}/rt_shadow.composite.spv CACHE INTERNAL "")
 add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
