@@ -16,6 +16,8 @@ struct UpscaleInputs {
     VkExtent2D render_size{}, output_size{};     // top-left sub-rectangles holding the scene (the 640x360 viewport of the 640x480 EFB)
     std::array<float,2> jitter{};                // internal pixels, as added to the projection
     bool reset=false;                            // history is invalid: camera cut, scene-mode change, first frame
+    bool sharpening=false;
+    float sharpness=0.5f;
     float frame_ms=16.7f;
     uint64_t frame=0;
     gx::Projection projection{}, clip_to_prev_clip{};   // the scene's projection and the camera reprojection (MotionTracker)
@@ -33,5 +35,5 @@ class Streamline;
 // DLSS 4.5 Super Resolution through Streamline; presets K (DLAA, Quality, Balanced), M (Performance), L (Ultra Performance).
 std::unique_ptr<Upscaler> make_dlss_upscaler(const Streamline& streamline, UpscaleMode mode);
 // FSR 3.1 through the FFX API (amd_fidelityfx_vk.dll in `directory`); it sharpens with its own RCAS when `sharpening` is on. Throws when the DLL is unusable.
-std::unique_ptr<Upscaler> make_fsr_upscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory, UpscaleMode mode, bool sharpening, float sharpness);
+std::unique_ptr<Upscaler> make_fsr_upscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory);
 }

@@ -116,6 +116,8 @@ class Game:
                 "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
         if "--config" not in self.game_args:   # no dist config: the game starts from defaults and saves its first change here
             args.extend(["--config", str(config)])
+        if "--window-mode" not in self.game_args:
+            args.extend(["--window-mode", "windowed"])   # saved borderless settings must not cover the owner's desktop during tests
         if self.skip_intro:
             args.append("--skip-intro")
         if "--fps-limit" not in self.game_args:

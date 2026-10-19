@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-ingame-overlay-design.md`
 
+**Execution status (2026-10-18):** Tasks 1–7 implemented and reviewed in 5710538..9cdc6af; Task 8 completed with the verification limits below. Original task checklists below describe the proposed sequence; actual API choices and deviations are recorded in `.superpowers/sdd/2026-10-18-ingame-overlay/progress.md`. Final verification resumed after Claude reached its session limit. Follow-up changes remain uncommitted; `dist` was staged without installing to the game directory.
+
 ## Global Constraints
 
 - Hotkeys: Insert toggles the menu, P toggles pause; both are host keys and never reach the game; P does nothing while the menu is open.
@@ -189,7 +191,14 @@ Throwaway proof that `shutdown()` + `configure_upscaling()` + `initialize()` wor
 
 ### Task 8: Verification
 
-- [ ] **Step 1:** `build.bat --no-install` and `ctest --test-dir build --output-on-failure` → all pass.
-- [ ] **Step 2:** Closed-menu cost: stage `dist/uc_before.exe` from the commit before Task 2, `python -m uctest bench dist/uc_before.exe dist/uc.exe --demo fight2` → difference inside the CI / below ~5%; if the demo check fails (`demo check fight2`), re-record.
-- [ ] **Step 3:** `python -m uctest run fight --measure 15` at speed 1 → FPS in the usual range.
-- [ ] **Step 4:** Update the spec status, `docs/testing/test-server.md`, and memory notes if a non-obvious finding came up.
+- [x] **Step 1:** `build.bat --no-install` and `ctest --test-dir build --output-on-failure` → all pass (114/114).
+- [x] **Step 2:** Closed-menu cost: baseline 5710538 staged as `dist/uc_before_overlay.exe`; `py -3.13 -m uctest bench dist/uc_before_overlay.exe dist/uc.exe --demo fight2 --runs 3` → +0.8% mean wall time, 95% CI [-9.2%, +10.8%], INCONCLUSIVE. All six runs performed 1,328,859 draws; best vs best +1.2%. No significant difference detected; machine drift leaves this comparison unable to exclude a small regression.
+- [x] **Step 3:** `py -3.13 -m uctest run fight --measure 15` → PASS at speed 1: active mean 149.9 FPS, p5 140 FPS, frame-gap p99 9.2 ms (`build/autotest/1792353629092599300/report.json`). This confirms live operation; the deterministic benchmark above supplies the performance comparison.
+- [x] **Step 4:** Updated spec status, `docs/testing/test-server.md`, and execution ledger with verification evidence and remaining limitations.
+
+### Verification notes (2026-10-18)
+
+- Restored four accidentally commented-out overlay checks: bloom on/off and sculpted/monochrome prompts. The expanded `overlay` run passed all 17 changes, saving each setting and preserving 1.5x render scale across renderer restarts (`build/autotest/1792353115167011400/report.json`). Menu captures were inspected, including bloom and DLSS X2.
+- Corrected a false pause failure caused by camera float roundoff: matrix entries allow absolute error 1e-5, while actors, HP and player health remain exact. Added regression checks for roundoff, actual movement, damage, missing camera and NaN; observed RED then GREEN. Unlimited pause passed three consecutive runs; 30 FPS and 60 FPS each passed once, including title, gameplay, menu over pause and resume.
+- Baseline was rebuilt from a clean 5710538 archive using local SDK sources, current generated code and the same Release/ThinLTO/PGO settings; no network fetch or main checkout change was needed. Scratch sources and the baseline executable remain under `build/overlay-baseline-*` for reproducibility.
+- Cutscene/QTE pause, live mouse binding capture, menu resize/focus transitions and audio continuity were not verified in this final pass. Existing sub-pixel bone movement and advancement of the guest audio timeline during pause remain limitations; other deferred review findings remain in the execution ledger.

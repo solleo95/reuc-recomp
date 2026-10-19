@@ -48,6 +48,23 @@ class CheckpointTest(unittest.TestCase):
                 with self.assertRaises(ValueError): client.resolve_saves("missing")
             finally: client.CHECKPOINTS = old
 
+class PauseSceneTest(unittest.TestCase):
+    def test_camera_roundoff_keeps_scene_frozen(self):
+        from uctest import scenarios
+        a = {"view": [18.2863064, -0.033859171], "enemies": [(160, [507.08, -0.5, 1.491], 20)], "life": 1}
+        b = dict(a, view=[18.2863102, -0.0338591784])
+        self.assertTrue(scenarios._same_scene(a, b))
+        self.assertTrue(scenarios._same_scene(dict(a, view=None), dict(a, view=None)))
+
+    def test_pause_still_detects_motion_damage_and_missing_camera(self):
+        from uctest import scenarios
+        a = {"view": [18.2863064], "enemies": [(160, [507.08, -0.5, 1.491], 20)], "life": 1}
+        for b in (dict(a, view=[18.287]), dict(a, view=None), dict(a, view=[]),
+                  dict(a, life=.9), dict(a, enemies=[(160, [507.09, -0.5, 1.491], 20)]),
+                  dict(a, enemies=[(160, [507.08, -0.5, 1.491], 10)]), dict(a, view=[float("nan")])):
+            with self.subTest(scene=b):
+                self.assertFalse(scenarios._same_scene(a, b))
+
 class StepsTest(unittest.TestCase):
     def test_select_presses_target_and_sees_change(self):
         t = menus.TARGETS["save_slot_1"]; g = ScriptedGame([t.screen, "scenario"])

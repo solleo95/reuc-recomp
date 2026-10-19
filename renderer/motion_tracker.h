@@ -2,7 +2,9 @@
 #include "gx_transforms.h"
 #include "gx_vertices.h"
 #include <compare>
-#include <map>
+#include <memory>
+#include <memory_resource>
+#include <unordered_map>
 #include <vector>
 
 namespace gx {
@@ -14,16 +16,17 @@ struct DrawKey {
     uint32_t vertices=0, occurrence=0;
     auto operator<=>(const DrawKey&) const=default;
 };
-struct PreviousDraw { PaletteBlock palette; Projection projection; };
+struct PreviousDraw { std::shared_ptr<const Transforms> transforms; };
 // Hands the vertex shader last frame's matrices of the same draw. Camera motion estimate and cut detection come from the paired draws.
 class MotionTracker {
 public:
+    explicit MotionTracker(std::pmr::memory_resource* upstream=std::pmr::get_default_resource());
     static constexpr float kCameraCutNdc=0.5f;          // median screen displacement of paired draws (NDC units) that counts as a cut
     static constexpr float kProjectionCutRelative=0.2f; // relative change of the projection scale (field of view) that counts as a cut
     void begin_frame();
     DrawKey key(const DrawPacket& draw);
     const PreviousDraw* previous(const DrawKey& key) const;
-    void record(const DrawKey& key, const Transforms& transforms, bool z_write);
+    void record(const DrawKey& key, std::shared_ptr<const Transforms> transforms, bool z_write);
     void end_frame();
     // Undo the key()/record() calls made since checkpoint() (a packet the renderer retries later).
     size_t checkpoint() const { return journal_.size(); }
@@ -32,9 +35,19 @@ public:
     const Projection& clip_to_prev_clip() const { return clip_to_prev_; }
 private:
     struct Entry { PreviousDraw draw; std::array<std::array<float,4>,3> rows; bool z_write; bool mesh; };
-    std::map<DrawKey,Entry> previous_, current_;
-    std::map<std::tuple<uint32_t,const void*,uint32_t>,uint32_t> occurrences_;
+    struct DrawKeyHash {
+        size_t operator()(const DrawKey& key) const {
+            size_t hash=std::hash<const void*>{}(key.mesh);
+            for(uint32_t value:{key.callsite,key.vertices,key.occurrence})
+                hash^=std::hash<uint32_t>{}(value)+0x9e3779b9u+(hash<<6)+(hash>>2);
+            return hash;
+        }
+    };
+    std::pmr::unsynchronized_pool_resource pool_;
+    std::pmr::unordered_map<DrawKey,Entry,DrawKeyHash> previous_, current_;
+    std::pmr::unordered_map<DrawKey,uint32_t,DrawKeyHash> occurrences_;
     std::vector<DrawKey> journal_;   // keys handed out this frame, in order
+    std::vector<float> moves_;
     bool cut_=false;
     Projection clip_to_prev_{{{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,0,1}}};
 };

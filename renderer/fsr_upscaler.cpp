@@ -26,8 +26,8 @@ FfxApiResource resource(const UpscaleImage& image, uint32_t state, uint32_t extr
 // states map to GENERAL in the SDK's Vulkan backend, so FFX transitions what it needs and hands them back as they came.
 class FsrUpscaler final : public Upscaler {
 public:
-    FsrUpscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory, UpscaleMode mode, bool sharpening, float sharpness)
-        : device_(device), physical_(physical), sharpening_(sharpening), sharpness_(sharpness) {   // `mode` only sizes the scene targets (the renderer)
+    FsrUpscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory)
+        : device_(device), physical_(physical) {
         module_=LoadLibraryW((directory / "amd_fidelityfx_vk.dll").c_str());
         if (!module_) throw std::runtime_error("FSR: amd_fidelityfx_vk.dll missing");
         ffxLoadFunctions(&api_, module_);
@@ -54,8 +54,8 @@ public:
         dispatch.motionVectorScale={1.0f, 1.0f};   // vectors are already previous minus current in internal pixels
         dispatch.renderSize={in.render_size.width, in.render_size.height};
         dispatch.upscaleSize={in.output_size.width, in.output_size.height};
-        dispatch.enableSharpening=sharpening_;
-        dispatch.sharpness=sharpness_;
+        dispatch.enableSharpening=in.sharpening;
+        dispatch.sharpness=in.sharpness;
         dispatch.frameTimeDelta=in.frame_ms;
         dispatch.preExposure=1.0f;
         dispatch.reset=in.reset;
@@ -94,7 +94,6 @@ private:
         std::fprintf(stderr, "FSR 3.1: %ux%u <- %ux%u\n", max_output_.width, max_output_.height, max_render_.width, max_render_.height);
     }
     VkDevice device_; VkPhysicalDevice physical_;
-    bool sharpening_; float sharpness_;
     HMODULE module_=nullptr;
     ffxFunctions api_{};
     ffxContext context_=nullptr;
@@ -102,7 +101,7 @@ private:
     VkExtent2D scene_target_{};
 };
 }
-std::unique_ptr<Upscaler> make_fsr_upscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory, UpscaleMode mode, bool sharpening, float sharpness) {
-    return std::make_unique<FsrUpscaler>(device,physical,directory,mode,sharpening,sharpness);
+std::unique_ptr<Upscaler> make_fsr_upscaler(VkDevice device, VkPhysicalDevice physical, const std::filesystem::path& directory) {
+    return std::make_unique<FsrUpscaler>(device,physical,directory);
 }
 }

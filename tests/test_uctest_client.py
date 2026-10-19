@@ -19,6 +19,19 @@ class FakeTransport:
         self.out.put(json.dumps({"type": "frame", "n": n, "context": context, "speed": 1, "ui": [-1]*12, **extra}))
 
 class ClientTest(unittest.TestCase):
+    def test_launch_keeps_saved_borderless_config_windowed(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root / "source-saves").mkdir(); (root / "run").mkdir()
+            exe=root / "uc.exe"
+            (root / "config.json").write_text(json.dumps({"graphics":{"window_mode":"borderless"}}))
+            g=Game(exe=str(exe),run_dir=root / "run",saves=root / "source-saves")
+            with patch("uctest.client.subprocess.Popen") as launch:
+                g._launch()
+            command=launch.call_args.args[0]
+            self.assertEqual(command[command.index("--window-mode")+1],"windowed")
+            self.assertEqual(command[command.index("--width")+1],"1280")
+            self.assertEqual(command[command.index("--height")+1],"720")
     def game(self, t):
         return Game(transport_factory=lambda: t, launch=False, run_dir=Path(self.tmp.name))
     def setUp(self):

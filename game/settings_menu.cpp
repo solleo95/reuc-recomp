@@ -13,6 +13,16 @@ namespace uc {
 namespace {
 constexpr UpscaleMode kModes[]={UpscaleMode::native,UpscaleMode::quality,UpscaleMode::balanced,UpscaleMode::performance,UpscaleMode::ultra_performance};
 constexpr uint32_t kLimits[]={30,60,90,120,144,165,240,360,0};   // the launcher's list; 0 = unlimited
+bool compact_checkbox(const char* id,const char* label,bool& value,float unit) {
+    const auto padding=ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{padding.x,0});
+    bool changed=ImGui::Checkbox(id,&value);
+    ImGui::PopStyleVar();
+    ImGui::SameLine(0,10*unit);
+    ImGui::BeginGroup(); ImGui::TextWrapped("%s",label); ImGui::EndGroup();
+    if(ImGui::IsItemClicked()) { value=!value; changed=true; }
+    return changed;
+}
 }
 SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height)
     : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),editor_(live.bindings()) {}
@@ -32,17 +42,22 @@ void SettingsMenu::commit() {
 }
 void SettingsMenu::build() {
     const auto& io=ImGui::GetIO();
-    const float unit=std::max(.75f,io.DisplaySize.y/1080.f);
+    const float font_scale=std::max(.75f,io.DisplaySize.y/1080.f);
+    const float unit=font_scale*.75f;
+    const float font_size=std::round(22*font_scale);
+    ImGui::GetStyle()=ImGuiStyle{};   // ScaleAllSizes must always start from unscaled metrics, including fields the theme leaves at defaults.
     launcher::graphite_style(); ImGui::GetStyle().ScaleAllSizes(unit);
+    const float previous_frame_height=font_size+2*std::floor(11*font_scale);
+    ImGui::GetStyle().FramePadding.y=(previous_frame_height*.75f-font_size)*.5f;
     ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;   // ScaleAllSizes floors thin borders to zero below 1x
     ImGui::GetStyle().WindowPadding={28*unit,22*unit};
-    const ImVec2 size{std::min(io.DisplaySize.x-40*unit,900*unit),std::min(io.DisplaySize.y-40*unit,720*unit)};
-    ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+    const ImVec2 size{std::min(io.DisplaySize.x-40*font_scale,560*font_scale),std::min(io.DisplaySize.y-40*font_scale,900*font_scale)};
+    ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Once,{.5f,.5f});
     ImGui::SetNextWindowSize(size,ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(.94f);
-    ImGui::PushFont(fonts_.sans,std::round(22*unit));
-    ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushFont(fonts_.serif,std::round(32*unit));ImGui::TextUnformatted(tr("graphics_title"));ImGui::PopFont();
+    ImGui::PushFont(fonts_.sans,font_size);
+    ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PushFont(fonts_.serif,std::round(32*font_scale));ImGui::TextWrapped("%s",tr("graphics_title"));ImGui::PopFont();
     ImGui::Dummy({0,6*unit});
     if(ImGui::BeginTabBar("tabs")) {
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
@@ -61,10 +76,9 @@ void SettingsMenu::build() {
 void SettingsMenu::main_tab(float unit) {
     auto options=current();
     const auto* features=features_();
-    const float column=(ImGui::GetContentRegionAvail().x-40*unit)/2;
     ImGui::Dummy({0,8*unit});
     ImGui::BeginChild("graphics",{0,0});
-    ImGui::BeginGroup(); ImGui::PushItemWidth(column);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     ImGui::TextUnformatted(tr("scale"));
     const auto scale_label=[&](double scale) {
         const double effective=scale ? scale : monitor_render_scale(monitor_width_,monitor_height_);
@@ -85,9 +99,7 @@ void SettingsMenu::main_tab(float unit) {
         for(const uint32_t value:kLimits) if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value)) options.fps_limit=value;
         ImGui::EndCombo();
     }
-    ImGui::PopItemWidth(); ImGui::EndGroup();
-    ImGui::SameLine(0,40*unit);
-    ImGui::BeginGroup(); ImGui::PushItemWidth(column);
+    ImGui::Dummy({0,6*unit});
     const auto supported=[&](UpscalerKind kind,bool generation,std::string& why) {
         if(kind==UpscalerKind::off) return true;
         if(failed_.contains(kind) || (generation && failed_generation_.contains(kind))) { why=tr("launcher_only"); return false; }
@@ -133,6 +145,14 @@ void SettingsMenu::main_tab(float unit) {
     }
     ImGui::EndDisabled();
     ImGui::Dummy({0,6*unit});
+    ImGui::BeginDisabled(!upscaling);
+    const auto sharpening_label=std::string(tr("sharpening"))+" (RCAS)";
+    compact_checkbox("##sharpening",sharpening_label.c_str(),options.sharpening,unit);
+    ImGui::BeginDisabled(!options.sharpening);
+    float sharpness=float(options.sharpness);
+    if(ImGui::SliderFloat("##sharpness",&sharpness,.01f,1.f,"%.2f")) options.sharpness=std::clamp(std::round(double(sharpness)*100)/100,.01,1.);
+    ImGui::EndDisabled(); ImGui::EndDisabled();
+    ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("framegen"));
     const auto choice=frame_generation_choice(options);
     const auto choice_label=[&](FrameGenChoice value) -> std::string {
@@ -152,13 +172,10 @@ void SettingsMenu::main_tab(float unit) {
         }
         ImGui::EndCombo();
     }
-    ImGui::PopItemWidth(); ImGui::EndGroup();
+    ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
     bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow
-    if(ImGui::Checkbox("##bloom",&no_bloom)) options.bloom=!no_bloom;
-    ImGui::SameLine();   // the label wraps beside the box (Russian is wider than the menu at small sizes) and toggles it too
-    ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextWrapped("%s",tr("bloom")); ImGui::EndGroup();
-    if(ImGui::IsItemClicked()) options.bloom=!options.bloom;
+    if(compact_checkbox("##bloom",tr("bloom"),no_bloom,unit)) options.bloom=!no_bloom;
     ImGui::EndChild();
     pending_=options;
 }
@@ -166,13 +183,12 @@ void SettingsMenu::controls_tab(float unit) {
     auto options=current();
     ImGui::Dummy({0,8*unit});
     ImGui::TextUnformatted(tr("style"));
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.45f);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     const char* styles[]={tr("gray"),tr("cyan")};
     if(ImGui::BeginCombo("##style",styles[size_t(options.prompt_style)])) {
         for(size_t i=0;i<2;++i) if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i)) options.prompt_style=PromptStyle(i);
         ImGui::EndCombo();
     }
-    ImGui::SameLine(0,25*unit);
     {   // the three mouse pictures of the chosen style
         const float ph=ImGui::GetFrameHeight(); const auto p=ImGui::GetCursorScreenPos(); auto* draw=ImGui::GetWindowDrawList();
         for(int i=0;i<3;++i) draw_mouse_icon(*draw,{p.x+i*ph,p.y},{ph*.65f,ph},{i==2 ? PhysicalKind::wheel : PhysicalKind::mouse,uint16_t(i==1 ? 3 : 1)},false,options.prompt_style);
@@ -200,19 +216,15 @@ void SettingsMenu::controls_tab(float unit) {
     if(editor_.capturing()) { ImGui::SameLine(); ImGui::TextWrapped("%s",tr("capture")); }
     if(editor_.error()) ImGui::TextWrapped("%s: %s",tr("rejected"),editor_.error()->c_str());
     ImGui::BeginDisabled(editor_.capturing().has_value());
-    if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_RowBg,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
-        ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);
-        ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
-        ImGui::TableSetupColumn("+",ImGuiTableColumnFlags_WidthFixed,46*unit);
-        ImGui::TableSetupColumn(tr("clear"),ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(tr("clear")).x+28*unit);
+    if(ImGui::BeginChild("bindings",{0,0})) {
         for(size_t i=0;i<size_t(Action::count);++i) {
-            const auto action=Action(i); ImGui::PushID(int(i)); ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextWrapped("%s",tr(action_names[i]));
-            ImGui::TableSetColumnIndex(1);
+            const auto action=Action(i); ImGui::PushID(int(i));
+            ImGui::TextWrapped("%s",tr(action_names[i]));
             const auto& entries=editor_.bindings()[i];
-            std::string names; for(const auto& entry:entries) { if(!names.empty()) names+=", "; names+=binding_name(entry); }
+            std::string names; for(const auto& entry:entries) { if(!names.empty()) names+='\n'; names+=binding_name(entry); }
             if(names.empty()) names=tr("unbound");
-            if(ImGui::Button(names.c_str(),{-1,0})) editor_.begin_capture(action,true);
+            if(ImGui::Button(names.c_str(),{ImGui::GetContentRegionAvail().x*.75f,0})) editor_.begin_capture(action,true);
+            if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",names.c_str());
             if(ImGui::BeginPopupContextItem("binding-menu")) {
                 for(size_t j=0;j<entries.size();++j) {
                     ImGui::PushID(int(j)); const auto label=std::string(tr("remove"))+": "+binding_name(entries[j]);
@@ -221,9 +233,8 @@ void SettingsMenu::controls_tab(float unit) {
                 }
                 ImGui::EndPopup();
             }
-            ImGui::TableSetColumnIndex(2);
             const bool special=action==Action::grenade || action==Action::knife || action==Action::qte_shake;
-            if(ImGui::Button("+",{-1,0})) { if(special) ImGui::OpenPopup("add-binding"); else editor_.begin_capture(action); }
+            if(ImGui::Button("+",{46*unit,0})) { if(special) ImGui::OpenPopup("add-binding"); else editor_.begin_capture(action); }
             if(ImGui::BeginPopup("add-binding")) {
                 if(ImGui::MenuItem(tr("add"))) editor_.begin_capture(action);
                 if(action==Action::grenade && ImGui::MenuItem(tr("chord"))) editor_.add(action,{BindingKind::interact_fire,{},{}});
@@ -231,12 +242,13 @@ void SettingsMenu::controls_tab(float unit) {
                 if(action==Action::qte_shake && ImGui::MenuItem(tr("motion"))) editor_.add(action,{BindingKind::qte_motion,{},{}});
                 ImGui::EndPopup();
             }
-            ImGui::TableSetColumnIndex(3);
-            if(ImGui::Button(tr("clear"),{-1,0})) editor_.clear(action);
+            ImGui::SameLine();
+            if(ImGui::Button(tr("clear"))) editor_.clear(action);
+            ImGui::Separator();
             ImGui::PopID();
         }
-        ImGui::EndTable();
     }
+    ImGui::EndChild();
     ImGui::EndDisabled();
 }
 }

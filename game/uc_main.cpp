@@ -604,7 +604,7 @@ static int real_main(int argc, char** argv) {
     };
     // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
     uc::HostKeys host_keys;
-    bool restart_pending=false;   // an upscaler / frame generation pick: the renderer is replaced at the next frame boundary
+    bool restart_pending=false;   // apply upscaling changes at the next frame boundary; replace the device only when required
     std::optional<uc::LiveSettings> live_settings;
     std::optional<uc::SettingsMenu> settings_menu;
     std::shared_ptr<std::promise<std::string>> features_promise; std::shared_future<std::string> features_query; std::optional<uc::FeatureReport> features;
@@ -617,11 +617,10 @@ static int real_main(int argc, char** argv) {
             renderer.set_render_scale(options.render_scale);
         };
         targets.upscaling=[&](const uc::Options& next) {
-            restart_pending|=next.upscaler!=options.upscaler || next.frame_generation!=options.frame_generation || next.sharpening!=options.sharpening
-                || next.frame_generation_multiplier!=options.frame_generation_multiplier;
+            restart_pending=true;
             options.upscaler=next.upscaler; options.upscale_mode=next.upscale_mode; options.sharpening=next.sharpening; options.sharpness=next.sharpness;
             options.frame_generation=next.frame_generation && !deterministic; options.frame_generation_multiplier=next.frame_generation_multiplier;
-            if (!restart_pending) renderer.set_upscale_mode(options.upscale_mode,options.sharpness);        };
+        };
         targets.fps_limit=[&](std::optional<uint32_t> limit) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
@@ -785,8 +784,13 @@ static int real_main(int argc, char** argv) {
             if (settings_menu) settings_menu->commit();   // the menu's picks, applied outside rendering
             if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial) {
                 restart_pending=false;
-                restart_renderer();
-                apply_host_keys();   // the new renderer gets the menu back
+                const auto began=std::chrono::steady_clock::now();
+                if (!renderer.set_upscaling(options.upscaler,options.upscale_mode,options.sharpening,options.sharpness,options.frame_generation,options.frame_generation_multiplier)) {
+                    restart_renderer();
+                    apply_host_keys();   // the new renderer gets the menu back
+                } else std::fprintf(stderr,"Upscaling updated in %.1f ms: %s, RCAS %s\n",
+                    std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count(),
+                    std::string(uc::upscaler_name(options.upscaler)).c_str(),options.sharpening ? "on" : "off");
                 if (options.upscaler!=uc::UpscalerKind::off && renderer.active_upscaler()!=options.upscaler) settings_menu->upscaler_failed(options.upscaler);
                 else if (options.frame_generation && !renderer.frame_generation_active()) settings_menu->frame_generation_failed(options.upscaler);
             }

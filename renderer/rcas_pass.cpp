@@ -21,6 +21,7 @@ void image_barrier(VkCommandBuffer command, VkImage image, VkImageLayout before,
 struct Constants { int32_t width, height; float sharpness, unused; };
 }
 void RcasPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders) {
+    if (pipeline_) return;
     device_ = device; memory_ = memory;
     std::ifstream file(shaders / "rcas.comp.spv", std::ios::binary);
     std::vector<char> code((std::istreambuf_iterator<char>(file)), {});

@@ -57,13 +57,12 @@ public:
     // style once into the menu's ImGui context.
     void set_menu(std::function<void()> build, std::function<void()> setup = {});
     bool menu_event(const SDL_Event& event) { owner(); return menu_overlay_.event(event); }   // true when the menu wants the event
-    // Upscaling and frame generation settings; called before initialize(). Another kind or frame generation needs a new renderer (the device
-    // depends on them): the game destroys this one and initializes a fresh one, see lost_copies().
+    // Initial device capabilities (Streamline, motion outputs and frame generation).
     void configure_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
-    // Same kind and frame generation, another quality mode or sharpness: the upscaler and the scene targets are rebuilt before the next frame.
-    void set_upscale_mode(UpscaleMode mode, double sharpness);
+    // At a guest frame boundary. False requires a new device; sharpening and off/on of the initialized kind preserve it.
+    bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
-    bool frame_generation_active() const { return dlss_g_ || (fsr_g_ && fsr_g_->has_context()); }
+    bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
     std::vector<const gx::TexturePixels*> copy_keys() const;
     void lost_copies(std::vector<const gx::TexturePixels*> keys);
@@ -137,11 +136,12 @@ private:
     void destroy_buffer(Buffer& buffer);
     Texture make_texture(const gx::TexturePixels* pixels, VkExtent2D physical_extent = {});
     Texture make_copy_texture(const std::shared_ptr<const gx::TexturePixels>& source);
+    void record_texture_copy(VkCommandBuffer command, VkImage source, VkExtent2D extent, const std::array<uint32_t,4>& region, Texture& target, VkImageLayout before);
     void recycle_copy_texture(Texture& texture);
     void destroy_texture(Texture& texture);
     void retire_textures(Slot& slot);
     void rebuild();
-    void retire_images();
+    void retire_images(bool keep_buffers=false);
     void retire_for_resize();
     void reap_retired(bool wait);
     // A pipeline for a draw: the specialized one when compiled, else the ubershader variant of the same fixed state (see queue_pipeline).
@@ -164,6 +164,7 @@ private:
     PromptStyle prompt_style_=PromptStyle::monochrome;
     bool bloom_=true;
     UpscalerKind upscaler_kind_=UpscalerKind::off;
+    bool dlss_available_=false, dlss_g_available_=false;
     UpscaleMode upscale_mode_=UpscaleMode::quality;
     bool sharpening_=false, frame_generation_=false;
     double sharpness_=0.5;
@@ -172,13 +173,17 @@ private:
     // Upscaling: the 3D scene of a guest frame renders into these internal-resolution targets up to the scene boundary, then the upscaler
     // fills efb_ and the rest of the frame (post chain, HUD) draws into efb_ at output resolution.
     std::unique_ptr<Streamline> streamline_;   // DLSS: loaded before the instance, shut down before the device
-    PresentFunctions present_;                 // swapchain calls (Streamline's proxies with DLSS)
+    PresentFunctions present_, base_present_;   // current backend and the preloaded Streamline calls
+    bool fsr_presentation_=false, dlss_presentation_=false;
     std::unique_ptr<Upscaler> upscaler_;
     RcasPass rcas_;   // sharpening after upscalers that do not sharpen themselves
     // DLSS Frame Generation: the HUD-less copy of the frame at back-buffer size, taken before the HUD packet (or at the present).
     std::unique_ptr<DlssFrameGeneration> dlss_g_;
     // FSR Frame Generation (frame interpolation swapchain); its interpolation may still read the previous frame's HUD-less copy, hence two.
     std::unique_ptr<FsrFrameGeneration> fsr_g_;
+    bool dlss_generation_enabled() const { return frame_generation_ && upscaler_kind_==UpscalerKind::dlss && bool(dlss_g_); }
+    bool fsr_generation_enabled() const { return frame_generation_ && upscaler_kind_==UpscalerKind::fsr && fsr_presentation_ && fsr_g_ && fsr_g_->has_context(); }
+    bool streamline_swapchain() const { return dlss_presentation_; }
     VkQueue fg_present_queue_=VK_NULL_HANDLE, fg_acquire_queue_=VK_NULL_HANDLE;   // extra queues of the game's family for the interpolation swapchain
     VkFormat swapchain_format_=VK_FORMAT_UNDEFINED;
     VkImage hudless_[2]{}; VkDeviceMemory hudless_memory_[2]{}; VkImageView hudless_view_[2]{};
@@ -197,6 +202,7 @@ private:
     // The last present's EFB clear, applied to the scene targets by the next frame's first scene pass (GX clears the EFB at the present copy).
     struct SceneClear { bool pending=false; std::array<uint32_t,4> region{}; std::array<uint8_t,4> color{}; uint32_t depth=0xFFFFFF; } scene_clear_;
     gx::SceneBoundary boundary_;
+    std::optional<gx::TextureCopy> scene_restore_copy_;   // final scene snapshot restored over the post chain's scratch workspace
     gx::MotionTracker tracker_;
     bool frame_start_=true, scene_phase_=false, scene_mode_=false, motion_cleared_=false, reset_next_=true;
     uint64_t upscale_frame_=0, whole_frame_upscales_=0;
@@ -207,6 +213,7 @@ private:
     void destroy_scene_targets();
     // Ends the scene of this frame: reconstructs scene_color_ into efb_, carries the scene depth into depth_ for the draws after it.
     void record_upscale(VkCommandBuffer command, bool black_output);
+    void configure_generation();
     UpscaleImage hudless_image() const;
     std::thread::id owner_;
     VkInstance instance_ = VK_NULL_HANDLE;

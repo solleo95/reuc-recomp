@@ -71,6 +71,18 @@ Every fatal error writes `dist/debug/crash-<time>-<pid>.txt` (host stack with gu
 
 Open (2026-10-15): `autoplay --god --speed 8 --max-minutes 2 --skip-tutorials` plays the chapter with no tutorial event at all (97–99 kills) but did not finish in 3 of 3 runs, while the same command without the flag reached `chapter_done` in 3 of 3: twice the frame stream stopped at the results screen (`timeout waiting for next game frame`, the game kept running and rendering), once the guest crashed in a J3D draw (`GX error 0 at 8028882C: expected 12, received 0`, tick 38401). Cause not found; use the flag for menu/gameplay scenarios (`no_tutorials`, `train_gameplay`, `perf`) until it is.
 
+## In-game menu and pause checks
+
+The in-game settings scenario is `python -m uctest run overlay`: Insert opens the menu over gameplay, graphics changes are applied and saved in the run's isolated config, render scale survives every upscaler switch, and Escape closes it. It covers bloom on/off, both prompt styles, FPS limits, DLSS/FSR quality, RCAS enable/strength/disable, repeated DLSS/FSR off/on, generator toggles and generator-family changes. These upscaler and generator changes preserve the device. `run.log` records host update timings.
+
+Harness scenarios and deterministic replays default to a 1280x720 window, overriding a saved fullscreen setting. Keep this window size during normal tests; use `--game-arg=--render-scale --game-arg=2` for a higher internal render resolution. Fullscreen or a different window size requires an explicit game argument.
+
+`ctest --test-dir build -R '^test_settings_menu$' --output-on-failure` drives real ImGui input at 1440p: 120 frames must preserve style metrics, the window remains 746×1200 with the existing 29-pixel body font and checkbox squares, controls have 75% of the previous height, both tabs remain visible, every main combo opens, a scale choice applies, RCAS toggles and slider changes persist to an isolated config, and dragging moves the menu. The optional GPU variant, `build/tests/test_settings_menu.exe --gpu dist/data/shaders build/menu-ui-final`, repeats the interactions through the Vulkan renderer and saves `main.png`, `combo.png`, `rcas.png`, `controls.png` and `dragged.png` for visual checks. It uses a hidden test window and synthetic ImGui events; no system input or game saves.
+
+`python -m uctest run pause` checks the title screen, gameplay, opening the menu over a paused scene, ignoring P while the menu is open, and resuming. Repeat with `--game-arg=--fps-limit --game-arg=30` or `60` to check capped modes. Enemy positions, HP and player health must match exactly; camera matrix entries allow absolute float roundoff of `1e-5`; captures allow at most 0.05% changed pixels for the known sub-pixel bone movement. Cutscenes, QTE and audio playback continuity remain unverified by this scenario; the guest audio timeline can advance while the output stream is paused.
+
+The demo benchmark currently needs Python 3.12 or newer; on this machine use `py -3.13 -m uctest bench ...` because the bare `python` command selects 3.10.
+
 ## Known gaps
 
 - Hover item and button rectangles of menu pages are not read from RAM (only the scenario page showed a hover word at `804B96BC`). Targets are measured aim coordinates (`screen x = 640 + 800·aimX`, `y = 360 + 600·aimY` at 1280x720).

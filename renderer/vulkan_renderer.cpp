@@ -99,10 +99,13 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo = &application;
     instance_info.enabledExtensionCount = uint32_t(extensions.size()); instance_info.ppEnabledExtensionNames = extensions.data();
     if (validation) { instance_info.enabledLayerCount = 1; instance_info.ppEnabledLayerNames = &layer; instance_info.pNext = &debug_info; }
-    if (upscaler_kind_ == UpscalerKind::dlss) {   // Streamline must initialize before the instance exists
+    {   // Optional backends must be ready before the instance, so live picks never need a new device.
         std::string reason;
-        streamline_ = Streamline::load(shaders.parent_path().parent_path(), frame_generation_, reason);
-        if (!streamline_) { std::fprintf(stderr, "DLSS unavailable: %s\n", reason.c_str()); upscaler_kind_ = UpscalerKind::off; frame_generation_ = false; }
+        streamline_ = Streamline::load(shaders.parent_path().parent_path(), true, reason);
+        if (!streamline_) {
+            std::fprintf(stderr, "DLSS unavailable: %s\n", reason.c_str());
+            if (upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
+        }
         else if (!validation && has(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
             // Streamline's Vulkan backend creates a debug messenger through the loader trampoline, which crashes when the extension is off.
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -154,28 +157,39 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     std::fprintf(stderr, "Vulkan device: %s; presentation retirement: %s\n", properties.deviceName, chosen_maintenance);
     if (streamline_) {
         std::string reason;
-        if (!streamline_->dlss_supported(physical_, reason)) {
+        dlss_available_=streamline_->dlss_supported(physical_, reason);
+        if (!dlss_available_) {
             std::fprintf(stderr, "DLSS unavailable: %s\n", reason.c_str());
-            streamline_->shutdown(); upscaler_kind_ = UpscalerKind::off; frame_generation_ = false;   // the instance stays; the device is created plainly
-        } else if (frame_generation_ && !streamline_->dlss_g_supported(physical_, reason)) {
-            std::fprintf(stderr, "DLSS Frame Generation unavailable: %s\n", reason.c_str()); frame_generation_ = false;
+            streamline_->shutdown();
+            if (upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
+        } else {
+            dlss_g_available_=streamline_->dlss_g_supported(physical_,reason);
+            if (!dlss_g_available_ && upscaler_kind_==UpscalerKind::dlss) frame_generation_=false;
         }
     }
-    const bool through_streamline = streamline_ && upscaler_kind_ == UpscalerKind::dlss;
+    bool through_streamline = streamline_ && streamline_->active();
     bool private_data = false;   // Streamline keeps swapchain data in a VkPrivateDataSlot
     if (through_streamline) {
         VkPhysicalDeviceVulkan13Features supported13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query.pNext = &supported13;
         vkGetPhysicalDeviceFeatures2(physical_, &query);
         private_data = supported13.privateData;
+        if (!private_data) {
+            std::fprintf(stderr,"DLSS unavailable: Streamline presentation requires Vulkan privateData\n");
+            streamline_->shutdown(); through_streamline=false; dlss_available_=dlss_g_available_=false;
+            if(upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
+        }
     }
     const float priorities[3] = {1, 1, 1};
     uint32_t queue_count = 1;
-    if (upscaler_kind_ == UpscalerKind::fsr && frame_generation_) {   // the interpolation swapchain presents and acquires on queues of its own
+    VkPhysicalDeviceVulkan12Features supported12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 query12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query12.pNext=&supported12;
+    vkGetPhysicalDeviceFeatures2(physical_,&query12);
+    {   // Optional interpolation queues are provisioned once, even when generation starts disabled.
         uint32_t family_count = 0; vkGetPhysicalDeviceQueueFamilyProperties(physical_, &family_count, nullptr);
         std::vector<VkQueueFamilyProperties> families(family_count); vkGetPhysicalDeviceQueueFamilyProperties(physical_, &family_count, families.data());
-        if (families[family_] .queueCount >= 3) queue_count = 3;
-        else { std::fprintf(stderr, "FSR Frame Generation unavailable: the graphics queue family has %u queue(s), 3 needed\n", families[family_].queueCount); frame_generation_ = false; }
+        if (families[family_].queueCount>=3 && supported12.timelineSemaphore) queue_count=3;
+        else if (upscaler_kind_==UpscalerKind::fsr) frame_generation_=false;
     }
     VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; queue_info.queueFamilyIndex = family_; queue_info.queueCount = queue_count; queue_info.pQueuePriorities = priorities;
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR retirement{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR}; retirement.swapchainMaintenance1 = VK_TRUE;
@@ -183,23 +197,20 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     features13.privateData = private_data;
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.timelineSemaphore = queue_count == 3;   // the interpolation swapchain's queue sync
-    if (upscaler_kind_ == UpscalerKind::fsr) {   // FidelityFX picks 16-bit shader variants whenever the GPU offers them (shaderInt16 below)
-        VkPhysicalDeviceVulkan12Features supported12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-        VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query.pNext = &supported12;
-        vkGetPhysicalDeviceFeatures2(physical_, &query);
-        features12.shaderFloat16 = supported12.shaderFloat16;
-    }
+    features12.shaderFloat16=supported12.shaderFloat16;
     if (features12.timelineSemaphore || features12.shaderFloat16) { features12.pNext = features13.pNext; features13.pNext = &features12; }
     std::vector<const char*> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME, chosen_maintenance};
-    if (upscaler_kind_ == UpscalerKind::fsr) {   // the FidelityFX Vulkan backend resolves these entry points by their extension names
+    {   // FidelityFX resolves these entry points by their extension names, including after a live switch.
         uint32_t n = 0; vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, nullptr);
         std::vector<VkExtensionProperties> supported(n); vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, supported.data());
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
+        if (through_streamline && std::any_of(supported.begin(),supported.end(),[](const auto& extension) { return std::strcmp(extension.extensionName,VK_KHR_PRESENT_ID_EXTENSION_NAME)==0; }))
+            device_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);   // dependency of the low-latency extension Streamline enables
     }
     // Upscaling: pipelines with the motion attachment also draw passes that bind none (post chain, HUD), which needs unused attachments.
     VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT unused{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT};
-    if (upscaler_kind_ != UpscalerKind::off) {
+    {
         VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query.pNext = &unused;
         vkGetPhysicalDeviceFeatures2(physical_, &query);
         VkPhysicalDeviceFeatures core_features{}; vkGetPhysicalDeviceFeatures(physical_, &core_features);
@@ -209,18 +220,21 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; device_info.pNext = &features13;
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
     logic_ops_=core.logicOp;
-    VkPhysicalDeviceFeatures enabled{}; enabled.logicOp=logic_ops_; enabled.independentBlend=motion_outputs_; enabled.shaderInt16=upscaler_kind_==UpscalerKind::fsr && core.shaderInt16; device_info.pEnabledFeatures=&enabled;
+    VkPhysicalDeviceFeatures enabled{}; enabled.logicOp=logic_ops_; enabled.independentBlend=motion_outputs_; enabled.shaderInt16=core.shaderInt16; device_info.pEnabledFeatures=&enabled;
     device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;   // queue_info.queueCount: 3 with the interpolation swapchain
     device_info.enabledExtensionCount = uint32_t(device_extensions.size()); device_info.ppEnabledExtensionNames = device_extensions.data();
     vk_check(through_streamline ? streamline_->create_device(instance_, physical_, device_info, device) : vkCreateDevice(physical_, &device_info, nullptr, &device), "vkCreateDevice");
-    if (through_streamline) present_ = streamline_->present_functions(device);
+    if (through_streamline) base_present_=streamline_->present_functions(device);
+    if (upscaler_kind_==UpscalerKind::dlss && frame_generation_ && dlss_g_available_) {
+        dlss_presentation_=true; present_=base_present_;
+    }
     vkGetDeviceQueue(device, family_, 0, &queue_); vkGetPhysicalDeviceMemoryProperties(physical_, &memory_);
-    if (queue_count == 3 && motion_outputs_ && frame_generation_) {
+    if (queue_count == 3 && motion_outputs_) {
         vkGetDeviceQueue(device, family_, 1, &fg_present_queue_); vkGetDeviceQueue(device, family_, 2, &fg_acquire_queue_);
         try {
             fsr_g_ = std::make_unique<FsrFrameGeneration>(device, physical_, FsrFrameGeneration::Queues{queue_, fg_present_queue_, fg_acquire_queue_, family_}, shaders.parent_path().parent_path());
-            present_ = fsr_g_->present_functions();
-        } catch (const std::exception& error) { std::fprintf(stderr, "FSR Frame Generation unavailable: %s\n", error.what()); frame_generation_ = false; }
+            if (upscaler_kind_==UpscalerKind::fsr && frame_generation_) { fsr_presentation_=true; present_=fsr_g_->present_functions(); }
+        } catch (const std::exception& error) { std::fprintf(stderr, "FSR Frame Generation unavailable: %s\n", error.what()); if(upscaler_kind_==UpscalerKind::fsr)frame_generation_=false; }
     }
     VkPhysicalDeviceProperties limits{}; vkGetPhysicalDeviceProperties(physical_,&limits);
     const auto alignment=size_t(limits.limits.minUniformBufferOffsetAlignment);
@@ -370,6 +384,26 @@ VulkanRenderer::Texture VulkanRenderer::make_copy_texture(const std::shared_ptr<
     }
     result.source=source; result.initialized=false;
     return result;
+}
+void VulkanRenderer::record_texture_copy(VkCommandBuffer command, VkImage source, VkExtent2D extent, const std::array<uint32_t,4>& region, Texture& target, VkImageLayout before) {
+    const auto [x,y,width,height]=region;
+    const bool initialized=before!=VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier(command,target.image,before,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,
+        initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels);
+    VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+    copy.srcOffsets[0]={int32_t(uint64_t(x)*extent.width/640),int32_t(uint64_t(y)*extent.height/480),0};
+    copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(x+width)*extent.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(y+height)*extent.height/480)),1};
+    copy.dstOffsets[1]={int32_t(target.extent.width),int32_t(target.extent.height),1};
+    vkCmdBlitImage(command,source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_LINEAR);
+    for(uint32_t i=1;i<target.mip_levels;++i) {
+        barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,i-1);
+        VkImageBlit mip{}; mip.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i-1,0,1}; mip.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i,0,1};
+        mip.srcOffsets[1]={int32_t(std::max(1u,target.extent.width>>(i-1))),int32_t(std::max(1u,target.extent.height>>(i-1))),1};
+        mip.dstOffsets[1]={int32_t(std::max(1u,target.extent.width>>i)),int32_t(std::max(1u,target.extent.height>>i)),1};
+        vkCmdBlitImage(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&mip,VK_FILTER_LINEAR);
+    }
+    barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,target.mip_levels-1);
+    barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels);
 }
 void VulkanRenderer::recycle_copy_texture(Texture& texture) {
     const double factor=std::max(efb_extent_.width/640.0,efb_extent_.height/480.0);
@@ -759,14 +793,34 @@ void VulkanRenderer::configure_upscaling(UpscalerKind kind, UpscaleMode mode, bo
     upscaler_kind_=kind; upscale_mode_=mode; sharpening_=sharpening; sharpness_=sharpness;
     frame_generation_=frame_generation && kind!=UpscalerKind::off; frame_generation_multiplier_=multiplier;
 }
-void VulkanRenderer::set_upscale_mode(UpscaleMode mode, double sharpness) {
+bool VulkanRenderer::set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier) {
     owner();
-    if (mode==upscale_mode_ && sharpness==sharpness_) return;
-    upscale_mode_=mode; sharpness_=sharpness;
-    if (!device || !upscaler_) return;
-    vk_check(vkDeviceWaitIdle(device), "upscale mode switch");
-    dlss_g_.reset(); upscaler_.reset();   // rebuild() makes both again (and the scene targets at the new internal size)
-    resized_=true;
+    if (!motion_outputs_ || (kind==UpscalerKind::dlss && !dlss_available_)) kind=UpscalerKind::off;
+    frame_generation=frame_generation && ((kind==UpscalerKind::dlss && dlss_g_available_) || (kind==UpscalerKind::fsr && bool(fsr_g_)));
+    sharpening_=sharpening; sharpness_=sharpness;
+    if (motion_outputs_ && sharpening_) rcas_.initialize(device,memory_,shaders_);
+    if (kind==upscaler_kind_ && mode==upscale_mode_ && frame_generation==frame_generation_ && multiplier==frame_generation_multiplier_) return true;
+    vk_check(present_.wait_idle(device), "upscale mode switch");
+    if (dlss_g_) dlss_g_->set_active(false,true);
+    if (fsr_g_ && fsr_g_->has_context()) fsr_g_->begin_frame(false,{},frame_index_);
+    const bool reconstruction_changed=kind!=upscaler_kind_ || mode!=upscale_mode_;
+    const bool fsr_presentation=kind==UpscalerKind::fsr && (frame_generation || fsr_presentation_);
+    const bool dlss_presentation=kind==UpscalerKind::dlss && (frame_generation || dlss_presentation_);
+    const bool backend_changed=fsr_presentation!=fsr_presentation_ || dlss_presentation!=dlss_presentation_;
+    if (backend_changed) {
+        if (fsr_g_) fsr_g_->release_context();
+        retire_images(true);   // every old chain is destroyed through its owning backend before routing changes
+        fsr_presentation_=fsr_presentation;
+        dlss_presentation_=dlss_presentation;
+        present_=fsr_presentation_ ? fsr_g_->present_functions() : dlss_presentation_ ? base_present_ : PresentFunctions{};
+    }
+    if (reconstruction_changed) upscaler_.reset();
+    if (multiplier!=frame_generation_multiplier_) { dlss_g_.reset(); fg_waited_value_=0; }
+    upscaler_kind_=kind; upscale_mode_=mode; frame_generation_=frame_generation; frame_generation_multiplier_=multiplier;
+    scene_phase_=false; reset_next_=true; scene_restore_copy_.reset();
+    if (reconstruction_changed || backend_changed) { resized_=true; rebuild(); }
+    else configure_generation();
+    return true;
 }
 std::vector<const gx::TexturePixels*> VulkanRenderer::copy_keys() const {
     std::vector<const gx::TexturePixels*> keys;
@@ -827,7 +881,7 @@ void VulkanRenderer::reap_retired(bool wait) {
         it = retired_.erase(it);
     }
 }
-void VulkanRenderer::retire_images() {
+void VulkanRenderer::retire_images(bool keep_buffers) {
     if (!device) return;
     VkResult status = present_.wait_idle(device);
     if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) vk_check(status, "retire device work");
@@ -846,8 +900,10 @@ void VulkanRenderer::retire_images() {
     if (swapchain_) present_.destroy(device, swapchain_, nullptr);
     swapchain_ = VK_NULL_HANDLE;
     for (auto& slot : slots_) {
-        retire_textures(slot);
-        destroy_buffer(slot.vertices); destroy_buffer(slot.indices); destroy_buffer(slot.pixels); destroy_buffer(slot.uniforms); destroy_buffer(slot.palettes); destroy_buffer(slot.banks); destroy_buffer(slot.motions); slot.mesh_refs.clear();
+        if (!keep_buffers) {
+            retire_textures(slot);
+            destroy_buffer(slot.vertices); destroy_buffer(slot.indices); destroy_buffer(slot.pixels); destroy_buffer(slot.uniforms); destroy_buffer(slot.palettes); destroy_buffer(slot.banks); destroy_buffer(slot.motions); slot.mesh_refs.clear();
+        }
         if (slot.view) vkDestroyImageView(device, slot.view, nullptr);
         if (slot.image) vkDestroyImage(device, slot.image, nullptr);
         if (slot.memory) vkFreeMemory(device, slot.memory, nullptr);
@@ -881,6 +937,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     in.render_size=region(scene_extent_); in.output_size=region(efb_extent_);
     in.jitter=jitter_;
     in.reset=reset_next_ || tracker_.camera_cut() || black_output;
+    in.sharpening=sharpening_; in.sharpness=float(sharpness_);
     in.frame_ms=last_upscale_==std::chrono::steady_clock::time_point{} ? 16.7f : std::clamp(std::chrono::duration<float,std::milli>(now-last_upscale_).count(),0.1f,100.f);
     in.frame=upscale_frame_;
     in.projection=scene_projection_; in.clip_to_prev_clip=tracker_.clip_to_prev_clip();
@@ -891,10 +948,16 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     upscaler_->evaluate(in);
-    if (fsr_g_) fsr_g_->prepare(in,frame_index_);
+    if (fsr_generation_enabled()) fsr_g_->prepare(in,frame_index_);
     if (sharpening_ && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
+    if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
+        slots_[next_slot_].copy_sources.push_back(scene_restore_copy_->target);   // the refresh submission owns this GPU use too
+        auto& texture=copy_textures_.at(scene_restore_copy_->target.get());
+        record_texture_copy(command,efb_,efb_extent_,scene_restore_copy_->source,texture,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        scene_restore_copy_.reset();
+    }
     // Draws after the boundary (particles in front of the HUD, 3D markers) test against the scene depth.
     barrier(command,depth_,efb_initialized_ ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);
     VkImageBlit blit{}; blit.srcSubresource=blit.dstSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,1};
@@ -962,6 +1025,7 @@ RenderPixels VulkanRenderer::capture_scene() {
     return pixels;
 }
 void VulkanRenderer::destroy_scene_targets() {
+    scene_restore_copy_.reset();
     for (auto [view,image,memory]:{std::tuple{&scene_color_view_,&scene_color_,&scene_color_memory_},{&scene_depth_view_,&scene_depth_,&scene_depth_memory_},{&scene_motion_view_,&scene_motion_,&scene_motion_memory_}}) {
         if (*view) vkDestroyImageView(device,*view,nullptr);
         if (*image) vkDestroyImage(device,*image,nullptr);
@@ -984,8 +1048,8 @@ void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkIm
     vk_check(vkCreateImageView(device, &view, nullptr, &target_view), "attachment view");
 }
 void VulkanRenderer::rebuild() {
-    if (fsr_g_) fsr_g_->release_context();   // the interpolation swapchain keeps one chain: it goes before its successor exists (no retirement)
-    if (swapchain_ && !fsr_g_) retire_for_resize(); else retire_images();
+    if (fsr_presentation_) fsr_g_->release_context();
+    if (swapchain_ && !fsr_presentation_ && !streamline_swapchain()) retire_for_resize(); else retire_images(true);
     VkSurfaceCapabilitiesKHR capabilities; vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &capabilities), "surface capabilities");
     VkImageUsageFlags swapchain_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if ((capabilities.supportedUsageFlags & swapchain_usage) != swapchain_usage) throw std::runtime_error("swapchain lacks transfer/color attachment support");
@@ -1058,24 +1122,14 @@ void VulkanRenderer::rebuild() {
     }
     if (!efb_) make_attachment(efb_,efb_memory_,efb_view_,efb_extent_);
     if (!depth_) make_attachment(depth_,depth_memory_,depth_view_,efb_extent_,true);
-    if (motion_outputs_ && !upscaler_) {
+    if (motion_outputs_ && upscaler_kind_!=UpscalerKind::off && !upscaler_) {
         if (upscaler_kind_==UpscalerKind::blit) upscaler_=make_blit_upscaler();
         else if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) upscaler_=make_dlss_upscaler(*streamline_,upscale_mode_);
         else if (upscaler_kind_==UpscalerKind::fsr) {
-            try { upscaler_=make_fsr_upscaler(device,physical_,shaders_.parent_path().parent_path(),upscale_mode_,sharpening_,float(sharpness_)); }
+            try { upscaler_=make_fsr_upscaler(device,physical_,shaders_.parent_path().parent_path()); }
             catch (const std::exception& error) { std::fprintf(stderr,"FSR unavailable: %s\n",error.what()); }
         }
         else std::fprintf(stderr, "Upscaling: %s is not available in this build\n", upscaler_kind_==UpscalerKind::dlss ? "DLSS" : "FSR");
-        if (upscaler_ && frame_generation_ && streamline_ && streamline_->frame_generation_loaded()) dlss_g_=std::make_unique<DlssFrameGeneration>(*streamline_,frame_generation_multiplier_);
-    }
-    if ((dlss_g_ || fsr_g_) && (hudless_extent_.width!=extent_.width || hudless_extent_.height!=extent_.height)) {   // the back buffer's size
-        for (int i=0;i<2;++i) {
-            if (hudless_view_[i]) vkDestroyImageView(device,hudless_view_[i],nullptr);
-            if (hudless_[i]) vkDestroyImage(device,hudless_[i],nullptr);
-            if (hudless_memory_[i]) vkFreeMemory(device,hudless_memory_[i],nullptr);
-            make_attachment(hudless_[i],hudless_memory_[i],hudless_view_[i],extent_);
-        }
-        hudless_extent_=extent_;
     }
     if (upscaler_) {
         const auto internal=internal_extent({efb_extent_.width,efb_extent_.height},upscale_mode_,upscaler_->minimum_internal({efb_extent_.width,efb_extent_.height}));
@@ -1089,13 +1143,29 @@ void VulkanRenderer::rebuild() {
             std::fprintf(stderr,"Upscaling: scene %ux%u -> %ux%u EFB (%s)\n",scene_extent_.width,scene_extent_.height,efb_extent_.width,efb_extent_.height,
                 upscaler_kind_==UpscalerKind::dlss ? "DLSS" : upscaler_kind_==UpscalerKind::fsr ? "FSR" : "blit");
         }
-        if (fsr_g_) {
+    }
+    configure_generation();
+    for (auto& slot : slots_) make_attachment(slot.image,slot.memory,slot.view,extent_);
+    resized_ = false;
+}
+void VulkanRenderer::configure_generation() {
+    if (upscaler_ && frame_generation_ && upscaler_kind_==UpscalerKind::dlss && dlss_g_available_ && !dlss_g_)
+        dlss_g_=std::make_unique<DlssFrameGeneration>(*streamline_,frame_generation_multiplier_);
+    if (frame_generation_active() || (frame_generation_ && fsr_presentation_)) {
+        if (hudless_extent_.width!=extent_.width || hudless_extent_.height!=extent_.height) {
+            for (int i=0;i<2;++i) {
+                if (hudless_view_[i]) vkDestroyImageView(device,hudless_view_[i],nullptr);
+                if (hudless_[i]) vkDestroyImage(device,hudless_[i],nullptr);
+                if (hudless_memory_[i]) vkFreeMemory(device,hudless_memory_[i],nullptr);
+                make_attachment(hudless_[i],hudless_memory_[i],hudless_view_[i],extent_);
+            }
+            hudless_extent_=extent_;
+        }
+        if (upscaler_ && fsr_presentation_ && !fsr_g_->has_context()) {
             try { fsr_g_->create_context(extent_,scene_extent_,swapchain_format_); }
             catch (const std::exception& error) { std::fprintf(stderr,"FSR Frame Generation unavailable: %s\n",error.what()); }
         }
     }
-    for (auto& slot : slots_) make_attachment(slot.image,slot.memory,slot.view,extent_);
-    resized_ = false;
 }
 bool VulkanRenderer::render(const gx::FramePacket& packet) {
     owner();
@@ -1157,14 +1227,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=false; hudless_taken_=false;
-            if (streamline_ && streamline_->active()) {   // the frame's token and latency markers; the guest's step is already done
+            if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
                 streamline_->marker(Streamline::Marker::simulation_end);
                 streamline_->marker(Streamline::Marker::render_submit_start);
             }
-            if (fsr_g_ && fsr_g_->has_context()) fsr_g_->begin_frame(scene && !packet.black_output,hudless_image(),frame_index_);
-            if (dlss_g_) dlss_g_->set_active(scene && !packet.black_output,reset_next_);   // menus, movies and black frames get no generated frames
+            if (fsr_presentation_ && fsr_g_->has_context()) fsr_g_->begin_frame(fsr_generation_enabled() && scene && !packet.black_output,hudless_image(),frame_index_);
+            if (dlss_g_) dlss_g_->set_active(dlss_generation_enabled() && scene && !packet.black_output,reset_next_);
             if (scene_phase_) {
                 tracker_.begin_frame();
                 jitter_=jitter_offset(upscale_frame_,jitter_phase_count(scene_extent_.width,efb_extent_.width));
@@ -1179,7 +1249,6 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         }
     }
     std::vector<MotionBlock> motion_blocks;
-    std::vector<const gx::PaletteBlock*> previous_palettes;   // appended after this packet's palettes
     std::vector<uint32_t> draw_motion(scene_draws,kNoMotion);
     std::unordered_set<const gx::TexturePixels*> used_textures;
     for(const auto& draw:packet.draws) for(size_t map=0;map<8;++map) used_textures.insert(draw_texture(draw,map).get());
@@ -1239,18 +1308,21 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         }
         if (const size_t d=gpu_draws.size(); d<scene_draws) {   // scene draw: last frame's matrices of the same draw for its motion vectors
             const auto key=tracker_.key(draw);
-            MotionBlock block{};
-            if (const auto* previous=tracker_.previous(key)) {
-                block.kind=1; block.prev_rows=previous->projection; block.prev_palette=uint32_t(previous_palettes.size());   // + palette count below
-                previous_palettes.push_back(&previous->palette);
-            } else { block.kind=2; block.prev_rows=tracker_.clip_to_prev_clip(); }
-            tracker_.record(key,*draw.transforms,summary.draws[d].z_write);
+            if(motion_write_mask(info.key)) {
+                MotionBlock block{};
+                if (const auto* previous=tracker_.previous(key)) {
+                    block.kind=1; block.prev_rows=previous->transforms->projection;
+                    const auto [palette,inserted]=palette_of.try_emplace(previous->transforms.get(),uint32_t(palette_blocks.size()));
+                    if (inserted) palette_blocks.push_back(palette->first);
+                    block.prev_palette=palette->second;
+                } else { block.kind=2; block.prev_rows=tracker_.clip_to_prev_clip(); }
+                draw_motion[d]=uint32_t(motion_blocks.size()); motion_blocks.push_back(block);
+            }
+            tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
             if (summary.draws[d].perspective) scene_projection_=draw.transforms->projection;
-            draw_motion[d]=uint32_t(motion_blocks.size()); motion_blocks.push_back(block);
         }
         gpu_draws.push_back(info);
     }
-    for (auto& block:motion_blocks) if (block.kind==1) block.prev_palette+=uint32_t(palette_blocks.size());
     if (vertex_count && index_count) {
         if (slot.vertices.size < VkDeviceSize(vertex_count) * sizeof(gx::GpuMeshVertex)) {
             destroy_buffer(slot.vertices); slot.vertices = make_buffer(VkDeviceSize(vertex_count) * sizeof(gx::GpuMeshVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -1268,11 +1340,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         }
     }
     if (!palette_blocks.empty()) {
-        const VkDeviceSize palette_bytes=VkDeviceSize(palette_blocks.size()+previous_palettes.size())*sizeof(gx::PaletteBlock);
+        const VkDeviceSize palette_bytes=VkDeviceSize(palette_blocks.size())*sizeof(gx::PaletteBlock);
         if (slot.palettes.size < palette_bytes) { destroy_buffer(slot.palettes); slot.palettes = make_buffer(palette_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); }
         auto* palettes=static_cast<gx::PaletteBlock*>(slot.palettes.mapped);
         for (size_t i=0;i<palette_blocks.size();++i) gx::fill_palette(palettes[i], *palette_blocks[i]);
-        for (size_t i=0;i<previous_palettes.size();++i) palettes[palette_blocks.size()+i]=*previous_palettes[i];
     }
     {   // the descriptor always has a bank bound; a frame without per-vertex texture matrices binds one unused entry
         const VkDeviceSize bank_bytes=VkDeviceSize(std::max<size_t>(banks.size(),1))*sizeof(gx::TextureBank);
@@ -1416,7 +1487,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     color.loadOp = initialized ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     for (size_t i=0;i<4;++i) color.clearValue.color.float32[i]=packet.clear_color[i]/255.f;
     VkRenderingAttachmentInfo colors[2]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, none bound outside the scene pass
-    if (scene) {   // vectors start at zero every frame: areas no depth-writing draw covers (sky, cleared regions) have no motion
+    const bool bind_motion=scene && (!motion_cleared_ || std::any_of(draw_motion.begin()+first,draw_motion.begin()+last,[](uint32_t index) { return index!=kNoMotion; }));
+    if (bind_motion) {   // clear once, then bind only for passes whose depth-writing draws produce vectors
         barrier(slot.command,scene_motion_,motion_initialized_ && motion_cleared_ ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         colors[1].imageView=target.motion_view; colors[1].imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -1503,7 +1575,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     const bool scene_only=scene_phase_ && !upscale_here;   // the whole packet belongs to the scene: copy and clear act on the scene targets
     const bool writes_scene=scene_phase_ && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
     if (writes_scene) record_pass(scene_target,0,scene_draws,true);
-    if (upscale_here) record_upscale(slot.command,packet.black_output);
+    if (upscale_here) {
+        if (scene_draws || packet.present) scene_restore_copy_.reset();   // another draw changed the scene since the saved copy
+        record_upscale(slot.command,packet.black_output);
+    }
     // DLSS-G's HUD-less colour: the frame after its post chain, before the HUD packet (the first packet after the scene boundary that draws
     // without copying), at back-buffer size; at the present when no such packet came (it then includes the HUD).
     const bool hud_packet=!packet.texture_copy && !packet.draws.empty();
@@ -1517,31 +1592,18 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         blit.dstOffsets[1]={int32_t(hudless_extent_.width),int32_t(hudless_extent_.height),1};
         vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,hudless.image,VK_IMAGE_LAYOUT_GENERAL,1,&blit,VK_FILTER_NEAREST);   // as the present copies
         barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
-        if (dlss_g_) dlss_g_->tag_hudless(slot.command,hudless);   // FSR's frame generation gets it with the frame's configuration (begin_frame)
+        if (dlss_generation_enabled()) dlss_g_->tag_hudless(slot.command,hudless);
         hudless_taken_=true;
     };
-    const bool hudless_wanted=(dlss_g_ || (fsr_g_ && fsr_g_->active())) && hudless_[0] && scene_mode_ && !scene_phase_ && !hudless_taken_;
+    const bool hudless_wanted=(dlss_generation_enabled() || (fsr_generation_enabled() && fsr_g_->active())) && hudless_[0] && scene_mode_ && !scene_phase_ && !hudless_taken_;
     if (hudless_wanted && efb_initialized_ && hud_packet) take_hudless();
-    if (!scene_only) record_pass(efb_target,scene_draws,packet.draws.size(),false);
+    if (!scene_only && (!efb_initialized_ || scene_draws<packet.draws.size())) record_pass(efb_target,scene_draws,packet.draws.size(),false);
     if (hudless_wanted && !hudless_taken_ && packet.present) take_hudless();
     const PassTarget& active=scene_only ? scene_target : efb_target;
-    if(copy_target) {
-        const auto [x,y,width,height]=packet.texture_copy->source;
-        barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_2_NONE,0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,copy_target->mip_levels);
-        VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
-        copy.srcOffsets[0]={int32_t(uint64_t(x)*active.extent.width/640),int32_t(uint64_t(y)*active.extent.height/480),0};
-        copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(x+width)*active.extent.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(y+height)*active.extent.height/480)),1};
-        copy.dstOffsets[1]={int32_t(copy_target->extent.width),int32_t(copy_target->extent.height),1};
-        vkCmdBlitImage(slot.command,active.color,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_LINEAR);
-        for(uint32_t i=1;i<copy_target->mip_levels;++i) {
-            barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,i-1);
-            VkImageBlit mip{}; mip.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i-1,0,1}; mip.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i,0,1};
-            mip.srcOffsets[1]={int32_t(std::max(1u,copy_target->extent.width>>(i-1))),int32_t(std::max(1u,copy_target->extent.height>>(i-1))),1};
-            mip.dstOffsets[1]={int32_t(std::max(1u,copy_target->extent.width>>i)),int32_t(std::max(1u,copy_target->extent.height>>i)),1};
-            vkCmdBlitImage(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&mip,VK_FILTER_LINEAR);
-        }
-        barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,copy_target->mip_levels-1);
-        barrier(slot.command,copy_target->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,copy_target->mip_levels);
+    if(copy_target) record_texture_copy(slot.command,active.color,active.extent,packet.texture_copy->source,*copy_target,VK_IMAGE_LAYOUT_UNDEFINED);
+    if (scene_only) {
+        if (copy_target && !packet.clear_after_copy) scene_restore_copy_=packet.texture_copy;
+        else if (!packet.draws.empty() || (copy_target && packet.clear_after_copy)) scene_restore_copy_.reset();
     }
     if (packet.present) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
@@ -1603,7 +1665,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = blit.dstOffsets[1] = {int32_t(extent_.width), int32_t(extent_.height), 1};
         vkCmdBlitImage(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
-        barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
+        const auto present_layout=fsr_presentation_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : streamline_swapchain() ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,present_layout,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
     }
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query + 1);
     vk_check(vkEndCommandBuffer(slot.command), "end frame"); vk_check(vkResetFences(device, 1, &slot.fence), "reset frame fence");
@@ -1617,27 +1681,27 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command.commandBuffer = slot.command;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = wait_count; submit.signalSemaphoreInfoCount = present_image ? 1 : 0; submit.commandBufferInfoCount = 1;
     submit.pWaitSemaphoreInfos = waits; submit.pSignalSemaphoreInfos = &signal; submit.pCommandBufferInfos = &command;
-    if (packet.present && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
+    if (packet.present && upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
     const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) copy_target->initialized=true;
     for (auto& texture : slot.textures) texture.initialized=true;
-    if (packet.present) { frame_start_=true; ++frame_index_; }
+    if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); }
     slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
     if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
     // With DLSS-G Streamline presents (and paces) the frames itself and never signals a present fence: its swapchain images are not tracked here.
-    const bool fenced = !dlss_g_ && !fsr_g_;   // the FFX swapchain paces and retires its own presentations too
+    const bool fenced = !streamline_swapchain() && !fsr_presentation_;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; present.pNext = fenced ? &present_fence : nullptr; present.waitSemaphoreCount = 1; present.pWaitSemaphores = &present_image->ready;
     present.swapchainCount = 1; present.pSwapchains = &swapchain_; present.pImageIndices = &image_index;
     const auto present_start = std::chrono::steady_clock::now();
-    const bool marked = streamline_ && streamline_->active();
+    const bool marked = upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active();
     if (marked) streamline_->marker(Streamline::Marker::present_start);
     VkResult result = present_.present(queue_, &present);   // with DLSS-G Streamline presents the generated frames here too
     if (marked) streamline_->marker(Streamline::Marker::present_end);
-    if (dlss_g_) dlss_g_->after_present();
-    if (fsr_g_) fsr_g_->after_present();
+    if (dlss_generation_enabled()) dlss_g_->after_present();
+    if (fsr_presentation_) fsr_g_->after_present();
     timings_.present_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_start).count();
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { present_image->pending = fenced; ++presentations_; }
     else if (result != VK_ERROR_OUT_OF_DATE_KHR) vk_check(result, "present frame");

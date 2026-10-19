@@ -198,8 +198,9 @@ int run(int argc,wchar_t** argv) {
             std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{48,"clear1"},
                 {80,"controls"},{84,"style"},{88,"style3"},{98,"style"},{102,"style2"},{110,"general"},
                 {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
-                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"upscaling"},{430,"upscaler-dlss"},
-                {434,"controls"},{440,"replace2"}};
+                {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"framegen"},{430,"framegen-dlss"},
+                {434,"framegen"},{438,"framegen-off"},{442,"framegen"},{446,"framegen-fsr"},{450,"framegen"},{454,"framegen-off"},
+                {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
                 unsigned first=114+unsigned(i)*18;
@@ -213,7 +214,7 @@ int run(int argc,wchar_t** argv) {
                 if(frame==when || frame==when+1)io.AddMouseButtonEvent(0,frame==when);
             }
             if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,41},true);}
-            if(frame==444) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
+            if(frame==480) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
             if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=!other.properties.value("smoke_external_edit",false);uc::save_config(config_path,other);}
         }
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -436,11 +437,26 @@ int run(int argc,wchar_t** argv) {
             track("sharpness");
             ImGui::EndDisabled();
             ImGui::Dummy({0,16*unit});
-            const bool framegen_supported=options.upscaler==uc::UpscalerKind::dlss ? features.dlss_g : options.upscaler==uc::UpscalerKind::fsr ? features.fsr_fg : false;
-            const char* framegen_why=!upscaling ? tr("unavailable") : checking ? tr("checking") : options.upscaler==uc::UpscalerKind::dlss && !features.dlss_g_reason.empty() ? features.dlss_g_reason.c_str() :
-                options.upscaler==uc::UpscalerKind::fsr && !features.fsr_fg_reason.empty() ? features.fsr_fg_reason.c_str() : tr("unsupported");
-            toggle("##framegen",tr("framegen"),options.frame_generation,!framegen_supported && !options.frame_generation,framegen_why);
-            if(options.frame_generation && upscaling) {
+            ImGui::TextUnformatted(tr("framegen"));push_font(ui.sans,22);
+            const auto generator=options.frame_generation ? options.upscaler : uc::UpscalerKind::off;
+            const bool generator_open=combo("##framegen",kind_label(generator));track("framegen");
+            if(generator_open) {
+                for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
+                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::dlss ? features.dlss_g : features.fsr_fg);
+                    const auto& reason=kind==uc::UpscalerKind::dlss ? features.dlss_g_reason : features.fsr_fg_reason;
+                    ImGui::BeginDisabled(!supported);
+                    if(ImGui::Selectable(kind_label(kind),generator==kind)) {
+                        options.frame_generation=kind!=uc::UpscalerKind::off;
+                        if(options.frame_generation)options.upscaler=kind;
+                    }
+                    track(std::string("framegen-")+std::string(uc::upscaler_name(kind)));
+                    ImGui::EndDisabled();
+                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopFont();
+            if(options.frame_generation && options.upscaler!=uc::UpscalerKind::off) {
                 const uint32_t most=options.upscaler==uc::UpscalerKind::dlss ? std::clamp<uint32_t>(features.dlss_g_max_multiplier,2,6) : 2;   // FSR FG: one generated frame
                 if(features_ready)options.frame_generation_multiplier=std::clamp<uint32_t>(options.frame_generation_multiplier,2,most);   // the saved choice survives until the report says what the PC allows
                 ImGui::TextUnformatted(tr("multiplier"));push_font(ui.sans,22);
@@ -623,14 +639,24 @@ int run(int argc,wchar_t** argv) {
                 if(uc::options_from_config(uc::load_config(config_path)).fps_limit!=144u || options.fps_limit!=144u)throw std::runtime_error("frame rate limit select/save UI failed");
             }
             if(frame==432) {
-                if(uc::options_from_config(uc::load_config(config_path)).upscaler!=uc::UpscalerKind::dlss || options.upscaler!=uc::UpscalerKind::dlss)throw std::runtime_error("upscaler select/save UI failed");
+                const auto saved=uc::options_from_config(uc::load_config(config_path));
+                if(saved.upscaler!=uc::UpscalerKind::dlss || options.upscaler!=uc::UpscalerKind::dlss || !saved.frame_generation || !options.frame_generation)throw std::runtime_error("DLSS generation select/save from Off failed");
                 ui.capture(smoke/L"upscaling.bmp");
             }
-            if(frame==452) {
+            if(frame==440 || frame==456) {
+                const auto saved=uc::options_from_config(uc::load_config(config_path));
+                if(saved.frame_generation || options.frame_generation)throw std::runtime_error("generation Off select/save failed");
+            }
+            if(frame==448) {
+                const auto saved=uc::options_from_config(uc::load_config(config_path));
+                if(saved.upscaler!=uc::UpscalerKind::fsr || !saved.frame_generation || saved.frame_generation_multiplier!=2)throw std::runtime_error("FSR generation select/save failed");
+                ui.capture(smoke/L"framegen-fsr.bmp");
+            }
+            if(frame==488) {
                 if(uc::load_config(config_path).input[size_t(uc::Action::weapon_previous)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,26},{}}})throw std::runtime_error("grid replacement/save failed");
                 ui.capture(smoke/L"grid-replaced.bmp");
             }
-            if(frame>=456) {
+            if(frame>=492) {
                 if(smoke_exe.empty())done=true;
                 else {
                     if(!process && !launch_requested)throw std::runtime_error("launch button failed: "+error);

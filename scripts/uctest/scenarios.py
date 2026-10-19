@@ -267,6 +267,17 @@ def _scene(f):
     return {"view": f.get("view"), "enemies": [(e["id"], e["root"], e["hp"]) for e in f.get("enemies") or []], "life": (f.get("player") or {}).get("life")}
 
 
+def _same_scene(a, b):
+    import math
+    if a["enemies"] != b["enemies"] or a["life"] != b["life"]:
+        return False
+    av, bv = a["view"], b["view"]
+    if av is None or bv is None:
+        return av is bv
+    # Recomputing the paused camera can round its floats by a few millionths.
+    return len(av) == len(bv) and all(math.isclose(x, y, rel_tol=0, abs_tol=1e-5) for x, y in zip(av, bv))
+
+
 def _check_frozen(g, where):
     """While paused: the picture and the actors stand still although the game keeps looping (retraces advance)."""
     g.advance(20)
@@ -275,7 +286,7 @@ def _check_frozen(g, where):
     second = g.capture()
     if g.frame["retraces"] - ticks < 180:
         g.fail(f"{where}: the game stopped looping while paused", "pause")
-    if _scene(g.frame) != scene:
+    if not _same_scene(_scene(g.frame), scene):
         g.fail(f"{where}: actors or camera moved while paused: {scene} -> {_scene(g.frame)}", "pause")
     if not _same_picture(first, second):
         g.fail(f"{where}: the picture changed while paused", "pause")
@@ -319,21 +330,20 @@ def pause(g, args):
             g.fail("P toggled the pause while the menu was open", "menu")
         g.host_key(g.ESCAPE)
         g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
-        if _scene(g.frame) != frozen:
+        if not _same_scene(_scene(g.frame), frozen):
             g.fail("the game moved while paused under the menu", "menu")
     with g.step("resume"):
         g.host_key(g.P)
         g.wait(lambda f: not f.get("paused"), seconds=5, awaited="resumed")
         g.advance(120)
-        if _scene(g.frame) == frozen:
+        if _same_scene(_scene(g.frame), frozen):
             g.fail("the game did not move after resuming", "resume")
         result["resumed"] = g.capture()
     return result
 
 
 def overlay(g, args):
-    """Insert opens the settings menu over the running game; every setting applies live (the renderer is replaced for upscaler / frame
-    generation switches), the game keeps running and the run's config.json has each value; Escape closes the menu."""
+    """Insert opens settings; every setting applies live, the game keeps running, and the run's config.json saves each value."""
     import json
     import time
     g.set_speed(8)
@@ -346,15 +356,20 @@ def overlay(g, args):
         g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
         g.advance(10)
         result["menu"] = g.capture()
-    changes = [dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
+    changes = [dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x
+               dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
                dict(fps_limit=60), dict(fps_limit=144), dict(fps_limit=0), dict(upscaler="fsr"), dict(upscale_mode="performance"), dict(upscale_mode="native"),
-               dict(upscaler="dlss"), dict(frame_generation=True), dict(upscaler="fsr"), dict(frame_generation=False), dict(upscaler="off")]
+               dict(upscaler="dlss"), dict(sharpening=True), dict(sharpness=.75), dict(sharpening=False),
+               dict(upscaler="off"), dict(upscaler="dlss"), dict(upscaler="off"), dict(upscaler="dlss"),
+               dict(frame_generation=True), dict(frame_generation=False), dict(frame_generation=True),
+               dict(upscaler="fsr"), dict(frame_generation=False), dict(frame_generation=True), dict(frame_generation=False),
+               dict(upscaler="off"), dict(upscaler="fsr"), dict(upscaler="off")]
     for change in changes:
         name = ",".join(f"{k}={v}" for k, v in change.items())
         with g.step(f"set_{name}"):
             ticks, began = g.frame["retraces"], time.monotonic()
             g.set_options(**change)
-            if "upscaler" in change:   # the device depends on it: the renderer is replaced (a few seconds for DLSS)
+            if "upscaler" in change:
                 g.wait(lambda f: f.get("upscaler") == change["upscaler"], seconds=15, awaited=f"active upscaler {change['upscaler']}")
             if "frame_generation" in change:
                 g.wait(lambda f: f.get("frame_generation") == change["frame_generation"], seconds=15, awaited=f"frame generation {change['frame_generation']}")

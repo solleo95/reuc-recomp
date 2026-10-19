@@ -8,7 +8,7 @@
 #include <string>
 union SDL_Event;
 namespace uc {
-// The in-game settings menu (Insert): Main (render scale, upscaling, quality, FPS limit, frame generation, bloom) and Controls (prompt style,
+// The in-game settings menu (Insert): Main (render scale, upscaling, quality, RCAS, FPS limit, frame generation, bloom) and Controls (prompt style,
 // bindings), laid out like the launcher. Every pick goes through LiveSettings, which applies and saves it.
 class SettingsMenu {
 public:

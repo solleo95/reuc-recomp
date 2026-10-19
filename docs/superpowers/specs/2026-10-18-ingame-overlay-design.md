@@ -1,6 +1,6 @@
 # In-game settings overlay, pause key, inverted bloom option
 
-Date: 2026-10-18. Status: owner questions answered; awaiting approval of the whole document.
+Date: 2026-10-18. Status: implemented in 5710538..9cdc6af; final verification and remaining limitations recorded in the implementation plan and `docs/testing/test-server.md`.
 
 ## Intent
 
@@ -18,16 +18,19 @@ Today every graphics/control option lives only in the launcher (`launcher/main.c
   4. FPS limit
   5. Frame generation: Off / DLSS X2 / FSR X2
   6. Section "Other": "Disable glow around light sources (bloom)"
+  7. RCAS sharpening toggle and strength slider, enabled when upscaling is active (owner follow-up, 2026-10-18).
 - Tab **Controls**:
   1. Prompt icon style
   2. Keyboard/mouse bindings
 - Every setting takes effect in real time and is saved to `config.json` immediately on change.
 - Bloom option semantics are inverted, in the launcher too: the checkbox is named "Disable glow around light sources (bloom)"; checked = no glow, unchecked = glow.
 - **P** pauses / resumes the game: the game simply freezes, no menu, nothing drawn.
+- Owner follow-up, 2026-10-18: narrow, draggable window with one control per row, both tabs visible, half-size checkboxes with vertically aligned labels. Theme scaling starts from fresh base metrics every frame so high-resolution windows cannot accumulate size changes.
+- Owner refinement, 2026-10-19: reduce controls and spacing by 25%; keep the existing window dimensions, fonts and checkbox squares. Control widths use 75% of the available row; vertical padding accounts for the unchanged text size.
 
 ## Non-goals
 
-- No other launcher options in the overlay (window mode, sharpening/sharpness, skip intro/tutorials, language, game folder, audio). *(builder's call from the owner's list)*
+- No other launcher options in the overlay (window mode, skip intro/tutorials, language, game folder, audio). *(builder's call from the owner's list; RCAS added by the owner follow-up)*
 - No pause screen, no "Paused" text, no audio fade.
 - No gamepad navigation of the overlay.
 

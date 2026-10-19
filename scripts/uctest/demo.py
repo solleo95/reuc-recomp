@@ -66,6 +66,7 @@ def replay_args(exe, demo, stop, saves, extra=()):
     pin = guest_cpu_args(extra)
     pin += [] if "--fps-limit" in extra else ["--fps-limit", "0"]   # every test runs the game unlocked, as a player does; a limit only by an explicit argument
     pin += [] if "--game-hz" in extra else ["--game-hz", str(DET_GAME_HZ)]
+    if "--window-mode" not in extra: pin += ["--window-mode", "windowed"]
     return [str(exe), "--test-server", "demo", "--save-root", str(saves), "--width", "1280", "--height", "720", "--god", "--skip-tutorials",
             "--skip-intro", "--deterministic", "--demo-play", str(demo), "--stop-retrace", str(stop), "--mute", "--no-vulkan-layers", "--profile", *pin, *extra]
 
