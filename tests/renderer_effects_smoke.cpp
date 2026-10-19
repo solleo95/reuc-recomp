@@ -1,6 +1,7 @@
 // GPU checks of the graphics effects (docs/superpowers/specs/2026-10-19-graphics-enhancements-design.md): one section per effect, each run by its own
 // flag so a failing effect names itself. --validation turns the Vulkan validation layer on and fails on any error.
 #include "check.h"
+#include "gbuffer.h"
 #include "vulkan_renderer.h"
 #include <SDL3/SDL_vulkan.h>
 #include <chrono>
@@ -157,6 +158,45 @@ int main(int argc, char** argv) {
             CHECK(channel(first,100,100)==255 && channel(first,1200,500)==16);   // far from the edge: exact triangle (upper left) and clear colour (lower right)
             CHECK(first.rgba==second.rgba);   // no jitter: repeated frames are identical
             CHECK(renderer.pass_ms(uc::GpuPass::smaa)>0);
+        }
+        if (wanted("gbuffer")) {
+            // The normal G-buffer: depth-writing draws write normal, fog and flags; draws that write no depth leave the surface below alone.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::blit,uc::UpscaleMode::native,false,0.5,false,2));
+            renderer.force_gbuffer(true);
+            auto frame=[&]() {
+                gx::FramePacket scene; scene.present=false;
+                auto lit=quad(0x1234,-1,-1,0.2f,1,{255,255,255,255},true);   // x from -1 to 0.2, facing the camera, lighting on
+                for(auto& vertex:lit.vertices) vertex.normal={0,0,1,0,0,0,0,0,0};
+                lit.uniforms.edit().channels[0]=1|2;
+                scene.draws.push_back(std::move(lit));
+                scene.draws.push_back(quad(0x2345,-0.5f,-1,0.5f,1,{0,255,0,255},false));   // x from -0.5 to 0.5, no depth write: a blended-style overlay
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.5f,0.9f,0.5f,{255,255,255,255},false));
+                submit(std::move(hud));
+            };
+            frame();   // the first frame decides scene mode for the next one
+            frame();
+            auto buffer=renderer.capture_gbuffer();
+            CHECK(buffer.width==1280 && buffer.height==960);
+            const auto texel=[&](const uc::VulkanRenderer::GBufferPixels& pixels,uint32_t x,uint32_t y) { const size_t i=(size_t(y)*pixels.width+x)*4; return uc::decode_gbuffer({pixels.texels[i],pixels.texels[i+1],pixels.texels[i+2],pixels.texels[i+3]}); };
+            const auto surface=texel(buffer,100,360);   // lit quad only
+            std::fprintf(stderr,"gbuffer: surface flags %u normal z %.3f; overlap flags %u; overlay-only flags %u; background flags %u\n",surface.flags,surface.normal[2],texel(buffer,500,360).flags,texel(buffer,900,360).flags,texel(buffer,1200,360).flags);
+            CHECK(surface.flags==(uc::kGBufferHasNormal|uc::kGBufferLit) && surface.normal[2]>0.99f);
+            CHECK(texel(buffer,500,360).flags==(uc::kGBufferHasNormal|uc::kGBufferLit));   // the overlay did not overwrite the surface
+            CHECK(texel(buffer,900,360).flags==0 && texel(buffer,1200,360).flags==0);      // overlay-only and empty pixels have no surface
+            renderer.set_render_scale(2.0);
+            frame(); frame();
+            buffer=renderer.capture_gbuffer();
+            CHECK(buffer.width==2560 && buffer.height==1920);
+            CHECK(texel(buffer,200,720).flags==(uc::kGBufferHasNormal|uc::kGBufferLit));
+            renderer.force_gbuffer(false);
         }
         if (wanted("ppl")) {
             // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);

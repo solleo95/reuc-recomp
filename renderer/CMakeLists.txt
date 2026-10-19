@@ -35,13 +35,13 @@ foreach(stage vert frag)
   add_custom_command(OUTPUT ${shader_dir}/smoke.${stage}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -target spirv -profile spirv_1_5 -entry ${entry} -stage ${shader_stage} -fvk-use-entrypoint-name -o ${shader_dir}/smoke.${stage}.spv
-    DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
+    DEPENDS shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
 endforeach()
 # Ubershader: the fragment shader with its TEV state read from the draw uniforms; used while a specialized pipeline compiles.
 add_custom_command(OUTPUT ${shader_dir}/smoke.uber.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
   COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DUBER -target spirv -profile spirv_1_5 -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o ${shader_dir}/smoke.uber.spv
-  DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
+  DEPENDS shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
 # Upscaling variants: jitter in the vertex shader, motion vectors as a second color output.
 foreach(stage vert frag uber)
   if(stage STREQUAL "vert")
@@ -54,7 +54,7 @@ foreach(stage vert frag uber)
   add_custom_command(OUTPUT ${shader_dir}/smoke.motion.${stage}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DMOTION ${motion_args} -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/smoke.motion.${stage}.spv
-    DEPENDS shaders/smoke.slang shaders/tev.slang VERBATIM)
+    DEPENDS shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
 endforeach()
 add_custom_command(OUTPUT ${shader_dir}/rcas.comp.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}

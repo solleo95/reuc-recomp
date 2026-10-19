@@ -1,4 +1,5 @@
 #include "tev.slang"
+#include "gbuffer.slang"
 TEV_CONST(66, destinationAlphaPass);
 
 struct Input {
@@ -152,9 +153,10 @@ bool alphaCompare(uint value, uint reference, uint operation) {
 }
 // GX BP fog float: 11-bit mantissa, 8-bit exponent, sign at bit 19.
 float fogFloat(uint v) { return asfloat(((v>>19)&1u)<<31 | ((v>>11)&255u)<<23 | (v&2047u)<<12); }
-float3 applyFog(float3 color, float depth) {
+// The GX fog amount at a pixel depth, 0 (clear) .. 1 (fully fogged); 0 with fog off.
+float fogAmount(float depth) {
     uint fsel=(drawState.fog[0].w>>21)&7u;
-    if(fsel==0) return color;
+    if(fsel==0) return 0.0;
     uint z=uint(saturate(depth)*16777215.0);
     float a=fogFloat(drawState.fog[0].x), c=fogFloat(drawState.fog[0].w&0xFFFFFu);
     float ze=((drawState.fog[0].w>>20)&1u)==0 ? a*16777216.0/float(int(drawState.fog[0].y)-int(z>>(drawState.fog[0].z&31u))) : a*float(z)/16777216.0;
@@ -163,7 +165,11 @@ float3 applyFog(float3 color, float depth) {
     else if(fsel==5) fog=1.0-exp2(-8.0*fog*fog);
     else if(fsel==6) fog=exp2(-8.0*(1.0-fog));
     else if(fsel==7) fog=exp2(-8.0*(1.0-fog)*(1.0-fog));
-    int ifog=int(round(fog*256.0));
+    return fog;
+}
+float3 applyFog(float3 color, float depth) {
+    if(((drawState.fog[0].w>>21)&7u)==0) return color;
+    int ifog=int(round(fogAmount(depth)*256.0));
     uint rgb=drawState.fog[1].x;
     int3 fogColor=int3((rgb>>16)&255u,(rgb>>8)&255u,rgb&255u);
     int3 prev=int3(round(saturate(color)*255.0));
@@ -173,8 +179,17 @@ struct Targets {
     float4 color : SV_Target0;
 #ifdef MOTION
     float4 motion : SV_Target1;   // rg: previous minus current position in target pixels (unjittered); written only by depth-writing draws
+    float4 gbuffer : SV_Target2;  // normal, fog and flags (gbuffer.slang); written only by depth-writing draws, and bound only while an effect reads it
 #endif
 };
+#ifdef MOTION
+float4 gbufferTexel(Output input) {
+    const float lengthSquared = dot(input.viewNormal, input.viewNormal);
+    const bool hasNormal = lengthSquared > 0.0;
+    const bool lit = ((drawState.channels[0] | drawState.channels[1] | drawState.channels[2] | drawState.channels[3]) & 2u) != 0;
+    return encodeGBuffer(hasNormal ? input.viewNormal * rsqrt(lengthSquared) : float3(0.0, 0.0, 0.0), fogAmount(input.position.z), (hasNormal ? kGBufferHasNormal : 0u) | (lit ? kGBufferLit : 0u));
+}
+#endif
 float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }
 Targets fragmentMain(Output input) {
     Targets targets;
@@ -182,6 +197,9 @@ Targets fragmentMain(Output input) {
     targets.motion = float4(pixelOf(input.previousClip) - pixelOf(input.currentClip), 0.0, 0.0);
 #endif
     targets.color = shadeFragment(input);
+#ifdef MOTION
+    targets.gbuffer = gbufferTexel(input);
+#endif
     return targets;
 }
 float4 shadeFragment(Output input) {

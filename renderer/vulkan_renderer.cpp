@@ -273,6 +273,7 @@ constexpr uint32_t kNoBank=UINT32_MAX;
 // are read by the upscaling variant only.
 constexpr uint32_t kNoMotion=UINT32_MAX;
 constexpr VkFormat kMotionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kGBufferFormat=VK_FORMAT_R16G16B16A16_UNORM;   // gbuffer.h
 struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, reserved[3]{}; };   // effects: kEffect* bits (graphics_effects.h)
 static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112);
 struct MotionBlock { gx::Projection prev_rows; uint32_t prev_palette, kind, unused[2]; };   // smoke.slang MotionBlock (std430)
@@ -589,14 +590,15 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         blend.srcColorBlendFactor=blend.srcAlphaBlendFactor=mode.mode==3 ? VK_BLEND_FACTOR_ONE : sources[mode.source];
         blend.dstColorBlendFactor=blend.dstAlphaBlendFactor=mode.mode==3 ? VK_BLEND_FACTOR_ONE : destinations[mode.destination];
         blend.colorBlendOp=blend.alphaBlendOp=mode.mode==3 ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD;
-        VkPipelineColorBlendAttachmentState blends[2]{blend,{}};
+        VkPipelineColorBlendAttachmentState blends[3]{blend,{},{}};
         blends[1].colorWriteMask=motion_write_mask(key);   // motion vectors: replaced, never blended
-        VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = motion_outputs_ ? 2 : 1; blending.pAttachments = blends;
+        blends[2].colorWriteMask=gbuffer_write_mask(key);  // G-buffer: replaced, never blended
+        VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = motion_outputs_ ? 3 : 1; blending.pAttachments = blends;
         blending.logicOpEnable=mode.mode==2; blending.logicOp=VkLogicOp(mode.logic);
         VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = 2; dynamic.pDynamicStates = dynamic_states;
-        const VkFormat formats[2] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat};
-        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = motion_outputs_ ? 2 : 1; rendering.pColorAttachmentFormats = formats;
+        const VkFormat formats[3] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat, kGBufferFormat};
+        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = motion_outputs_ ? 3 : 1; rendering.pColorAttachmentFormats = formats;
         rendering.depthAttachmentFormat=VK_FORMAT_D32_SFLOAT;
         VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depth.depthTestEnable=bool(key[68]&1); depth.depthWriteEnable=bool(key[68]&16);
@@ -971,6 +973,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,scene_depth_,scene_depth_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);
     barrier(command,scene_motion_,scene_motion_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
+    if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
@@ -1030,6 +1033,32 @@ VulkanRenderer::MotionPixels VulkanRenderer::capture_motion() {
     destroy_buffer(buffer);
     return pixels;
 }
+VulkanRenderer::GBufferPixels VulkanRenderer::capture_gbuffer() {
+    owner();
+    if (!scene_gbuffer_ || !gbuffer_initialized_) throw std::logic_error("no G-buffer to capture");
+    vk_check(present_.wait_idle(device),"G-buffer capture idle");
+    const VkDeviceSize bytes=VkDeviceSize(scene_extent_.width)*scene_extent_.height*8;
+    Buffer buffer=make_buffer(bytes,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool=pool_; allocation.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount=1;
+    VkCommandBuffer command=VK_NULL_HANDLE; vk_check(vkAllocateCommandBuffers(device,&allocation,&command),"G-buffer capture command");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vk_check(vkBeginCommandBuffer(command,&begin),"begin G-buffer capture");
+    const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
+    VkBufferImageCopy copy{}; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={scene_extent_.width,scene_extent_.height,1};
+    vkCmdCopyImageToBuffer(command,scene_gbuffer_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer.buffer,1,&copy);
+    barrier(command,scene_gbuffer_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,scene_gbuffer_layout_,all,any,all,any);
+    vk_check(vkEndCommandBuffer(command),"end G-buffer capture");
+    VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command_info.commandBuffer=command;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.commandBufferInfoCount=1; submit.pCommandBufferInfos=&command_info;
+    vk_check(vkQueueSubmit2(queue_,1,&submit,VK_NULL_HANDLE),"submit G-buffer capture");
+    vk_check(vkQueueWaitIdle(queue_),"G-buffer capture wait");
+    vkFreeCommandBuffers(device,pool_,1,&command);
+    const auto* data=static_cast<const uint16_t*>(buffer.mapped);
+    GBufferPixels pixels{scene_extent_.width,scene_extent_.height,{data,data+size_t(bytes/2)}};
+    destroy_buffer(buffer);
+    return pixels;
+}
 RenderPixels VulkanRenderer::capture_scene() {
     owner();
     if (!scene_color_ || !scene_initialized_) throw std::logic_error("no scene target to capture");
@@ -1055,14 +1084,14 @@ RenderPixels VulkanRenderer::capture_scene() {
 }
 void VulkanRenderer::destroy_scene_targets() {
     scene_restore_copy_.reset();
-    for (auto [view,image,memory]:{std::tuple{&scene_color_view_,&scene_color_,&scene_color_memory_},{&scene_depth_view_,&scene_depth_,&scene_depth_memory_},{&scene_motion_view_,&scene_motion_,&scene_motion_memory_}}) {
+    for (auto [view,image,memory]:{std::tuple{&scene_color_view_,&scene_color_,&scene_color_memory_},{&scene_depth_view_,&scene_depth_,&scene_depth_memory_},{&scene_motion_view_,&scene_motion_,&scene_motion_memory_},{&scene_gbuffer_view_,&scene_gbuffer_,&scene_gbuffer_memory_}}) {
         if (*view) vkDestroyImageView(device,*view,nullptr);
         if (*image) vkDestroyImage(device,*image,nullptr);
         if (*memory) vkFreeMemory(device,*memory,nullptr);
         *view=VK_NULL_HANDLE; *image=VK_NULL_HANDLE; *memory=VK_NULL_HANDLE;
     }
-    scene_extent_={}; scene_initialized_=motion_initialized_=false;
-    scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL; scene_motion_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    scene_extent_={}; scene_initialized_=motion_initialized_=gbuffer_initialized_=gbuffer_cleared_=false;
+    scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL; scene_motion_layout_=scene_gbuffer_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 }
 void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkImageView& target_view,VkExtent2D extent,bool depth,VkFormat format) {
     VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; image.imageType = VK_IMAGE_TYPE_2D; image.format = format!=VK_FORMAT_UNDEFINED ? format : depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
@@ -1169,6 +1198,7 @@ void VulkanRenderer::rebuild() {
             make_attachment(scene_color_,scene_color_memory_,scene_color_view_,scene_extent_);
             make_attachment(scene_depth_,scene_depth_memory_,scene_depth_view_,scene_extent_,true);
             make_attachment(scene_motion_,scene_motion_memory_,scene_motion_view_,scene_extent_,false,kMotionFormat);
+            make_attachment(scene_gbuffer_,scene_gbuffer_memory_,scene_gbuffer_view_,scene_extent_,false,kGBufferFormat);
             reset_next_=true;
             std::fprintf(stderr,"Upscaling: scene %ux%u -> %ux%u EFB (%s)\n",scene_extent_.width,scene_extent_.height,efb_extent_.width,efb_extent_.height,
                 upscaler_kind_==UpscalerKind::dlss ? "DLSS" : upscaler_kind_==UpscalerKind::fsr ? "FSR" : upscaler_kind_==UpscalerKind::smaa ? "SMAA" : "blit");
@@ -1247,8 +1277,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     // Upscaling: a frame whose predecessor had a 3D scene draws into the internal scene targets until the scene boundary (the game's
     // copy of the finished scene, gx::SceneBoundary), is upscaled into efb_ there, and draws the rest (post chain, HUD) into efb_.
-    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; }
-        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint()};
+    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; }
+        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint()};
     gx::PacketSummary summary;
     size_t scene_draws=0;          // draws [0, scene_draws) of this packet go to the scene targets
     bool upscale_here=false;       // the upscale runs after those draws, before the rest and before the packet's copy/present
@@ -1256,7 +1286,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if (frame_start_) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
-            scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=false; hudless_taken_=false;
+            scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
@@ -1468,7 +1498,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {   // retried later: the packet must look unseen to the per-frame upscaling state
             boundary_=upscale_before.boundary; frame_start_=upscale_before.frame_start; scene_phase_=upscale_before.scene_phase; scene_mode_=upscale_before.scene_mode;
-            motion_cleared_=upscale_before.motion_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales;
+            motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales;
             tracker_.rollback(upscale_before.tracker);
             return false;
         }
@@ -1505,9 +1535,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     // A render target of the frame: efb_ (output resolution) or the internal scene targets. Between passes color is TRANSFER_SRC, depth
     // DEPTH_ATTACHMENT and motion COLOR_ATTACHMENT; *initialized false means never written (cleared on first use).
-    struct PassTarget { VkImage color, depth; VkImageView color_view, depth_view, motion_view; VkExtent2D extent; bool* initialized; };
-    const PassTarget efb_target{efb_,depth_,efb_view_,depth_view_,VK_NULL_HANDLE,efb_extent_,&efb_initialized_};
-    const PassTarget scene_target{scene_color_,scene_depth_,scene_color_view_,scene_depth_view_,scene_motion_view_,scene_extent_,&scene_initialized_};
+    struct PassTarget { VkImage color, depth; VkImageView color_view, depth_view, motion_view, gbuffer_view; VkExtent2D extent; bool* initialized; };
+    const PassTarget efb_target{efb_,depth_,efb_view_,depth_view_,VK_NULL_HANDLE,VK_NULL_HANDLE,efb_extent_,&efb_initialized_};
+    const PassTarget scene_target{scene_color_,scene_depth_,scene_color_view_,scene_depth_view_,scene_motion_view_,scene_gbuffer_view_,scene_extent_,&scene_initialized_};
     const auto depth_stages=VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
     // Debug: UC_SKIP_CALLSITES=<hex>[,<hex>...] leaves the draws of those guest callsites out (finding what a callsite draws).
     static const std::vector<uint32_t> skipped_callsites=[] {
@@ -1527,7 +1557,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; color.imageView = target.color_view; color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = initialized ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     for (size_t i=0;i<4;++i) color.clearValue.color.float32[i]=packet.clear_color[i]/255.f;
-    VkRenderingAttachmentInfo colors[2]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, none bound outside the scene pass
+    VkRenderingAttachmentInfo colors[3]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, [2]: G-buffer; none bound outside the scene pass
     const bool bind_motion=scene && (!motion_cleared_ || std::any_of(draw_motion.begin()+first,draw_motion.begin()+last,[](uint32_t index) { return index!=kNoMotion; }));
     if (bind_motion) {   // clear once, then bind only for passes whose depth-writing draws produce vectors
         barrier(slot.command,scene_motion_,motion_initialized_ && motion_cleared_ ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1537,7 +1567,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         motion_cleared_=motion_initialized_=true;
         scene_motion_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = motion_outputs_ ? 2 : 1; rendering.pColorAttachments = colors;
+    if (scene && effects_need_gbuffer()) {   // cleared by the first scene pass of a frame (no surface), then loaded; bound only while an effect reads it
+        barrier(slot.command,scene_gbuffer_,gbuffer_initialized_ && gbuffer_cleared_ ? scene_gbuffer_layout_ : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        colors[2].imageView=target.gbuffer_view; colors[2].imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colors[2].loadOp=gbuffer_cleared_ ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; colors[2].storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+        gbuffer_cleared_=gbuffer_initialized_=true;
+        scene_gbuffer_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = motion_outputs_ ? 3 : 1; rendering.pColorAttachments = colors;
     const VkImageLayout depth_before=!initialized ? VK_IMAGE_LAYOUT_UNDEFINED : scene ? scene_depth_layout_ : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     barrier(slot.command,target.depth,depth_before,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
@@ -1677,23 +1715,26 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     auto clear_region=[&](const PassTarget& active, bool with_motion) {   // after a copy: GX clears the copied EFB region when asked
             barrier(slot.command,active.depth,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
             barrier(slot.command,active.color,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            VkRenderingAttachmentInfo colors[2]{{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}},depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-            for (auto [attachment,view]:{std::pair{&colors[0],active.color_view},std::pair{&colors[1],active.motion_view}}) {
+            VkRenderingAttachmentInfo colors[3]{{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}},depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            const bool clear_motion=with_motion && active.motion_view && motion_cleared_;   // the scene's vectors in the cleared region go with it
+            const bool clear_gbuffer=with_motion && active.gbuffer_view && gbuffer_cleared_ && scene_gbuffer_layout_==VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;   // and so do its surfaces
+            for (auto [attachment,view]:{std::pair{&colors[0],active.color_view},std::pair{&colors[1],clear_motion ? active.motion_view : VK_NULL_HANDLE},std::pair{&colors[2],clear_gbuffer ? active.gbuffer_view : VK_NULL_HANDLE}}) {
                 attachment->imageView=view; attachment->imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; attachment->loadOp=VK_ATTACHMENT_LOAD_OP_LOAD; attachment->storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             }
-            const bool clear_motion=with_motion && active.motion_view && motion_cleared_;   // the scene's vectors in the cleared region go with it
             depth.imageView=active.depth_view; depth.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL; depth.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD; depth.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
-            VkRenderingInfo clear_render{VK_STRUCTURE_TYPE_RENDERING_INFO}; clear_render.renderArea.extent=active.extent; clear_render.layerCount=1; clear_render.colorAttachmentCount=clear_motion ? 2 : 1; clear_render.pColorAttachments=colors; clear_render.pDepthAttachment=&depth;
+            VkRenderingInfo clear_render{VK_STRUCTURE_TYPE_RENDERING_INFO}; clear_render.renderArea.extent=active.extent; clear_render.layerCount=1; clear_render.colorAttachmentCount=clear_gbuffer ? 3 : clear_motion ? 2 : 1; clear_render.pColorAttachments=colors; clear_render.pDepthAttachment=&depth;
             const auto& source=copy_target ? packet.texture_copy->source : packet.display_source;
             const uint32_t x=uint64_t(source[0])*active.extent.width/640,y=uint64_t(source[1])*active.extent.height/480;
             const uint32_t right=std::max(x+1,uint32_t(uint64_t(source[0]+source[2])*active.extent.width/640)),bottom=std::max(y+1,uint32_t(uint64_t(source[1]+source[3])*active.extent.height/480));
             VkClearRect rectangle{{{int32_t(x),int32_t(y)},{right-x,bottom-y}},0,1};
-            VkClearAttachment clears[3]{}; clears[0].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[1].aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;
-            clears[2].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[2].colorAttachment=1;
+            VkClearAttachment clears[4]{}; clears[0].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[1].aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;
+            uint32_t clear_count=2;
+            if (clear_motion) { clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count++].colorAttachment=1; }
+            if (clear_gbuffer) { clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count++].colorAttachment=2; }   // cleared to zero: no surface
             for(size_t i=0;i<4;++i) clears[0].clearValue.color.float32[i]=packet.clear_color[i]/255.f;
             clears[1].clearValue.depthStencil={packet.clear_depth/float(0xFFFFFF),0};
             vkCmdBeginRendering(slot.command,&clear_render);
-            vkCmdClearAttachments(slot.command,clear_motion ? 3 : 2,clears,1,&rectangle);
+            vkCmdClearAttachments(slot.command,clear_count,clears,1,&rectangle);
             vkCmdEndRendering(slot.command);
             barrier(slot.command,active.color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
     };

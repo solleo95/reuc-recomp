@@ -77,6 +77,10 @@ public:
     uint64_t whole_frame_upscales() const { return whole_frame_upscales_; }   // frames without the game's scene copy: upscaled whole at present
     struct MotionPixels { uint32_t width=0, height=0; std::vector<float> rg; std::array<float,2> at(uint32_t x, uint32_t y) const { const size_t i=(size_t(y)*width+x)*2; return {rg.at(i), rg.at(i+1)}; } };
     MotionPixels capture_motion();   // tests/tools: the motion target of the last scene (waits for the GPU)
+    struct GBufferPixels { uint32_t width=0, height=0; std::vector<uint16_t> texels; };   // rgba per texel, as gbuffer.h encodes
+    GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
+    void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
+    bool effects_need_gbuffer() const { return motion_outputs_ && force_gbuffer_; }   // the screen-space effects add their own conditions
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
@@ -205,12 +209,14 @@ private:
     uint64_t fg_waited_value_=0;   // the frame-generation inputs fence value the scene targets were last released at
     // Layouts of the scene depth and vectors between packets: attachment layouts during the scene, GENERAL after the upscale until the next
     // frame's first scene pass (frame generation reads them at the present in that layout).
-    VkImageLayout scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, scene_motion_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    VkImage scene_color_=VK_NULL_HANDLE, scene_depth_=VK_NULL_HANDLE, scene_motion_=VK_NULL_HANDLE;
-    VkDeviceMemory scene_color_memory_=VK_NULL_HANDLE, scene_depth_memory_=VK_NULL_HANDLE, scene_motion_memory_=VK_NULL_HANDLE;
-    VkImageView scene_color_view_=VK_NULL_HANDLE, scene_depth_view_=VK_NULL_HANDLE, scene_motion_view_=VK_NULL_HANDLE;
+    VkImageLayout scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, scene_motion_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, scene_gbuffer_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkImage scene_color_=VK_NULL_HANDLE, scene_depth_=VK_NULL_HANDLE, scene_motion_=VK_NULL_HANDLE, scene_gbuffer_=VK_NULL_HANDLE;
+    VkDeviceMemory scene_color_memory_=VK_NULL_HANDLE, scene_depth_memory_=VK_NULL_HANDLE, scene_motion_memory_=VK_NULL_HANDLE, scene_gbuffer_memory_=VK_NULL_HANDLE;
+    VkImageView scene_color_view_=VK_NULL_HANDLE, scene_depth_view_=VK_NULL_HANDLE, scene_motion_view_=VK_NULL_HANDLE, scene_gbuffer_view_=VK_NULL_HANDLE;
     VkExtent2D scene_extent_{};
-    bool scene_initialized_=false, motion_initialized_=false;
+    bool scene_initialized_=false, motion_initialized_=false, gbuffer_initialized_=false;
+    bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
+    bool force_gbuffer_=false;
     // The last present's EFB clear, applied to the scene targets by the next frame's first scene pass (GX clears the EFB at the present copy).
     struct SceneClear { bool pending=false; std::array<uint32_t,4> region{}; std::array<uint8_t,4> color{}; uint32_t depth=0xFFFFFF; } scene_clear_;
     gx::SceneBoundary boundary_;

@@ -33,6 +33,10 @@ int main() {
     z[68]=16; CHECK(uc::motion_write_mask(z)==0);   // update without compare: Vulkan writes no depth either
     z[68]=1; CHECK(uc::motion_write_mask(z)==0);
     z[68]=5; CHECK(uc::motion_write_mask(z)==0);    // destination-alpha second pass
+    // The G-buffer follows the same rule: only draws that write depth define a surface.
+    z[68]=17|(3<<1); CHECK(uc::gbuffer_write_mask(z)==(VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT));
+    z[68]=16; CHECK(uc::gbuffer_write_mask(z)==0);
+    z[68]=1; CHECK(uc::gbuffer_write_mask(z)==0);
     CHECK(uc::valid_pipeline_key(a,false));
     auto bad=a; bad[69]=0; CHECK(!uc::valid_pipeline_key(bad,false));
     bad=a; bad[1]=17; CHECK(!uc::valid_pipeline_key(bad,false));
