@@ -14,11 +14,12 @@ struct PushParams {
     float viewport[4], view_a[4], view_b[2], depth_range[2];
     uint32_t region[2], signal_size[2];
     uint32_t divisor, frame, rays;
-    float cone, reach, strength, padding[2];
+    float cone, reach, strength;
+    uint32_t mode; float padding;
 };
 static_assert(sizeof(PushParams)==96 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,cone)==76);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr uint32_t kBindings=8;
+constexpr uint32_t kBindings=9;
 VkShaderModule load_module(VkDevice device, const std::filesystem::path& path) {
     std::ifstream file(path,std::ios::binary);
     std::vector<char> code((std::istreambuf_iterator<char>(file)),{});
@@ -42,7 +43,7 @@ void RtReflectionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryP
     try {
         modules_[0]=load_module(device_,shaders/"rt_reflect.trace.spv"); modules_[1]=load_module(device_,shaders/"rt_reflect.composite.spv");
         const VkDescriptorType types[kBindings]={VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE};
         VkDescriptorSetLayoutBinding bindings[kBindings]{};
         for (uint32_t i=0;i<kBindings;++i) bindings[i]={i,types[i],1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
         VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=kBindings; set.pBindings=bindings;
@@ -57,7 +58,7 @@ void RtReflectionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryP
             check(vkCreateComputePipelines(device_,VK_NULL_HANDLE,1,&pipeline,nullptr,&pipelines_[i]),"pipeline");
         }
         const uint32_t sets=2*slots;
-        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,sets},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4*sets},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,sets},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2*sets}};
+        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,sets},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,5*sets},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,sets},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2*sets}};
         VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=sets; pool.poolSizeCount=4; pool.pPoolSizes=sizes;
         check(vkCreateDescriptorPool(device_,&pool,nullptr,&pool_),"descriptor pool");
         const std::vector<VkDescriptorSetLayout> layouts(sets,set_layout_);
@@ -90,8 +91,9 @@ void RtReflectionPass::ensure_signal(VkExtent2D extent) {
 }
 void RtReflectionPass::write_set(VkDescriptorSet set, const RtReflectInputs& in, VkImageView signal_in) {
     VkWriteDescriptorSetAccelerationStructureKHR tlas{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR}; tlas.accelerationStructureCount=1; tlas.pAccelerationStructures=&in.tlas;
-    const VkDescriptorImageInfo images[6]={{VK_NULL_HANDLE,in.depth,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.gbuffer,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.material,VK_IMAGE_LAYOUT_GENERAL},
-        {VK_NULL_HANDLE,signal_.view,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,signal_in,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.color,VK_IMAGE_LAYOUT_GENERAL}};
+    const VkDescriptorImageInfo images[7]={{VK_NULL_HANDLE,in.depth,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.gbuffer,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.material,VK_IMAGE_LAYOUT_GENERAL},
+        {VK_NULL_HANDLE,signal_.view,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,signal_in,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.color,VK_IMAGE_LAYOUT_GENERAL},
+        {VK_NULL_HANDLE,in.albedo ? in.albedo : in.material,VK_IMAGE_LAYOUT_GENERAL}};   // the reflections never read it: the material view stands in
     const VkDescriptorBufferInfo records{in.records,0,VK_WHOLE_SIZE};
     VkWriteDescriptorSet writes[kBindings]{};
     for (uint32_t i=0;i<kBindings;++i) { writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet=set; writes[i].dstBinding=i; writes[i].descriptorCount=1; }
@@ -101,11 +103,13 @@ void RtReflectionPass::write_set(VkDescriptorSet set, const RtReflectInputs& in,
     writes[5].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[5].pImageInfo=&images[3];
     writes[6].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[6].pImageInfo=&images[4];
     writes[7].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[7].pImageInfo=&images[5];
+    writes[8].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[8].pImageInfo=&images[6];
     vkUpdateDescriptorSets(device_,kBindings,writes,0,nullptr);
 }
 VkImageView RtReflectionPass::trace(const RtReflectInputs& in) {
     if (in.slot>=slots_) throw std::invalid_argument("rt reflections: frame slot out of range");
-    const RtReflectPreset preset=rt_reflect_preset(in.level);
+    RtReflectPreset preset=rt_reflect_preset(in.level); float strength=kRtReflectStrength;
+    if (in.mode==RtRadianceMode::lighting) { const RtLightPreset light=rt_light_preset(in.level); preset={light.divisor,light.rays,0.f,light.reach}; strength=light.strength; }   // cone 0: lighting draws its own directions
     if (!preset.divisor || !in.region.width || !in.region.height) throw std::logic_error("rt reflections: trace() with the effect off");
     divisor_=preset.divisor;
     ensure_signal({(in.region.width+divisor_-1)/divisor_,(in.region.height+divisor_-1)/divisor_});
@@ -125,7 +129,7 @@ VkImageView RtReflectionPass::trace(const RtReflectInputs& in) {
     params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
-    params.divisor=divisor_; params.frame=in.frame; params.rays=preset.rays; params.cone=preset.cone; params.reach=preset.reach; params.strength=kRtReflectStrength;
+    params.divisor=divisor_; params.frame=in.frame; params.rays=preset.rays; params.cone=preset.cone; params.reach=preset.reach; params.strength=strength; params.mode=uint32_t(in.mode);
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
@@ -142,7 +146,7 @@ void RtReflectionPass::composite(const RtReflectInputs& in, VkImageView filtered
     params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
-    params.divisor=divisor_; params.strength=kRtReflectStrength;
+    params.divisor=divisor_; params.strength=in.mode==RtRadianceMode::lighting ? rt_light_preset(in.level).strength : kRtReflectStrength; params.mode=uint32_t(in.mode);
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&composite_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);

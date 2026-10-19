@@ -238,7 +238,7 @@ void SettingsMenu::effects_tab(float unit) {
         const std::string why=std::string(tr("rt_unavailable"))+(features && !features->ray_tracing_reason.empty() ? " ("+features->ray_tracing_reason+")" : "");
         ImGui::SetTooltip("%s",why.c_str());
     }
-    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows},{"##rt-ao","rt_ambient_occlusion",&options.effects.rt_ambient_occlusion},{"##rt-reflections","rt_reflections",&options.effects.rt_reflections}}) {
+    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows},{"##rt-ao","rt_ambient_occlusion",&options.effects.rt_ambient_occlusion},{"##rt-reflections","rt_reflections",&options.effects.rt_reflections},{"##rt-lighting","rt_lighting",&options.effects.rt_lighting}}) {
         ImGui::Dummy({0,6*unit});
         ImGui::TextUnformatted(tr(title));
         ImGui::BeginDisabled(!rt.levels_enabled);

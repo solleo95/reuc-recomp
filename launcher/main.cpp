@@ -534,6 +534,8 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##rt-ao","rt_ambient_occlusion","rt-ambient-occlusion",options.effects.rt_ambient_occlusion,!rt.levels_enabled);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##rt-reflections","rt_reflections","rt-reflections",options.effects.rt_reflections,!rt.levels_enabled);
+                ImGui::Dummy({0,8*unit});
+                level_combo("##rt-lighting","rt_lighting","rt-lighting",options.effects.rt_lighting,!rt.levels_enabled);
             }
             const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
             ImGui::Dummy({0,8*unit});

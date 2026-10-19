@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_effects.h"
+#include "rt_light_math.h"
 #include "rt_reflect_math.h"
 #include "view_reconstruct.h"
 #include <vulkan/vulkan.h>
@@ -11,10 +12,13 @@
 namespace uc {
 // What the ray-traced reflections need of a scene: the frame's TLAS and the internal scene targets in VK_IMAGE_LAYOUT_GENERAL (D32 depth, the G-buffer, the R32_UINT
 // material-record index per pixel, the RGBA8 colour with storage usage, modified by composite()) and the frame's material records (reflectivity in their flags).
+// The pass traces two effects with the same machinery (shaders/rt_reflect.slang): the reflections and the lighting (one diffuse bounce, plan p6); one instance per effect.
+enum class RtRadianceMode : uint32_t { reflections, lighting };
 struct RtReflectInputs {
+    RtRadianceMode mode=RtRadianceMode::reflections;
     VkCommandBuffer command=VK_NULL_HANDLE;
     VkAccelerationStructureKHR tlas=VK_NULL_HANDLE;
-    VkImageView depth=VK_NULL_HANDLE, gbuffer=VK_NULL_HANDLE, material=VK_NULL_HANDLE, color=VK_NULL_HANDLE;
+    VkImageView depth=VK_NULL_HANDLE, gbuffer=VK_NULL_HANDLE, material=VK_NULL_HANDLE, color=VK_NULL_HANDLE, albedo=VK_NULL_HANDLE;   // albedo: the lighting composite's reflectance
     VkBuffer records=VK_NULL_HANDLE;
     VkExtent2D region{};
     std::array<float,6> viewport{};

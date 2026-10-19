@@ -1053,7 +1053,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
-    bool rt_shadow_ran=false, rt_reflect_go=false;
+    bool rt_shadow_ran=false, rt_reflect_go=false, rt_light_go=false;
     if (rt_frame_ && (rt_as_open_ || rt_.stats().instances)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
@@ -1084,7 +1084,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
             rt_shadow_traced_=rt_shadow_ran=true;
         }
-        rt_reflect_go=rt_ready && rt_reflect_active();   // the reflections run after the raster occlusion below: they read the colour all the shading finished
+        rt_reflect_go=rt_ready && rt_reflect_active(); rt_light_go=rt_ready && rt_light_active();   // they run after the raster occlusion below: they read the colour all the shading finished
     }
     rt_shadow_ran_last_=rt_shadow_ran;
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
@@ -1105,26 +1105,30 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion_.record(occlusion);
         pass_timer_.end(command,timer_slot,GpuPass::occlusion);
     }
-    if (rt_reflect_go) {   // ray-traced reflections: after every other shading of the colour (RT shadows and AO, GTAO, the shadow map, contact shadows)
-        const auto idle=[this] { vk_check(present_.wait_idle(device),"rt reflections idle"); };
-        rt_reflection_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
-        rt_reflection_denoiser_.initialize(device,memory_,shaders_,idle);
-        rt_reflection_denoiser_.set_max_history(kRtReflectHistory);
-        pass_timer_.begin(command,timer_slot,GpuPass::rt_reflections);
-        RtReflectInputs reflect;
-        reflect.command=command; reflect.tlas=rt_.tlas(); reflect.depth=scene_depth_view_; reflect.gbuffer=scene_gbuffer_view_; reflect.material=scene_material_view_; reflect.color=scene_color_view_;
-        reflect.records=rt_records_[rt_record_slot_].buffer; reflect.region=in.render_size; reflect.viewport=scene_viewport; reflect.view=view_params(*frame_projection_);
-        reflect.level=effects_.rt_reflections; reflect.slot=timer_slot; reflect.frame=uint32_t(upscale_frame_%8)+1;
-        const VkImageView noisy=rt_reflection_.trace(reflect);
-        rt_reflection_denoiser_.resize(rt_reflection_.signal_extent());
-        if (in.reset || !rt_reflect_ran_last_) rt_reflection_denoiser_.reset();
+    // The reflections and the lighting (one diffuse bounce): the same pass in two modes, one instance and one denoiser each, after every other shading of the colour (RT shadows
+    // and AO, GTAO, the shadow map, contact shadows); the lighting first, so that the reflections show the bounced light too.
+    const auto radiance_pass=[&](RtReflectionPass& pass, RtDenoiser& denoiser, RtRadianceMode mode, EffectLevel level, uint32_t history, bool& ran_last, GpuPass timed) {
+        const auto idle=[this] { vk_check(present_.wait_idle(device),"rt radiance idle"); };
+        pass.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
+        denoiser.initialize(device,memory_,shaders_,idle);
+        denoiser.set_max_history(history);
+        pass_timer_.begin(command,timer_slot,timed);
+        RtReflectInputs inputs;
+        inputs.mode=mode; inputs.command=command; inputs.tlas=rt_.tlas(); inputs.depth=scene_depth_view_; inputs.gbuffer=scene_gbuffer_view_; inputs.material=scene_material_view_; inputs.color=scene_color_view_; inputs.albedo=scene_albedo_view_;
+        inputs.records=rt_records_[rt_record_slot_].buffer; inputs.region=in.render_size; inputs.viewport=scene_viewport; inputs.view=view_params(*frame_projection_);
+        inputs.level=level; inputs.slot=timer_slot; inputs.frame=uint32_t(upscale_frame_%8)+1;
+        const VkImageView noisy=pass.trace(inputs);
+        denoiser.resize(pass.signal_extent());
+        if (in.reset || !ran_last) denoiser.reset();
         DenoiseInputs denoise;
         denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
         denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
-        rt_reflection_.composite(reflect,rt_reflection_denoiser_.denoise(command,RtSignal::radiance,noisy,denoise,int(effects_.rt_reflections)>=int(EffectLevel::high) ? 3 : 2));
-        pass_timer_.end(command,timer_slot,GpuPass::rt_reflections);
-    }
-    rt_reflect_ran_last_=rt_reflect_go;
+        pass.composite(inputs,denoiser.denoise(command,RtSignal::radiance,noisy,denoise,int(level)>=int(EffectLevel::high) ? 3 : 2));
+        pass_timer_.end(command,timer_slot,timed);
+    };
+    if (rt_light_go) radiance_pass(rt_lighting_,rt_lighting_denoiser_,RtRadianceMode::lighting,effects_.rt_lighting,kRtLightHistory,rt_light_ran_last_,GpuPass::rt_lighting);
+    if (rt_reflect_go) radiance_pass(rt_reflection_,rt_reflection_denoiser_,RtRadianceMode::reflections,effects_.rt_reflections,kRtReflectHistory,rt_reflect_ran_last_,GpuPass::rt_reflections);
+    rt_light_ran_last_=rt_light_go; rt_reflect_ran_last_=rt_reflect_go;
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -2234,7 +2238,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

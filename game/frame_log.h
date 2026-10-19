@@ -20,6 +20,7 @@ struct FrameRow {
     double gpu_upscale_ms = 0, gpu_smaa_ms = 0, gpu_occlusion_ms = 0;   // latest GPU time of each effect pass (renderer pass timestamps), 0 while the pass does not run
     double gpu_rt_shadows_ms = 0;   // ray-traced shadows (trace, denoise, composite) of the frame's boundary packet
     double gpu_rt_reflections_ms = 0;   // ray-traced reflections likewise
+    double gpu_rt_lighting_ms = 0;      // ray-traced lighting likewise
     double gpu_rt_as_ms = 0;   // ray tracing: acceleration structures summed over the frame's packets
     uint32_t rt_blas = 0; uint64_t rt_triangles = 0;   // the frame's BLASes (one per scene packet with instances) and their triangles
     double gpu_ms = 0;   // longest GPU execution of one submission retired since the previous present (timestamp queries)
