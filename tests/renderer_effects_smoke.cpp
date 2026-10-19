@@ -1182,8 +1182,7 @@ int main(int argc, char** argv) {
                 const auto settle=[&](bool rt,uc::EffectLevel level,float specular,bool cover) { for(int i=0;i<40;++i) frame(rt,level,specular,cover); return frame(rt,level,specular,cover); };
                 const auto off=settle(false,uc::EffectLevel::off,1.f,false);
                 const auto on=settle(true,uc::EffectLevel::medium,1.f,false);
-                std::fprintf(stderr,"rt-reflections: pass runs %llu\n",(unsigned long long)renderer.pass_runs(uc::GpuPass::rt_reflections));
-                const float weight=uc::rt_fresnel(1.f/std::sqrt(10.f))*uc::rt_reflectivity({1,1,1},true);
+                const float weight=std::min(uc::rt_fresnel(1.f/std::sqrt(10.f))*uc::rt_reflectivity({1,1,1},true)*uc::kRtReflectStrength,1.f);
                 std::fprintf(stderr,"rt-reflections: floor off (%d %d %d), on (%d %d %d), plate (%d %d %d), weight %.3f\n",at(off,floor_x,floor_y,0),at(off,floor_x,floor_y,1),at(off,floor_x,floor_y,2),at(on,floor_x,floor_y,0),at(on,floor_x,floor_y,1),at(on,floor_x,floor_y,2),
                     at(on,floor_x,plate_y,0),at(on,floor_x,plate_y,1),at(on,floor_x,plate_y,2),double(weight));
                 const std::array<float,3> plate{float(at(on,floor_x,plate_y,0)),float(at(on,floor_x,plate_y,1)),float(at(on,floor_x,plate_y,2))};

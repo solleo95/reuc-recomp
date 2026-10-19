@@ -33,6 +33,8 @@ inline uint32_t rt_reflect_pack(float reflectivity, uint32_t flags) {
     return (flags&~(255u<<kRtReflectivityShift)&~kRtReflective)|(value<<kRtReflectivityShift)|(value ? kRtReflective : 0u);
 }
 inline float rt_reflect_unpack(uint32_t flags) { return float((flags>>kRtReflectivityShift)&255u)/255.f; }
+// The composite's weight is fresnel x reflectivity x this: the game's gloss values are small (S12) and its scenes dark, so the plain product would show nothing.
+constexpr float kRtReflectStrength=4.f;
 constexpr float kRtFresnelF0=0.04f;
 inline float rt_fresnel(float n_dot_v) { const float m=1.f-std::clamp(n_dot_v,0.f,1.f), m2=m*m; return kRtFresnelF0+(1.f-kRtFresnelF0)*m2*m2*m; }
 inline std::array<float,3> rt_reflect(const std::array<float,3>& incident, const std::array<float,3>& normal) {

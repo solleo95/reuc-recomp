@@ -125,7 +125,7 @@ VkImageView RtReflectionPass::trace(const RtReflectInputs& in) {
     params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
-    params.divisor=divisor_; params.frame=in.frame; params.rays=preset.rays; params.cone=preset.cone; params.reach=preset.reach; params.strength=1.f;
+    params.divisor=divisor_; params.frame=in.frame; params.rays=preset.rays; params.cone=preset.cone; params.reach=preset.reach; params.strength=kRtReflectStrength;
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
@@ -142,7 +142,7 @@ void RtReflectionPass::composite(const RtReflectInputs& in, VkImageView filtered
     params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
-    params.divisor=divisor_; params.strength=1.f;
+    params.divisor=divisor_; params.strength=kRtReflectStrength;
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&composite_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
