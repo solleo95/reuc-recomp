@@ -959,6 +959,7 @@ UpscaleImage VulkanRenderer::hudless_image() const {   // this frame's HUD-less 
 }
 void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) {
     tracker_.end_frame();   // every scene draw of the frame is recorded: camera cut and reprojection of this frame
+    if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
     const auto now=std::chrono::steady_clock::now();
     UpscaleInputs in;
     in.command=command;
@@ -1303,6 +1304,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
+            scene_lights_.clear();
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
@@ -1621,6 +1623,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const size_t set_index=d;
             if (!info.index_count) continue;
             if (!bloom_ && gx::bloom_composite(draw)) continue;
+            if (scene && effects_need_lights()) scene_lights_.add(*draw.uniforms);
             if (std::find(skipped_callsites.begin(),skipped_callsites.end(),draw.callsite)!=skipped_callsites.end()) continue;
             const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
             const auto area=uc::efb_viewport(v,target.extent.width,target.extent.height);

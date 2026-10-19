@@ -11,6 +11,7 @@
 #include "dlss_frame_generation.h"
 #include "fsr_frame_generation.h"
 #include "scene_boundary.h"
+#include "scene_lights.h"
 #include "upscale_mode.h"
 #include "upscaler.h"
 #ifdef _WIN32
@@ -81,6 +82,9 @@ public:
     struct GBufferPixels { uint32_t width=0, height=0; std::vector<uint16_t> texels; };   // rgba per texel, as gbuffer.h encodes
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
+    void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
+    bool effects_need_lights() const { return motion_outputs_ && force_lights_; }   // contact shadows (and later the shadow maps) add their conditions
+    const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
     bool effects_need_gbuffer() const { return motion_outputs_ && force_gbuffer_; }   // the screen-space effects add their own conditions
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
@@ -219,7 +223,9 @@ private:
     VkExtent2D scene_extent_{};
     bool scene_initialized_=false, motion_initialized_=false, gbuffer_initialized_=false;
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
-    bool force_gbuffer_=false, force_scene_targets_=false;
+    bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
+    gx::SceneLightCollector scene_lights_;                 // the scene draws' lights of this frame, filled while the scene is recorded
+    std::optional<gx::CollectedLight> dominant_light_;     // chosen at the scene boundary, kept across frames (hysteresis)
     // The last present's EFB clear, applied to the scene targets by the next frame's first scene pass (GX clears the EFB at the present copy).
     struct SceneClear { bool pending=false; std::array<uint32_t,4> region{}; std::array<uint8_t,4> color{}; uint32_t depth=0xFFFFFF; } scene_clear_;
     gx::SceneBoundary boundary_;
