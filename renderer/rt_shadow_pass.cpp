@@ -16,8 +16,8 @@ struct PushParams {
     uint32_t divisor, frame, sun_rays, local_lights;
     float sun_cone, light_radius;
     float lamp_clearance;
-    float eye_radius;
-    float overhead[4];     // direction toward the synthetic overhead light, then its shadow strength (0: none)
+    float trace_lamps;     // 1: the game's point lights cast rays (tests); 0: they do not
+    float overhead[4];     // direction toward the synthetic key light, then its shadow strength (0: none)
     float overhead_cone, overhead_reach, padding[2];
 };
 static_assert(sizeof(PushParams)==128 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,sun_cone)==80);
@@ -132,11 +132,10 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
     params.divisor=divisor_; params.frame=in.frame; params.sun_rays=sun.divisor ? sun.rays : 0; params.local_lights=local.divisor ? local.lights : 0;
     params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f; params.lamp_clearance=kRtLampClearance;
-    if (in.level_light) {   // the level's shadows come from the synthetic overhead light; the headlamp is not traced
-        params.eye_radius=kRtEyeLightRadius;
+    params.trace_lamps=in.trace_lamps ? 1.f : 0.f;
+    if (in.level_light) {   // the level's shadows come from the synthetic key light
         for (size_t axis=0;axis<3;++axis) params.overhead[axis]=kRtOverheadDirection[axis];
-        params.overhead[3]=kRtOverheadStrength; params.overhead_cone=local.soft ? kRtOverheadConeRadians : 0.f; params.overhead_reach=kRtOverheadReach;
-    }
+        params.overhead[3]=kRtOverheadStrength; params.overhead_cone=local.soft ? kRtOverheadConeRadians : 0.f; params.overhead_reach=kRtOverheadReach;    }
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);

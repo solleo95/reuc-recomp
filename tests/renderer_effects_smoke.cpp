@@ -692,6 +692,7 @@ int main(int argc, char** argv) {
             if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-shadows: skipped, the device has no ray tracing\n");
             else {
                 CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                renderer.set_rt_trace_lamps(true);   // the game's point lights are camera-relative and not traced in play; these fixtures check the machinery (the overhead check turns it off)
                 using Vec=std::array<double,3>;
                 const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
                 const std::array<float,4> material{0.8f,0.6f,0.4f,1.f};
@@ -860,29 +861,26 @@ int main(int argc, char** argv) {
                 }
                 CHECK(blocked(shadowed_sun,Light::directional) && blocked(shadowed_point,Light::point));   // the two points exercise a blocked rig and a blocked lamp
                 dual=false; ambient={0.35f,0.35f,0.35f,1.f};
-                // (b4) the synthetic overhead light (rt_shadow_math.h): under rt_local_shadows a static roof above the floor shadows it by the softened strength, on top of the lamps'
-                // own shadows; the sun level alone does not run it
+                // (b4) the synthetic key light (rt_shadow_math.h): under rt_local_shadows a static roof above the floor shadows it by the softened strength; the game's point
+                // lights are not traced (camera-relative in the game); the sun level alone does not run the key light
                 {
+                    renderer.set_rt_trace_lamps(false);
                     vertical_plate=false; roof=true;
                     const auto& toward=uc::kRtOverheadDirection;
-                    const double reach=1.2/toward[1];   // from the floor (y = -1) up to the roof (y = 0.2)
-                    const Vec under{-0.3,-1,-3.8}, aside{3.0,-1,-3.8};
+                    const double reach=1.2/toward[1];   // from the floor (y = -1) up to the roof (y = 0.2) along the key light's direction
+                    const Vec under{-1.0,-1,-4.5}, aside{3.0,-1,-4.5};
                     const auto inside=[&](const Vec& p) { const double x=p[0]+toward[0]*reach, z=p[2]+toward[2]*reach; return x>=-1 && x<=1 && z>=-5 && z<=-3; };
                     CHECK(inside(under) && !inside(aside));
                     frame(local_only,Light::point); frame(local_only,Light::point);
                     signal=renderer.capture_rt_shadow_signal();
-                    // the fixture's point lamp (3.67 units from the eye, so a lamp, not the headlamp) is blocked by the roof too: its share goes (blocked_lamp), the overhead light takes its strength on top
-                    const float lamp_share=uc::gx_light_contribution(light_uniform(Light::point),3,2,{float(under[0]),float(under[1]),float(under[2])},{0,1,0});
-                    const float lamp_blocked[]={0.f};
-                    const double blocked_lamp=uc::shadow_factor(ambient[0],std::array<float,1>{lamp_share},lamp_blocked);
                     const double roofed=signal_at(signal,under,2), open=signal_at(signal,aside,2);
-                    std::fprintf(stderr,"rt-shadows: overhead light under a roof %.3f (expected %.3f), in the open %.3f\n",roofed,blocked_lamp*(1.0-uc::kRtOverheadStrength),open);
-                    CHECK(std::abs(roofed-blocked_lamp*(1.0-uc::kRtOverheadStrength))<=0.05 && std::abs(open-1.0)<=0.01);
+                    std::fprintf(stderr,"rt-shadows: key light under a roof %.3f (expected %.3f), in the open %.3f\n",roofed,1.0-uc::kRtOverheadStrength,open);
+                    CHECK(std::abs(roofed-(1.0-uc::kRtOverheadStrength))<=0.05 && std::abs(open-1.0)<=0.01);   // the point lamp's roof-blocked share is not removed: lamps are not traced
                     frame(sun_only,Light::point); frame(sun_only,Light::point);
                     signal=renderer.capture_rt_shadow_signal();
-                    CHECK(std::abs(signal_at(signal,under,2)-1.0)<=0.01);   // rt_local_shadows is off: neither the lamp nor the overhead light is traced
+                    CHECK(std::abs(signal_at(signal,under,2)-1.0)<=0.01);   // rt_local_shadows is off: no key light
                     // a roof beyond the light's reach (the car's own roof above a seat) does not shadow the floor under it
-                    roof_y=5.f;
+                    roof_y=6.f;
                     const double far_reach=(roof_y+1.0)/toward[1];
                     CHECK(far_reach>uc::kRtOverheadReach);
                     frame(local_only,Light::point); frame(local_only,Light::point);
@@ -891,6 +889,21 @@ int main(int argc, char** argv) {
                     CHECK(std::abs(signal_at(signal,under,2)-1.0)<=0.01);
                     roof_y=0.2f;
                     vertical_plate=true; roof=false;
+                    renderer.set_rt_trace_lamps(true);
+                }
+                // (b5) a moving camera must not drag the shadows: after a dolly (the projection scale grows every frame) the denoised signal equals the one of a camera that
+                // stood still at the final scale (the history is reprojected by the motion vectors)
+                {
+                    const float final_zoom=1.25f;
+                    for(int i=0;i<40;++i) frame(local_only,Light::point,true,final_zoom);
+                    const auto still=renderer.capture_rt_shadow_filtered();
+                    for(int i=0;i<30;++i) frame(local_only,Light::point,true,1.f+(final_zoom-1.f)*float(i)/29.f);
+                    const auto moved=renderer.capture_rt_shadow_filtered();
+                    CHECK(still.width==moved.width && still.height==moved.height);
+                    double sum=0, worst=0; size_t differing=0;
+                    for(size_t i=0;i<still.factor.size();++i) { const double d=std::abs(double(still.factor[i])-double(moved.factor[i])); sum+=d; worst=std::max(worst,d); differing+=d>0.1; }
+                    std::fprintf(stderr,"rt-shadows: dolly vs still: mean %.4f, worst %.3f, %.2f%% of the pixels differ by more than 0.1\n",sum/double(still.factor.size()),worst,100.0*double(differing)/double(still.factor.size()));
+                    CHECK(sum/double(still.factor.size())<0.005 && double(differing)/double(still.factor.size())<0.01);
                 }
                 // (c) nothing is lit: every factor is 1 (Review Focus 1)
                 frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
@@ -938,6 +951,7 @@ int main(int argc, char** argv) {
             if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-cache: skipped, the device has no ray tracing\n");
             else {
                 CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                renderer.set_rt_trace_lamps(true);
                 using Vec=std::array<double,3>;
                 const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
                 const std::array<float,4> material{0.8f,0.6f,0.4f,1.f}, ambient{0.35f,0.35f,0.35f,1.f};

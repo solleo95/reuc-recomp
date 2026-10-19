@@ -1067,7 +1067,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.command=command; shadow.tlas=rt_.tlas(); shadow.depth=scene_depth_view_; shadow.gbuffer=scene_gbuffer_view_; shadow.material=scene_material_view_; shadow.color=scene_color_view_;
             shadow.records=rt_records_[rt_record_slot_].buffer; shadow.lights=rt_lights_[rt_record_slot_].buffer;
             shadow.region=in.render_size; shadow.viewport=scene_viewport; shadow.view=view_params(*frame_projection_);
-            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off;
+            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_; shadow.trace_lamps=rt_trace_lamps_;   // the test mode traces the lamps instead of the key light
             shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
             rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
@@ -1181,6 +1181,10 @@ VulkanRenderer::MotionPixels VulkanRenderer::capture_motion() {
     destroy_buffer(buffer);
     return pixels;
 }
+static float half_to_float(uint16_t h) {   // IEEE half to float
+    const uint32_t sign=uint32_t(h>>15)<<31, exponent=(h>>10)&31, mantissa=h&1023;
+    return !exponent ? std::bit_cast<float>(sign)+(sign ? -1.f : 1.f)*std::ldexp(float(mantissa),-24) : exponent==31 ? std::bit_cast<float>(sign|0x7F800000u|(mantissa<<13)) : std::bit_cast<float>(sign|((exponent+112)<<23)|(mantissa<<13));
+}
 VulkanRenderer::RtShadowPixels VulkanRenderer::capture_rt_shadow_signal() {
     owner();
     const VkExtent2D extent=rt_shadow_.signal_extent();
@@ -1195,10 +1199,25 @@ VulkanRenderer::RtShadowPixels VulkanRenderer::capture_rt_shadow_signal() {
     RtShadowPixels pixels{extent.width,extent.height,{}};
     pixels.factor.reserve(size_t(extent.width)*extent.height);
     const auto* halves=static_cast<const uint16_t*>(buffer.mapped);
-    for (size_t i=0;i<size_t(extent.width)*extent.height;++i) {   // IEEE half to float
-        const uint16_t h=halves[i]; const uint32_t sign=uint32_t(h>>15)<<31, exponent=(h>>10)&31, mantissa=h&1023;
-        pixels.factor.push_back(!exponent ? std::bit_cast<float>(sign)+(sign ? -1.f : 1.f)*std::ldexp(float(mantissa),-24) : exponent==31 ? std::bit_cast<float>(sign|0x7F800000u|(mantissa<<13)) : std::bit_cast<float>(sign|((exponent+112)<<23)|(mantissa<<13)));
-    }
+    for (size_t i=0;i<size_t(extent.width)*extent.height;++i) pixels.factor.push_back(half_to_float(halves[i]));
+    destroy_buffer(buffer);
+    return pixels;
+}
+VulkanRenderer::RtShadowPixels VulkanRenderer::capture_rt_shadow_filtered() {
+    owner();
+    const VkExtent2D extent=rt_shadow_.signal_extent();
+    if (!rt_shadow_traced_ || !rt_shadow_denoiser_.output_image()) throw std::logic_error("no denoised ray-traced shadow signal to capture");
+    vk_check(present_.wait_idle(device),"rt shadow capture idle");
+    const VkDeviceSize bytes=VkDeviceSize(extent.width)*extent.height*8;   // RGBA16F: the factor is the red channel
+    Buffer buffer=make_buffer(bytes,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    run_commands([&](VkCommandBuffer command) {
+        VkBufferImageCopy copy{}; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={extent.width,extent.height,1};
+        vkCmdCopyImageToBuffer(command,rt_shadow_denoiser_.output_image(),VK_IMAGE_LAYOUT_GENERAL,buffer.buffer,1,&copy);
+    });
+    RtShadowPixels pixels{extent.width,extent.height,{}};
+    pixels.factor.reserve(size_t(extent.width)*extent.height);
+    const auto* halves=static_cast<const uint16_t*>(buffer.mapped);
+    for (size_t i=0;i<size_t(extent.width)*extent.height;++i) pixels.factor.push_back(half_to_float(halves[i*4]));
     destroy_buffer(buffer);
     return pixels;
 }

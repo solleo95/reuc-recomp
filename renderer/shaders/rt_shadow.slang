@@ -17,7 +17,7 @@ struct Params {
     float sunCone;        // half angle of the soft-shadow cone, radians (0: hard)
     float lightRadius;    // soft-shadow disc radius as a fraction of the distance to a local light (0: hard)
     float lampClearance;  // a lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced
-    float eyeRadius;      // a point light within this many view units of the eye is the headlamp and is not traced (0: every light is)
+    float traceLamps;     // 0: the game's point lights are not traced (they are camera-relative: their shadows would swim); 1: they are (tests)
     float4 overhead;      // the synthetic overhead light: xyz = unit direction toward it (view space), w = the shadow strength (0: none), rt_shadow_math.h
     float overheadCone;   // its soft-shadow cone half angle, radians
     float overheadReach;  // its rays are blocked only within this many view units
@@ -101,7 +101,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             contribution[i] = max(strength, 0.0) * dot(light.color.rgb, float3(0.299, 0.587, 0.114)) / 255.0;   // signed diffuse can go negative: that is no light to remove
             toLight[i] = direction; distanceTo[i] = dist;
             directional[i] = dot(light.position.xyz, light.position.xyz) > 1e10;
-            headlamp[i] = params.eyeRadius > 0.0 && dot(light.position.xyz, light.position.xyz) < params.eyeRadius * params.eyeRadius;   // rt_shadow_math.h rt_is_eye_light
+            headlamp[i] = params.traceLamps == 0.0 && !directional[i];   // a camera-relative point light: its share stays in the total, it casts no ray
             total += contribution[i];
         }
         if (total > 0.0) {

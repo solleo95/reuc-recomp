@@ -106,6 +106,8 @@ public:
     bool rt_shadows_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off); }
     bool rt_scene_active() const { return rt_shadows_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
+    void set_rt_trace_lamps(bool on) { rt_trace_lamps_=on; }   // tests: trace the game's point lights instead of the synthetic key light (the lights are camera-relative in the game, so off in play)
+    RtShadowPixels capture_rt_shadow_filtered();   // tests/tools: the denoiser's output for the same frame (what the composite multiplies by)
     RtShadowPixels capture_rt_shadow_signal();   // tests/tools: the noisy signal of the latest traced frame (waits for the GPU); throws when none was traced
     uint32_t rt_shadow_signal_images() const { return rt_shadow_.signal_images_created(); }
     RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
@@ -227,6 +229,7 @@ private:
     RtScene rt_;
     RtShadowPass rt_shadow_;
     RtDenoiser rt_shadow_denoiser_;
+    bool rt_trace_lamps_=false;
     bool rt_shadow_traced_=false, rt_shadow_ran_last_=false;   // traced: the signal image holds a frame's trace; ran_last: the previous frame denoised (else the history is stale)
     VkBufferUsageFlags rt_input_usage() const { return ray_tracing_ ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT|VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0; }   // mesh and palette buffers the AS builder reads
     bool motion_outputs_=false;   // upscaling: pipelines carry the motion attachment and the jitter (smoke.motion.*.spv)
