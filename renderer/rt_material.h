@@ -32,7 +32,9 @@ inline bool light_model_valid(const gx::TevMaterial& material, const gx::Channel
     if (material.stages==0) return true;
     enum Kind { zero, factor, lit, unknown };
     const auto product=[](Kind x, Kind y) { return x==zero || y==zero ? zero : x==unknown || y==unknown || (x==lit && y==lit) ? unknown : x==lit || y==lit ? lit : factor; };
-    const auto sum=[](Kind x, Kind y) { return x==zero ? y : y==zero ? x : x==unknown || y==unknown || x!=y ? unknown : x; };
+    // A light-independent term next to a lit one (a second texture times a konst, an emissive texture) stays "lit": the shadow factor dims it with the lit part,
+    // an approximation that over-darkens such a term inside a shadow (the game's seats, floors and walls carry one).
+    const auto sum=[](Kind x, Kind y) { return x==zero ? y : y==zero ? x : x==unknown || y==unknown ? unknown : x==y ? x : lit; };
     Kind registers[4]={unknown,unknown,unknown,unknown};
     uint32_t output=0;
     for (uint32_t i=0;i<material.stages;++i) {
