@@ -33,6 +33,9 @@ public:
     void rollback(size_t mark);
     bool camera_cut() const { return cut_; }                       // of the frame finished by the last end_frame()
     const Projection& clip_to_prev_clip() const { return clip_to_prev_; }
+    // The camera's motion in view space: the previous frame's view-space position of a point that stands still in the world, from its view-space position in the
+    // finished frame (rows of a 3x4 matrix: the rotation and the translation; the identity after a cut or without a paired level draw).
+    const std::array<std::array<float,4>,3>& view_to_prev_view() const { return view_to_prev_; }
 private:
     struct Entry { PreviousDraw draw; std::array<std::array<float,4>,3> rows; bool z_write; bool mesh; };
     struct DrawKeyHash {
@@ -50,5 +53,6 @@ private:
     std::vector<float> moves_;
     bool cut_=false;
     Projection clip_to_prev_{{{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,0,1}}};
+    std::array<std::array<float,4>,3> view_to_prev_{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
 };
 }

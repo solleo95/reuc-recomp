@@ -66,6 +66,20 @@ int main() {
     CHECK(uc::kRtOverheadReach>1.5f && uc::kRtOverheadReach*toward[1]<7.f);   // inside the room: the height the ray reaches stays short of the roof (7 units above a seat top)
     CHECK(near(uc::rt_overhead_factor(0.5f,1.f),1.f-0.5f*uc::kRtOverheadStrength));            // a soft edge: half of the rays blocked
     CHECK(near(uc::rt_overhead_factor(1.f,0.f),1.f));                                          // a surface turned away from the light takes no shadow of it (its own shading already shows that)
+    {   // the key light stays put in the world: the camera's yaw turns its view-space direction the other way (V = previous view from the current one = R^T for a camera yaw)
+        const float yaw=0.05f, c=std::cos(yaw), s=std::sin(yaw);
+        const std::array<std::array<float,4>,3> view_to_prev{{{c,0,-s,0},{0,1,0,0},{s,0,c,0}}};
+        const auto turned=uc::rt_key_direction_after({0.f,0.f,1.f},view_to_prev);
+        CHECK(near(turned[0],s) && near(turned[1],0.f) && near(turned[2],c));   // R (0,0,1) with R^T = view_to_prev: (s, 0, c)
+        const auto back=uc::rt_key_direction_after(turned,{{{c,0,s,0},{0,1,0,0},{-s,0,c,0}}});   // the opposite motion returns it
+        CHECK(near(back[0],0.f,1e-5f) && near(back[2],1.f,1e-5f));
+        const std::array<std::array<float,4>,3> identity{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
+        const auto same=uc::rt_key_direction_after(uc::kRtOverheadDirection,identity);
+        CHECK(near(same[0],uc::kRtOverheadDirection[0]) && near(same[1],uc::kRtOverheadDirection[1]) && near(same[2],uc::kRtOverheadDirection[2]));
+        const std::array<std::array<float,4>,3> far_turn{{{0,0,-1,0},{0,1,0,0},{1,0,0,0}}};   // a 90 degree turn in one frame is a cut, not motion: back to the default direction
+        const auto reset=uc::rt_key_direction_after({0.f,0.f,1.f},far_turn);
+        CHECK(near(reset[0],uc::kRtOverheadDirection[0]) && near(reset[1],uc::kRtOverheadDirection[1]) && near(reset[2],uc::kRtOverheadDirection[2]));
+    }
     CHECK(near(uc::rt_overhead_facing(-0.5f),0.f) && near(uc::rt_overhead_facing(1.f),1.f) && uc::rt_overhead_facing(0.15f)>0.f && uc::rt_overhead_facing(0.15f)<1.f);
     return 0;
 }

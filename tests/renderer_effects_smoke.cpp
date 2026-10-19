@@ -963,9 +963,13 @@ int main(int argc, char** argv) {
                     return std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices});
                 };
                 auto floor_mesh=make_mesh(floor_corners), plate_mesh=make_mesh(plate_corners);
+                const std::array<std::array<float,3>,4> roof_corners{{{-1,0.2f,-5},{1,0.2f,-5},{1,0.2f,-3},{-1,0.2f,-3}}};
+                auto roof_mesh=make_mesh(roof_corners); bool roof_on=false;   // a horizontal plate above the floor: the key light's shadow falls beside it
+                float camera_z=0.f;   // every draw's view-space z offset: a camera moving along its axis (the meshes stay the same objects, so the motion tracker pairs the draws)
+                uc::EffectLevel local_level=uc::EffectLevel::medium;
                 const auto surface=[&](const std::shared_ptr<const gx::MeshBuffers>& mesh,bool plate,std::array<float,4> row0) {   // row0: the x row of the object-to-view matrix
                     auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
-                    draw.transforms.edit().projection=projection; draw.transforms.edit().position_rows[0]=row0;
+                    draw.transforms.edit().projection=projection; draw.transforms.edit().position_rows[0]=row0; draw.transforms.edit().position_rows[2]={0,0,1,camera_z};
                     auto& uniforms=draw.uniforms.edit();
                     uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);
                     uniforms.channels[0]=2|(1<<2)|(2<<7)|(3<<9);
@@ -978,12 +982,13 @@ int main(int argc, char** argv) {
                 };
                 const std::array<float,4> mirrored{-1,0,0,-3};   // x' = -x - 3: the plate mirrored to x in [-3.5, -2.5]
                 auto frame=[&](float shift,bool fresh_meshes,bool rt=true) {
-                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_local_shadows=uc::EffectLevel::medium; renderer.set_effects(effects);
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_local_shadows=local_level; renderer.set_effects(effects);
                     if(fresh_meshes) { floor_mesh=make_mesh(floor_corners); plate_mesh=make_mesh(plate_corners); }   // a new identity every frame: the cache must not grow without bound
                     gx::FramePacket scene; scene.present=false;
                     scene.draws.push_back(surface(floor_mesh,false,{1,0,0,0}));
                     scene.draws.push_back(surface(plate_mesh,true,{1,0,0,shift}));
                     scene.draws.push_back(surface(plate_mesh,true,mirrored));
+                    if(roof_on) scene.draws.push_back(surface(roof_mesh,true,{1,0,0,0}));
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -1048,6 +1053,26 @@ int main(int argc, char** argv) {
                 const uint64_t after=renderer.rt_cache_stats().builds;
                 frame(0,false,false); frame(0,false,false);
                 CHECK(renderer.rt_cache_stats().builds==after);
+                // (e) a camera moving along its axis must not wear the denoiser's history out: with the soft key light the denoised signal after a 3-unit approach at 0.1 unit per
+                // frame (2-3% of the distance: more than the history's depth tolerance) is as close to the converged still-camera signal as a still camera's own later frame is
+                {
+                    renderer.set_rt_trace_lamps(false); local_level=uc::EffectLevel::high; roof_on=true;
+                    for(int i=0;i<80;++i) frame(0,false);
+                    const auto converged=renderer.capture_rt_shadow_filtered();
+                    for(int i=0;i<6;++i) frame(0,false);
+                    const auto later=renderer.capture_rt_shadow_filtered();
+                    for(int i=0;i<=30;++i) { camera_z=std::max(0.f,3.f-0.1f*float(i)); frame(0,false); }
+                    const auto approached=renderer.capture_rt_shadow_filtered();
+                    camera_z=0.f; local_level=uc::EffectLevel::medium; roof_on=false; renderer.set_rt_trace_lamps(true);
+                    CHECK(converged.factor.size()==approached.factor.size());
+                    double still_error=0, moving_error=0;
+                    for(size_t i=0;i<converged.factor.size();++i) { still_error+=std::abs(double(later.factor[i])-double(converged.factor[i])); moving_error+=std::abs(double(approached.factor[i])-double(converged.factor[i])); }
+                    still_error/=double(converged.factor.size()); moving_error/=double(converged.factor.size());
+                    size_t shadowed=0; for(const float v:converged.factor) shadowed+=v<0.9f;
+                    std::fprintf(stderr,"rt-cache: denoiser after an approach: error %.5f against %.5f of a still camera, %.2f%% of the signal shadowed\n",moving_error,still_error,100.0*double(shadowed)/double(converged.factor.size()));
+                    CHECK(shadowed>converged.factor.size()/200);   // the fixture has a shadow to smear
+                    CHECK(moving_error<=still_error*2+0.002);
+                }
             }
         }
         if (wanted("rt-denoise")) {

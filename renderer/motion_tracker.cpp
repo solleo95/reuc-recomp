@@ -88,7 +88,13 @@ void MotionTracker::end_frame() {
     if(!moves_.empty()) { std::nth_element(moves_.begin(),moves_.begin()+moves_.size()/2,moves_.end()); median=moves_[moves_.size()/2]; }
     cut_=fov_jump || median>kCameraCutNdc;
     clip_to_prev_={{{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,0,1}}};
+    view_to_prev_={{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
     if(largest && !cut_) {
+        // the same level geometry's previous view from its current view: MV_prev * inverse(MV)
+        if(const auto inv=inverse(model_view(largest->rows))) {
+            const auto motion=multiply(model_view(largest_previous->rows),*inv);
+            view_to_prev_={motion[0],motion[1],motion[2]};
+        }
         // the level geometry's previous clip from its current clip: P_prev * MV_prev * inverse(P * MV)
         if(const auto inv=inverse(multiply(largest->draw.transforms->projection,model_view(largest->rows))))
             clip_to_prev_=multiply(multiply(largest_previous->draw.transforms->projection,model_view(largest_previous->rows)),*inv);

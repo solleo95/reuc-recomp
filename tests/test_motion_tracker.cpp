@@ -117,6 +117,26 @@ int main() {
         for(size_t r=0;r<4;++r) for(size_t c=0;c<4;++c) previous[r]+=tracker.clip_to_prev_clip()[r][c]*now[c];
         CHECK(std::abs(previous[0])<1e-4f && !tracker.camera_cut());
     }
+    {   // the camera's view-space motion: a level draw seen at translation t and then turned by a camera yaw has MV = [R | R t]; the previous view from the current one is R^T
+        const auto turned=[&](float yaw,float tx,float tz) {
+            gx::Transforms t; t.projection=perspective(); t.current=0;
+            const float c=std::cos(yaw), s=std::sin(yaw);
+            t.position_rows[0]={c,0,s,c*tx+s*tz}; t.position_rows[1]={0,1,0,0}; t.position_rows[2]={-s,0,c,-s*tx+c*tz};
+            return std::make_shared<const gx::Transforms>(std::move(t));
+        };
+        gx::MotionTracker tracker;
+        tracker.begin_frame(); tracker.record(tracker.key(draw(1,mesh)),turned(0,0,-10),true); tracker.end_frame();
+        const float yaw=0.05f;
+        tracker.begin_frame(); tracker.record(tracker.key(draw(1,mesh)),turned(yaw,0,-10),true); tracker.end_frame();
+        const auto& motion=tracker.view_to_prev_view();
+        const float c=std::cos(yaw), s=std::sin(yaw);
+        CHECK(!tracker.camera_cut());
+        CHECK(std::abs(motion[0][0]-c)<1e-4f && std::abs(motion[0][2]+s)<1e-4f && std::abs(motion[2][0]-s)<1e-4f && std::abs(motion[2][2]-c)<1e-4f && std::abs(motion[1][1]-1)<1e-4f);   // R^T
+        CHECK(std::abs(motion[0][3])<1e-3f && std::abs(motion[1][3])<1e-3f && std::abs(motion[2][3])<1e-3f);   // a pure rotation about the camera: no translation
+        gx::MotionTracker still;   // no motion, and no paired draw: the identity
+        still.begin_frame(); still.record(still.key(draw(1,mesh)),at(0,0,-10),true); still.end_frame();
+        CHECK(still.view_to_prev_view()[0][0]==1.f && still.view_to_prev_view()[1][1]==1.f && still.view_to_prev_view()[2][3]==0.f);
+    }
     {   // a warmed frame shape reuses tracking storage instead of allocating map nodes per draw
         CountingMemory memory;
         gx::MotionTracker tracker(&memory);

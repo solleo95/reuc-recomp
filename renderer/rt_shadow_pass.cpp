@@ -134,7 +134,7 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f; params.lamp_clearance=kRtLampClearance;
     params.trace_lamps=in.trace_lamps ? 1.f : 0.f;
     if (in.level_light) {   // the level's shadows come from the synthetic key light
-        for (size_t axis=0;axis<3;++axis) params.overhead[axis]=kRtOverheadDirection[axis];
+        for (size_t axis=0;axis<3;++axis) params.overhead[axis]=in.key_direction[axis];
         params.overhead[3]=kRtOverheadStrength; params.overhead_cone=local.soft ? kRtOverheadConeRadians : 0.f; params.overhead_reach=kRtOverheadReach;    }
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);

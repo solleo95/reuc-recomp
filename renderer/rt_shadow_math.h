@@ -53,6 +53,18 @@ constexpr float kRtOverheadStrength=0.65f;
 // below the car's roof). What blocks within the reach: luggage racks, seat backs, tables, characters, the chandelier.
 constexpr float kRtOverheadReach=8.0f;   // 5.8 units of height at the light's elevation, short of the roof
 constexpr float kRtOverheadConeRadians=0.06f; // half angle of its soft-shadow cone
+// The key light stands still in the world, so its view-space direction follows the camera's rotation: `view_to_prev` is MotionTracker::view_to_prev_view() (the
+// previous view from the current one, rows of a 3x4); a direction d_prev of the previous frame is d_cur = R^T d_prev with R its rotation. A turn of more than ~10 degrees in
+// one frame is a camera cut (or a wrong estimate): back to the default direction.
+inline std::array<float,3> rt_key_direction_after(const std::array<float,3>& previous, const std::array<std::array<float,4>,3>& view_to_prev) {
+    std::array<float,3> now{};
+    for (size_t i=0;i<3;++i) now[i]=view_to_prev[0][i]*previous[0]+view_to_prev[1][i]*previous[1]+view_to_prev[2][i]*previous[2];
+    const float length=std::sqrt(now[0]*now[0]+now[1]*now[1]+now[2]*now[2]);
+    if (!(length>0.5f)) return kRtOverheadDirection;
+    for (float& v:now) v/=length;
+    const float cosine=now[0]*previous[0]+now[1]*previous[1]+now[2]*previous[2];
+    return cosine<0.985f ? kRtOverheadDirection : now;
+}
 // A surface faces the overhead light when the cosine between its normal and the direction is above ~0.05, fully from ~0.3.
 inline float rt_overhead_facing(float n_dot_l) { const float t=std::fmin(std::fmax((n_dot_l-0.05f)/0.25f,0.f),1.f); return t*t*(3.f-2.f*t); }
 inline float rt_overhead_factor(float blocked_fraction, float facing) { return 1.f-kRtOverheadStrength*blocked_fraction*facing; }
