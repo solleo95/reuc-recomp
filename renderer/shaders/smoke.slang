@@ -200,9 +200,10 @@ float4 gbufferTexel(Output input) {
 // Stage-0 texture (when the stage samples one) times channel 0's material colour, no lighting. After shadeFragment (the ubershader loads order0 there).
 float4 albedoTexel(Output input) {
     const float4 material = (drawState.channels[0] & 1u) != 0 ? input.rawColor0 : drawState.materials[0];
-    if ((order0 & 64u) == 0) return material;
-    const float3 coord = input.texcoords[(order0 >> 3) & 7];
-    return material * sampleImage(order0 & 7, coord.xy / (coord.z != 0.0 ? coord.z : 1.0));
+    const bool noStage = stageCount == 0;   // evaluateTev draws rasterised x texture 0 at coordinate 0
+    if (!noStage && (order0 & 64u) == 0) return material;
+    const float3 coord = input.texcoords[noStage ? 0 : (order0 >> 3) & 7];
+    return material * sampleImage(noStage ? 0 : order0 & 7, coord.xy / (coord.z != 0.0 ? coord.z : 1.0));
 }
 #endif
 float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }

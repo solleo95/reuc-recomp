@@ -341,7 +341,9 @@ private:
     VkImageView scene_material_view_=VK_NULL_HANDLE, scene_albedo_view_=VK_NULL_HANDLE;
     VkImageLayout scene_rt_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;   // of both
     bool rt_material_initialized_=false, rt_material_cleared_=false;   // cleared (and bound) by a scene pass of this frame
-    std::array<Buffer,kFrameSlots> rt_records_{}, rt_lights_{};   // RtMaterialRecord / 8 gx::LightUniform per record
+    // RtMaterialRecord / 8 gx::LightUniform per record. A growth destroys the replaced buffer mid-frame: a consumer binds them only after the frame's
+    // last scene packet (the boundary).
+    std::array<Buffer,kFrameSlots> rt_records_{}, rt_lights_{};
     uint32_t rt_record_slot_=0, rt_record_count_=0;
     void sync_rt_material_targets();   // the GPU is idle or the targets are unused
     void destroy_rt_material_targets();

@@ -7,7 +7,7 @@ constexpr uint32_t kTextureOrder=64;   // texture map 0, coordinate 0, colour ch
 int main() {
     const auto lit=gx::channel_lighting(2|(1<<2));   // lighting on, light 0
     const auto unlit=gx::channel_lighting(1);
-    gx::TevMaterial modulate; modulate.stages=1; modulate.stage[0].color=env(15,8,10,15); modulate.stage[0].order=kTextureOrder;   // texture x rasterised
+    gx::TevMaterial modulate; modulate.stages=1; modulate.swaps={0xE4,0xE4,0xE4,0xE4}; modulate.stage[0].color=env(15,8,10,15); modulate.stage[0].order=kTextureOrder;   // texture x rasterised
     CHECK(uc::light_model_valid(modulate,lit));
     gx::TevMaterial konst=modulate; konst.stage[0].color=env(15,10,14,15);   // rasterised x konst
     CHECK(uc::light_model_valid(konst,lit));
@@ -24,7 +24,10 @@ int main() {
     CHECK(!uc::light_model_valid(other_channel,lit));
     gx::TevMaterial scaled=modulate; scaled.stage[0].color|=1u<<20;   // scale 2
     CHECK(!uc::light_model_valid(scaled,lit));
-    gx::TevMaterial none; CHECK(!uc::light_model_valid(none,lit));   // no TEV stage
+    gx::TevMaterial swapped=modulate; swapped.stage[0].alpha=1; swapped.swaps[1]=0x1B;   // rasteriser swap table 1 reverses the channels
+    CHECK(!uc::light_model_valid(swapped,lit));
+    gx::TevMaterial none; CHECK(uc::light_model_valid(none,lit));   // no TEV stage: the renderer draws rasterised x texture 0
+    CHECK(!uc::light_model_valid(none,unlit));
     CHECK(sizeof(uc::RtMaterialRecord)==48);
     return 0;
 }

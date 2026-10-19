@@ -574,7 +574,7 @@ int main(int argc, char** argv) {
                 auto frame=[&](bool rt) {
                     uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_shadows=uc::EffectLevel::medium; renderer.set_effects(effects);
                     gx::FramePacket scene; scene.present=false;
-                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},false));   // the floor (vertex-colour TEV: no stage)
+                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},false));   // the floor (no TEV stage: rasterised x texture 0)
                     scene.draws.push_back(surface({{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,0,1},true));   // the box's front
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
@@ -600,7 +600,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,"rt-material: records %zu, box %u floor %u empty %u; box albedo %u %u %u\n",records.size(),box,floor,empty,targets.albedo[i],targets.albedo[i+1],targets.albedo[i+2]);
                 CHECK(box<records.size() && floor<records.size() && box!=floor && empty==~0u);
                 CHECK(records[box].material_color==material && (records[box].flags&uc::kRtModelValid) && records[box].light_mask==1);
-                CHECK(!(records[floor].flags&uc::kRtModelValid));   // no TEV stage: not the modelled form
+                CHECK(records[floor].flags&uc::kRtModelValid);   // no TEV stage: the renderer draws rasterised x texture 0, the modelled form
                 CHECK(std::abs(int(targets.albedo[i])-160)<=1 && std::abs(int(targets.albedo[i+1])-60)<=1 && std::abs(int(targets.albedo[i+2])-20)<=1);   // texture x material colour, unlit
                 CHECK(on.rgba==off.rgba);   // writing the targets leaves the picture alone
                 frame(false); frame(false);

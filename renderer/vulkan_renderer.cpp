@@ -1508,7 +1508,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     // RT material records (rt_material.h) of this packet's depth-writing scene draws, appended to the frame's at rt_record_count_.
     const bool rt_records=rt_material_active() && scene_material_;
     const uint32_t first_record=rt_record_count_;
-    std::vector<uint32_t> draw_record(scene_draws,kRtNoRecord);
+    std::vector<uint32_t> draw_record(rt_records ? scene_draws : 0,kRtNoRecord);   // empty with RT off: read only when rt_records
     std::vector<RtMaterialRecord> records;
     std::vector<const gx::DrawUniform*> record_uniforms;
     std::unordered_set<const gx::TexturePixels*> used_textures;
@@ -1882,7 +1882,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (scene) {
                 push.motion=draw_motion[d];
                 if (summary.draws[d].perspective) { push.jitter[0]=jitter_[0]; push.jitter[1]=jitter_[1]; }   // post-style quads stay unjittered
-                if (draw_record[d]!=kRtNoRecord) {
+                if (rt_records && draw_record[d]!=kRtNoRecord) {
                     push.record=draw_record[d];
                     push.effects|=kEffectRtMaterial|(records[draw_record[d]-first_record].flags&kRtModelValid ? kEffectRtModelValid : 0u);
                 }
