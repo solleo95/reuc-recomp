@@ -60,13 +60,22 @@ add_custom_command(OUTPUT ${shader_dir}/rcas.comp.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
   COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rcas.slang -entry main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/rcas.comp.spv
   DEPENDS shaders/rcas.slang VERBATIM)
+# SMAA 1x (third_party/smaa, MIT): three compute entry points of one shader.
+foreach(smaa_pass edges weights blend)
+  add_custom_command(OUTPUT ${shader_dir}/smaa.${smaa_pass}.spv
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smaa.slang -I ${CMAKE_SOURCE_DIR}/third_party/smaa -entry ${smaa_pass}Main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/smaa.${smaa_pass}.spv
+    DEPENDS shaders/smaa.slang ${CMAKE_SOURCE_DIR}/third_party/smaa/SMAA.hlsl VERBATIM)
+endforeach()
 set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv
-  ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv CACHE INTERNAL "")
+  ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv
+  ${shader_dir}/smaa.edges.spv ${shader_dir}/smaa.weights.spv ${shader_dir}/smaa.blend.spv CACHE INTERNAL "")
 add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp rcas_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp rcas_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp)
+target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
 target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons PRIVATE uc_streamline_sdk uc_fidelityfx_sdk)
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})

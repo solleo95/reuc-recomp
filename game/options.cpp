@@ -6,7 +6,7 @@
 #include <cmath>
 namespace uc {
 namespace {
-constexpr std::array<std::string_view,4> kUpscalerNames{"off","dlss","fsr","blit"};
+constexpr std::array<std::string_view,5> kUpscalerNames{"off","dlss","fsr","blit","smaa"};
 constexpr std::array<std::string_view,5> kUpscaleModeNames{"native","quality","balanced","performance","ultra_performance"};
 }
 std::optional<UpscalerKind> upscaler_from_name(std::string_view name, bool allow_test) {

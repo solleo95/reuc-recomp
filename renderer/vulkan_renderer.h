@@ -66,6 +66,8 @@ public:
     void configure_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // At a guest frame boundary. False requires a new device; sharpening and off/on of the initialized kind preserve it.
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
+    // SMAA works on the finished frame at the output size, whatever the quality setting says.
+    UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa ? UpscaleMode::native : upscale_mode_; }
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.

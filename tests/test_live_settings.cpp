@@ -69,6 +69,7 @@ int main() {
         CHECK(fsr.upscaler==uc::UpscalerKind::fsr && fsr.frame_generation && fsr.frame_generation_multiplier==2);
         CHECK(!uc::with_frame_generation(fsr,uc::FrameGenChoice::off).frame_generation);
         CHECK(!uc::with_upscaler(fsr,uc::UpscalerKind::off).frame_generation);
+        CHECK(!uc::with_upscaler(fsr,uc::UpscalerKind::smaa).frame_generation);   // SMAA has no generator
         CHECK(uc::frame_generation_choice(fsr)==uc::FrameGenChoice::fsr && uc::frame_generation_choice(uc::Options{})==uc::FrameGenChoice::off);
     }
     fs::remove(path);

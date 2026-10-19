@@ -31,6 +31,8 @@ public:
     virtual RenderExtent minimum_internal(RenderExtent output) const=0;
 };
 std::unique_ptr<Upscaler> make_blit_upscaler();   // test-only: linear blit of the scene into the output
+// SMAA 1x at ratio 1 (compute; smaa.{edges,weights,blend}.spv in `shaders`): no jitter, no motion vectors.
+std::unique_ptr<Upscaler> make_smaa_upscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders);
 class Streamline;
 // DLSS 4.5 Super Resolution through Streamline; presets K (DLAA, Quality, Balanced), M (Performance), L (Ultra Performance).
 std::unique_ptr<Upscaler> make_dlss_upscaler(const Streamline& streamline, UpscaleMode mode);

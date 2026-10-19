@@ -37,5 +37,5 @@ enum class FrameGenChoice { off, dlss, fsr };
 FrameGenChoice frame_generation_choice(const Options&);
 // Frame generation needs its own upscaler: choosing DLSS or FSR generation switches the upscaler to match (FSR: one generated frame).
 Options with_frame_generation(Options, FrameGenChoice);
-Options with_upscaler(Options, UpscalerKind);   // Off also turns frame generation off
+Options with_upscaler(Options, UpscalerKind);   // Off and SMAA also turn frame generation off
 }

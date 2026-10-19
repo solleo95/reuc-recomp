@@ -522,7 +522,7 @@ void VulkanRenderer::create_samplers() {
         sampler.anisotropyEnable=anisotropy>1 && (mode&128) && mip==2; sampler.maxAnisotropy=sampler.anisotropyEnable ? float(anisotropy) : 1.f;
         vk_check(vkCreateSampler(device,&sampler,nullptr,&texture_samplers_[mode]),"texture sampler");
         if(motion_outputs_) {   // scene draws sample as if at output resolution (DLSS/FSR guides: log2(internal/output) - 1)
-            auto biased=sampler; biased.mipLodBias=float(-std::log2(upscale_ratio(upscale_mode_))-1.0);
+            auto biased=sampler; biased.mipLodBias=upscaler_kind_==UpscalerKind::smaa ? 0.f : float(-std::log2(upscale_ratio(upscale_mode_))-1.0);   // SMAA: no upscaling, no jitter, no bias
             vk_check(vkCreateSampler(device,&biased,nullptr,&scene_samplers_[mode]),"scene texture sampler");
         }
     }
@@ -815,7 +815,7 @@ void VulkanRenderer::set_render_scale(double scale) {
 void VulkanRenderer::configure_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier) {
     if (instance_) throw std::logic_error("upscaling is configured before initialize()");
     upscaler_kind_=kind; upscale_mode_=mode; sharpening_=sharpening; sharpness_=sharpness;
-    frame_generation_=frame_generation && kind!=UpscalerKind::off; frame_generation_multiplier_=multiplier;
+    frame_generation_=frame_generation && (kind==UpscalerKind::dlss || kind==UpscalerKind::fsr); frame_generation_multiplier_=multiplier;
 }
 bool VulkanRenderer::set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier) {
     owner();
@@ -842,6 +842,7 @@ bool VulkanRenderer::set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sha
     if (multiplier!=frame_generation_multiplier_) { dlss_g_.reset(); fg_waited_value_=0; }
     upscaler_kind_=kind; upscale_mode_=mode; frame_generation_=frame_generation; frame_generation_multiplier_=multiplier;
     scene_phase_=false; reset_next_=true; scene_restore_copy_.reset();
+    if (reconstruction_changed && layout_) { destroy_samplers(); create_samplers(); }   // the scene samplers' mip bias follows the reconstruction (the device is idle here)
     if (reconstruction_changed || backend_changed) { resized_=true; rebuild(); }
     else configure_generation();
     return true;
@@ -972,11 +973,12 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
-    pass_timer_.begin(command,timer_slot,GpuPass::upscale);
+    const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
+    pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
     if (fsr_generation_enabled()) fsr_g_->prepare(in,frame_index_);
     if (sharpening_ && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));
-    pass_timer_.end(command,timer_slot,GpuPass::upscale);
+    pass_timer_.end(command,timer_slot,timed_pass);
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -1151,6 +1153,7 @@ void VulkanRenderer::rebuild() {
     if (!depth_) make_attachment(depth_,depth_memory_,depth_view_,efb_extent_,true);
     if (motion_outputs_ && upscaler_kind_!=UpscalerKind::off && !upscaler_) {
         if (upscaler_kind_==UpscalerKind::blit) upscaler_=make_blit_upscaler();
+        else if (upscaler_kind_==UpscalerKind::smaa) upscaler_=make_smaa_upscaler(device,memory_,shaders_);
         else if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) upscaler_=make_dlss_upscaler(*streamline_,upscale_mode_);
         else if (upscaler_kind_==UpscalerKind::fsr) {
             try { upscaler_=make_fsr_upscaler(device,physical_,shaders_.parent_path().parent_path()); }
@@ -1159,7 +1162,7 @@ void VulkanRenderer::rebuild() {
         else std::fprintf(stderr, "Upscaling: %s is not available in this build\n", upscaler_kind_==UpscalerKind::dlss ? "DLSS" : "FSR");
     }
     if (upscaler_) {
-        const auto internal=internal_extent({efb_extent_.width,efb_extent_.height},upscale_mode_,upscaler_->minimum_internal({efb_extent_.width,efb_extent_.height}));
+        const auto internal=internal_extent({efb_extent_.width,efb_extent_.height},effective_upscale_mode(),upscaler_->minimum_internal({efb_extent_.width,efb_extent_.height}));
         if (scene_extent_.width!=internal.width || scene_extent_.height!=internal.height) {
             destroy_scene_targets();
             scene_extent_={internal.width,internal.height};
@@ -1168,7 +1171,7 @@ void VulkanRenderer::rebuild() {
             make_attachment(scene_motion_,scene_motion_memory_,scene_motion_view_,scene_extent_,false,kMotionFormat);
             reset_next_=true;
             std::fprintf(stderr,"Upscaling: scene %ux%u -> %ux%u EFB (%s)\n",scene_extent_.width,scene_extent_.height,efb_extent_.width,efb_extent_.height,
-                upscaler_kind_==UpscalerKind::dlss ? "DLSS" : upscaler_kind_==UpscalerKind::fsr ? "FSR" : "blit");
+                upscaler_kind_==UpscalerKind::dlss ? "DLSS" : upscaler_kind_==UpscalerKind::fsr ? "FSR" : upscaler_kind_==UpscalerKind::smaa ? "SMAA" : "blit");
         }
     }
     configure_generation();
@@ -1264,7 +1267,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (dlss_g_) dlss_g_->set_active(dlss_generation_enabled() && scene && !packet.black_output,reset_next_);
             if (scene_phase_) {
                 tracker_.begin_frame();
-                jitter_=jitter_offset(upscale_frame_,jitter_phase_count(scene_extent_.width,efb_extent_.width));
+                jitter_=uses_jitter(upscaler_kind_) ? jitter_offset(upscale_frame_,jitter_phase_count(scene_extent_.width,efb_extent_.width)) : std::array<float,2>{};
             }
         }
         summary=gx::summarize(packet);

@@ -390,14 +390,14 @@ int run(int argc,wchar_t** argv) {
             ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_None);ImGui::PushItemWidth(-1);
             ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
             const bool checking=features_query.valid();
-            const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : tr("off");};
+            const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : kind==uc::UpscalerKind::smaa ? "SMAA" : tr("off");};
             const bool upscaler_open=combo("##upscaling",kind_label(options.upscaler));track("upscaling");
             if(upscaler_open) {
-                for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
-                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::dlss ? features.dlss : features.fsr);
-                    const auto& reason=kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
+                for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::smaa,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
+                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::smaa ? features.effects : kind==uc::UpscalerKind::dlss ? features.dlss : features.fsr);
+                    const auto& reason=kind==uc::UpscalerKind::smaa ? features.effects_reason : kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
                     ImGui::BeginDisabled(!supported && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left, not re-picked
-                    if(ImGui::Selectable(kind_label(kind),options.upscaler==kind))options.upscaler=kind;
+                    if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {options.upscaler=kind;if(kind==uc::UpscalerKind::smaa)options.frame_generation=false;}   // SMAA has no generator
                     track(std::string("upscaler-")+std::string(uc::upscaler_name(kind)));
                     ImGui::EndDisabled();
                     if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
@@ -405,6 +405,7 @@ int run(int argc,wchar_t** argv) {
                 ImGui::EndCombo();
             }
             const bool upscaling=options.upscaler!=uc::UpscalerKind::off;
+            const bool scaled=options.upscaler==uc::UpscalerKind::dlss || options.upscaler==uc::UpscalerKind::fsr;   // SMAA renders at the output size: no quality choice
             ImGui::PopFont();ImGui::Dummy({0,10*unit});
             ImGui::TextUnformatted(tr("quality"));push_font(ui.sans,22);
             const auto mode_label=[&](uc::UpscaleMode mode) -> std::string {
@@ -417,8 +418,8 @@ int run(int argc,wchar_t** argv) {
                 }
                 return {};
             };
-            ImGui::BeginDisabled(!upscaling);
-            const auto current_mode=upscaling ? mode_label(options.upscale_mode) : std::string("—");
+            ImGui::BeginDisabled(!scaled);
+            const auto current_mode=scaled ? mode_label(options.upscale_mode) : std::string("—");
             const bool mode_open=combo("##quality",current_mode.c_str());track("upscale-mode");
             if(mode_open) {
                 for(const auto mode:{uc::UpscaleMode::native,uc::UpscaleMode::quality,uc::UpscaleMode::balanced,uc::UpscaleMode::performance,uc::UpscaleMode::ultra_performance}) {

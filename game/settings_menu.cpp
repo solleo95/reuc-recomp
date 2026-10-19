@@ -105,15 +105,16 @@ void SettingsMenu::main_tab(float unit) {
         if(kind==UpscalerKind::off) return true;
         if(failed_.contains(kind) || (generation && failed_generation_.contains(kind))) { why=tr("launcher_only"); return false; }
         if(!features) { why=tr("checking"); return false; }
+        if(kind==UpscalerKind::smaa) { if(!features->effects) why=tr("effects_unavailable"); return features->effects; }   // SMAA runs on the effects path and has no generator
         const bool ok=kind==UpscalerKind::dlss ? (generation ? features->dlss_g : features->dlss) : (generation ? features->fsr_fg : features->fsr);
         const auto& reason=kind==UpscalerKind::dlss ? (generation ? features->dlss_g_reason : features->dlss_reason) : (generation ? features->fsr_fg_reason : features->fsr_reason);
         if(!ok) why=reason.empty() ? tr("unsupported") : reason;
         return ok;
     };
-    const auto kind_label=[&](UpscalerKind kind) { return kind==UpscalerKind::dlss ? "DLSS" : kind==UpscalerKind::fsr ? "FSR" : tr("off"); };
+    const auto kind_label=[&](UpscalerKind kind) { return kind==UpscalerKind::dlss ? "DLSS" : kind==UpscalerKind::fsr ? "FSR" : kind==UpscalerKind::smaa ? "SMAA" : tr("off"); };
     ImGui::TextUnformatted(tr("upscaling"));
     if(ImGui::BeginCombo("##upscaling",kind_label(options.upscaler))) {
-        for(const auto kind:{UpscalerKind::off,UpscalerKind::dlss,UpscalerKind::fsr}) {
+        for(const auto kind:{UpscalerKind::off,UpscalerKind::smaa,UpscalerKind::dlss,UpscalerKind::fsr}) {
             std::string why; const bool ok=supported(kind,false,why);
             ImGui::BeginDisabled(!ok && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left
             if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {
@@ -129,6 +130,7 @@ void SettingsMenu::main_tab(float unit) {
     ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("quality"));
     const bool upscaling=options.upscaler!=UpscalerKind::off;
+    const bool scaled=options.upscaler==UpscalerKind::dlss || options.upscaler==UpscalerKind::fsr;   // SMAA renders at the output size: no quality choice
     const auto mode_label=[&](UpscaleMode mode) -> std::string {
         switch(mode) {
         case UpscaleMode::native: return options.upscaler==UpscalerKind::fsr ? "Native AA" : "DLAA";
@@ -139,8 +141,8 @@ void SettingsMenu::main_tab(float unit) {
         }
         return {};
     };
-    ImGui::BeginDisabled(!upscaling);
-    if(ImGui::BeginCombo("##quality",upscaling ? mode_label(options.upscale_mode).c_str() : "—")) {
+    ImGui::BeginDisabled(!scaled);
+    if(ImGui::BeginCombo("##quality",scaled ? mode_label(options.upscale_mode).c_str() : "—")) {
         for(const auto mode:kModes) if(ImGui::Selectable(mode_label(mode).c_str(),options.upscale_mode==mode)) options.upscale_mode=mode;
         ImGui::EndCombo();
     }

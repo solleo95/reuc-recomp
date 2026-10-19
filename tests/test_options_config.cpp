@@ -50,6 +50,7 @@ int main() {
     options.prompt_style=uc::PromptStyle(99);
     bool invalid_style=false;try{uc::store_options(document,options);}catch(const std::invalid_argument&){invalid_style=true;}
     CHECK(invalid_style && uc::serialize_config(document)==before);
+    CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"upscaler":"smaa"}})")).upscaler==uc::UpscalerKind::smaa);
     {   // graphics.anisotropy
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"anisotropy":4}})")).effects.anisotropy==4);
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.anisotropy==16);

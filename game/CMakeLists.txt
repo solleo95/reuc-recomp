@@ -74,6 +74,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION .)
   install(FILES ${UC_SHADER_FILES} DESTINATION data/shaders)
   install(FILES ${UC_UPSCALER_RUNTIME} DESTINATION .)
+  install(FILES ${CMAKE_SOURCE_DIR}/third_party/smaa/LICENSE.txt DESTINATION licenses/SMAA)
   install(FILES ${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md DESTINATION .)   # credits and trademark line; the licence texts go to licenses/ (renderer, cmake/upscaler_sdks.cmake)
   install(FILES ${CMAKE_SOURCE_DIR}/project/identified_sdk.txt ${CMAKE_SOURCE_DIR}/project/symbols.txt ${CMAKE_SOURCE_DIR}/project/gx_symbols.txt ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed DESTINATION data)
 else()

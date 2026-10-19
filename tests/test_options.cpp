@@ -103,6 +103,8 @@ int main() {
         CHECK(o.sharpening && o.sharpness==0.35 && o.frame_generation && o.frame_generation_multiplier==3);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscaler","blit"})).upscaler==uc::UpscalerKind::blit);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscaler","fsr"})).upscaler==uc::UpscalerKind::fsr);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscaler","smaa"})).upscaler==uc::UpscalerKind::smaa);
+        CHECK(uc::upscaler_name(uc::UpscalerKind::smaa)=="smaa" && !uc::uses_jitter(uc::UpscalerKind::smaa) && uc::uses_jitter(uc::UpscalerKind::dlss) && uc::uses_jitter(uc::UpscalerKind::fsr));
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--upscale-mode","native"})).upscale_mode==uc::UpscaleMode::native);
         CHECK(!d.features && std::get<uc::Options>(parse(std::array<std::string_view,1>{"--features"})).features);   // launcher's support query
         auto off=std::get<uc::Options>(parse(std::array<std::string_view,5>{"--sharpness","1","--no-sharpening","--frame-generation","0"}));

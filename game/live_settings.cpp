@@ -46,7 +46,7 @@ Options with_frame_generation(Options options,FrameGenChoice choice) {
     return options;
 }
 Options with_upscaler(Options options,UpscalerKind kind) {
-    if(kind==UpscalerKind::off) options.frame_generation=false;
+    if(kind==UpscalerKind::off || kind==UpscalerKind::smaa) options.frame_generation=false;   // SMAA has no generator
     else if(options.frame_generation && kind!=options.upscaler) options.frame_generation_multiplier=2;   // the generator follows its upscaler
     options.upscaler=kind;
     return options;

@@ -125,6 +125,39 @@ int main(int argc, char** argv) {
             CHECK(largest<=2);
             CHECK(renderer.effective_anisotropy()==1);   // the last frame asked for 1
         }
+        if (wanted("smaa")) {
+            // SMAA 1x as the anti-aliasing choice: scene at the EFB size, no jitter, diagonal edges gain intermediate values, flat areas stay exact.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::smaa,uc::UpscaleMode::quality,false,0.5,false,2));
+            auto frame=[&]() {   // scene packet, the game's scene copy (the boundary), HUD + present
+                gx::FramePacket scene; scene.present=false;
+                auto triangle=quad(0x1234,-1,-1,1,1,{255,255,255,255},true);   // half of the screen, white on the dark clear colour (a luma step above SMAA's 0.1 threshold): a long diagonal edge
+                triangle.vertices.resize(3); triangle.vertices[0].position={-1,-1,-1}; triangle.vertices[1].position={1,-1,-1}; triangle.vertices[2].position={-1,1,-1};
+                triangle.indices={0,1,2};
+                scene.draws.push_back(std::move(triangle));
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.3f,-0.5f,0.6f,0.5f,{0,255,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            frame();   // the first frame decides scene mode for the next one
+            const auto first=frame(), second=frame();
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) uc::save_png(first,std::filesystem::path(dump)/"smaa.png");   // debugging aid
+            CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{1280,960}));   // ratio 1: the scene renders at the EFB size
+            const auto channel=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4]); };
+            size_t blended=0;
+            for(uint32_t y=60;y<340;++y) for(uint32_t x=60;x<1220;++x) { const int red=channel(first,x,y); blended+=red>24 && red<248; }   // between the clear colour (16) and the triangle (255)
+            std::fprintf(stderr,"smaa: %zu pixels with intermediate values\n",blended);
+            CHECK(blended>=200);
+            CHECK(channel(first,100,100)==255 && channel(first,1200,500)==16);   // far from the edge: exact triangle (upper left) and clear colour (lower right)
+            CHECK(first.rgba==second.rgba);   // no jitter: repeated frames are identical
+            CHECK(renderer.pass_ms(uc::GpuPass::smaa)>0);
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);

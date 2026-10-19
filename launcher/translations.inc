@@ -1,6 +1,6 @@
 // Columns: en, ru, de, fr, es, it, pt-BR, pl, uk, tr, ja, ko, zh-Hans.
 {"graphics_title",{"Graphics settings","Настройки графики","Grafikeinstellungen","Paramètres graphiques","Ajustes gráficos","Impostazioni grafiche","Configurações gráficas","Ustawienia grafiki","Налаштування графіки","Grafik ayarları","グラフィック設定","그래픽 설정","图形设置"}},
-{"upscaling",{"Upscaling","Масштабирование","Hochskalierung","Mise à l’échelle","Reescalado","Upscaling","Ampliação","Skalowanie","Масштабування","Yükseltme","アップスケーリング","업스케일링","超分辨率"}},
+{"upscaling",{"Anti-aliasing / upscaling","Сглаживание / масштабирование","Kantenglättung / Hochskalierung","Anticrénelage / mise à l’échelle","Suavizado / reescalado","Antialiasing / upscaling","Suavização / ampliação","Antyaliasing / skalowanie","Згладжування / масштабування","Kenar yumuşatma / yükseltme","アンチエイリアス / アップスケーリング","안티앨리어싱 / 업스케일링","抗锯齿 / 超分辨率"}},
 {"quality",{"Quality","Качество","Qualität","Qualité","Calidad","Qualità","Qualidade","Jakość","Якість","Kalite","品質","품질","画质"}},
 {"framegen",{"Frame generation","Генерация кадров","Frame-Generierung","Génération d’images","Generación de fotogramas","Generazione fotogrammi","Geração de quadros","Generowanie klatek","Генерація кадрів","Kare oluşturma","フレーム生成","프레임 생성","帧生成"}},
 {"off",{"Off","Выкл.","Aus","Désactivé","Desactivado","Disattivato","Desativado","Wyłączone","Вимкнено","Kapalı","オフ","끄기","关闭"}},
