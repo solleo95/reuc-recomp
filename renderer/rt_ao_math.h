@@ -6,14 +6,14 @@
 namespace uc {
 // Ray-traced ambient occlusion (docs/superpowers/plans/2026-10-20-ray-tracing-p4-ao.md): cosine-weighted hemisphere rays of a limited length, the share of them
 // that hit something lowers the scene colour. divisor: the signal is traced at 1/divisor of the internal resolution per axis (0 = the effect is off); radius: the
-// rays' length in view units (GTAO's is 0.5); strength: how much of the colour a fully blocked hemisphere removes.
+// rays' length in view units (the game's scale: a seat is about 4 units tall, the car 140 long; GTAO's 0.5 shows almost nothing, see S11); strength: how much of the colour a fully blocked hemisphere removes.
 struct RtAoPreset { uint32_t divisor; uint32_t rays; float radius; float strength; };
 inline RtAoPreset rt_ao_preset(EffectLevel level) {
     switch (level) {
-        case EffectLevel::low: return {2,1,0.35f,0.7f};
-        case EffectLevel::medium: return {2,1,0.5f,0.75f};
-        case EffectLevel::high: return {1,2,0.5f,0.8f};
-        case EffectLevel::ultra: return {1,4,0.8f,0.8f};
+        case EffectLevel::low: return {4,1,1.5f,0.7f};
+        case EffectLevel::medium: return {2,1,2.5f,0.75f};
+        case EffectLevel::high: return {2,2,3.5f,0.8f};
+        case EffectLevel::ultra: return {1,2,5.0f,0.8f};
         default: return {0,0,0.f,0.f};
     }
 }

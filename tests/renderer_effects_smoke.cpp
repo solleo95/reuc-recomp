@@ -916,7 +916,8 @@ int main(int argc, char** argv) {
                         int hit=0, total=0;
                         for(int i=0;i<128;++i) for(int j=0;j<128;++j) {
                             const auto v=uc::rt_ao_direction({0,1,0},(float(i)+0.5f)/128.f,(float(j)+0.5f)/128.f);
-                            if(v[2]<-1e-6f && d/-double(v[2])<=preset.radius) ++hit;
+                            const double t=v[2]<-1e-6f ? d/-double(v[2]) : 1e9;
+                            if(t<=preset.radius && -1.0+t*double(v[1])<=3.0) ++hit;   // within the radius and under the wall's top edge (y = 3)
                             ++total;
                         }
                         return double(hit)/total;

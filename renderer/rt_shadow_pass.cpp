@@ -134,8 +134,7 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
     params.divisor=divisor_; params.frame=in.frame; params.sun_rays=sun.divisor ? sun.rays : 0; params.local_lights=local.divisor ? local.lights : 0;
     params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f;
-    params.ao_radius=ao.radius; params.ao_strength=ao.strength; params.ao_rays=float(ao.rays);
-    params.trace_lamps=in.trace_lamps ? 1.f : 0.f;
+    params.ao_radius=ao.radius; params.ao_strength=ao.strength; params.ao_rays=float(ao.rays);    params.trace_lamps=in.trace_lamps ? 1.f : 0.f;
     if (in.level_light) {   // the level's shadows come from the synthetic key light
         for (size_t axis=0;axis<3;++axis) params.overhead[axis]=in.key_direction[axis];
         params.overhead[3]=kRtOverheadStrength; params.overhead_cone=local.soft ? kRtOverheadConeRadians : 0.f; params.overhead_reach=kRtOverheadReach;    }
