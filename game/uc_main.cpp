@@ -204,7 +204,7 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--anisotropy 1|2|4|8|16] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
     const auto input_config=uc::load_config(config_path);
@@ -213,7 +213,7 @@ static int real_main(int argc, char** argv) {
     options=std::get<uc::Options>(std::move(parsed));
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
         const auto support=uc::probe_upscalers(exe_dir());
-        uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason};
+        uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason,support.effects,support.effects_reason,support.anisotropy_max};
         std::printf("%s\n",uc::to_json(report).c_str());
         return 0;
     }
@@ -626,10 +626,11 @@ static int real_main(int argc, char** argv) {
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
         };
         targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
+        targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
         live_settings.emplace(config_path,input_config,std::move(targets));
-        if (controlled) features=uc::FeatureReport{true,true,true,true,4};   // test runs exercise every choice whatever this PC has
+        if (controlled) features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16};   // test runs exercise every choice whatever this PC has
         else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
             features_promise=std::make_shared<std::promise<std::string>>(); features_query=features_promise->get_future().share();
             std::thread([promise=features_promise,exe=exe_path(),config=config_path] { promise->set_value(uc::query_features(exe,config)); }).detach();

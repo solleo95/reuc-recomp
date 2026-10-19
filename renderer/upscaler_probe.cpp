@@ -89,6 +89,36 @@ bool probe_fsr_fg(std::string& reason) {
     vkDestroyInstance(instance, nullptr);
     return ok;
 }
+// What the renderer asks of the device for the effects (the same pick as the game: NVIDIA/discrete first).
+void probe_effects(UpscalerSupport& support) {
+    VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion=VK_API_VERSION_1_3;
+    VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo=&application;
+    VkInstance instance=VK_NULL_HANDLE;
+    if (vkCreateInstance(&instance_info, nullptr, &instance)!=VK_SUCCESS) { support.effects_reason="no Vulkan 1.3 instance"; return; }
+    uint32_t count=0; vkEnumeratePhysicalDevices(instance, &count, nullptr);
+    std::vector<VkPhysicalDevice> devices(count); vkEnumeratePhysicalDevices(instance, &count, devices.data());
+    VkPhysicalDevice chosen=VK_NULL_HANDLE; int score=-1;
+    for (auto device:devices) {
+        VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(device, &properties);
+        const int value=(properties.vendorID==0x10DE)*2+(properties.deviceType==VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+        if (value>score) { score=value; chosen=device; }
+    }
+    if (!chosen) support.effects_reason="no Vulkan GPU";
+    else {
+        VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT unused{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext=&unused;
+        vkGetPhysicalDeviceFeatures2(chosen, &features);
+        VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(chosen, &properties);
+        if (!unused.dynamicRenderingUnusedAttachments) support.effects_reason="the GPU lacks VK_EXT_dynamic_rendering_unused_attachments";
+        else if (!features.features.independentBlend) support.effects_reason="the GPU lacks independent blending";
+        else support.effects=true;
+        if (features.features.samplerAnisotropy) {
+            uint32_t level=1; while (level<16 && float(level*2)<=properties.limits.maxSamplerAnisotropy) level*=2;
+            support.anisotropy_max=level;
+        }
+    }
+    vkDestroyInstance(instance, nullptr);
+}
 void probe_fsr(const std::filesystem::path& directory, UpscalerSupport& support) {
     const auto path=directory / "amd_fidelityfx_vk.dll";
     HMODULE module=LoadLibraryW(path.c_str());
@@ -104,6 +134,7 @@ UpscalerSupport probe_upscalers(const std::filesystem::path& directory) {
     UpscalerSupport support;
     probe_dlss(directory, support);
     probe_fsr(directory, support);
+    probe_effects(support);
     return support;
 }
 }

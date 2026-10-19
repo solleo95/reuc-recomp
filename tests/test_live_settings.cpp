@@ -18,6 +18,7 @@ int main() {
     targets.upscaling=[&](const uc::Options&){ calls.push_back("upscaling"); };
     targets.fps_limit=[&](std::optional<uint32_t>){ calls.push_back("fps_limit"); };
     targets.bloom=[&](bool){ calls.push_back("bloom"); };
+    targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
@@ -35,6 +36,10 @@ int main() {
     {   // the quality mode goes through the upscaling target once
         calls.clear(); auto next=live.options(); next.upscale_mode=uc::UpscaleMode::performance; live.apply(next);
         CHECK((calls==std::vector<std::string>{"upscaling"}) && saved().upscale_mode==uc::UpscaleMode::performance);
+    }
+    {   // an effects change reaches the effects target once and is saved
+        calls.clear(); auto next=live.options(); next.effects.anisotropy=4; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.anisotropy==4);
     }
     {   // frame rate limit, unlimited included
         calls.clear(); auto next=live.options(); next.fps_limit=144u; live.apply(next);

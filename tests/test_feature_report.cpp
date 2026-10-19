@@ -10,6 +10,13 @@ int main() {
     const auto reasons=uc::feature_report_from_json(uc::to_json(none));
     CHECK(reasons.fsr_fg_reason=="fewer than 3 queues");
     CHECK(!reasons.dlss && reasons.dlss_reason=="no NVIDIA RTX GPU" && reasons.dlss_g_reason=="requires RTX 40 or newer" && reasons.fsr_reason=="amd_fidelityfx_vk.dll missing");
+    {   // screen-space effects and anisotropy support
+        uc::FeatureReport effects; effects.effects=true; effects.effects_reason="x"; effects.anisotropy_max=8;
+        const auto round=uc::feature_report_from_json(uc::to_json(effects));
+        CHECK(round.effects && round.effects_reason=="x" && round.anisotropy_max==8);
+        const auto old=uc::feature_report_from_json(R"({"dlss":true})");   // a report from an older uc.exe
+        CHECK(!old.effects && old.anisotropy_max==1);
+    }
     const auto partial=uc::feature_report_from_json(R"({"dlss":true})");   // missing fields: unavailable
     CHECK(partial.dlss && !partial.dlss_g && !partial.fsr && partial.dlss_g_max_multiplier==0);
     for(auto text:{"","not json","[]",R"({"dlss":"yes"})",R"({"dlss_g_max_multiplier":-1})"}) {

@@ -110,4 +110,11 @@ int main() {
         for(auto bad:{std::array<std::string_view,2>{"--sharpness","0"},{"--sharpness","1.01"},{"--sharpness","nan"},{"--frame-generation","1"},{"--frame-generation","7"},
                       {"--upscale-mode","dlaa"},{"--upscaler","xess"}}) CHECK(std::holds_alternative<std::string>(parse(bad)));
     }
+    {   // graphics effects: anisotropic filtering
+        CHECK(std::get<uc::Options>(defaults).effects.anisotropy==16);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--anisotropy","8"})).effects.anisotropy==8);
+        const auto bad=parse(std::array<std::string_view,2>{"--anisotropy","3"});
+        CHECK(std::holds_alternative<std::string>(bad) && std::get<std::string>(bad)=="invalid value for --anisotropy");
+        CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));
+    }
 }

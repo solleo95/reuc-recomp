@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics_effects.h"
 #include "input_prompts.h"
 #include "upscale_mode.h"
 #include <filesystem>
@@ -22,6 +23,7 @@ struct Options {
     double sharpness=0.5;    // 0.01..1
     bool frame_generation=false;   // DLSS-G with DLSS, FSR FG with FSR; forced off in deterministic runs
     uint32_t frame_generation_multiplier=2;   // presented frames per rendered frame, 2..6
+    GraphicsEffects effects;   // graphics.anisotropy and the later effect options
     bool features=false;   // --features: print what DLSS/FSR/frame generation this machine supports (JSON, for the launcher) and exit
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;

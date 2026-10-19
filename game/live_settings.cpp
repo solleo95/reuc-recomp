@@ -10,8 +10,10 @@ void LiveSettings::apply(const Options& next) {
     const bool upscaling=next.upscaler!=was.upscaler || next.upscale_mode!=was.upscale_mode || next.sharpening!=was.sharpening || next.sharpness!=was.sharpness
         || next.frame_generation!=was.frame_generation || next.frame_generation_multiplier!=was.frame_generation_multiplier;
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom!=was.bloom, style=next.prompt_style!=was.prompt_style;
-    if(!scale && !upscaling && !limit && !bloom && !style) return;
+    const bool effects=next.effects!=was.effects;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects) return;
     options_=next;
+    if(effects) targets_.effects(next.effects);
     if(scale) targets_.render_scale(next.render_scale);
     if(upscaling) targets_.upscaling(next);
     if(limit) targets_.fps_limit(next.fps_limit);

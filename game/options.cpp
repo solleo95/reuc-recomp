@@ -51,6 +51,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
         else if (arg == "--no-sharpening") options.sharpening = false;
         else if (arg == "--features") options.features = true;
+        else if (arg == "--anisotropy") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";
+            uint32_t level = 0; const auto value = arguments[i];
+            auto parsed = std::from_chars(value.data(), value.data() + value.size(), level);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || !valid_anisotropy(level)) return "invalid value for --anisotropy";
+            options.effects.anisotropy = level;
+        }
         else if (arg == "--upscaler" || arg == "--upscale-mode" || arg == "--sharpness" || arg == "--frame-generation") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             const auto value = arguments[i];
