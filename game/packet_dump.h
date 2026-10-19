@@ -3,7 +3,10 @@
 #include "scene_boundary.h"
 #include "scene_lights.h"
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
+#include <memory>
 #include <fstream>
 #include <vector>
 #include <cstdlib>
@@ -76,6 +79,7 @@ public:
     void enable_stats() {
         if(const char* path=std::getenv("UC_PACKET_STATS")) stats_path_=path;
         if(const char* path=std::getenv("UC_LIGHT_STATS")) lights_path_=path;
+        if(const char* path=std::getenv("UC_MESH_STATS")) mesh_path_=path;
     }
     // UC_LIGHT_STATS=<file>: per callsite of the perspective (scene) draws, written at exit as CSV sorted by vertices: draws, vertices, draws with channel 0 / 1 lit,
     // lights used per kind (directional, point, spot, specular; counted per draw), vertices with a normal, blend, alpha-test draws, depth-writing draws, textured draws.
@@ -98,6 +102,33 @@ public:
             row.alpha_test+=((uniforms.pixel[0]>>16)&7)!=7 || ((uniforms.pixel[0]>>19)&7)!=7;   // an alpha compare other than "always"
             row.depth_write+=(uniforms.pixel[1]&16)!=0;
             row.textured+=draw.texture!=nullptr;
+        }
+    }
+    // UC_MESH_STATS=<file>: tessellation survey (docs/spikes/S7-tessellation-survey.md). Per distinct mesh of the scene draws: triangles, positions shared by
+    // vertices, and of those the ones whose vertex normals differ by more than 15 degrees (an edge there would crack when tessellated with per-vertex normals).
+    // Written at exit: totals of drawn triangles per class (mesh path with matching normals, mesh path with diverging normals, inline vertices).
+    struct MeshInfo { std::shared_ptr<const gx::MeshBuffers> keep; uint64_t triangles=0,shared=0,diverging=0,draws=0; };
+    void mesh_stats(const gx::FramePacket& packet) {
+        for(const auto& draw:packet.draws) {
+            if(!gx::summarize(draw).perspective) continue;
+            if(!draw.mesh) { inline_triangles_+=draw.index_view().empty() ? draw.vertex_view().size()/3 : draw.index_view().size()/3; continue; }
+            auto& info=meshes_[draw.mesh.get()];
+            if(!info.keep) {
+                info.keep=draw.mesh; info.triangles=draw.mesh->indices.size()/3;
+                std::map<std::array<int,3>,std::vector<std::array<float,3>>> positions;
+                for(const auto& v:draw.mesh->vertices) {
+                    const std::array<int,3> key{int(std::lround(v.position[0]*1000)),int(std::lround(v.position[1]*1000)),int(std::lround(v.position[2]*1000))};
+                    const float length=std::sqrt(v.normal[0]*v.normal[0]+v.normal[1]*v.normal[1]+v.normal[2]*v.normal[2]);
+                    positions[key].push_back(length>0 ? std::array<float,3>{v.normal[0]/length,v.normal[1]/length,v.normal[2]/length} : std::array<float,3>{0,0,0});
+                }
+                for(const auto& [key,normals]:positions) {
+                    if(normals.size()<2) continue;
+                    ++info.shared;
+                    for(const auto& n:normals) if(n[0]*normals[0][0]+n[1]*normals[0][1]+n[2]*normals[0][2]<0.9659f) {++info.diverging;break;}   // cos 15 degrees
+                }
+            }
+            ++info.draws;
+            (info.diverging*20>info.shared ? drawn_diverging_ : drawn_matching_)+=info.triangles;   // diverging: more than 5% of the shared positions
         }
     }
     // UC_SCENE_DUMP=<file>|<every>|<frames>: every `every`-th presented frame (up to `frames` of them) is written as scene summaries
@@ -140,6 +171,15 @@ public:
                     (unsigned long long)r.alpha_test,(unsigned long long)r.depth_write,(unsigned long long)r.textured);
             std::fclose(out);
         }
+        if(!mesh_path_.empty()) if(std::FILE* out=std::fopen(mesh_path_.c_str(),"w")) {
+            uint64_t shared=0,diverging=0,bad_meshes=0;
+            for(const auto& [pointer,m]:meshes_) {shared+=m.shared;diverging+=m.diverging;bad_meshes+=m.diverging*20>m.shared;}
+            const double total=double(drawn_matching_+drawn_diverging_+inline_triangles_);
+            std::fprintf(out,"distinct meshes %zu (diverging %llu), shared positions %llu, diverging positions %llu\n",meshes_.size(),(unsigned long long)bad_meshes,(unsigned long long)shared,(unsigned long long)diverging);
+            std::fprintf(out,"drawn triangles: matching-normal meshes %llu, diverging meshes %llu, inline vertices %llu; matching share %.1f%%\n",(unsigned long long)drawn_matching_,(unsigned long long)drawn_diverging_,
+                (unsigned long long)inline_triangles_,total>0 ? 100.0*double(drawn_matching_)/total : 0.0);
+            std::fclose(out);
+        }
         if(!stats_path_.empty()) if(std::FILE* out=std::fopen(stats_path_.c_str(),"w")) {
             for(const auto& [key,count]:stats_) {
                 const auto& [site,blend,stages,texture,copy]=key;
@@ -154,6 +194,7 @@ public:
         motion(packet);
         scene(packet);
         if(!lights_path_.empty()) light_stats(packet);
+        if(!mesh_path_.empty()) mesh_stats(packet);
         if(!stats_path_.empty()) {
             std::string copy="-";
             if(packet.texture_copy) copy=std::to_string(packet.texture_copy->target->levels[0].width)+"x"+std::to_string(packet.texture_copy->target->levels[0].height);
@@ -192,6 +233,9 @@ private:
     unsigned long skip_=0,count_=3;
     std::string go_file_,stats_path_,motion_go_,lights_path_;
     std::map<uint32_t,LightRow> lights_;
+    std::string mesh_path_;
+    std::map<const void*,MeshInfo> meshes_;
+    uint64_t drawn_matching_=0,drawn_diverging_=0,inline_triangles_=0;
     std::FILE* motion_file_=nullptr;
     unsigned long motion_frames_=300;
     unsigned long long motion_frame_=0;
