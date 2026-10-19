@@ -89,6 +89,8 @@ int main(int argc, char** argv) {
         CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{640,480}));   // performance: half of the 1280x960 EFB
         const auto pixels=renderer.capture(shown);
         CHECK(pixels.width==1280 && pixels.height==720);
+        CHECK(renderer.pass_ms(uc::GpuPass::upscale)>0);   // the blit upscaler's pass was timed; passes that never ran read 0
+        CHECK(renderer.pass_ms(uc::GpuPass::smaa)==0 && renderer.pass_ms(uc::GpuPass::occlusion)==0);
         auto at=[&](uint32_t x,uint32_t y) { return &pixels.rgba[(size_t(y)*pixels.width+x)*4]; };
         size_t blended_scene=0, blended_hud=0;
         for(uint32_t x=690;x<716;++x) { const auto red=at(x,360)[0]; blended_scene+=red>16 && red<255; }   // scene edge at x 704

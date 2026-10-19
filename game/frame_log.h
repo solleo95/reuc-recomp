@@ -17,6 +17,7 @@ struct FrameRow {
     double acquire_ms = 0, submit_ms = 0, present_ms = 0;   // inside render(): vkAcquireNextImage, vkQueueSubmit, vkQueuePresent
     double events_ms = 0, cpu_mcycles = 0;   // SDL event handling since the previous present; CPU cycles the main thread ran since then (QueryThreadCycleTime)
     double idle_ms = 0, thread_ms[8] = {};   // the scheduler waiting with every guest thread blocked; baton time of guest threads 1..8 since the previous present
+    double gpu_upscale_ms = 0, gpu_smaa_ms = 0, gpu_occlusion_ms = 0;   // latest GPU time of each effect pass (renderer pass timestamps), 0 while the pass does not run
     double gpu_ms = 0;   // longest GPU execution of one submission retired since the previous present (timestamp queries)
     double sealed_to_done_ms = 0, taken_to_done_ms = 0;   // worst presenting packet completed since the previous present: sealed by the guest -> GPU done, and taken by the renderer -> GPU done
     uint32_t events = 0, queued = 0, outstanding = 0;

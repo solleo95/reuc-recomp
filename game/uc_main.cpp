@@ -523,7 +523,8 @@ static int real_main(int argc, char** argv) {
                       for(int t=0;t<8;++t) { const uint64_t run=sched.thread_run_ns(t+1); row.thread_ms[t]=(run-frame_thread_last[t])/1e6; frame_thread_last[t]=run; } }
                     row.retraces=uc::vi_stats().retraces; row.textures=renderer.texture_creations(); row.decodes=uc::gx_stats().texture_decodes; row.dvd_reads=uc::dvd_stats().reads;
                     row.audio_blocks=uc::audio_stats().frames; row.seal_wait_ns=gx::seal_wait_ns(); row.switches=sched.switch_stats().switches; row.queued=uint32_t(depth.queued); row.outstanding=uint32_t(depth.outstanding);
-                    { const auto window=gx::take_latency_window(); row.sealed_to_done_ms=window.sealed_to_done_ms; row.taken_to_done_ms=window.taken_to_done_ms; row.gpu_ms=renderer.take_gpu_window_ms(); }
+                    { const auto window=gx::take_latency_window(); row.sealed_to_done_ms=window.sealed_to_done_ms; row.taken_to_done_ms=window.taken_to_done_ms; row.gpu_ms=renderer.take_gpu_window_ms();
+                      row.gpu_upscale_ms=renderer.pass_ms(uc::GpuPass::upscale); row.gpu_smaa_ms=renderer.pass_ms(uc::GpuPass::smaa); row.gpu_occlusion_ms=renderer.pass_ms(uc::GpuPass::occlusion); }
                     frame_log->add(row);
                     frame_cpu_last=cpu; frame_busy_ns=frame_events_ns=0; frame_events=0;
                 } else if (frame_log) frame_cpu_last=thread_cycles();
@@ -807,6 +808,7 @@ static int real_main(int argc, char** argv) {
                 const double profile_ms=std::chrono::duration<double,std::milli>(now-last_profile_time).count();
                 std::fprintf(stderr,"[fps] window_ms %.3f retraces %llu:%llu presents %llu fps %.3f\n",profile_ms,(unsigned long long)last_profile_retrace,(unsigned long long)profile_retrace,(unsigned long long)(presents-last_profile_presents),1000.0*(presents-last_profile_presents)/profile_ms);
                 last_profile_time=now; last_profile_retrace=profile_retrace;
+                std::fprintf(stderr,"[gpu] passes: upscale %.2f ms, smaa %.2f ms, occlusion %.2f ms\n",renderer.pass_ms(uc::GpuPass::upscale),renderer.pass_ms(uc::GpuPass::smaa),renderer.pass_ms(uc::GpuPass::occlusion));
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws());
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
                 if(!present_intervals.empty()) {

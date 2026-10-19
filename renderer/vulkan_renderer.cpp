@@ -248,6 +248,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkQueryPoolCreateInfo timing{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO}; timing.queryType = VK_QUERY_TYPE_TIMESTAMP; timing.queryCount = uint32_t(slots_.size() * 2);
     vk_check(vkCreateQueryPool(device, &timing, nullptr, &timing_pool_), "timing query pool");
     timestamp_period_ = limits.limits.timestampPeriod;
+    pass_timer_.initialize(device, timestamp_period_, uint32_t(slots_.size()));
     for (size_t i = 0; i < slots_.size(); ++i) {
         slots_[i].command = commands[i];
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -754,6 +755,7 @@ void VulkanRenderer::collect() {
         uint64_t stamps[2];
         if (slot.timed && vkGetQueryPoolResults(device, timing_pool_, uint32_t((&slot - slots_.data()) * 2), 2, sizeof stamps, stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && stamps[1] >= stamps[0])
         { const uint64_t ns = uint64_t(double(stamps[1] - stamps[0]) * timestamp_period_); gpu_busy_ns_ += ns; if (ns > gpu_window_max_ns_) gpu_window_max_ns_ = ns; }
+        if (slot.timed) pass_timer_.collect(uint32_t(&slot - slots_.data()));
         slot.timed = false;
     }
 }
@@ -969,9 +971,12 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,scene_motion_,scene_motion_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
+    const auto timer_slot=uint32_t(next_slot_);
+    pass_timer_.begin(command,timer_slot,GpuPass::upscale);
     upscaler_->evaluate(in);
     if (fsr_generation_enabled()) fsr_g_->prepare(in,frame_index_);
     if (sharpening_ && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));
+    pass_timer_.end(command,timer_slot,GpuPass::upscale);
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -1482,6 +1487,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     const uint32_t first_query = uint32_t((&slot - slots_.data()) * 2);
     vkCmdResetQueryPool(slot.command, timing_pool_, first_query, 2);
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query);
+    pass_timer_.reset(slot.command, first_query / 2);
     slot.timed = true;
     for (const auto& texture : slot.textures) {
         if (texture.initialized) continue;
@@ -1790,6 +1796,7 @@ void VulkanRenderer::shutdown() {
             if (slot.acquired) vkDestroySemaphore(device, slot.acquired, nullptr);
             slot = {};
         }
+        pass_timer_.shutdown();
         if (timing_pool_) vkDestroyQueryPool(device, timing_pool_, nullptr);
         if (pool_) vkDestroyCommandPool(device, pool_, nullptr);
         if (streamline_ && streamline_->active()) {   // slShutdown before the device and instance go; the surface it created first
