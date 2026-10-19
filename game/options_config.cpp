@@ -77,6 +77,7 @@ Options options_from_config(const ConfigDocument& document) {
             options.effects.anisotropy=value.get<uint32_t>();
         }
         if(graphics.contains("per_pixel_lighting"))options.effects.per_pixel_lighting=boolean(graphics["per_pixel_lighting"]);
+        if(graphics.contains("contact_shadows"))options.effects.contact_shadows=boolean(graphics["contact_shadows"]);
         if(graphics.contains("ambient_occlusion")) {
             const auto level=graphics["ambient_occlusion"].is_string() ? effect_level_from_name(graphics["ambient_occlusion"].get<std::string>()) : std::nullopt;
             if(!level)invalid("graphics.ambient_occlusion must be off, low, medium, high or ultra");
@@ -121,6 +122,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["frame_generation_multiplier"]=options.frame_generation_multiplier;
     graphics["anisotropy"]=options.effects.anisotropy;
     graphics["per_pixel_lighting"]=options.effects.per_pixel_lighting;
+    graphics["contact_shadows"]=options.effects.contact_shadows;
     if(effect_level_name(options.effects.ambient_occlusion).empty())invalid("unknown ambient_occlusion");
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
     options_from_config(replacement);

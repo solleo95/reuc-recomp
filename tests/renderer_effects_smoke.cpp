@@ -299,6 +299,63 @@ int main(int argc, char** argv) {
             frame(uc::EffectLevel::off,false);
             frame(uc::EffectLevel::off,false);
         }
+        if (wanted("contact")) {
+            // Contact shadows toward the dominant directional light: a box on a floor, lit from the upper left. The floor right at the box's base darkens,
+            // the far floor does not, a scene with only a point light has no shadow caster, and the shadows add to the ambient occlusion.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };
+            const auto surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool directional) {
+                auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
+                projection(draw);
+                auto& uniforms=draw.uniforms.edit();
+                uniforms.channels[0]=1|2|(1<<2)|(2<<7);   // vertex colour as material, lighting on, light 0, clamped diffuse, no attenuation
+                uniforms.ambient[0]={90,90,90,255};
+                uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0};
+                uniforms.lights[0].position=directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{-0.5f,1.f,-3.f,0};
+                uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                return draw;
+            };
+            auto frame=[&](bool contact,uc::EffectLevel ao,bool directional) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.contact_shadows=contact; effects.ambient_occlusion=ao; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},directional));   // the floor
+                scene.draws.push_back(surface({{{-0.5f,-0.4f,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,1,0},directional));   // the box's top
+                scene.draws.push_back(surface({{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,0,1},directional));   // its front
+                scene.draws.push_back(surface({{{0.5f,-1,-4},{0.5f,-1,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4}}},{1,0,0},directional));   // its right side
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto red=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4]); };
+            frame(false,uc::EffectLevel::off,true);   // the first frame decides scene mode for the next one
+            const auto off=frame(false,uc::EffectLevel::off,true);
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) uc::save_png(off,std::filesystem::path(dump)/"contact-off.png");   // debugging aid
+            frame(true,uc::EffectLevel::off,true);
+            const auto on=frame(true,uc::EffectLevel::off,true);
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) uc::save_png(on,std::filesystem::path(dump)/"contact-on.png");
+            int shadow=0, far_floor=0;
+            for(uint32_t y=262;y<300;++y) for(uint32_t x=700;x<760;++x) shadow=std::max(shadow,red(off,x,y)-red(on,x,y));   // the floor just right of the box's base
+            for(uint32_t x=100;x<500;x+=20) far_floor=std::max(far_floor,std::abs(red(off,x,200)-red(on,x,200)));
+            std::fprintf(stderr,"contact: base shadow %d, far floor %d, dominant light %s\n",shadow,far_floor,renderer.dominant_light() ? "found" : "none");
+            CHECK(renderer.dominant_light().has_value() && renderer.dominant_light()->kind==gx::LightKind::directional);
+            CHECK(shadow>=15 && far_floor<=1);
+            frame(false,uc::EffectLevel::off,false); const auto point_off=frame(false,uc::EffectLevel::off,false);
+            frame(true,uc::EffectLevel::off,false); const auto point_on=frame(true,uc::EffectLevel::off,false);
+            CHECK(!renderer.dominant_light().has_value() && point_on.rgba==point_off.rgba);   // a point light is no shadow caster: nothing changes
+            frame(false,uc::EffectLevel::medium,true); const auto ao_only=frame(false,uc::EffectLevel::medium,true);
+            frame(true,uc::EffectLevel::medium,true); const auto both=frame(true,uc::EffectLevel::medium,true);
+            int added=0; for(uint32_t y=262;y<300;++y) for(uint32_t x=700;x<760;++x) added=std::max(added,red(ao_only,x,y)-red(both,x,y));
+            CHECK(added>=10);   // both effects darken: the contact shadows go on top of the occlusion
+            frame(false,uc::EffectLevel::off,true); frame(false,uc::EffectLevel::off,true);
+        }
         if (wanted("ppl")) {
             // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);
             // per pixel the centre is lit by the near light. Baked-colour (unlit) draws stay identical.

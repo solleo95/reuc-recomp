@@ -958,7 +958,8 @@ UpscaleImage VulkanRenderer::hudless_image() const {   // this frame's HUD-less 
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT};
 }
 void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) {
-    tracker_.end_frame();   // every scene draw of the frame is recorded: camera cut and reprojection of this frame    if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
+    tracker_.end_frame();   // every scene draw of the frame is recorded: camera cut and reprojection of this frame
+    if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
     const auto now=std::chrono::steady_clock::now();
     UpscaleInputs in;
     in.command=command;
@@ -990,7 +991,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
-    if (effects_.ambient_occlusion!=EffectLevel::off && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
+    if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_);
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
         OcclusionInputs occlusion;
@@ -999,7 +1000,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion.region=in.render_size;
         occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
         occlusion.view=view_params(*frame_projection_);
-        occlusion.ao=effects_.ambient_occlusion;
+        occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.contact_shadows; occlusion.light=dominant_light_;
         occlusion.noise_frame=(upscaler_kind_==UpscalerKind::dlss || upscaler_kind_==UpscalerKind::fsr) ? uint32_t(upscale_frame_%8)+1 : 0;   // the upscaler's history averages the pattern; otherwise it stays fixed
         occlusion_.record(occlusion);
         pass_timer_.end(command,timer_slot,GpuPass::occlusion);

@@ -514,6 +514,8 @@ int run(int argc,wchar_t** argv) {
                 ImGui::PopFont();
             }
             ImGui::Dummy({0,8*unit});
+            toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,features_ready && !features.effects && !options.effects.contact_shadows,tr("effects_unavailable"));
+            ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);

@@ -1,11 +1,13 @@
 #pragma once
 #include "graphics_effects.h"
+#include "scene_lights.h"
 #include "upscaler.h"
 #include "view_reconstruct.h"
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace uc {
 // What the screen-space occlusion needs of a scene: the internal scene targets in VK_IMAGE_LAYOUT_GENERAL (left there), the scene viewport in pixels of
@@ -17,7 +19,9 @@ struct OcclusionInputs {
     std::array<float,6> viewport{};       // x, y, width, height in target pixels, then the viewport's near and far depth
     ViewParams view{};
     EffectLevel ao=EffectLevel::off;
-    uint32_t noise_frame=0;               // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
+    bool contact=false;                   // contact shadows toward `light` (nothing happens without one)
+    std::optional<gx::CollectedLight> light;  // the scene's dominant directional or spot light
+    uint32_t noise_frame=0;              // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
 };
 // The slices, steps and resolution of a preset.
 struct AoPreset { uint32_t slices, steps; bool full_resolution; };
@@ -35,18 +39,18 @@ private:
     Image make_image(VkFormat format, VkExtent2D extent);
     void destroy_image(Image& image);
     void write_image(uint32_t binding, VkImageView view, VkDescriptorType type);
-    void resize(VkExtent2D ao_size);
+    void resize(VkExtent2D ao_size, VkExtent2D contact_size);
     VkDevice device_=VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_{};
-    VkShaderModule modules_[3]{};
-    VkPipeline pipelines_[3]{};
+    VkShaderModule modules_[4]{};   // ao, denoise, composite, contact
+    VkPipeline pipelines_[4]{};
     VkSampler sampler_=VK_NULL_HANDLE;
     VkDescriptorSetLayout set_layout_=VK_NULL_HANDLE;
     VkPipelineLayout layout_=VK_NULL_HANDLE;
     VkDescriptorPool pool_=VK_NULL_HANDLE;
     VkDescriptorSet set_=VK_NULL_HANDLE;
-    Image raw_, blurred_;
-    VkExtent2D ao_size_{};
+    Image raw_, blurred_, contact_;
+    VkExtent2D ao_size_{}, contact_size_{};
     VkImageView bound_depth_=VK_NULL_HANDLE, bound_gbuffer_=VK_NULL_HANDLE, bound_color_=VK_NULL_HANDLE;
 };
 }

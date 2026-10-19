@@ -221,6 +221,11 @@ void SettingsMenu::effects_tab(float unit) {
         if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     };
     level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
+    ImGui::Dummy({0,6*unit});
+    ImGui::BeginDisabled(!path && !options.effects.contact_shadows);
+    compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
+    ImGui::EndDisabled();
+    if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

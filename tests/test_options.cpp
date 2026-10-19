@@ -125,6 +125,8 @@ int main() {
         const auto bad_level=parse(std::array<std::string_view,2>{"--ambient-occlusion","extreme"});
         CHECK(std::holds_alternative<std::string>(bad_level) && std::get<std::string>(bad_level)=="invalid value for --ambient-occlusion");
         CHECK(!uc::effect_level_from_name("High") && !uc::effect_level_from_name(""));
+        CHECK(!std::get<uc::Options>(defaults).effects.contact_shadows);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--contact-shadows"})).effects.contact_shadows);
         CHECK(!std::get<uc::Options>(defaults).effects.per_pixel_lighting);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--per-pixel-lighting"})).effects.per_pixel_lighting);
         CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));

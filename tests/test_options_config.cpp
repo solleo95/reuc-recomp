@@ -64,6 +64,10 @@ int main() {
             bool bad_level=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){bad_level=true;}
             CHECK(bad_level);
         }
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":true}})")).effects.contact_shadows);
+        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.contact_shadows);
+        bool contact_not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":"on"}})"));}catch(const std::invalid_argument&){contact_not_boolean=true;}
+        CHECK(contact_not_boolean);
         bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}
         CHECK(not_boolean);
         auto stored=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto fresh=uc::options_from_config(stored);fresh.effects.anisotropy=2;uc::store_options(stored,fresh);

@@ -17,7 +17,11 @@ struct Params {
     uint flags;
     float strength;
     float2 depthRange;   // the viewport's near and far depth
+    float4 light;        // contact shadows: the dominant light, xyz = view-space position (a directional light's far point is its direction), w = 1 for a spot light
+    uint2 contactSize;   // size of the contact-shadow image
+    uint2 reserved;
 };
+// flags: bit 0 = ambient occlusion on, bit 1 = contact shadows on
 [[vk::push_constant]] ConstantBuffer<Params> params;
 [[vk::binding(0, 0)]] SamplerState linearSampler;
 [[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
@@ -27,6 +31,8 @@ struct Params {
 [[vk::binding(5, 0)]] Texture2D<float> occlusion;
 [[vk::binding(6, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> rawOcclusionOut;
 [[vk::binding(7, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> occlusionOut;
+[[vk::binding(8, 0)]] Texture2D<float> contactTex;
+[[vk::binding(9, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> contactOut;
 
 static const float kPi = 3.14159265;
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
@@ -132,27 +138,62 @@ void denoiseMain(uint3 id : SV_DispatchThreadID) {
 }
 
 [shader("compute")] [numthreads(8, 8, 1)]
-void compositeMain(uint3 id : SV_DispatchThreadID) {
-    if (any(id.xy >= params.region)) return;
+void contactMain(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= params.contactSize)) return;
+    float scale = float(params.region.x) / float(params.contactSize.x);
+    int2 pixel = int2((float2(id.xy) + 0.5) * scale);
     float3 position, normal;
-    if (!surfaceAt(int2(id.xy), position, normal)) return;
-    float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
-    float scale = float(params.region.x) / float(params.aoSize.x);
-    float2 aoPosition = (float2(id.xy) + 0.5) / scale - 0.5;
-    int2 base = int2(floor(aoPosition));
-    float2 fraction = aoPosition - float2(base);
+    if (!surfaceAt(pixel, position, normal)) { contactOut[id.xy] = 1.0; return; }
+    float3 toLight = params.light.w > 0.5 ? normalize(params.light.xyz - position) : normalize(params.light.xyz);
+    if (dot(normal, toLight) <= 0.0) { contactOut[id.xy] = 1.0; return; }   // facing away from the light: the lighting already darkened it
+    float distanceHere = -position.z;
+    float maxLength = 0.03 * distanceHere;     // the ray is short: contact only
+    float thickness = 0.005 * distanceHere;    // what counts as a blocker in front of the ray
+    float jitter = interleavedGradientNoise(float2(pixel), params.noise);
+    float shadow = 0.0;
+    [loop] for (uint step = 0; step < 16; ++step) {
+        float t = (float(step) + 0.5 + 0.5 * jitter) / 16.0 * maxLength;
+        float3 sampled = position + toLight * t + normal * (0.002 * distanceHere);   // a small lift keeps a flat surface from shadowing itself
+        float2 ndc = float2(params.viewA.x * sampled.x / -sampled.z - params.viewA.z, params.viewA.y * sampled.y / -sampled.z - params.viewA.w);
+        float2 samplePixel = params.viewport.xy + (ndc * 0.5 + 0.5) * params.viewport.zw;
+        if (any(samplePixel < float2(0.0, 0.0)) || any(samplePixel >= float2(params.region))) break;
+        float stored = sceneDepth.Load(int3(int2(samplePixel), 0));
+        if (stored >= 1.0) continue;
+        float sceneDistance = params.viewB.y / (projectionDepth(stored) + params.viewB.x);   // -z of the surface at that pixel
+        float sampleDistance = -sampled.z;
+        if (sceneDistance < sampleDistance && sampleDistance - sceneDistance < thickness) { shadow = 1.0; break; }
+    }
+    contactOut[id.xy] = 1.0 - shadow;
+}
+
+// A half-resolution occlusion image at a full-resolution pixel: bilinear taps, each weighted by how close its depth is to this pixel's.
+float upsampleOcclusion(Texture2D<float> source, uint2 size, uint2 pixel, float3 position) {
+    float scale = float(params.region.x) / float(size.x);
+    float2 at0 = (float2(pixel) + 0.5) / scale - 0.5;
+    int2 base = int2(floor(at0));
+    float2 fraction = at0 - float2(base);
     float sum = 0.0, total = 0.0;
-    [unroll] for (int i = 0; i < 4; ++i) {   // bilinear taps, each weighted by how close its depth is to this pixel's
-        int2 at = clamp(base + int2(i & 1, i >> 1), int2(0, 0), int2(params.aoSize) - 1);
+    [unroll] for (int i = 0; i < 4; ++i) {
+        int2 at = clamp(base + int2(i & 1, i >> 1), int2(0, 0), int2(size) - 1);
         float3 tapPosition, tapNormal;
-        float value = occlusion.Load(int3(at, 0));
+        float value = source.Load(int3(at, 0));
         float bilinear = ((i & 1) != 0 ? fraction.x : 1.0 - fraction.x) * ((i >> 1) != 0 ? fraction.y : 1.0 - fraction.y);
         float depthWeight = 1.0;
         if (surfaceAt(int2((float2(at) + 0.5) * scale), tapPosition, tapNormal)) depthWeight = 1.0 / (0.01 + 50.0 * abs(tapPosition.z - position.z) / -position.z);
         sum += value * bilinear * depthWeight; total += bilinear * depthWeight;
     }
-    float ao = total > 0.0 ? sum / total : 1.0;
+    return total > 0.0 ? sum / total : 1.0;
+}
+
+[shader("compute")] [numthreads(8, 8, 1)]
+void compositeMain(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= params.region)) return;
+    float3 position, normal;
+    if (!surfaceAt(int2(id.xy), position, normal)) return;
+    float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
+    float ao = (params.flags & 1u) != 0 ? upsampleOcclusion(occlusion, params.aoSize, id.xy, position) : 1.0;
+    float contact = (params.flags & 2u) != 0 ? upsampleOcclusion(contactTex, params.contactSize, id.xy, position) : 1.0;
     float4 color = sceneColor[id.xy];
-    color.rgb *= lerp(1.0, ao, saturate(params.strength) * (1.0 - fog));
+    color.rgb *= lerp(1.0, ao, saturate(params.strength) * (1.0 - fog)) * lerp(1.0, contact, 0.6 * (1.0 - fog));
     sceneColor[id.xy] = color;
 }
