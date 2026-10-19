@@ -360,6 +360,7 @@ static int real_main(int argc, char** argv) {
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom);
+        renderer.set_effects(options.effects);
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
             uc::CompileScreen screen;
             renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
@@ -626,7 +627,7 @@ static int real_main(int argc, char** argv) {
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
         };
         targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
-        targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; };
+        targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
         live_settings.emplace(config_path,input_config,std::move(targets));

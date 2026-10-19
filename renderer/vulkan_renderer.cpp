@@ -221,6 +221,8 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
     logic_ops_=core.logicOp;
     VkPhysicalDeviceFeatures enabled{}; enabled.logicOp=logic_ops_; enabled.independentBlend=motion_outputs_; enabled.shaderInt16=core.shaderInt16; device_info.pEnabledFeatures=&enabled;
+    enabled.samplerAnisotropy=core.samplerAnisotropy; anisotropy_supported_=core.samplerAnisotropy;
+    { VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_,&properties); anisotropy_limit_=properties.limits.maxSamplerAnisotropy; }
     device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;   // queue_info.queueCount: 3 with the interpolation swapchain
     device_info.enabledExtensionCount = uint32_t(device_extensions.size()); device_info.ppEnabledExtensionNames = device_extensions.data();
     vk_check(through_streamline ? streamline_->create_device(instance_, physical_, device_info, device) : vkCreateDevice(physical_, &device_info, nullptr, &device), "vkCreateDevice");
@@ -501,6 +503,42 @@ VulkanRenderer::PipelineChoice VulkanRenderer::pipeline_for(const PipelineKey& k
     if (fresh || ms>=2) std::fprintf(stderr,"[pipeline] %s %s compiled on the render thread: %.1f ms\n",fresh ? "new" : "not yet ready",uber ? "ubershader" : "key",ms);
     return {pipeline,uber};
 }
+uint32_t VulkanRenderer::effective_anisotropy() const { return clamp_anisotropy(effects_.anisotropy,anisotropy_supported_,anisotropy_limit_); }
+// One sampler per GX sampler mode (wrap s/t, mipmap mode, mag/min filter); anisotropic filtering applies to the ones that filter linearly across mips.
+void VulkanRenderer::create_samplers() {
+    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; sampler.magFilter=sampler.minFilter=VK_FILTER_NEAREST;
+    sampler.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    const VkSamplerAddressMode modes[]={VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,VK_SAMPLER_ADDRESS_MODE_REPEAT,VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT};
+    const auto anisotropy=effective_anisotropy();
+    for(uint32_t mode=0;mode<256;++mode) {
+        const auto s=mode&3,t=(mode>>2)&3,mip=(mode>>5)&3;
+        if(s>2 || t>2 || mip>2) continue;
+        sampler.addressModeU=modes[s]; sampler.addressModeV=modes[t];
+        sampler.magFilter=(mode&16) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        sampler.minFilter=(mode&128) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        sampler.mipmapMode=mip==2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sampler.maxLod=mip ? VK_LOD_CLAMP_NONE : 0.f;
+        sampler.anisotropyEnable=anisotropy>1 && (mode&128) && mip==2; sampler.maxAnisotropy=sampler.anisotropyEnable ? float(anisotropy) : 1.f;
+        vk_check(vkCreateSampler(device,&sampler,nullptr,&texture_samplers_[mode]),"texture sampler");
+        if(motion_outputs_) {   // scene draws sample as if at output resolution (DLSS/FSR guides: log2(internal/output) - 1)
+            auto biased=sampler; biased.mipLodBias=float(-std::log2(upscale_ratio(upscale_mode_))-1.0);
+            vk_check(vkCreateSampler(device,&biased,nullptr,&scene_samplers_[mode]),"scene texture sampler");
+        }
+    }
+}
+void VulkanRenderer::destroy_samplers() {
+    for(auto& sampler:texture_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
+    for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
+}
+void VulkanRenderer::set_effects(const GraphicsEffects& effects) {
+    owner();
+    const bool anisotropy=effects.anisotropy!=effects_.anisotropy;
+    effects_=effects;
+    if(anisotropy && layout_) {   // the samplers exist: swap them while the GPU holds none (descriptor sets are rewritten every frame)
+        vk_check(vkDeviceWaitIdle(device),"anisotropy change");
+        destroy_samplers(); create_samplers();
+    }
+}
 VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
     gx::BlendState mode;
     mode.mode=key[0]&3; mode.source=(key[0]>>2)&7; mode.destination=(key[0]>>5)&7; mode.logic=(key[0]>>8)&15;
@@ -513,23 +551,7 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         VkDescriptorSetLayoutBinding texture_bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_SAMPLER,8,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{2,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr},{3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr},{4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr},{5,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}};
         VkDescriptorSetLayoutCreateInfo texture_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; texture_layout.bindingCount=6; texture_layout.pBindings=texture_bindings;
         vk_check(vkCreateDescriptorSetLayout(device,&texture_layout,nullptr,&texture_layout_),"texture descriptor layout");
-        VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; sampler.magFilter=sampler.minFilter=VK_FILTER_NEAREST;
-        sampler.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        const VkSamplerAddressMode modes[]={VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,VK_SAMPLER_ADDRESS_MODE_REPEAT,VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT};
-        for(uint32_t mode=0;mode<256;++mode) {
-            const auto s=mode&3,t=(mode>>2)&3,mip=(mode>>5)&3;
-            if(s>2 || t>2 || mip>2) continue;
-            sampler.addressModeU=modes[s]; sampler.addressModeV=modes[t];
-            sampler.magFilter=(mode&16) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-            sampler.minFilter=(mode&128) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-            sampler.mipmapMode=mip==2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            sampler.maxLod=mip ? VK_LOD_CLAMP_NONE : 0.f;
-            vk_check(vkCreateSampler(device,&sampler,nullptr,&texture_samplers_[mode]),"texture sampler");
-            if(motion_outputs_) {   // scene draws sample as if at output resolution (DLSS/FSR guides: log2(internal/output) - 1)
-                auto biased=sampler; biased.mipLodBias=float(-std::log2(upscale_ratio(upscale_mode_))-1.0);
-                vk_check(vkCreateSampler(device,&biased,nullptr,&scene_samplers_[mode]),"scene texture sampler");
-            }
-        }
+        create_samplers();
         VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout_info.pushConstantRangeCount=1; layout_info.pPushConstantRanges=&projection;
         layout_info.setLayoutCount=1; layout_info.pSetLayouts=&texture_layout_;
         vk_check(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout_), "pipeline layout");

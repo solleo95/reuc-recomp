@@ -83,6 +83,10 @@ target_link_libraries(renderer_upscale_smoke PRIVATE uc_vulkan)
 add_dependencies(renderer_upscale_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 add_custom_command(TARGET renderer_upscale_smoke POST_BUILD   # --dlss: Streamline and DLSS next to the test
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} $<TARGET_FILE_DIR:renderer_upscale_smoke> VERBATIM)
+add_executable(renderer_effects_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_effects_smoke.cpp)
+target_include_directories(renderer_effects_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(renderer_effects_smoke PRIVATE uc_vulkan)
+add_dependencies(renderer_effects_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
 install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION tools)
 install(FILES ${UC_SHADER_FILES} DESTINATION tools/data/shaders)

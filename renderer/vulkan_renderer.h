@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics_effects.h"
 #include "gx_packets.h"
 #include "pipeline_keys.h"
 #include "prompt_overlay.h"
@@ -53,6 +54,9 @@ public:
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
     void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
+    // Graphics effects (graphics_effects.h): callable before or after initialize(); a change of the anisotropy level swaps the samplers at once.
+    void set_effects(const GraphicsEffects& effects);
+    uint32_t effective_anisotropy() const;   // the level the device runs (requested, clamped to its limit)
     // In-game menu: build() lays out the ImGui widgets of each presented frame (empty = closed, no ImGui work at all); setup() loads fonts and
     // style once into the menu's ImGui context.
     void set_menu(std::function<void()> build, std::function<void()> setup = {});
@@ -163,6 +167,10 @@ private:
     std::function<void()> menu_build_, menu_setup_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
     bool bloom_=true;
+    GraphicsEffects effects_;
+    bool anisotropy_supported_=false; float anisotropy_limit_=1;
+    void create_samplers();
+    void destroy_samplers();
     UpscalerKind upscaler_kind_=UpscalerKind::off;
     bool dlss_available_=false, dlss_g_available_=false;
     UpscaleMode upscale_mode_=UpscaleMode::quality;
