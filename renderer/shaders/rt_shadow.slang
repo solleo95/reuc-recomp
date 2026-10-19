@@ -50,10 +50,11 @@ bool shadedSurface(float4 texel) {
     const uint flags = uint(round(texel.w * 65535.0));
     return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0 && (flags & kGBufferLit) != 0 && (flags & kGBufferModelValid) != 0;
 }
-// A surface of the scene that the occlusion applies to: any depth-writing draw with a normal that is not a cut-out (no light model needed)
-bool opaqueSurface(float4 texel) {
+// A surface the ambient occlusion applies to: a GX-lit depth-writing draw with a normal that is not a cut-out (no light model needed; unlit surfaces are baked
+// or emissive: a lamp's glass or a fire must not be darkened by its own fixture)
+bool litSurface(float4 texel) {
     const uint flags = uint(round(texel.w * 65535.0));
-    return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0;
+    return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0 && (flags & kGBufferLit) != 0;
 }
 // rt_ao_math.h rt_ao_direction: a cosine-weighted direction in the hemisphere of the unit normal (u in [0, 1))
 float3 aoDirection(float3 normal, float2 u) {
@@ -162,10 +163,10 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             }
         }
     }
-    if (params.aoRays > 0.5 && opaqueSurface(texel) && stored < 1.0) {   // ambient occlusion: cosine-weighted rays of a limited length, on any surface with a normal (rt_ao_math.h)
+    if (params.aoRays > 0.5 && litSurface(texel) && stored < 1.0) {   // ambient occlusion: cosine-weighted rays of a limited length, on any lit surface (rt_ao_math.h)
         const float3 position = viewPositionAt(pixel, stored);
         const float3 normal = decodeGBufferNormal(texel.xy);
-        const float3 start = position + normal * (6e-3 * length(position) + 6e-3);   // a larger bias than the shadows': the cosine-weighted rays include grazing ones, and the reconstructed depth is a little off the surface
+        const float3 start = position + normal * min(6e-3 * length(position) + 6e-3, 0.1);   // a larger bias than the shadows': the cosine-weighted rays include grazing ones, and the reconstructed depth is a little off the surface; capped so that far surfaces still see low occluders
         const uint rays = uint(params.aoRays);
         float blocked = 0.0;
         for (uint r = 0; r < rays; ++r) {
@@ -184,7 +185,9 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     const int2 pixel = int2(id.xy);
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
-    if (!opaqueSurface(texel) || stored >= 1.0) return;   // the signal is 1 where an effect does not apply (an unlit or unmodelled surface has no shadow term)
+    // Shadows alone: only the surfaces the light model describes (the denoiser and the upsample blend neighbours by depth and normal only, so a 1 traced on an unlit decal
+    // would leak into a shadowed wall it lies on). With ambient occlusion: every lit surface (the signal is 1 where an effect does not apply, e.g. no shadow term).
+    if (!(params.aoRays > 0.5 ? litSurface(texel) : shadedSurface(texel)) || stored >= 1.0) return;
     const float centreDepth = abs(viewPositionAt(pixel, stored).z);
     // a depth-aware bilinear upsample of the signal: its taps are weighted by how close their pixel's view depth is
     // signal pixel t was traced at scene pixel t*divisor + divisor/2, whose centre is t*divisor + divisor/2 + 0.5: the tap position of a scene pixel centre is its offset from there

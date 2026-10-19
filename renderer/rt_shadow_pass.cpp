@@ -154,7 +154,7 @@ void RtShadowPass::composite(const RtShadowInputs& in, VkImageView filtered) {
     params.view_b[0]=in.view.depth_a; params.view_b[1]=in.view.depth_b;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
-    params.divisor=divisor_;
+    params.divisor=divisor_; params.ao_rays=float(rt_ao_preset(in.ao).rays);   // the composite's gate depends on whether ambient occlusion is traced
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&composite_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);

@@ -1072,7 +1072,9 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
             rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
-            if (in.reset || !rt_shadow_ran_last_) rt_shadow_denoiser_.reset();   // a cut, a black frame or a frame without the effect: the history is stale
+            const std::array<EffectLevel,3> signal_levels{effects_.rt_shadows,effects_.rt_local_shadows,effects_.rt_ambient_occlusion};
+            if (in.reset || !rt_shadow_ran_last_ || signal_levels!=rt_signal_levels_) rt_shadow_denoiser_.reset();   // a cut, a black frame, a frame without the effect or another mix of effects in the signal: the history is stale
+            rt_signal_levels_=signal_levels;
             DenoiseInputs denoise;
             denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
             denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;

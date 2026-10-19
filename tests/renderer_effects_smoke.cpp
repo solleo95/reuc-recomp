@@ -943,6 +943,18 @@ int main(int argc, char** argv) {
                     const auto open_at=[&](const Vec& p) { const auto at=pixel_of(p); return double(open.factor[size_t(at[1])*open.width+at[0]]); };
                     std::fprintf(stderr,"rt-shadows: ambient occlusion on open floor: %.3f (z -2.65), %.3f (z -2.2), %.3f (z -4), minimum %.3f\n",open_at({0.0,-1.0,-2.65}),open_at({0.0,-1.0,-2.2}),open_at({0.0,-1.0,-4.0}),double(*std::min_element(open.factor.begin(),open.factor.end())));
                     CHECK(std::abs(open_at({0.0,-1.0,-2.65})-1.0)<=0.03);
+                    // an unlit surface (baked or emissive) keeps its colour: no occlusion on it (a lamp's glass must not be darkened by its own fixture)
+                    {
+                        wall=true;
+                        const auto grey_at=[&](const uc::RenderPixels& pixels,const Vec& p) { const auto at=pixel_of(p); return int(pixels.rgba[(size_t(at[1])*pixels.width+at[0])*4+1]); };
+                        const Setting none{false,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off};
+                        frame(none,Light::point,false); const auto before=frame(none,Light::point,false);
+                        for(int i=0;i<40;++i) frame(ao_only,Light::point,false);
+                        const auto after=frame(ao_only,Light::point,false);
+                        std::fprintf(stderr,"rt-shadows: unlit floor beside the wall: off %d, ambient occlusion %d\n",grey_at(before,{0.0,-1.0,-2.65}),grey_at(after,{0.0,-1.0,-2.65}));
+                        CHECK(std::abs(grey_at(before,{0.0,-1.0,-2.65})-grey_at(after,{0.0,-1.0,-2.65}))<=1);
+                        wall=false;
+                    }
                     Setting gtao_only{false,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::high};
                     for(int i=0;i<3;++i) frame(gtao_only,Light::point);
                     CHECK(renderer.pass_runs(uc::GpuPass::occlusion)>occlusion_runs);   // without RT AO the raster one runs again

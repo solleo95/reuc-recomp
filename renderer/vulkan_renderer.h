@@ -230,6 +230,7 @@ private:
     RtShadowPass rt_shadow_;
     RtDenoiser rt_shadow_denoiser_;
     bool rt_trace_lamps_=false;
+    std::array<EffectLevel,3> rt_signal_levels_{};   // the levels (shadows, local shadows, ambient occlusion) the denoiser's history was accumulated under
     std::array<float,3> rt_key_direction_=kRtOverheadDirection;   // the synthetic key light's view-space direction, turned with the camera so that it stands still in the world
     bool rt_shadow_traced_=false, rt_shadow_ran_last_=false;   // traced: the signal image holds a frame's trace; ran_last: the previous frame denoised (else the history is stale)
     VkBufferUsageFlags rt_input_usage() const { return ray_tracing_ ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT|VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0; }   // mesh and palette buffers the AS builder reads

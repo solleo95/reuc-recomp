@@ -30,8 +30,15 @@ The first draft of the presets (High at full resolution with 2 rays, Ultra with 
 * `test_rt_ao_math`: preset table, direction unit length and hemisphere, mean cosine 2/3, factor endpoints. `test_rt_ui`: GTAO is greyed only while RT AO is active.
 * Validation clean.
 
+## Review (fresh opus, 0 Critical, 3 Important, fixed test first where a test could see it)
+
+* Composite gate: with AO the gate is `lit and has a normal`, without it the old light-model gate again (the denoiser and the upsample blend neighbours by depth and normal only, so a 1 traced on an unlit decal leaked into the shadowed wall under it).
+* AO skips unlit surfaces (smoke: an unlit floor beside the wall keeps its grey exactly), so a lamp's glass is not darkened by its own fixture.
+* The denoiser's history resets when the mix of levels (shadows, local shadows, AO) changes; the AO ray bias is capped at 0.1 units.
+* Deferred minors: `kLampClearance` is a shader constant that the C++ constant is only documented against (the lamp checks of the smoke fail if they drift); the launcher tooltip of the greyed GTAO combo says "replaced" also when the GPU lacks the effects path; the weapon draw (another projection) was not checked for AO.
+
 ## Not covered
 
-* The AO also darkens characters and baked surfaces that are lit by the game's own shading (it is a multiplier on the finished colour, like GTAO); strength 0.8 and the limited radius keep it subtle; no per-material exclusion.
+* The AO also darkens characters and surfaces that are lit by the game's own shading (it is a multiplier on the finished colour, like GTAO); strength 0.8 and the limited radius keep it subtle; no per-material exclusion.
 * Binary any-hit rays with no hit-distance falloff: with one ray per pixel at Low the denoiser does the smoothing (a longer history lag when something moves).
 * The in-game menu's new combo was not looked at on screen; the launcher and the menu build and the host tests pass.
