@@ -1067,7 +1067,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.records=rt_records_[rt_record_slot_].buffer; shadow.lights=rt_lights_[rt_record_slot_].buffer;
             shadow.region=in.render_size; shadow.viewport=scene_viewport; shadow.view=view_params(*frame_projection_);
             shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.slot=timer_slot;
-            shadow.frame=(upscaler_kind_==UpscalerKind::dlss || upscaler_kind_==UpscalerKind::fsr) ? uint32_t(upscale_frame_%8)+1 : 0;   // as the occlusion noise: the upscaler's history averages the pattern
+            shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
             rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
             if (in.reset || !rt_shadow_ran_last_) rt_shadow_denoiser_.reset();   // a cut, a black frame or a frame without the effect: the history is stale

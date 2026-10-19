@@ -8,6 +8,7 @@ ChannelLighting channel_lighting(uint32_t control) {
     result.mask = uint8_t(((control >> 2) & 15) | ((control >> 7) & 240));
     result.diffuse = (control >> 7) & 3;
     result.attenuation = (control >> 9) & 3;
+    result.ambient_vertex = (control & 64) != 0;
     return result;
 }
 LightKind classify_light(const LightUniform& light, uint32_t attenuation) {

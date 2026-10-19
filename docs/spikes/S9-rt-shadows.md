@@ -34,6 +34,12 @@ Not benchmarked a second time. With the master switch off, or both shadow levels
 
 Two harness runs of `uctest run fight --measure 8` (DLSS, windowed 1280x720): RT shadows and local shadows `high` (151 active windows, mean 118.5 FPS, minimum 80, frame gap p99 12 ms) and RT off. The bot reaches different game moments in the two runs, so their frames show different parts of the dining car and cannot be compared pixel for pixel; the deterministic smoke fixture is the reference for the shadow values (sun signal 0.377 against 0.377 computed on the CPU, point light 0.331 against 0.329). In the RT-on frames the dining car is shaded consistently, the table and chair shadows fall away from the lights, and there is no flicker, banding or blotches (three frames 100 ms apart look steady). A matched before/after capture of the same retrace is still to be taken (it needs a demo replay with frame capture at a fixed retrace).
 
+## Found after the first measurements: no game draw was model-valid
+
+The final review's follow-up check counted the material records of the fight demo: 3.16 M records, **none** passed `light_model_valid` (vertex ambient 0). The classifier accepted only `texture x rasterised` at colour scale 1 followed by pass-through stages, while the game's draws use scale 2 or 4 and a second stage that adds `texture x rasterised`, `konst x rasterised` or multiplies by the previous result (about 90% of the records are `0x8F8AF` + `0x28F8A0`, `0x28F8AF`, `0x18F8AF` + `0x18FEA0/0x18FAE0`, `0x8F8AF` + `0x28F80F`). So the S9 timings above are the cost of tracing without the composite ever touching a pixel (the trace and denoise still ran); in the game the effect did nothing. The classifier now evaluates the TEV algebra over {zero, light-independent factor, proportional to the lit colour, unknown}: scale is free, a sum of proportional terms stays proportional, a bias, a subtraction, an interpolation, the rasterised colour twice or a light-independent term added to a proportional one is rejected. The measurements were not repeated (the composite adds one full-resolution compute pass, about 0.1 ms at 1707x1280); a repeat is part of the next phase's baseline.
+
+A matched pair of frames from the live run (`options` command toggling the effect, 100 ms apart, dining car floor) now shows the shadows under the tables and chairs.
+
 ## Carried forward
 
 - The fixed acceleration-structure and capture cost (about 0.9 ms end to end) decides how much of the High budget the remaining effects get.

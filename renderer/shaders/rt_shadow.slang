@@ -93,7 +93,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 strength = denominator > 0.0 ? max(0.0, dot(light.cosine.xyz, float3(1.0, angle, angle * angle))) / denominator : 0.0;
             }
             if (diffuse != 0) { const float c = dot(direction, normal); strength *= diffuse == 2 ? max(0.0, c) : c; }
-            contribution[i] = strength * dot(light.color.rgb, float3(0.299, 0.587, 0.114)) / 255.0;
+            contribution[i] = max(strength, 0.0) * dot(light.color.rgb, float3(0.299, 0.587, 0.114)) / 255.0;   // signed diffuse can go negative: that is no light to remove
             toLight[i] = direction; distanceTo[i] = dist;
             directional[i] = dot(light.position.xyz, light.position.xyz) > 1e10;
             total += contribution[i];
@@ -125,7 +125,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 }
                 removed += contribution[i] * (blocked / float(rays));
             }
-            factor = 1.0 - removed / total;
+            factor = saturate(min(total - removed, 1.0) / min(total, 1.0));   // GX clamps ambient + lights at 1 before the material (rt_shadow_math.h shadow_factor)
         }
     }
     signalOut[id.xy] = factor;
@@ -140,7 +140,9 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (!shadedSurface(texel) || stored >= 1.0) return;
     const float centreDepth = abs(viewPositionAt(pixel, stored).z);
     // a depth-aware bilinear upsample of the signal: its taps are weighted by how close their pixel's view depth is
-    const float2 at = (float2(pixel) + 0.5) / float(params.divisor) - 0.5;
+    // signal pixel t was traced at scene pixel t*divisor + divisor/2, whose centre is t*divisor + divisor/2 + 0.5: the tap position of a scene pixel centre is its offset from there
+    const float d = float(params.divisor);
+    const float2 at = (float2(pixel) + 0.5 - float(params.divisor / 2) - 0.5) / d;
     const int2 base = int2(floor(at));
     const float2 f = at - float2(base);
     float sum = 0.0, weights = 0.0;

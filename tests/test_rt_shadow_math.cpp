@@ -24,6 +24,12 @@ int main() {
     const float two[]={0.4f,0.4f}, half[]={0.f,1.f};
     CHECK(near(uc::shadow_factor(0.2f,two,half),0.6f));
     CHECK(uc::shadow_factor(0.f,{},{})==1.f);   // no light at all: nothing to remove
+    // GX clamps ambient + lights at 1 before it multiplies the material (smoke.slang lightControl): the shadow removes a light's share of the clamped sum
+    const float bright[]={0.8f};
+    CHECK(near(uc::shadow_factor(0.5f,bright,zero_vis),0.5f));   // (1.3 - 0.8) clamps to 0.5, 1.3 clamps to 1
+    const float half_light[]={0.5f};
+    CHECK(near(uc::shadow_factor(1.2f,half_light,zero_vis),1.f));   // the ambient alone already saturates the surface: the shadow changes nothing
+    CHECK(uc::shadow_factor(0.5f,bright,zero_vis)>=0.f && uc::shadow_factor(0.5f,bright,zero_vis)<=1.f);
 
     // GX contribution (renderer/shaders/smoke.slang lightControl): attenuation 0 = none, 3 = distance/spot; diffuse 2 = clamped N.L
     gx::LightUniform directional;
@@ -33,6 +39,7 @@ int main() {
     CHECK(near(uc::gx_light_contribution(directional,0,2,origin,tilted),0.5f,1e-3f));
     const std::array<float,3> away{0,0,-1};
     CHECK(uc::gx_light_contribution(directional,0,2,origin,away)==0.f);   // diffuse 2 clamps at zero
+    CHECK(uc::gx_light_contribution(directional,0,1,origin,away)==0.f);   // signed diffuse (mode 1) goes negative behind the surface: the share is clamped at zero
     gx::LightUniform point;
     point.color={255.f,255.f,255.f,0.f}; point.position={0.f,0.f,2.f,0.f}; point.cosine={1.f,0.f,0.f,0.f}; point.distance={1.f,0.f,1.f,0.f};
     CHECK(near(uc::gx_light_contribution(point,3,2,origin,up),0.2f));   // 1 / (1 + d^2) at d = 2

@@ -30,14 +30,18 @@ inline RtLocalPreset rt_local_preset(EffectLevel level) {
 }
 constexpr float kRtSunConeRadians=0.02f;      // half angle of the sun's soft-shadow cone
 constexpr float kRtLightRadiusFraction=0.03f; // a point light's soft-shadow disc radius as a fraction of the distance to it
-// The factor that removes the shadowed lights' share from a pixel's light: 1 − Σ share_i·(1 − v_i), share_i = c_i / (ambient + Σ c).
-// ambient and contributions are in the same unit (gx_light_contribution gives 0..1 per light, like the record's ambient colour).
+// The factor that removes the shadowed lights' contribution from a pixel's light: GX clamps ambient + lights at 1 before it multiplies the material
+// (smoke.slang lightControl), so the lit colour scales by min(total − removed, 1) / min(total, 1), total = ambient + Σ c_i, removed = Σ c_i·(1 − v_i).
+// ambient and contributions are in the same unit (gx_light_contribution gives 0..1 per light, like the record's ambient colour); a negative contribution counts as none.
 inline float shadow_factor(float ambient_luminance, std::span<const float> contributions, std::span<const float> visibilities) {
-    float total=ambient_luminance, removed=0.f;
-    for (const float c:contributions) total+=c;
+    float total=std::fmax(ambient_luminance,0.f), removed=0.f;
+    for (size_t i=0;i<contributions.size();++i) {
+        const float c=std::fmax(contributions[i],0.f);
+        total+=c;
+        if (i<visibilities.size()) removed+=c*(1.f-visibilities[i]);
+    }
     if (total<=0.f) return 1.f;
-    for (size_t i=0;i<contributions.size() && i<visibilities.size();++i) removed+=contributions[i]*(1.f-visibilities[i]);
-    return 1.f-removed/total;
+    return std::fmin(total-removed,1.f)/std::fmin(total,1.f);
 }
 // One GX light's diffuse contribution to a surface point in luminance (0..1) as lightControl() in shaders/smoke.slang computes it for a channel with
 // the given attenuation function (0 none, 1 specular, 3 distance/spot) and diffuse mode (2 = clamped N.L). The specular function is not a diffuse light.
@@ -57,6 +61,6 @@ inline float gx_light_contribution(const gx::LightUniform& light, uint32_t atten
         const float cosine=direction[0]*normal[0]+direction[1]*normal[1]+direction[2]*normal[2];
         strength*=diffuse==2 ? std::fmax(0.f,cosine) : cosine;
     }
-    return strength*(0.299f*light.color[0]+0.587f*light.color[1]+0.114f*light.color[2])/255.f;
+    return std::fmax(strength,0.f)*(0.299f*light.color[0]+0.587f*light.color[1]+0.114f*light.color[2])/255.f;   // signed diffuse (mode 1) can go negative: that is no light to remove
 }
 }

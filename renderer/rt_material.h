@@ -19,25 +19,35 @@ static_assert(sizeof(RtMaterialRecord)==48);
 inline uint32_t rt_record_flags(const gx::ChannelLighting& channel0, bool model_valid) {
     return (model_valid ? kRtModelValid : 0u)|((channel0.attenuation&3u)<<kRtAttenuationShift)|((channel0.diffuse&3u)<<kRtDiffuseShift);
 }
-// Whether the RT estimate can model the draw's colour: channel 0 lit, and TEV stage 0 producing the rasterised colour of channel 0 times a texture or
-// konst (or one), with every later stage passing that result through unchanged. Fog comes after the TEV and does not matter. No stage at all is the
-// same form (tev.slang evaluateTev: rasterised colour x texture 0). Stage 0's rasteriser swap table must be the identity.
+// Whether the RT estimate can model the draw's colour: channel 0 lit with its ambient from the register, and the TEV's final colour a sum of terms that are each
+// the rasterised colour of channel 0 times a light-independent factor (texture, konst, one, half) or a previous such result, so that scaling the light
+// scales the colour. Evaluated stage by stage over {zero, factor, proportional to the lit colour, unknown}; a stage with a bias, a subtraction, an
+// interpolation (a != zero), the rasterised colour twice or a light-independent term added to a proportional one makes the result unknown. The
+// colour scale is free (it multiplies the lit colour too). Fog comes after the TEV and does not matter. No stage at all is the same form (tev.slang
+// evaluateTev: rasterised colour x texture 0). A stage that reads the rasterised colour needs the identity swap table and colour channel 0.
 inline bool light_model_valid(const gx::TevMaterial& material, const gx::ChannelLighting& channel0) {
-    if (!channel0.lit || material.stages>16) return false;
+    if (!channel0.lit || channel0.ambient_vertex || material.stages>16) return false;
     if (material.stages==0) return true;
-    if (material.swaps[material.stage[0].alpha&3]!=0xE4) return false;   // a swizzled rasterised colour is not the lit colour
-    constexpr uint32_t kZero=15, kRasterised=10;
-    const auto plain=[](uint32_t env) { return ((env>>16)&0x37u)==0; };   // no bias, add, scale 1 (bits 16-17 bias, 18 subtract, 20-21 scale)
-    const uint32_t env=material.stage[0].color, a=(env>>12)&15, b=(env>>8)&15, c=(env>>4)&15, d=env&15;
-    const auto factor=[](uint32_t selector) { return selector==8 || selector==12 || selector==14; };   // texture, one, konst
-    if (!plain(env) || a!=kZero || d!=kZero || ((material.stage[0].order>>7)&7)!=0) return false;
-    if (!((b==kRasterised && factor(c)) || (c==kRasterised && factor(b)))) return false;
-    uint32_t current=(env>>22)&3;   // the register holding the lit result
-    for (uint32_t i=1;i<material.stages;++i) {
-        const uint32_t next=material.stage[i].color;
-        if (!plain(next) || ((next>>4)&0xFFFu)!=0xFFFu || (next&15)!=current*2) return false;   // a = b = c = zero, d = that register
-        current=(next>>22)&3;
+    enum Kind { zero, factor, lit, unknown };
+    const auto product=[](Kind x, Kind y) { return x==zero || y==zero ? zero : x==unknown || y==unknown || (x==lit && y==lit) ? unknown : x==lit || y==lit ? lit : factor; };
+    const auto sum=[](Kind x, Kind y) { return x==zero ? y : y==zero ? x : x==unknown || y==unknown || x!=y ? unknown : x; };
+    Kind registers[4]={unknown,unknown,unknown,unknown};
+    uint32_t output=0;
+    for (uint32_t i=0;i<material.stages;++i) {
+        const auto& stage=material.stage[i];
+        const uint32_t env=stage.color, selectors[4]={(env>>12)&15,(env>>8)&15,(env>>4)&15,env&15};
+        const auto kind=[&](uint32_t selector) -> Kind {
+            if (selector<8) return selector%2==0 ? registers[selector/2] : unknown;   // 0, 2, 4, 6: the colour registers; the odd ones are alphas
+            return selector==10 ? lit : selector==8 || selector==12 || selector==13 || selector==14 ? factor : selector==15 ? zero : unknown;   // 8 texture, 10 rasterised, 12 one, 13 half, 14 konst, 15 zero
+        };
+        bool reads_rasterised=false;
+        for (const uint32_t selector:selectors) reads_rasterised|=selector==10;
+        if (reads_rasterised && (material.swaps[stage.alpha&3]!=0xE4 || ((stage.order>>7)&7)!=0)) return false;   // a swizzled or another channel's colour is not the lit colour
+        const bool plain=((env>>16)&7u)==0;   // no bias (bits 16-17), no subtraction (bit 18); the scale (20-21) is free
+        const Kind term=selectors[0]==15 ? product(kind(selectors[1]),kind(selectors[2])) : unknown;   // d + b x c; an interpolation with a != zero is not modelled
+        output=(env>>22)&3;
+        registers[output]=plain ? sum(kind(selectors[3]),term) : unknown;
     }
-    return true;
+    return registers[output]==lit;
 }
 }

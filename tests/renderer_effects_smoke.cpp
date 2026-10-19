@@ -693,7 +693,8 @@ int main(int argc, char** argv) {
                 CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
                 using Vec=std::array<double,3>;
                 const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
-                const std::array<float,4> material{0.8f,0.6f,0.4f,1.f}, ambient{0.35f,0.35f,0.35f,1.f};
+                const std::array<float,4> material{0.8f,0.6f,0.4f,1.f};
+                std::array<float,4> ambient{0.35f,0.35f,0.35f,1.f};   // the fixtures' ambient register (the saturation check raises it)
                 const std::array<std::array<float,3>,4> floor_corners{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}}, plate_corners{{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}};
                 enum class Light { directional, point };
                 auto light_uniform=[&](Light kind) {
@@ -746,7 +747,7 @@ int main(int argc, char** argv) {
                 const auto expected=[&](const Vec& p,Light kind) {
                     const float contribution=uc::gx_light_contribution(light_uniform(kind),kind==Light::point ? 3 : 0,2,{float(p[0]),float(p[1]),float(p[2])},{0,1,0});
                     const float visibility[]={blocked(p,kind) ? 0.f : 1.f};
-                    return uc::shadow_factor(0.35f,std::array<float,1>{contribution},visibility);
+                    return uc::shadow_factor(ambient[0],std::array<float,1>{contribution},visibility);
                 };
                 const auto signal_at=[&](const uc::VulkanRenderer::RtShadowPixels& signal,const Vec& p,uint32_t divisor) {   // the point's signal pixel (the point's shadow can be only a few pixels tall)
                     const auto pixel=pixel_of(p);
@@ -787,6 +788,14 @@ int main(int argc, char** argv) {
                 frame(sun_only,Light::point); frame(sun_only,Light::point);   // the sun level does not trace a point light
                 signal=renderer.capture_rt_shadow_signal();
                 CHECK(std::abs(signal_at(signal,shadowed_point,2)-1.0)<=0.01);
+                // (b2) GX clamps ambient + light at 1: with a bright ambient the shadow takes only what the clamp leaves (0.9 / 1 instead of the unclamped 0.61)
+                ambient={0.9f,0.9f,0.9f,1.f};
+                frame(sun_only,Light::directional); frame(sun_only,Light::directional);
+                signal=renderer.capture_rt_shadow_signal();
+                const double bright_shadow=signal_at(signal,shadowed_sun,2);
+                std::fprintf(stderr,"rt-shadows: bright ambient: shadowed %.3f, expected %.3f\n",bright_shadow,expected(shadowed_sun,Light::directional));
+                CHECK(std::abs(bright_shadow-expected(shadowed_sun,Light::directional))<=0.05 && bright_shadow>0.8);
+                ambient={0.35f,0.35f,0.35f,1.f};
                 // (c) nothing is lit: every factor is 1 (Review Focus 1)
                 frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
                 signal=renderer.capture_rt_shadow_signal();

@@ -1,5 +1,4 @@
 #pragma once
-#include "view_reconstruct.h"
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>

@@ -40,7 +40,7 @@ Design: `docs/superpowers/specs/2026-10-19-ray-tracing-design.md`; plans `docs/s
 
 ## Testing
 
-* Host tests: `test_options`, `test_options_config`, `test_live_settings`, `test_feature_report`, `test_settings_menu`, `test_scene_lights`, `test_view_reconstruct`, `test_gbuffer`, `test_pipeline_keys`.
+* Host tests: `test_options`, `test_options_config`, `test_live_settings`, `test_feature_report`, `test_settings_menu`, `test_scene_lights`, `test_view_reconstruct`, `test_gbuffer`, `test_pipeline_keys`, `test_rt_material`, `test_rt_shadow_math`, `test_rt_denoise_math`, `test_rt_ui`.
 * GPU: `renderer_effects_smoke [--validation] [--aniso] [--smaa] [--gbuffer] [--passthrough] [--gtao] [--contact] [--ppl] [--rt-material] [--rt-as] [--rt-shadows] [--rt-denoise]` (every section when no flag), `renderer_upscale_smoke`, `renderer_smoke`. They are not part of ctest; run them from `build/renderer` (with `VK_LOADER_LAYERS_DISABLE=~implicit~` for `--validation`). `UC_SMOKE_DUMP=<dir>` saves the frames of the sections.
 * Live: `python -m uctest run fight --game-arg=--ambient-occlusion --game-arg=high --game-arg=--profile` prints `[gpu] passes: …` per second; the frame log has `gpu_upscale_ms`, `gpu_smaa_ms`, `gpu_occlusion_ms`.
 * Debug switches: `UC_LIGHT_STATS=<file>` (lighting per callsite), `UC_SKIP_CALLSITES=<hex>,…` (leave draws of a guest callsite out).
