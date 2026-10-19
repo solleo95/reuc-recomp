@@ -29,5 +29,11 @@ int main() {
     gx::TevMaterial none; CHECK(uc::light_model_valid(none,lit));   // no TEV stage: the renderer draws rasterised x texture 0
     CHECK(!uc::light_model_valid(none,unlit));
     CHECK(sizeof(uc::RtMaterialRecord)==48);
+    // The record carries the channel's attenuation function (bits 8-9) and diffuse mode (10-11) for the RT shadow pass (shaders/rt_shadow.slang)
+    const auto channel=gx::channel_lighting(2|(1<<2)|(2<<7)|(3<<9));   // lit, light 0, clamped diffuse, distance attenuation
+    const uint32_t flags=uc::rt_record_flags(channel,true);
+    CHECK((flags&uc::kRtModelValid) && ((flags>>8)&3)==3 && ((flags>>10)&3)==2);
+    CHECK(!(uc::rt_record_flags(channel,false)&uc::kRtModelValid) && ((uc::rt_record_flags(channel,false)>>8)&3)==3);
+    CHECK(((uc::rt_record_flags(gx::channel_lighting(2|(1<<2)),false)>>8)&15)==0);   // no attenuation, no diffuse
     return 0;
 }

@@ -18,6 +18,7 @@ struct FrameRow {
     double events_ms = 0, cpu_mcycles = 0;   // SDL event handling since the previous present; CPU cycles the main thread ran since then (QueryThreadCycleTime)
     double idle_ms = 0, thread_ms[8] = {};   // the scheduler waiting with every guest thread blocked; baton time of guest threads 1..8 since the previous present
     double gpu_upscale_ms = 0, gpu_smaa_ms = 0, gpu_occlusion_ms = 0;   // latest GPU time of each effect pass (renderer pass timestamps), 0 while the pass does not run
+    double gpu_rt_shadows_ms = 0;   // ray-traced shadows (trace, denoise, composite) of the frame's boundary packet
     double gpu_rt_as_ms = 0, gpu_rt_probe_ms = 0;   // ray tracing (UC_RT_PROBE): acceleration structures summed over the frame's packets; the probe's latest time
     uint32_t rt_blas = 0; uint64_t rt_triangles = 0;   // the frame's BLASes (one per scene packet with instances) and their triangles
     double gpu_ms = 0;   // longest GPU execution of one submission retired since the previous present (timestamp queries)

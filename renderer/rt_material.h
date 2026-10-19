@@ -11,8 +11,14 @@ namespace uc {
 // colour; the albedo target carries the per-pixel vertex colour. Logic-op draws write neither target: their pixels keep the record/albedo underneath.
 constexpr uint32_t kRtModelValid=1, kRtReflective=2, kRtEmissive=4;
 constexpr uint32_t kRtNoRecord=~0u;
+// The record's flags also carry the channel-0 attenuation function (bits 8-9) and diffuse mode (bits 10-11) the RT shadow pass needs to evaluate the draw's
+// lights as lightControl() does.
+constexpr uint32_t kRtAttenuationShift=8, kRtDiffuseShift=10;
 struct RtMaterialRecord { std::array<float,4> material_color, ambient_color; uint32_t light_mask; uint32_t lights_offset; uint32_t flags; float roughness; };
 static_assert(sizeof(RtMaterialRecord)==48);
+inline uint32_t rt_record_flags(const gx::ChannelLighting& channel0, bool model_valid) {
+    return (model_valid ? kRtModelValid : 0u)|((channel0.attenuation&3u)<<kRtAttenuationShift)|((channel0.diffuse&3u)<<kRtDiffuseShift);
+}
 // Whether the RT estimate can model the draw's colour: channel 0 lit, and TEV stage 0 producing the rasterised colour of channel 0 times a texture or
 // konst (or one), with every later stage passing that result through unchanged. Fog comes after the TEV and does not matter. No stage at all is the
 // same form (tev.slang evaluateTev: rasterised colour x texture 0). Stage 0's rasteriser swap table must be the identity.

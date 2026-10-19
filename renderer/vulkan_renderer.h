@@ -9,8 +9,10 @@
 #include "occlusion_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
+#include "rt_denoiser.h"
 #include "rt_material.h"
 #include "rt_scene.h"
+#include "rt_shadow_pass.h"
 #include "streamline.h"
 #include "dlss_frame_generation.h"
 #include "fsr_frame_generation.h"
@@ -102,6 +104,13 @@ public:
     // Ray tracing debug probe (UC_RT_PROBE=1, phase 0): per-frame acceleration structures and one shadow ray per scene pixel, counted, nothing drawn.
     // Off, nothing ray tracing runs or allocates. set_rt_probe: tests (what the variable sets at initialize).
     bool rt_probe_active() const { return rt_probe_ && ray_tracing_; }
+    // Ray-traced shadows (docs/superpowers/plans/2026-10-19-ray-tracing-p2.md): the sun and the local lights trace rays through the frame's TLAS. effects_ has the RT
+    // levels masked by device support. rt_scene_active: the acceleration structures are built this frame (shadows or the probe).
+    bool rt_shadows_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off); }
+    bool rt_scene_active() const { return rt_probe_active() || rt_shadows_active(); }
+    struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
+    RtShadowPixels capture_rt_shadow_signal();   // tests/tools: the noisy signal of the latest traced frame (waits for the GPU); throws when none was traced
+    uint32_t rt_shadow_signal_images() const { return rt_shadow_.signal_images_created(); }
     void set_rt_probe(bool on);
     uint32_t rt_probe_occluded();   // tests/tools: the occluded pixels the latest probe counted (waits for the GPU)
     RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
@@ -220,6 +229,9 @@ private:
     bool ray_tracing_=false;
     bool rt_probe_=false, rt_frame_=false, rt_as_open_=false;   // rt_frame_: the probe was on at this frame's start; rt_as_open_: the rt_as timer runs on to the TLAS
     RtScene rt_;
+    RtShadowPass rt_shadow_;
+    RtDenoiser rt_shadow_denoiser_;
+    bool rt_shadow_traced_=false, rt_shadow_ran_last_=false;   // traced: the signal image holds a frame's trace; ran_last: the previous frame denoised (else the history is stale)
     VkBufferUsageFlags rt_input_usage() const { return ray_tracing_ ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT|VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0; }   // mesh and palette buffers the AS builder reads
     bool motion_outputs_=false;   // upscaling: pipelines carry the motion attachment and the jitter (smoke.motion.*.spv)
     // Upscaling: the 3D scene of a guest frame renders into these internal-resolution targets up to the scene boundary, then the upscaler

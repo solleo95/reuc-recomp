@@ -3,7 +3,9 @@
 #include "check.h"
 #include "gbuffer.h"
 #include "rt_denoiser.h"
+#include "rt_shadow_math.h"
 #include "vulkan_renderer.h"
+#include <algorithm>
 #include <SDL3/SDL_vulkan.h>
 #include <bit>
 #include <chrono>
@@ -727,6 +729,148 @@ int main(int argc, char** argv) {
                 as_runs=renderer.pass_runs(uc::GpuPass::rt_as); probe_runs=renderer.pass_runs(uc::GpuPass::rt_probe);
                 frame(0); frame(0);   // probe off: nothing RT runs
                 CHECK(renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_probe)==probe_runs);
+            }
+        }
+        if (wanted("rt-shadows")) {
+            // Ray-traced shadows (rt_shadow_pass.h, plan p2 Tasks 8-9): a thin plate (the box's front) over a floor, lit by one directional or one point light. The
+            // visibility signal must equal shadow_factor() computed on the CPU from an independent ray cast of the plate, and the frame must show it.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-shadows: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                using Vec=std::array<double,3>;
+                const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                const std::array<float,4> material{0.8f,0.6f,0.4f,1.f}, ambient{0.35f,0.35f,0.35f,1.f};
+                const std::array<std::array<float,3>,4> floor_corners{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}}, plate_corners{{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}};
+                enum class Light { directional, point };
+                auto light_uniform=[&](Light kind) {
+                    gx::LightUniform light;
+                    light.color={255,255,255,255}; light.direction={0,0,1,0}; light.cosine={1,0,0,0}; light.distance={1,0,0,0};
+                    light.position=kind==Light::directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{1.5f,1.5f,-3.f,0};
+                    return light;
+                };
+                auto surface=[&](const std::array<std::array<float,3>,4>& corners,std::array<float,3> normal,bool plate,Light kind,bool lit) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
+                    draw.transforms.edit().projection=projection;
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);   // depth test "less or equal" with update
+                    uniforms.channels[0]=lit ? 2|(1<<2)|(2<<7)|(kind==Light::point ? 3<<9 : 0) : 0;   // material register, lighting on, light 0, clamped diffuse, distance attenuation for the point light
+                    uniforms.materials[0]=material; uniforms.ambient[0]=ambient;
+                    uniforms.lights[0]=light_uniform(kind);
+                    if(plate) { draw.material.stages=1; draw.material.swaps={0xE4,0xE4,0xE4,0xE4}; draw.material.stage[0]={0x8F8AF,0x8FFC0,64,0,0}; }   // stage 0: texture x rasterised colour (the model-valid form)
+                    draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices}); draw.vertices.clear(); draw.indices.clear();   // an RT instance needs a mesh draw
+                    return draw;
+                };
+                struct Setting { bool master; uc::EffectLevel sun, local, raster; };
+                auto frame=[&](Setting s,Light kind,bool lit=true,float zoom=1.f) {
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=s.master; effects.rt_shadows=s.sun; effects.rt_local_shadows=s.local; effects.shadows=s.raster; renderer.set_effects(effects);
+                    gx::FramePacket scene; scene.present=false;
+                    auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
+                    auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
+                    scene.draws.push_back(std::move(floor)); scene.draws.push_back(std::move(plate));
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    return renderer.capture(submit(std::move(hud)));
+                };
+                // The CPU reference: the floor point P under the light, the plate as the only occluder, the GX equations of rt_shadow_math.h.
+                const auto pixel_of=[&](const Vec& p) { return std::array<uint32_t,2>{uint32_t((p[0]/-p[2]+1)/2*1280),uint32_t((p[1]/-p[2]+1)/2*720)}; };   // unit scales, no offsets; the 1280x720 scene region
+                const auto blocked=[&](const Vec& p,Light kind) {
+                    const auto l=light_uniform(kind);
+                    const Vec target{kind==Light::directional ? p[0]+(l.position[0]/1.7320508e6)*1e4 : l.position[0],kind==Light::directional ? p[1]+(l.position[1]/1.7320508e6)*1e4 : l.position[1],kind==Light::directional ? p[2]+(l.position[2]/1.7320508e6)*1e4 : l.position[2]};
+                    const double t=(-4-p[2])/(target[2]-p[2]);
+                    if(!(t>0 && t<1)) return false;
+                    const double x=p[0]+(target[0]-p[0])*t, y=p[1]+(target[1]-p[1])*t;
+                    return x>=-0.5 && x<=0.5 && y>=-1 && y<=-0.4;
+                };
+                const auto expected=[&](const Vec& p,Light kind) {
+                    const float contribution=uc::gx_light_contribution(light_uniform(kind),kind==Light::point ? 3 : 0,2,{float(p[0]),float(p[1]),float(p[2])},{0,1,0});
+                    const float visibility[]={blocked(p,kind) ? 0.f : 1.f};
+                    return uc::shadow_factor(0.35f,std::array<float,1>{contribution},visibility);
+                };
+                const auto signal_at=[&](const uc::VulkanRenderer::RtShadowPixels& signal,const Vec& p,uint32_t divisor) {   // the point's signal pixel (the point's shadow can be only a few pixels tall)
+                    const auto pixel=pixel_of(p);
+                    return double(signal.factor[size_t(pixel[1]/divisor)*signal.width+(pixel[0]/divisor)]);
+                };
+                // Sample points on the floor that the camera sees (not behind the plate) and whose shadow state is the same for every point within 8 cm (a robust margin).
+                const auto hidden=[&](const Vec& p) { const auto at=pixel_of(p); return at[0]>=545 && at[0]<=735 && at[1]>=260 && at[1]<=335; };
+                const auto robust=[&](const Vec& p,Light kind,bool want_blocked,double margin) {
+                    for(const double dx:{-margin,0.0,margin}) for(const double dz:{-margin,0.0,margin}) if(blocked({p[0]+dx,p[1],p[2]+dz},kind)!=want_blocked) return false;
+                    return true;
+                };
+                const auto pick=[&](Light kind,bool want_blocked) {   // the widest margin any visible point has: the middle of the region, away from every edge
+                    for(const double margin:{0.25,0.18,0.12,0.08}) {
+                        std::vector<Vec> found;
+                        for(double x=-4;x<=4;x+=0.05) for(double z=-5.5;z<=-4.2;z+=0.05) { const Vec p{x,-1,z}; if(!hidden(p) && robust(p,kind,want_blocked,margin)) found.push_back(p); }
+                        if(!found.empty()) return found[found.size()/2];
+                    }
+                    throw std::runtime_error("rt-shadows: no sample point");
+                };
+                const Vec shadowed_sun=pick(Light::directional,true), lit_sun=pick(Light::directional,false), shadowed_point=pick(Light::point,true), lit_point=pick(Light::point,false);
+                std::fprintf(stderr,"rt-shadows: expected sun shadowed %.3f lit %.3f, point shadowed %.3f lit %.3f\n",expected(shadowed_sun,Light::directional),expected(lit_sun,Light::directional),expected(shadowed_point,Light::point),expected(lit_point,Light::point));
+                CHECK(blocked(shadowed_sun,Light::directional) && !blocked(lit_sun,Light::directional) && blocked(shadowed_point,Light::point) && !blocked(lit_point,Light::point));   // the fixture's geometry
+                const Setting off{false,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off};
+                const Setting sun_only{true,uc::EffectLevel::medium,uc::EffectLevel::off,uc::EffectLevel::off}, local_only{true,uc::EffectLevel::off,uc::EffectLevel::medium,uc::EffectLevel::off};
+                // (a) the sun: the signal against the CPU reference
+                frame(sun_only,Light::directional); frame(sun_only,Light::directional);   // the first frame decides scene mode for the next one
+                auto signal=renderer.capture_rt_shadow_signal();
+                CHECK(signal.width==640 && signal.height==360);   // medium: half the 1280x720 scene region
+                const double sun_shadow=signal_at(signal,shadowed_sun,2), sun_lit=signal_at(signal,lit_sun,2);
+                std::fprintf(stderr,"rt-shadows: sun signal shadowed %.3f lit %.3f\n",sun_shadow,sun_lit);
+                CHECK(std::abs(sun_shadow-expected(shadowed_sun,Light::directional))<=0.05 && std::abs(sun_lit-1.0)<=0.01);
+                // (b) the point light is a local light: it is traced by rt_local_shadows only
+                frame(local_only,Light::point); frame(local_only,Light::point);
+                signal=renderer.capture_rt_shadow_signal();
+                const double point_shadow=signal_at(signal,shadowed_point,2), point_lit=signal_at(signal,lit_point,2);
+                std::fprintf(stderr,"rt-shadows: point signal shadowed %.3f lit %.3f\n",point_shadow,point_lit);
+                CHECK(std::abs(point_shadow-expected(shadowed_point,Light::point))<=0.05 && std::abs(point_lit-1.0)<=0.01);
+                frame(sun_only,Light::point); frame(sun_only,Light::point);   // the sun level does not trace a point light
+                signal=renderer.capture_rt_shadow_signal();
+                CHECK(std::abs(signal_at(signal,shadowed_point,2)-1.0)<=0.01);
+                // (c) nothing is lit: every factor is 1 (Review Focus 1)
+                frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
+                signal=renderer.capture_rt_shadow_signal();
+                CHECK(*std::min_element(signal.factor.begin(),signal.factor.end())>=0.999f);
+                // (d) off: nothing runs and nothing is allocated
+                frame(off,Light::directional); frame(off,Light::directional);
+                const uint64_t runs=renderer.pass_runs(uc::GpuPass::rt_shadows); const uint32_t images=renderer.rt_shadow_signal_images();
+                frame(off,Light::directional); frame(off,Light::directional);
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_shadows)==runs && renderer.rt_shadow_signal_images()==images);
+                // (e) frames: the shadowed floor is darker with the effect, the far floor is not; the raster shadow map does not run while RT shadows replace it
+                const Setting both_raster{true,uc::EffectLevel::medium,uc::EffectLevel::off,uc::EffectLevel::medium};
+                frame(off,Light::directional); const auto picture_off=frame(off,Light::directional);
+                const auto shadow_runs=renderer.pass_runs(uc::GpuPass::shadow);
+                for(int i=0;i<3;++i) frame(both_raster,Light::directional);
+                const auto picture_on=frame(both_raster,Light::directional);
+                CHECK(renderer.pass_runs(uc::GpuPass::shadow)==shadow_runs);   // replaced: no shadow map while RT shadows are active (the raster level stays medium)
+                const auto grey=[&](const uc::RenderPixels& pixels,const Vec& p) { const auto at=pixel_of(p); return int(pixels.rgba[(size_t(at[1])*pixels.width+at[0])*4+1]); };
+                std::fprintf(stderr,"rt-shadows: picture shadowed floor off %d on %d, far floor off %d on %d\n",grey(picture_off,shadowed_sun),grey(picture_on,shadowed_sun),grey(picture_off,lit_sun),grey(picture_on,lit_sun));
+                CHECK(grey(picture_on,shadowed_sun)<=grey(picture_off,shadowed_sun)-25 && std::abs(grey(picture_on,lit_sun)-grey(picture_off,lit_sun))<=1);
+                // (f) the master switch off with the levels kept: the raster shadow map runs again, no RT pass
+                const auto rt_runs=renderer.pass_runs(uc::GpuPass::rt_shadows);
+                const Setting master_off{false,uc::EffectLevel::medium,uc::EffectLevel::off,uc::EffectLevel::medium};
+                for(int i=0;i<3;++i) frame(master_off,Light::directional);
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_shadows)==rt_runs && renderer.pass_runs(uc::GpuPass::shadow)>shadow_runs);
+                // (g) toggling between presets that share a resolution allocates nothing new; a still camera does not shimmer with soft shadows
+                const Setting soft{true,uc::EffectLevel::high,uc::EffectLevel::off,uc::EffectLevel::off};
+                for(int i=0;i<8;++i) frame(i%2 ? sun_only : soft,Light::directional);
+                const auto growths=renderer.rt_buffer_growths(); const auto signal_images=renderer.rt_shadow_signal_images();
+                for(int i=0;i<20;++i) frame(i%2 ? sun_only : soft,Light::directional);
+                CHECK(renderer.rt_buffer_growths()==growths && renderer.rt_shadow_signal_images()==signal_images);
+                std::vector<int> series;
+                for(int i=0;i<20;++i) { const auto picture=frame(soft,Light::directional); if(i>=12) series.push_back(grey(picture,shadowed_sun)); }
+                double mean=0; for(int v:series) mean+=v; mean/=double(series.size());
+                double deviation=0; for(int v:series) deviation+=(v-mean)*(v-mean);
+                deviation=std::sqrt(deviation/double(series.size()));
+                std::fprintf(stderr,"rt-shadows: soft shadow over 8 still frames: mean %.1f deviation %.2f\n",mean,deviation);
+                CHECK(deviation<2.0);
+                frame(off,Light::directional); frame(off,Light::directional);
             }
         }
         if (wanted("rt-denoise")) {

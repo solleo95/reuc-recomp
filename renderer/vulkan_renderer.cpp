@@ -1063,12 +1063,35 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
-    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the debug probe
+    bool rt_shadow_ran=false;
+    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows and the debug probe
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
-        rt_.build_tlas(command);
+        const bool tlas_built=rt_.build_tlas(command);
         pass_timer_.end(command,timer_slot,GpuPass::rt_as);
-        if (frame_projection_ && dominant_light_ && dominant_light_->kind==gx::LightKind::directional) {
+        if (tlas_built && rt_shadows_active() && gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_) {   // ray-traced shadows: trace, denoise, composite into the scene colour
+            const auto idle=[this] { vk_check(present_.wait_idle(device),"rt shadows idle"); };
+            rt_shadow_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
+            rt_shadow_denoiser_.initialize(device,memory_,shaders_,idle);
+            pass_timer_.begin(command,timer_slot,GpuPass::rt_shadows);
+            RtShadowInputs shadow;
+            shadow.command=command; shadow.tlas=rt_.tlas(); shadow.depth=scene_depth_view_; shadow.gbuffer=scene_gbuffer_view_; shadow.material=scene_material_view_; shadow.color=scene_color_view_;
+            shadow.records=rt_records_[rt_record_slot_].buffer; shadow.lights=rt_lights_[rt_record_slot_].buffer;
+            shadow.region=in.render_size; shadow.viewport=scene_viewport; shadow.view=view_params(*frame_projection_);
+            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.slot=timer_slot;
+            shadow.frame=(upscaler_kind_==UpscalerKind::dlss || upscaler_kind_==UpscalerKind::fsr) ? uint32_t(upscale_frame_%8)+1 : 0;   // as the occlusion noise: the upscaler's history averages the pattern
+            const VkImageView noisy=rt_shadow_.trace(shadow);
+            rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
+            if (in.reset || !rt_shadow_ran_last_) rt_shadow_denoiser_.reset();   // a cut, a black frame or a frame without the effect: the history is stale
+            DenoiseInputs denoise;
+            denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
+            denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
+            const bool high=int(effects_.rt_shadows)>=int(EffectLevel::high) || int(effects_.rt_local_shadows)>=int(EffectLevel::high);
+            rt_shadow_.composite(shadow,rt_shadow_denoiser_.denoise(command,RtSignal::visibility,noisy,denoise,high ? 3 : 2));
+            pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
+            rt_shadow_traced_=rt_shadow_ran=true;
+        }
+        if (rt_probe_active() && frame_projection_ && dominant_light_ && dominant_light_->kind==gx::LightKind::directional) {
             const auto& p=dominant_light_->position; const float length=std::sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]);
             RtProbeInputs probe; probe.depth=scene_depth_view_; probe.region=in.render_size; probe.viewport=scene_viewport; probe.view=view_params(*frame_projection_);
             probe.to_light={p[0]/length,p[1]/length,p[2]/length};
@@ -1077,6 +1100,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             pass_timer_.end(command,timer_slot,GpuPass::rt_probe);
         }
     }
+    rt_shadow_ran_last_=rt_shadow_ran;
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
@@ -1173,6 +1197,27 @@ VulkanRenderer::MotionPixels VulkanRenderer::capture_motion() {
         return std::bit_cast<float>(sign|((exponent+112)<<23)|(mantissa<<13));
     };
     for (size_t i=0;i<size_t(scene_extent_.width)*scene_extent_.height;++i) { pixels.rg.push_back(half(halves[i*4])); pixels.rg.push_back(half(halves[i*4+1])); }
+    destroy_buffer(buffer);
+    return pixels;
+}
+VulkanRenderer::RtShadowPixels VulkanRenderer::capture_rt_shadow_signal() {
+    owner();
+    const VkExtent2D extent=rt_shadow_.signal_extent();
+    if (!rt_shadow_traced_ || !rt_shadow_.signal_image()) throw std::logic_error("no ray-traced shadow signal to capture");
+    vk_check(present_.wait_idle(device),"rt shadow capture idle");
+    const VkDeviceSize bytes=VkDeviceSize(extent.width)*extent.height*2;
+    Buffer buffer=make_buffer(bytes,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    run_commands([&](VkCommandBuffer command) {
+        VkBufferImageCopy copy{}; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={extent.width,extent.height,1};
+        vkCmdCopyImageToBuffer(command,rt_shadow_.signal_image(),VK_IMAGE_LAYOUT_GENERAL,buffer.buffer,1,&copy);
+    });
+    RtShadowPixels pixels{extent.width,extent.height,{}};
+    pixels.factor.reserve(size_t(extent.width)*extent.height);
+    const auto* halves=static_cast<const uint16_t*>(buffer.mapped);
+    for (size_t i=0;i<size_t(extent.width)*extent.height;++i) {   // IEEE half to float
+        const uint16_t h=halves[i]; const uint32_t sign=uint32_t(h>>15)<<31, exponent=(h>>10)&31, mantissa=h&1023;
+        pixels.factor.push_back(!exponent ? std::bit_cast<float>(sign)+(sign ? -1.f : 1.f)*std::ldexp(float(mantissa),-24) : exponent==31 ? std::bit_cast<float>(sign|0x7F800000u|(mantissa<<13)) : std::bit_cast<float>(sign|((exponent+112)<<23)|(mantissa<<13)));
+    }
     destroy_buffer(buffer);
     return pixels;
 }
@@ -1492,7 +1537,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
             scene_lights_.clear(); frame_projection_.reset(); shadow_fit_.reset(); shadow_cleared_=false;
             rt_material_cleared_=false; rt_record_slot_=frame_index_%kFrameSlots; rt_record_count_=0;   // the slot's previous frame has completed (see rt_ below)
-            rt_frame_=rt_probe_active();
+            rt_frame_=rt_scene_active();
             if (rt_frame_) {   // frame index modulo the in-flight slots: a frame has at least one submission, so the slot's previous frame has completed
                 rt_.initialize(device,physical_,memory_,shaders_,uint32_t(kFrameSlots));
                 rt_.begin_frame(frame_index_);
@@ -1598,7 +1643,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto& uniforms=*draw.uniforms;
                 const auto lighting=gx::channel_lighting(uniforms.channels[0]);
                 const uint32_t index=first_record+uint32_t(records.size());
-                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,light_model_valid(draw.material,lighting) ? kRtModelValid : 0u,0.f});
+                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,rt_record_flags(lighting,light_model_valid(draw.material,lighting)),0.f});
                 record_uniforms.push_back(&uniforms);
                 draw_record[d]=index;
             }
@@ -2157,7 +2202,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);
