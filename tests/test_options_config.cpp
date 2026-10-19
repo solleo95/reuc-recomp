@@ -72,12 +72,6 @@ int main() {
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.motion_blur==uc::EffectLevel::off);
         auto blur_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto blur_options=uc::options_from_config(blur_doc);blur_options.effects.motion_blur=uc::EffectLevel::low;uc::store_options(blur_doc,blur_options);
         CHECK(uc::options_from_config(blur_doc).effects.motion_blur==uc::EffectLevel::low && uc::serialize_config(blur_doc).find("\"motion_blur\": \"low\"")!=std::string::npos);
-        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"volumetric_lighting":"high"}})")).effects.volumetric_lighting==uc::EffectLevel::high);
-        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.volumetric_lighting==uc::EffectLevel::off);
-        auto shaft_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto shaft_options=uc::options_from_config(shaft_doc);shaft_options.effects.volumetric_lighting=uc::EffectLevel::medium;uc::store_options(shaft_doc,shaft_options);
-        CHECK(uc::options_from_config(shaft_doc).effects.volumetric_lighting==uc::EffectLevel::medium && uc::serialize_config(shaft_doc).find("\"volumetric_lighting\": \"medium\"")!=std::string::npos);
-        bool bad_shaft=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"volumetric_lighting":3}})"));}catch(const std::invalid_argument&){bad_shaft=true;}
-        CHECK(bad_shaft);
         bool bad_blur=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"motion_blur":"extreme"}})"));}catch(const std::invalid_argument&){bad_blur=true;}
         CHECK(bad_blur);
         bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}

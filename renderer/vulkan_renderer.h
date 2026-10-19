@@ -7,7 +7,6 @@
 #include "motion_tracker.h"
 #include "motion_blur_pass.h"
 #include "occlusion_pass.h"
-#include "volumetric_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
 #include "streamline.h"
@@ -88,7 +87,7 @@ public:
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
     void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
-    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || effects_.volumetric_lighting!=EffectLevel::off); }
+    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
     bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
@@ -232,7 +231,6 @@ private:
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
     OcclusionPass occlusion_;
     MotionBlurPass motion_blur_;
-    VolumetricPass volumetric_;
     ShadowMap shadow_map_;
     VkShaderModule shadow_vertex_module_=VK_NULL_HANDLE;
     VkPipeline shadow_pipeline_=VK_NULL_HANDLE;

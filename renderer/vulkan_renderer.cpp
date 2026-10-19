@@ -1042,18 +1042,6 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion_.record(occlusion);
         pass_timer_.end(command,timer_slot,GpuPass::occlusion);
     }
-    if (effects_.volumetric_lighting!=EffectLevel::off && dominant_light_ && frame_projection_) {   // shafts toward the light, added to the scene colour before it is reconstructed
-        VolumetricInputs shafts;
-        shafts.command=command; shafts.targets_generation=targets_generation_; shafts.color=in.color; shafts.region=in.render_size;
-        shafts.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
-        shafts.view=view_params(*frame_projection_); shafts.level=effects_.volumetric_lighting; shafts.light=dominant_light_;
-        if (light_screen_position(*dominant_light_,shafts.view,shafts.viewport)) {
-            volumetric_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"volumetric idle"); });
-            pass_timer_.begin(command,timer_slot,GpuPass::volumetric);
-            volumetric_.record(shafts);
-            pass_timer_.end(command,timer_slot,GpuPass::volumetric);
-        }
-    }
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -1963,7 +1951,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); volumetric_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown();
         destroy_scene_targets();
         for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
         stop_workers();

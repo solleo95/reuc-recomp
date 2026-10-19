@@ -111,8 +111,7 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
             menu.commit(); CHECK(live.options().effects.motion_blur==uc::EffectLevel::low && !live.error());
             CHECK(context.OpenPopupStack.empty());
             CHECK(!live.options().effects.contact_shadows);
-            const float volumetric_center=blur_center+height+3*style.ItemSpacing.y+std::floor(6*unit)+text;   // and the light shafts combo follows that
-            io.AddMousePosEvent(effects->Pos.x+small_height*.5f,effects->Pos.y+volumetric_center+height*.5f+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
+            io.AddMousePosEvent(effects->Pos.x+small_height*.5f,effects->Pos.y+blur_center+height*.5f+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
             CHECK(context.HoveredId==effects->GetID("##contact"));
             click(io.MousePos);
             menu.commit(); CHECK(live.options().effects.contact_shadows && !live.error());

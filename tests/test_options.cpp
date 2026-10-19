@@ -127,12 +127,6 @@ int main() {
         CHECK(!uc::effect_level_from_name("High") && !uc::effect_level_from_name(""));
         CHECK(std::get<uc::Options>(defaults).effects.motion_blur==uc::EffectLevel::off);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--motion-blur","medium"})).effects.motion_blur==uc::EffectLevel::medium);
-        CHECK(std::get<uc::Options>(defaults).effects.volumetric_lighting==uc::EffectLevel::off);
-        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--volumetric-lighting","low"})).effects.volumetric_lighting==uc::EffectLevel::low);
-        const auto bad_volumetric=parse(std::array<std::string_view,2>{"--volumetric-lighting","dense"});
-        CHECK(std::holds_alternative<std::string>(bad_volumetric) && std::get<std::string>(bad_volumetric)=="invalid value for --volumetric-lighting");
-        const auto missing_volumetric=parse(std::array<std::string_view,1>{"--volumetric-lighting"});
-        CHECK(std::holds_alternative<std::string>(missing_volumetric) && std::get<std::string>(missing_volumetric)=="missing value for --volumetric-lighting");
         const auto bad_blur=parse(std::array<std::string_view,2>{"--motion-blur","extreme"});
         CHECK(std::holds_alternative<std::string>(bad_blur) && std::get<std::string>(bad_blur)=="invalid value for --motion-blur");
         const auto missing_blur=parse(std::array<std::string_view,1>{"--motion-blur"});

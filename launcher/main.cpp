@@ -520,8 +520,6 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
-                ImGui::Dummy({0,8*unit});
-                level_combo("##volumetric","volumetric_lighting","volumetric-lighting",options.effects.volumetric_lighting);
             }
             ImGui::Dummy({0,8*unit});
             toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));

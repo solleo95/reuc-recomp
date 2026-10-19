@@ -222,7 +222,6 @@ void SettingsMenu::effects_tab(float unit) {
     };
     level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
     level_combo("##blur","motion_blur",options.effects.motion_blur);
-    level_combo("##volumetric","volumetric_lighting",options.effects.volumetric_lighting);
     ImGui::Dummy({0,6*unit});
     ImGui::BeginDisabled(!path && !options.effects.contact_shadows);
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);

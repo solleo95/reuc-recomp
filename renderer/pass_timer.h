@@ -6,7 +6,7 @@
 
 namespace uc {
 // GPU passes of the graphics effects that get their own timing (frame log columns, --profile). Later effects append to the list.
-enum class GpuPass : uint32_t { upscale, smaa, occlusion, shadow, motion_blur, volumetric, count };
+enum class GpuPass : uint32_t { upscale, smaa, occlusion, shadow, motion_blur, count };
 constexpr size_t kGpuPassCount=size_t(GpuPass::count);
 // Per-submission timestamps around passes: reset(slot) at the start of a slot's command buffer, begin()/end() around a pass, collect(slot) once
 // that slot's fence has completed. last_ms() keeps the latest measurement of each pass (0 until it ran).
