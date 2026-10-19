@@ -1,6 +1,7 @@
 #pragma once
 #include "gx_packets.h"
 #include "scene_boundary.h"
+#include "scene_lights.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -72,7 +73,33 @@ public:
         }
         if(packet.present && ++motion_frame_>=motion_frames_) {motion_done_=true;std::fclose(motion_file_);motion_file_=nullptr;}
     }
-    void enable_stats() { if(const char* path=std::getenv("UC_PACKET_STATS")) stats_path_=path; }
+    void enable_stats() {
+        if(const char* path=std::getenv("UC_PACKET_STATS")) stats_path_=path;
+        if(const char* path=std::getenv("UC_LIGHT_STATS")) lights_path_=path;
+    }
+    // UC_LIGHT_STATS=<file>: per callsite of the perspective (scene) draws, written at exit as CSV sorted by vertices: draws, vertices, draws with channel 0 / 1 lit,
+    // lights used per kind (directional, point, spot, specular; counted per draw), vertices with a normal, blend, alpha-test draws, depth-writing draws, textured draws.
+    struct LightRow { uint64_t draws=0,vertices=0,lit0=0,lit1=0,kinds[4]{},normals=0,alpha_test=0,depth_write=0,textured=0; std::string blend; };
+    void light_stats(const gx::FramePacket& packet) {
+        for(const auto& draw:packet.draws) {
+            if(!gx::summarize(draw).perspective) continue;
+            auto& row=lights_[draw.callsite];
+            const auto view=draw.vertex_view();
+            ++row.draws; row.vertices+=view.size();
+            row.blend=std::to_string(draw.blend.mode)+":"+std::to_string(draw.blend.source)+":"+std::to_string(draw.blend.destination);
+            for(const auto& vertex:view) row.normals+=vertex.normal[0]!=0 || vertex.normal[1]!=0 || vertex.normal[2]!=0;
+            const auto& uniforms=*draw.uniforms;
+            for(size_t channel=0;channel<2;++channel) {
+                const auto lighting=gx::channel_lighting(uniforms.channels[channel]);
+                if(!lighting.lit) continue;
+                (channel ? row.lit1 : row.lit0)+=1;
+                for(size_t light=0;light<8;++light) if(lighting.mask&(1u<<light)) ++row.kinds[size_t(gx::classify_light(uniforms.lights[light],lighting.attenuation))];
+            }
+            row.alpha_test+=((uniforms.pixel[0]>>16)&7)!=7 || ((uniforms.pixel[0]>>19)&7)!=7;   // an alpha compare other than "always"
+            row.depth_write+=(uniforms.pixel[1]&16)!=0;
+            row.textured+=draw.texture!=nullptr;
+        }
+    }
     // UC_SCENE_DUMP=<file>|<every>|<frames>: every `every`-th presented frame (up to `frames` of them) is written as scene summaries
     // (renderer/scene_boundary.h text) after an "F <presented index> <serial of the presenting packet>" line; scene_sampled() tells
     // the caller to capture that frame, so each summary has a screenshot (frame-...-<serial>.png).
@@ -103,6 +130,16 @@ public:
     bool scene_sampled() const { return scene_sampled_; }
     ~PacketDump() {
         if(file_) std::fclose(file_);
+        if(!lights_path_.empty()) if(std::FILE* out=std::fopen(lights_path_.c_str(),"w")) {
+            std::vector<std::pair<uint32_t,LightRow>> rows(lights_.begin(),lights_.end());
+            std::sort(rows.begin(),rows.end(),[](const auto& a,const auto& b) { return a.second.vertices>b.second.vertices; });
+            std::fprintf(out,"callsite,draws,vertices,lit0,lit1,directional,point,spot,specular,normals,blend,alpha_test,depth_write,textured\n");
+            for(const auto& [site,r]:rows)
+                std::fprintf(out,"%08X,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%s,%llu,%llu,%llu\n",site,(unsigned long long)r.draws,(unsigned long long)r.vertices,(unsigned long long)r.lit0,(unsigned long long)r.lit1,
+                    (unsigned long long)r.kinds[0],(unsigned long long)r.kinds[1],(unsigned long long)r.kinds[2],(unsigned long long)r.kinds[3],(unsigned long long)r.normals,r.blend.c_str(),
+                    (unsigned long long)r.alpha_test,(unsigned long long)r.depth_write,(unsigned long long)r.textured);
+            std::fclose(out);
+        }
         if(!stats_path_.empty()) if(std::FILE* out=std::fopen(stats_path_.c_str(),"w")) {
             for(const auto& [key,count]:stats_) {
                 const auto& [site,blend,stages,texture,copy]=key;
@@ -116,6 +153,7 @@ public:
     void packet(const gx::FramePacket& packet) {
         motion(packet);
         scene(packet);
+        if(!lights_path_.empty()) light_stats(packet);
         if(!stats_path_.empty()) {
             std::string copy="-";
             if(packet.texture_copy) copy=std::to_string(packet.texture_copy->target->levels[0].width)+"x"+std::to_string(packet.texture_copy->target->levels[0].height);
@@ -151,7 +189,8 @@ public:
 private:
     std::FILE* file_=nullptr;
     unsigned long skip_=0,count_=3;
-    std::string go_file_,stats_path_,motion_go_;
+    std::string go_file_,stats_path_,motion_go_,lights_path_;
+    std::map<uint32_t,LightRow> lights_;
     std::FILE* motion_file_=nullptr;
     unsigned long motion_frames_=300;
     unsigned long long motion_frame_=0;

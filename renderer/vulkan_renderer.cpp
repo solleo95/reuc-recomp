@@ -1478,6 +1478,16 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     const PassTarget efb_target{efb_,depth_,efb_view_,depth_view_,VK_NULL_HANDLE,efb_extent_,&efb_initialized_};
     const PassTarget scene_target{scene_color_,scene_depth_,scene_color_view_,scene_depth_view_,scene_motion_view_,scene_extent_,&scene_initialized_};
     const auto depth_stages=VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    // Debug: UC_SKIP_CALLSITES=<hex>[,<hex>...] leaves the draws of those guest callsites out (finding what a callsite draws).
+    static const std::vector<uint32_t> skipped_callsites=[] {
+        std::vector<uint32_t> sites;
+        if(const char* text=std::getenv("UC_SKIP_CALLSITES")) for(const char* at=text;*at;) {
+            char* end=nullptr; const auto value=std::strtoul(at,&end,16);
+            if(end==at) break;
+            sites.push_back(uint32_t(value)); at=*end==',' ? end+1 : end;
+        }
+        return sites;
+    }();
     auto record_pass=[&](const PassTarget& target, size_t first, size_t last, bool scene) {
     const bool initialized=*target.initialized;
     barrier(slot.command, target.color, initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1526,6 +1536,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const size_t set_index=d;
             if (!info.index_count) continue;
             if (!bloom_ && gx::bloom_composite(draw)) continue;
+            if (std::find(skipped_callsites.begin(),skipped_callsites.end(),draw.callsite)!=skipped_callsites.end()) continue;
             const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
             const auto area=uc::efb_viewport(v,target.extent.width,target.extent.height);
             VkViewport draw_viewport{area.x,area.y,area.width,area.height,v[4],v[5]};
