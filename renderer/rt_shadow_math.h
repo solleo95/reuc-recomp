@@ -37,6 +37,10 @@ inline RtLightClass rt_light_class(const gx::LightUniform& light, uint32_t atten
     const float x=light.position[0], y=light.position[1], z=light.position[2];
     return x*x+y*y+z*z>1e10f ? RtLightClass::rig : RtLightClass::lamp;   // a position beyond 1e5 units stands for a direction (scene_lights.cpp classify_light)
 }
+// A lamp's shadow ray ends this many view units before the lamp: the lamp sits inside its own fixture (a shade, a chandelier, a sconce on the wall) which
+// would block every ray to it. View units are the game's (one unit is about 0.4 m: the cars' lamps hang 5 units above the eye). Tuned on the first scene.
+constexpr float kRtLampClearance=1.0f;
+inline float rt_lamp_tmax(float distance) { return std::fmax(distance-kRtLampClearance,0.f); }   // 0: the surface is inside the clearance, no ray
 constexpr float kRtSunConeRadians=0.02f;      // half angle of the sun's soft-shadow cone
 constexpr float kRtLightRadiusFraction=0.03f; // a point light's soft-shadow disc radius as a fraction of the distance to it
 // The factor that removes the shadowed lights' contribution from a pixel's light: GX clamps ambient + lights at 1 before it multiplies the material

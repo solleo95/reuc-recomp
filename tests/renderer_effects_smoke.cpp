@@ -706,6 +706,7 @@ int main(int argc, char** argv) {
                     light.position=kind==Light::directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{1.5f,1.5f,-3.f,0};
                     return light;
                 };
+                float shell=0.f;   // half size of a static box around the point light (its fixture), 0 = none
                 bool plate_skinned=true;   // only skinned draws (per-vertex matrices: characters) occlude; the game's static level geometry does not (see below)
                 auto surface=[&](const std::array<std::array<float,3>,4>& corners,std::array<float,3> normal,bool plate,Light kind,bool lit) {
                     auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
@@ -729,6 +730,14 @@ int main(int argc, char** argv) {
                     auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
                     auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
                     scene.draws.push_back(std::move(floor)); scene.draws.push_back(std::move(plate));
+                    if(shell>0) {   // a static box around the point light (its fixture): six faces
+                        const float cx=1.5f, cy=1.5f, cz=-3.f, h=shell;
+                        const std::array<std::array<std::array<float,3>,4>,6> faces{{
+                            {{{cx-h,cy-h,cz-h},{cx+h,cy-h,cz-h},{cx+h,cy+h,cz-h},{cx-h,cy+h,cz-h}}}, {{{cx-h,cy-h,cz+h},{cx+h,cy-h,cz+h},{cx+h,cy+h,cz+h},{cx-h,cy+h,cz+h}}},
+                            {{{cx-h,cy-h,cz-h},{cx-h,cy-h,cz+h},{cx-h,cy+h,cz+h},{cx-h,cy+h,cz-h}}}, {{{cx+h,cy-h,cz-h},{cx+h,cy-h,cz+h},{cx+h,cy+h,cz+h},{cx+h,cy+h,cz-h}}},
+                            {{{cx-h,cy-h,cz-h},{cx+h,cy-h,cz-h},{cx+h,cy-h,cz+h},{cx-h,cy-h,cz+h}}}, {{{cx-h,cy+h,cz-h},{cx+h,cy+h,cz-h},{cx+h,cy+h,cz+h},{cx-h,cy+h,cz+h}}}}};
+                        for(const auto& face:faces) { auto draw=surface(face,{0,0,1},false,kind,lit); draw.transforms.edit().projection[0][0]=zoom; scene.draws.push_back(std::move(draw)); }
+                    }
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -796,6 +805,18 @@ int main(int argc, char** argv) {
                 const double static_lamp=signal_at(signal,shadowed_point,2);
                 std::fprintf(stderr,"rt-shadows: static plate under a lamp: signal %.3f, expected %.3f\n",static_lamp,expected(shadowed_point,Light::point));
                 CHECK(expected(shadowed_point,Light::point)<0.6 && std::abs(static_lamp-expected(shadowed_point,Light::point))<=0.05);
+                // (a4) a lamp sits inside its fixture: a shell smaller than the clearance around it is ignored (the plate's shadow stays, the lit floor stays lit); a larger one blocks the lamp (the documented limit)
+                shell=0.4f*uc::kRtLampClearance;
+                frame(local_only,Light::point); frame(local_only,Light::point);
+                signal=renderer.capture_rt_shadow_signal();
+                std::fprintf(stderr,"rt-shadows: small shell: shadowed %.3f lit %.3f\n",signal_at(signal,shadowed_point,2),signal_at(signal,lit_point,2));
+                CHECK(std::abs(signal_at(signal,shadowed_point,2)-expected(shadowed_point,Light::point))<=0.05 && std::abs(signal_at(signal,lit_point,2)-1.0)<=0.01);
+                shell=1.5f*uc::kRtLampClearance;
+                frame(local_only,Light::point); frame(local_only,Light::point);
+                signal=renderer.capture_rt_shadow_signal();
+                std::fprintf(stderr,"rt-shadows: large shell: lit %.3f\n",signal_at(signal,lit_point,2));
+                CHECK(signal_at(signal,lit_point,2)<0.8);
+                shell=0.f;
                 plate_skinned=true;
                 frame(sun_only,Light::directional); frame(sun_only,Light::directional);
                 signal=renderer.capture_rt_shadow_signal();

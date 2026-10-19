@@ -46,6 +46,10 @@ int main() {
     CHECK(uc::gx_light_contribution(point,1,2,origin,up)==0.f);   // the specular function is not a diffuse light
     gx::LightUniform dim=directional; dim.color={0.f,255.f,0.f,0.f};
     CHECK(near(uc::gx_light_contribution(dim,0,2,origin,up),0.587f,1e-3f));   // luminance weights
+    // A lamp's ray stops short of the lamp so that its own fixture (shade, chandelier) does not block it
+    CHECK(near(uc::rt_lamp_tmax(10.f),10.f-uc::kRtLampClearance));
+    CHECK(uc::rt_lamp_tmax(uc::kRtLampClearance*0.5f)==0.f && uc::rt_lamp_tmax(uc::kRtLampClearance)==0.f);   // a surface inside the clearance is not shadowed by its lamp
+    CHECK(uc::kRtLampClearance>0.f);
     // Light classes of the shadow pass (spec: a lamp is a physical point/spot light of the level, a rig a character's directional fill light, a specular light is never traced)
     gx::LightUniform lamp; lamp.position={0.f,5.f,70.f,0.f}; lamp.color={185.f,155.f,60.f,0.f};   // a car lamp of the first scene
     gx::LightUniform rig; rig.position={-5.2e9f,6.9e9f,4.9e9f,0.f}; rig.color={29.f,29.f,29.f,0.f};   // a character rig light

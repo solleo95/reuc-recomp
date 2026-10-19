@@ -15,7 +15,8 @@ struct PushParams {
     uint32_t region[2], signal_size[2];
     uint32_t divisor, frame, sun_rays, local_lights;
     float sun_cone, light_radius;
-    uint32_t reserved[2];
+    float lamp_clearance;
+    uint32_t reserved;
 };
 static_assert(sizeof(PushParams)==96 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,sun_cone)==80);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16_SFLOAT;
@@ -128,7 +129,7 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
     params.divisor=divisor_; params.frame=in.frame; params.sun_rays=sun.divisor ? sun.rays : 0; params.local_lights=local.divisor ? local.lights : 0;
-    params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f;
+    params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f; params.lamp_clearance=kRtLampClearance;
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);

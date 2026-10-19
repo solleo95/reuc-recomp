@@ -16,7 +16,8 @@ struct Params {
     uint localLights;     // the strongest point/spot lights traced per pixel (0: none)
     float sunCone;        // half angle of the soft-shadow cone, radians (0: hard)
     float lightRadius;    // soft-shadow disc radius as a fraction of the distance to a local light (0: hard)
-    uint2 reserved;
+    float lampClearance;  // a lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced
+    uint reserved;
 };
 [[vk::push_constant]] ConstantBuffer<Params> params;
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
@@ -123,7 +124,8 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                         direction = jitter(direction, radius, u);
                     }
                     // a rig light follows a character and ignores the level: only characters block it; a lamp is in the level: the whole scene blocks it
-                    blocked += occluded(origin, direction, directional[i] ? 1e4 : max(distanceTo[i] - 1e-3, 1e-3), directional[i] ? 2u : 3u) ? 1.0 : 0.0;
+                    const float reach = directional[i] ? 1e4 : distanceTo[i] - params.lampClearance;
+                    if (reach > 0.0) blocked += occluded(origin, direction, reach, directional[i] ? 2u : 3u) ? 1.0 : 0.0;
                 }
                 removed += contribution[i] * (blocked / float(rays));
             }
