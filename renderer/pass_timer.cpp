@@ -17,7 +17,7 @@ void PassTimer::begin(VkCommandBuffer command, uint32_t slot, GpuPass pass) {
 }
 void PassTimer::end(VkCommandBuffer command, uint32_t slot, GpuPass pass) {
     vkCmdWriteTimestamp2(command,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,pool_,query(slot,pass)+1);
-    recorded_[slot][size_t(pass)]=true;
+    recorded_[slot][size_t(pass)]=true; ++runs_[size_t(pass)];
 }
 void PassTimer::collect(uint32_t slot) {
     for (size_t pass=0;pass<kGpuPassCount;++pass) {

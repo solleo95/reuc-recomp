@@ -117,6 +117,14 @@ int main() {
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--anisotropy","8"})).effects.anisotropy==8);
         const auto bad=parse(std::array<std::string_view,2>{"--anisotropy","3"});
         CHECK(std::holds_alternative<std::string>(bad) && std::get<std::string>(bad)=="invalid value for --anisotropy");
+        CHECK(std::get<uc::Options>(defaults).effects.ambient_occlusion==uc::EffectLevel::off);
+        for(const auto& [name,level]:{std::pair{"off",uc::EffectLevel::off},{"low",uc::EffectLevel::low},{"medium",uc::EffectLevel::medium},{"high",uc::EffectLevel::high},{"ultra",uc::EffectLevel::ultra}}) {
+            CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--ambient-occlusion",name})).effects.ambient_occlusion==level);
+            CHECK(uc::effect_level_name(level)==name && uc::effect_level_from_name(name)==level);
+        }
+        const auto bad_level=parse(std::array<std::string_view,2>{"--ambient-occlusion","extreme"});
+        CHECK(std::holds_alternative<std::string>(bad_level) && std::get<std::string>(bad_level)=="invalid value for --ambient-occlusion");
+        CHECK(!uc::effect_level_from_name("High") && !uc::effect_level_from_name(""));
         CHECK(!std::get<uc::Options>(defaults).effects.per_pixel_lighting);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--per-pixel-lighting"})).effects.per_pixel_lighting);
         CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));

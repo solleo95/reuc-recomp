@@ -5,6 +5,7 @@
 #include "prompt_overlay.h"
 #include "menu_overlay.h"
 #include "motion_tracker.h"
+#include "occlusion_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
 #include "streamline.h"
@@ -86,7 +87,7 @@ public:
     bool effects_need_lights() const { return motion_outputs_ && force_lights_; }   // contact shadows (and later the shadow maps) add their conditions
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
-    bool effects_need_gbuffer() const { return motion_outputs_ && force_gbuffer_; }   // the screen-space effects add their own conditions
+    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off); }
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
@@ -95,6 +96,7 @@ public:
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
     double take_gpu_window_ms() { return gpu_window_max_ns_.exchange(0) / 1e6; }   // longest single GPU submission retired since the last call (frame log)
+    uint64_t pass_runs(GpuPass pass) const { return pass_timer_.runs(pass); }   // how often an effect pass was recorded
     double pass_ms(GpuPass pass) const { return pass_timer_.last_ms(pass); }   // latest GPU time of one effect pass (0 until it ran)
     uint64_t gpu_busy_ns() const { return gpu_busy_ns_.load(); }   // summed GPU execution time of retired frame submissions
     uint64_t texture_creations() const { owner(); return texture_creations_; }
@@ -224,6 +226,8 @@ private:
     bool scene_initialized_=false, motion_initialized_=false, gbuffer_initialized_=false;
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
+    OcclusionPass occlusion_;
+    std::optional<gx::Projection> frame_projection_;       // the projection the scene's world was drawn with this frame (what the screen-space effects reconstruct with)
     gx::SceneLightCollector scene_lights_;                 // the scene draws' lights of this frame, filled while the scene is recorded
     std::optional<gx::CollectedLight> dominant_light_;     // chosen at the scene boundary, kept across frames (hysteresis)
     // The last present's EFB clear, applied to the scene targets by the next frame's first scene pass (GX clears the EFB at the present copy).

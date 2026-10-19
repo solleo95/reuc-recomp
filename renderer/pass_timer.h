@@ -18,6 +18,7 @@ public:
     void end(VkCommandBuffer command, uint32_t slot, GpuPass pass);
     void collect(uint32_t slot);
     double last_ms(GpuPass pass) const { return last_[size_t(pass)]; }
+    uint64_t runs(GpuPass pass) const { return runs_[size_t(pass)]; }   // how often the pass was recorded (tests: a frame without a scene records none)
     void shutdown();
 private:
     uint32_t query(uint32_t slot, GpuPass pass) const { return (slot*uint32_t(kGpuPassCount)+uint32_t(pass))*2; }
@@ -27,5 +28,6 @@ private:
     uint32_t slots_=0;
     std::vector<std::array<bool,kGpuPassCount>> recorded_;   // per slot: the pass wrote both timestamps in the current submission
     std::array<double,kGpuPassCount> last_{};
+    std::array<uint64_t,kGpuPassCount> runs_{};
 };
 }

@@ -56,6 +56,14 @@ int main() {
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.anisotropy==16);
         CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.per_pixel_lighting);
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":true}})")).effects.per_pixel_lighting);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"ambient_occlusion":"high"}})")).effects.ambient_occlusion==uc::EffectLevel::high);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.ambient_occlusion==uc::EffectLevel::off);
+        auto level_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto level_options=uc::options_from_config(level_doc);level_options.effects.ambient_occlusion=uc::EffectLevel::medium;uc::store_options(level_doc,level_options);
+        CHECK(uc::options_from_config(level_doc).effects.ambient_occlusion==uc::EffectLevel::medium && uc::serialize_config(level_doc).find("\"ambient_occlusion\": \"medium\"")!=std::string::npos);
+        for(const char* text:{R"({"game":"S:/Games/Test/game","graphics":{"ambient_occlusion":"extreme"}})",R"({"game":"S:/Games/Test/game","graphics":{"ambient_occlusion":2}})"}) {
+            bool bad_level=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){bad_level=true;}
+            CHECK(bad_level);
+        }
         bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}
         CHECK(not_boolean);
         auto stored=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto fresh=uc::options_from_config(stored);fresh.effects.anisotropy=2;uc::store_options(stored,fresh);

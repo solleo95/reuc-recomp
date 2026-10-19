@@ -958,8 +958,7 @@ UpscaleImage VulkanRenderer::hudless_image() const {   // this frame's HUD-less 
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT};
 }
 void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) {
-    tracker_.end_frame();   // every scene draw of the frame is recorded: camera cut and reprojection of this frame
-    if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
+    tracker_.end_frame();   // every scene draw of the frame is recorded: camera cut and reprojection of this frame    if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
     const auto now=std::chrono::steady_clock::now();
     UpscaleInputs in;
     in.command=command;
@@ -991,6 +990,20 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
+    if (effects_.ambient_occlusion!=EffectLevel::off && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
+        occlusion_.initialize(device,memory_,shaders_);
+        pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
+        OcclusionInputs occlusion;
+        occlusion.command=command; occlusion.color=in.color; occlusion.depth=in.depth;
+        occlusion.gbuffer={scene_gbuffer_,scene_gbuffer_view_,kGBufferFormat,scene_extent_,color_usage};
+        occlusion.region=in.render_size;
+        occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
+        occlusion.view=view_params(*frame_projection_);
+        occlusion.ao=effects_.ambient_occlusion;
+        occlusion.noise_frame=(upscaler_kind_==UpscalerKind::dlss || upscaler_kind_==UpscalerKind::fsr) ? uint32_t(upscale_frame_%8)+1 : 0;   // the upscaler's history averages the pattern; otherwise it stays fixed
+        occlusion_.record(occlusion);
+        pass_timer_.end(command,timer_slot,GpuPass::occlusion);
+    }
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -1294,8 +1307,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     // Upscaling: a frame whose predecessor had a 3D scene draws into the internal scene targets until the scene boundary (the game's
     // copy of the finished scene, gx::SceneBoundary), is upscaled into efb_ there, and draws the rest (post chain, HUD) into efb_.
-    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; }
-        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint()};
+    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; std::optional<gx::Projection> frame_projection; }
+        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint(),frame_projection_};
     gx::PacketSummary summary;
     size_t scene_draws=0;          // draws [0, scene_draws) of this packet go to the scene targets
     bool upscale_here=false;       // the upscale runs after those draws, before the rest and before the packet's copy/present
@@ -1304,7 +1317,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
-            scene_lights_.clear();
+            scene_lights_.clear(); frame_projection_.reset();
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
@@ -1398,6 +1411,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             }
             tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
             if (summary.draws[d].perspective) scene_projection_=draw.transforms->projection;
+            if (summary.draws[d].perspective && summary.draws[d].z_write && !frame_projection_) frame_projection_=draw.transforms->projection;   // the world's projection: the first depth-writing perspective draw (the weapon comes later with its own)
         }
         gpu_draws.push_back(info);
     }
@@ -1516,7 +1530,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {   // retried later: the packet must look unseen to the per-frame upscaling state
             boundary_=upscale_before.boundary; frame_start_=upscale_before.frame_start; scene_phase_=upscale_before.scene_phase; scene_mode_=upscale_before.scene_mode;
-            motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales;
+            motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales; frame_projection_=upscale_before.frame_projection;
             tracker_.rollback(upscale_before.tracker);
             return false;
         }
@@ -1841,7 +1855,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown();
         destroy_scene_targets();
         for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
         stop_workers();

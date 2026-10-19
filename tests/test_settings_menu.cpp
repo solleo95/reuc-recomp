@@ -94,6 +94,16 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
         CHECK(context.HoveredId==effects->GetID("##ppl"));
         click(io.MousePos);
         menu.commit(); CHECK(live.options().effects.per_pixel_lighting && !live.error());
+        CHECK(live.options().effects.ambient_occlusion==uc::EffectLevel::off);
+        {   // ambient occlusion: the preset combo below the checkbox, pick "high" (the fourth entry)
+            const float checkbox_top=first+height+2*style.ItemSpacing.y+std::floor(6*unit);
+            const float combo_center=checkbox_top+small_height+style.ItemSpacing.y+std::floor(6*unit)+style.ItemSpacing.y+text+style.ItemSpacing.y+height*.5f;
+            click({effects->Pos.x+40,effects->Pos.y+combo_center});
+            popup=ImGui::FindWindowByName("##Combo_00"); CHECK(popup && popup->Active);
+            click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+3*(text+style.ItemSpacing.y)+text*.5f});
+            menu.commit(); CHECK(live.options().effects.ambient_occlusion==uc::EffectLevel::high && !live.error());
+            CHECK(context.OpenPopupStack.empty());
+        }
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
         CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
     }
@@ -152,6 +162,6 @@ int main(int argc,char** argv) {
         ImGui::DestroyContext();
     }
     const auto saved=uc::options_from_config(uc::load_config(folder/"config.json"));
-    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4);
+    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4 && saved.effects.per_pixel_lighting && saved.effects.ambient_occlusion==uc::EffectLevel::high);
     std::filesystem::remove(folder/"config.json"); std::filesystem::remove(folder);
 }

@@ -208,6 +208,19 @@ void SettingsMenu::effects_tab(float unit) {
     compact_checkbox("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,unit);
     ImGui::EndDisabled();
     if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
+    const auto preset_label=[&](EffectLevel level) { return level==EffectLevel::off ? std::string(tr("off")) : std::string(tr(level==EffectLevel::low ? "level_low" : level==EffectLevel::medium ? "level_medium" : level==EffectLevel::high ? "level_high" : "level_ultra")); };
+    const auto level_combo=[&](const char* id,const char* title,EffectLevel& value) {   // the presets of an effect; greyed out like the other screen-space effects
+        ImGui::Dummy({0,6*unit});
+        ImGui::TextUnformatted(tr(title));
+        ImGui::BeginDisabled(!path && value==EffectLevel::off);
+        if(ImGui::BeginCombo(id,preset_label(value).c_str())) {
+            for(const auto level:{EffectLevel::off,EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) if(ImGui::Selectable(preset_label(level).c_str(),value==level)) value=level;
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
+    };
+    level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

@@ -52,6 +52,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--no-sharpening") options.sharpening = false;
         else if (arg == "--features") options.features = true;
         else if (arg == "--per-pixel-lighting") options.effects.per_pixel_lighting = true;
+        else if (arg == "--ambient-occlusion") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --ambient-occlusion";
+            const auto level = effect_level_from_name(arguments[i]);
+            if (!level) return "invalid value for --ambient-occlusion";
+            options.effects.ambient_occlusion = *level;
+        }
         else if (arg == "--anisotropy") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";
             uint32_t level = 0; const auto value = arguments[i];

@@ -236,6 +236,69 @@ int main(int argc, char** argv) {
             CHECK(renderer.descriptor_pool_creations()-pools<=10 && renderer.texture_creations()-textures<=10);   // switching rebuilds targets, not the per-frame resources
             renderer.force_scene_targets(false);
         }
+        if (wanted("gtao")) {
+            // Ambient occlusion on a floor meeting a wall at 90 degrees: the crease darkens, flat areas and unfogged-away pixels stay put, fog fades it, menus skip it.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };   // near 1, far 100, 90 degrees
+            const auto surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool fogged) {
+                auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
+                projection(draw);
+                if(fogged) { auto& uniforms=draw.uniforms.edit(); uniforms.fog[0]=280480; uniforms.fog[3]=(2u<<21)|(1u<<20); uniforms.fog[4]=0x808080; }   // linear fog, orthographic form, fully fogged everywhere
+                return draw;
+            };
+            auto frame=[&](uc::EffectLevel level,bool fogged,bool menu=false) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.ambient_occlusion=level; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                if(!menu) {
+                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},fogged));   // the floor
+                    scene.draws.push_back(surface({{{-12,-1,-8},{12,-1,-8},{12,6,-8},{-12,6,-8}}},{0,0,1},fogged));      // the wall
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                }
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto red=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4]); };
+            frame(uc::EffectLevel::off,false);   // the first frame decides scene mode for the next one
+            const auto base=frame(uc::EffectLevel::off,false);
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) uc::save_png(base,std::filesystem::path(dump)/"gtao-base.png");   // debugging aid
+            CHECK(red(base,640,190)==180 && red(base,640,600)==180);   // flat floor and wall are the uniform colour
+            for(const auto level:{uc::EffectLevel::low,uc::EffectLevel::medium,uc::EffectLevel::high,uc::EffectLevel::ultra}) {
+                frame(level,false);
+                const auto shaded=frame(level,false);
+                int darkest=0;
+                for(uint32_t y=300;y<335;++y) darkest=std::max(darkest,red(base,640,y)-red(shaded,640,y));   // within ~5% of the screen height of the crease (row 315)
+                std::fprintf(stderr,"gtao %s: crease darkening %d, far floor %d, far wall %d\n",std::string(uc::effect_level_name(level)).c_str(),darkest,red(base,640,190)-red(shaded,640,190),red(base,640,600)-red(shaded,640,600));
+                if(std::getenv("UC_SMOKE_DUMP")) { std::fprintf(stderr,"  rows:"); for(uint32_t y=182;y<640;y+=24) std::fprintf(stderr," %u:%d",y,red(shaded,640,y)); std::fprintf(stderr,"\n"); }   // debugging aid
+                CHECK(darkest>=10);
+                CHECK(std::abs(red(base,640,190)-red(shaded,640,190))<=6 && std::abs(red(base,640,600)-red(shaded,640,600))<=6);   // far from the crease: at most the sampling noise of a few slices (the crease itself loses 30+)
+            }
+            const auto fog_base=frame(uc::EffectLevel::off,true);
+            frame(uc::EffectLevel::high,true);
+            const auto fog_shaded=frame(uc::EffectLevel::high,true);
+            for(uint32_t y=300;y<335;++y) CHECK(std::abs(red(fog_base,640,y)-red(fog_shaded,640,y))<=1);   // fully fogged: no occlusion
+            const auto runs=renderer.pass_runs(uc::GpuPass::occlusion);
+            CHECK(runs>0);
+            const auto menu=frame(uc::EffectLevel::high,false,true);   // no scene this frame
+            CHECK(renderer.pass_runs(uc::GpuPass::occlusion)==runs && red(menu,100,100)==16);
+            frame(uc::EffectLevel::medium,false);
+            auto before_pools=renderer.descriptor_pool_creations(), before_textures=renderer.texture_creations();
+            for(int i=0;i<20;++i) frame(uc::EffectLevel::medium,false);
+            const auto steady_pools=renderer.descriptor_pool_creations()-before_pools, steady_textures=renderer.texture_creations()-before_textures;   // what a frame costs anyway (the fixture's fresh copy target)
+            before_pools=renderer.descriptor_pool_creations(); before_textures=renderer.texture_creations();
+            for(int i=0;i<20;++i) frame(i%2 ? uc::EffectLevel::low : uc::EffectLevel::high,false);   // inside the effects path a level change swaps AO images only: no new per-frame resources
+            CHECK(renderer.descriptor_pool_creations()-before_pools<=steady_pools+2 && renderer.texture_creations()-before_textures<=steady_textures+2);
+            for(int i=0;i<10;++i) frame(i%2 ? uc::EffectLevel::off : uc::EffectLevel::medium,false);   // entering and leaving the path rebuilds the scene targets and must stay clean
+            frame(uc::EffectLevel::off,false);
+            frame(uc::EffectLevel::off,false);
+        }
         if (wanted("ppl")) {
             // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);
             // per pixel the centre is lit by the near light. Baked-colour (unlit) draws stay identical.
