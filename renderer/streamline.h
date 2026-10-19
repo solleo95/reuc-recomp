@@ -24,6 +24,7 @@ public:
     VkResult create_surface(VkInstance instance, void* hwnd, VkSurfaceKHR& surface) const;
     void destroy_surface(VkInstance instance, VkSurfaceKHR surface) const;
     bool dlss_supported(VkPhysicalDevice physical, std::string& reason) const;
+    bool ray_reconstruction_supported(VkPhysicalDevice physical, std::string& reason) const;
     bool dlss_g_supported(VkPhysicalDevice physical, std::string& reason) const;
     bool frame_generation_loaded() const { return frame_generation_; }
     bool active() const { return initialized_; }

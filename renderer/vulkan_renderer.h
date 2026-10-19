@@ -104,6 +104,7 @@ public:
     uint64_t gpu_busy_ns() const { return gpu_busy_ns_.load(); }   // summed GPU execution time of retired frame submissions
     uint64_t texture_creations() const { owner(); return texture_creations_; }
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
+    bool ray_tracing_supported() const { return ray_tracing_; }   // the device was created with ray query, acceleration structures and descriptor indexing, and the effects path
     VkDevice device = VK_NULL_HANDLE;
 private:
     FrameTimings timings_;
@@ -197,6 +198,7 @@ private:
     bool sharpening_=false, frame_generation_=false;
     double sharpness_=0.5;
     uint32_t frame_generation_multiplier_=2;
+    bool ray_tracing_=false;
     bool motion_outputs_=false;   // upscaling: pipelines carry the motion attachment and the jitter (smoke.motion.*.spv)
     // Upscaling: the 3D scene of a guest frame renders into these internal-resolution targets up to the scene boundary, then the upscaler
     // fills efb_ and the rest of the frame (post chain, HUD) draws into efb_ at output resolution.

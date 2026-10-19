@@ -41,7 +41,7 @@ std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& direct
         reason="sl.interposer.dll lacks an expected export"; return nullptr;
     }
     // DLSS-G needs Reflex and PCL (latency markers); they load only with frame generation.
-    std::vector<sl::Feature> features{sl::kFeatureDLSS};
+    std::vector<sl::Feature> features{sl::kFeatureDLSS, sl::kFeatureDLSS_RR};
     if (frame_generation) features.insert(features.end(), {sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL});
     const std::wstring plugins=std::filesystem::absolute(directory).wstring();
     const wchar_t* paths[]={plugins.c_str()};
@@ -104,6 +104,7 @@ static bool supported(const StreamlineApi& api, sl::Feature feature, VkPhysicalD
     return false;
 }
 bool Streamline::dlss_supported(VkPhysicalDevice physical, std::string& reason) const { return supported(*api_, sl::kFeatureDLSS, physical, reason); }
+bool Streamline::ray_reconstruction_supported(VkPhysicalDevice physical, std::string& reason) const { return supported(*api_, sl::kFeatureDLSS_RR, physical, reason); }
 bool Streamline::dlss_g_supported(VkPhysicalDevice physical, std::string& reason) const {
     if (!frame_generation_) { reason="not requested"; return false; }
     return supported(*api_, sl::kFeatureDLSS_G, physical, reason);

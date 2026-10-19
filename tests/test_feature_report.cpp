@@ -17,6 +17,13 @@ int main() {
         const auto old=uc::feature_report_from_json(R"({"dlss":true})");   // a report from an older uc.exe
         CHECK(!old.effects && old.anisotropy_max==1);
     }
+    {   // ray tracing and ray reconstruction support
+        uc::FeatureReport rt; rt.ray_tracing=true; rt.ray_tracing_reason=""; rt.ray_reconstruction=false; rt.ray_reconstruction_reason="no DLSS-RR";
+        const auto round=uc::feature_report_from_json(uc::to_json(rt));
+        CHECK(round.ray_tracing && round.ray_tracing_reason.empty() && !round.ray_reconstruction && round.ray_reconstruction_reason=="no DLSS-RR");
+        const auto old=uc::feature_report_from_json(R"({"dlss":true})");   // a report from an older uc.exe
+        CHECK(!old.ray_tracing && !old.ray_reconstruction && old.ray_tracing_reason.empty() && old.ray_reconstruction_reason.empty());
+    }
     const auto partial=uc::feature_report_from_json(R"({"dlss":true})");   // missing fields: unavailable
     CHECK(partial.dlss && !partial.dlss_g && !partial.fsr && partial.dlss_g_max_multiplier==0);
     for(auto text:{"","not json","[]",R"({"dlss":"yes"})",R"({"dlss_g_max_multiplier":-1})"}) {

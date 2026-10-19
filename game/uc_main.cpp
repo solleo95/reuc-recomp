@@ -213,7 +213,7 @@ static int real_main(int argc, char** argv) {
     options=std::get<uc::Options>(std::move(parsed));
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
         const auto support=uc::probe_upscalers(exe_dir());
-        uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason,support.effects,support.effects_reason,support.anisotropy_max};
+        uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason,support.effects,support.effects_reason,support.anisotropy_max,support.ray_tracing,support.ray_reconstruction,support.ray_tracing_reason,support.ray_reconstruction_reason};
         std::printf("%s\n",uc::to_json(report).c_str());
         return 0;
     }

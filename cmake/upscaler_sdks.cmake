@@ -27,9 +27,9 @@ target_include_directories(uc_fidelityfx_sdk INTERFACE ${fidelityfx_SOURCE_DIR}/
 # Production (signed) runtime files loaded from the exe directory.
 set(UC_UPSCALER_RUNTIME
   ${streamline_SOURCE_DIR}/bin/x64/sl.interposer.dll ${streamline_SOURCE_DIR}/bin/x64/sl.common.dll
-  ${streamline_SOURCE_DIR}/bin/x64/sl.dlss.dll ${streamline_SOURCE_DIR}/bin/x64/sl.dlss_g.dll
+  ${streamline_SOURCE_DIR}/bin/x64/sl.dlss.dll ${streamline_SOURCE_DIR}/bin/x64/sl.dlss_d.dll ${streamline_SOURCE_DIR}/bin/x64/sl.dlss_g.dll
   ${streamline_SOURCE_DIR}/bin/x64/sl.reflex.dll ${streamline_SOURCE_DIR}/bin/x64/sl.pcl.dll
-  ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlss.dll ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlssg.dll
+  ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlss.dll ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlssd.dll ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlssg.dll
   ${streamline_SOURCE_DIR}/bin/x64/NvLowLatencyVk.dll
   ${fidelityfx_SOURCE_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll
   CACHE INTERNAL "")

@@ -1,4 +1,5 @@
 #pragma once
+#include <vulkan/vulkan.h>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -12,6 +13,10 @@ struct UpscalerSupport {
     bool effects=false;          // unused attachments + independent blend: the path of the screen-space effects
     std::string effects_reason;
     uint32_t anisotropy_max=1;   // 1 when samplerAnisotropy is missing
+    bool ray_tracing=false, ray_reconstruction=false;   // ray query + acceleration structures (and the effects path); DLSS-RR through Streamline
+    std::string ray_tracing_reason, ray_reconstruction_reason;
 };
+// Why the device cannot ray trace (extensions, features), nullptr when it has everything; the renderer enables them under the same test.
+const char* ray_tracing_gap(VkPhysicalDevice physical);
 UpscalerSupport probe_upscalers(const std::filesystem::path& directory);
 }

@@ -5,21 +5,39 @@
 #include "streamline.h"
 #include "streamline_api.h"
 #include <ffx_api/ffx_api_loader.h>
+#include <algorithm>
+#include <cstring>
 #include <vector>
 
 namespace uc {
+const char* ray_tracing_gap(VkPhysicalDevice physical) {
+    uint32_t n=0; vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> extensions(n); vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, extensions.data());
+    const auto has=[&](const char* name) { return std::any_of(extensions.begin(), extensions.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name)==0; }); };
+    if (!has(VK_KHR_RAY_QUERY_EXTENSION_NAME)) return "the GPU lacks VK_KHR_ray_query";
+    if (!has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) || !has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) return "the GPU lacks VK_KHR_acceleration_structure";
+    VkPhysicalDeviceRayQueryFeaturesKHR query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR structure{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}; structure.pNext=&query;
+    VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; features12.pNext=&structure;
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext=&features12;
+    vkGetPhysicalDeviceFeatures2(physical, &features);
+    if (!query.rayQuery) return "the GPU lacks VK_KHR_ray_query";
+    if (!structure.accelerationStructure || !features12.bufferDeviceAddress) return "the GPU lacks VK_KHR_acceleration_structure";
+    if (!features12.descriptorIndexing || !features12.runtimeDescriptorArray || !features12.shaderSampledImageArrayNonUniformIndexing) return "the GPU lacks descriptor indexing";
+    return nullptr;
+}
 namespace {
 // DLSS and DLSS-G through Streamline on the first NVIDIA GPU (the one the game picks: discrete first).
 void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support) {
     std::string reason;
     auto sl=Streamline::load(directory, true, reason);
-    if (!sl) { support.dlss_reason=support.dlss_g_reason=reason; return; }
+    if (!sl) { support.dlss_reason=support.dlss_g_reason=support.ray_reconstruction_reason=reason; return; }
     VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion=VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo=&application;
     const char* debug_utils=VK_EXT_DEBUG_UTILS_EXTENSION_NAME;   // see VulkanRenderer::initialize: Streamline's backend needs it
     instance_info.enabledExtensionCount=1; instance_info.ppEnabledExtensionNames=&debug_utils;
     VkInstance instance=VK_NULL_HANDLE;
-    if (sl->create_instance(instance_info, instance)!=VK_SUCCESS) { support.dlss_reason=support.dlss_g_reason="Vulkan instance through Streamline failed"; return; }
+    if (sl->create_instance(instance_info, instance)!=VK_SUCCESS) { support.dlss_reason=support.dlss_g_reason=support.ray_reconstruction_reason="Vulkan instance through Streamline failed"; return; }
     uint32_t count=0; sl->enumerate_physical_devices(instance, &count, nullptr);
     std::vector<VkPhysicalDevice> devices(count); sl->enumerate_physical_devices(instance, &count, devices.data());
     VkPhysicalDevice chosen=VK_NULL_HANDLE; int score=-1;
@@ -28,8 +46,9 @@ void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support
         const int value=(properties.vendorID==0x10DE)*2+(properties.deviceType==VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
         if (value>score) { score=value; chosen=device; }
     }
-    if (!chosen) support.dlss_reason=support.dlss_g_reason="no Vulkan GPU";
+    if (!chosen) support.dlss_reason=support.dlss_g_reason=support.ray_reconstruction_reason="no Vulkan GPU";
     else {
+        support.ray_reconstruction=sl->ray_reconstruction_supported(chosen, support.ray_reconstruction_reason);
         support.dlss=sl->dlss_supported(chosen, support.dlss_reason);
         support.dlss_g=support.dlss && sl->dlss_g_supported(chosen, support.dlss_g_reason);
         if (!support.dlss) support.dlss_g_reason=support.dlss_reason;
@@ -94,7 +113,7 @@ void probe_effects(UpscalerSupport& support) {
     VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion=VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo=&application;
     VkInstance instance=VK_NULL_HANDLE;
-    if (vkCreateInstance(&instance_info, nullptr, &instance)!=VK_SUCCESS) { support.effects_reason="no Vulkan 1.3 instance"; return; }
+    if (vkCreateInstance(&instance_info, nullptr, &instance)!=VK_SUCCESS) { support.effects_reason=support.ray_tracing_reason="no Vulkan 1.3 instance"; return; }
     uint32_t count=0; vkEnumeratePhysicalDevices(instance, &count, nullptr);
     std::vector<VkPhysicalDevice> devices(count); vkEnumeratePhysicalDevices(instance, &count, devices.data());
     VkPhysicalDevice chosen=VK_NULL_HANDLE; int score=-1;
@@ -103,7 +122,7 @@ void probe_effects(UpscalerSupport& support) {
         const int value=(properties.vendorID==0x10DE)*2+(properties.deviceType==VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
         if (value>score) { score=value; chosen=device; }
     }
-    if (!chosen) support.effects_reason="no Vulkan GPU";
+    if (!chosen) support.effects_reason=support.ray_tracing_reason="no Vulkan GPU";
     else {
         VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT unused{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT};
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext=&unused;
@@ -112,6 +131,9 @@ void probe_effects(UpscalerSupport& support) {
         if (!unused.dynamicRenderingUnusedAttachments) support.effects_reason="the GPU lacks VK_EXT_dynamic_rendering_unused_attachments";
         else if (!features.features.independentBlend) support.effects_reason="the GPU lacks independent blending";
         else support.effects=true;
+        if (!support.effects) support.ray_tracing_reason="the effects path is unavailable";
+        else if (const char* gap=ray_tracing_gap(chosen)) support.ray_tracing_reason=gap;
+        else support.ray_tracing=true;
         if (features.features.samplerAnisotropy) {
             uint32_t level=1; while (level<16 && float(level*2)<=properties.limits.maxSamplerAnisotropy) level*=2;
             support.anisotropy_max=level;

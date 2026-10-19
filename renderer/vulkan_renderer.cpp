@@ -5,6 +5,7 @@
 #include "rebuild_gate.h"
 #include "buffer_memory.h"
 #include "upscale_math.h"
+#include "upscaler_probe.h"
 #include <tuple>
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
@@ -216,6 +217,16 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         VkPhysicalDeviceFeatures core_features{}; vkGetPhysicalDeviceFeatures(physical_, &core_features);
         if (unused.dynamicRenderingUnusedAttachments && core_features.independentBlend) { device_extensions.push_back(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME); unused.pNext = features13.pNext; features13.pNext = &unused; motion_outputs_ = true; }
         else { std::fprintf(stderr, "Upscaling unavailable: VK_EXT_dynamic_rendering_unused_attachments or independentBlend missing\n"); upscaler_kind_ = UpscalerKind::off; frame_generation_ = false; }
+    }
+    // Ray tracing (ray query in compute/fragment shaders): all of it or none, so a GPU without it still creates the device.
+    VkPhysicalDeviceRayQueryFeaturesKHR ray_query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR}; ray_query.rayQuery = VK_TRUE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}; acceleration.accelerationStructure = VK_TRUE;
+    ray_tracing_ = motion_outputs_ && !ray_tracing_gap(physical_);
+    if (ray_tracing_) {
+        for (const char* name : {VK_KHR_RAY_QUERY_EXTENSION_NAME, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME}) device_extensions.push_back(name);
+        if (!features12.timelineSemaphore && !features12.shaderFloat16) { features12.pNext = features13.pNext; features13.pNext = &features12; }
+        features12.bufferDeviceAddress = features12.descriptorIndexing = features12.runtimeDescriptorArray = features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        acceleration.pNext = &ray_query; ray_query.pNext = features13.pNext; features13.pNext = &acceleration;
     }
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; device_info.pNext = &features13;
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
