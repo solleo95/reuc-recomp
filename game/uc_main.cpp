@@ -526,7 +526,7 @@ static int real_main(int argc, char** argv) {
                     row.audio_blocks=uc::audio_stats().frames; row.seal_wait_ns=gx::seal_wait_ns(); row.switches=sched.switch_stats().switches; row.queued=uint32_t(depth.queued); row.outstanding=uint32_t(depth.outstanding);
                     { const auto window=gx::take_latency_window(); row.sealed_to_done_ms=window.sealed_to_done_ms; row.taken_to_done_ms=window.taken_to_done_ms; row.gpu_ms=renderer.take_gpu_window_ms();
                       row.gpu_upscale_ms=renderer.pass_ms(uc::GpuPass::upscale); row.gpu_smaa_ms=renderer.pass_ms(uc::GpuPass::smaa); row.gpu_occlusion_ms=renderer.pass_ms(uc::GpuPass::occlusion);
-                      row.gpu_rt_as_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_as); row.gpu_rt_shadows_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_shadows);
+                      row.gpu_rt_as_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_as); row.gpu_rt_shadows_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_shadows); row.gpu_rt_reflections_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_reflections);
                       const auto rt=renderer.rt_stats(); row.rt_blas=rt.blas; row.rt_triangles=rt.triangles; }
                     frame_log->add(row);
                     frame_cpu_last=cpu; frame_busy_ns=frame_events_ns=0; frame_events=0;

@@ -1053,13 +1053,14 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
-    bool rt_shadow_ran=false;
+    bool rt_shadow_ran=false, rt_reflect_ran=false;
     if (rt_frame_ && (rt_as_open_ || rt_.stats().instances)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
         const bool tlas_built=rt_.build_tlas(command);
         pass_timer_.end(command,timer_slot,GpuPass::rt_as);
-        if (tlas_built && rt_trace_active() && gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_) {   // ray-traced shadows: trace, denoise, composite into the scene colour
+        const bool rt_ready=tlas_built && gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_;
+        if (rt_ready && rt_trace_active()) {   // ray-traced shadows: trace, denoise, composite into the scene colour
             const auto idle=[this] { vk_check(present_.wait_idle(device),"rt shadows idle"); };
             rt_shadow_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
             rt_shadow_denoiser_.initialize(device,memory_,shaders_,idle);
@@ -1083,8 +1084,27 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
             rt_shadow_traced_=rt_shadow_ran=true;
         }
+        if (rt_ready && rt_reflect_active()) {   // ray-traced reflections after the shadows and AO: they read the colour those finished
+            const auto idle=[this] { vk_check(present_.wait_idle(device),"rt reflections idle"); };
+            rt_reflection_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
+            rt_reflection_denoiser_.initialize(device,memory_,shaders_,idle);
+            pass_timer_.begin(command,timer_slot,GpuPass::rt_reflections);
+            RtReflectInputs reflect;
+            reflect.command=command; reflect.tlas=rt_.tlas(); reflect.depth=scene_depth_view_; reflect.gbuffer=scene_gbuffer_view_; reflect.material=scene_material_view_; reflect.color=scene_color_view_;
+            reflect.records=rt_records_[rt_record_slot_].buffer; reflect.region=in.render_size; reflect.viewport=scene_viewport; reflect.view=view_params(*frame_projection_);
+            reflect.level=effects_.rt_reflections; reflect.slot=timer_slot; reflect.frame=uint32_t(upscale_frame_%8)+1;
+            const VkImageView noisy=rt_reflection_.trace(reflect);
+            rt_reflection_denoiser_.resize(rt_reflection_.signal_extent());
+            if (in.reset || !rt_reflect_ran_last_) rt_reflection_denoiser_.reset();
+            DenoiseInputs denoise;
+            denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
+            denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
+            rt_reflection_.composite(reflect,rt_reflection_denoiser_.denoise(command,RtSignal::radiance,noisy,denoise,int(effects_.rt_reflections)>=int(EffectLevel::high) ? 3 : 2));
+            pass_timer_.end(command,timer_slot,GpuPass::rt_reflections);
+            rt_reflect_ran=true;
+        }
     }
-    rt_shadow_ran_last_=rt_shadow_ran;
+    rt_shadow_ran_last_=rt_shadow_ran; rt_reflect_ran_last_=rt_reflect_ran;
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
@@ -1646,7 +1666,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto& uniforms=*draw.uniforms;
                 const auto lighting=gx::channel_lighting(uniforms.channels[0]);
                 const uint32_t index=first_record+uint32_t(records.size());
-                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,rt_record_flags(lighting,light_model_valid(draw.material,lighting,gx::channel_lighting(uniforms.channels[1]))),0.f});
+                const auto second=gx::channel_lighting(uniforms.channels[1]);
+                const float reflectivity=rt_reflectivity({uniforms.materials[1][0],uniforms.materials[1][1],uniforms.materials[1][2]},second.lit && second.attenuation==1);   // the game's gloss: the specular material colour
+                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,rt_reflect_pack(reflectivity,rt_record_flags(lighting,light_model_valid(draw.material,lighting,second))),0.f});
                 record_uniforms.push_back(&uniforms);
                 draw_record[d]=index;
             }
@@ -2210,7 +2232,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

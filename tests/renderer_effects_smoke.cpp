@@ -1130,6 +1130,81 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        if (wanted("rt-reflections")) {
+            // Ray-traced reflections (rt_reflection_pass.h, plan p5): a glossy floor (channel 1 lit with the specular function, specular material white) under a red plate
+            // that stands ahead of the camera. The mirror ray of the floor point (0, -1, -3) reaches the plate at (0, 0, -6); the frame shows the plate there, so the floor takes
+            // fresnel x reflectivity of the plate's colour. A matte floor, a hidden hit and the effect off leave the floor as it is.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-reflections: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                using Vec=std::array<float,3>;
+                const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                const auto make_mesh=[&](const std::array<Vec,4>& corners,std::array<uint8_t,4> color,Vec normal={0,0,1}) {
+                    auto draw=quad(0x1000,-1,-1,1,1,color,true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; draw.vertices[i].color[0]=color; }
+                    return std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices});
+                };
+                const auto floor_mesh=make_mesh({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{180,180,180,255},{0,1,0});
+                const auto plate_mesh=make_mesh({{{-3,-0.5f,-6},{3,-0.5f,-6},{3,2,-6},{-3,2,-6}}},{255,0,0,255});
+                const auto cover_mesh=make_mesh({{{-0.3f,-0.2f,-4.5f},{0.3f,-0.2f,-4.5f},{0.3f,0.2f,-4.5f},{-0.3f,0.2f,-4.5f}}},{0,0,255,255});   // a nearer blue quad hiding the plate's pixel at the hit
+                const auto draw_of=[&](const std::shared_ptr<const gx::MeshBuffers>& mesh,bool floor,float specular) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    draw.transforms.edit().projection=projection;
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);
+                    if(floor) {
+                        uniforms.channels[0]=2|(1<<2)|(2<<7)|(3<<9); uniforms.channels[1]=2|(1<<9);   // channel 1: lit with the specular function
+                        uniforms.materials[0]={0.8f,0.6f,0.4f,1.f}; uniforms.ambient[0]={0.5f,0.5f,0.5f,1.f}; uniforms.materials[1]={specular,specular,specular,1.f};
+                        uniforms.lights[0].color={120,120,120,255}; uniforms.lights[0].position={0,5,0,0}; uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                    }
+                    draw.mesh=mesh; draw.vertices.clear(); draw.indices.clear();
+                    return draw;
+                };
+                auto frame=[&](bool rt,uc::EffectLevel level,float specular,bool cover) {
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_reflections=level; renderer.set_effects(effects);
+                    gx::FramePacket scene; scene.present=false;
+                    scene.draws.push_back(draw_of(floor_mesh,true,specular));
+                    scene.draws.push_back(draw_of(plate_mesh,false,0.f));
+                    if(cover) scene.draws.push_back(draw_of(cover_mesh,false,0.f));
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    return renderer.capture(submit(std::move(hud)));
+                };
+                const auto at=[&](const uc::RenderPixels& pixels,int x,int y,int channel) { return int(pixels.rgba[(size_t(y)*pixels.width+size_t(x))*4+size_t(channel)]); };
+                const int floor_x=640, floor_y=240, plate_y=360;   // pixels of (0, -1, -3) and (0, 0, -6)
+                const auto settle=[&](bool rt,uc::EffectLevel level,float specular,bool cover) { for(int i=0;i<40;++i) frame(rt,level,specular,cover); return frame(rt,level,specular,cover); };
+                const auto off=settle(false,uc::EffectLevel::off,1.f,false);
+                const auto on=settle(true,uc::EffectLevel::medium,1.f,false);
+                std::fprintf(stderr,"rt-reflections: pass runs %llu\n",(unsigned long long)renderer.pass_runs(uc::GpuPass::rt_reflections));
+                const float weight=uc::rt_fresnel(1.f/std::sqrt(10.f))*uc::rt_reflectivity({1,1,1},true);
+                std::fprintf(stderr,"rt-reflections: floor off (%d %d %d), on (%d %d %d), plate (%d %d %d), weight %.3f\n",at(off,floor_x,floor_y,0),at(off,floor_x,floor_y,1),at(off,floor_x,floor_y,2),at(on,floor_x,floor_y,0),at(on,floor_x,floor_y,1),at(on,floor_x,floor_y,2),
+                    at(on,floor_x,plate_y,0),at(on,floor_x,plate_y,1),at(on,floor_x,plate_y,2),double(weight));
+                const std::array<float,3> plate{float(at(on,floor_x,plate_y,0)),float(at(on,floor_x,plate_y,1)),float(at(on,floor_x,plate_y,2))};
+                CHECK(plate[0]>200 && plate[1]<40);   // the plate is red where the ray hits it, and the effect does not touch it
+                for(int channel=0;channel<3;++channel) {
+                    const float expected=float(at(off,floor_x,floor_y,channel))*(1.f-weight)+plate[size_t(channel)]*weight;
+                    CHECK(std::abs(float(at(on,floor_x,floor_y,channel))-expected)<=6.f);
+                }
+                CHECK(at(on,floor_x,floor_y,0)>at(off,floor_x,floor_y,0)+3);   // the effect is visible: more red than without
+                const auto matte=settle(true,uc::EffectLevel::medium,0.f,false);
+                CHECK(std::abs(at(matte,floor_x,floor_y,0)-at(off,floor_x,floor_y,0))<=1 && std::abs(at(matte,floor_x,floor_y,2)-at(off,floor_x,floor_y,2))<=1);   // no gloss, no reflection
+                const auto hidden_off=settle(false,uc::EffectLevel::off,1.f,true), hidden_on=settle(true,uc::EffectLevel::medium,1.f,true);
+                std::fprintf(stderr,"rt-reflections: hit hidden by a nearer quad: floor off %d on %d\n",at(hidden_off,floor_x,floor_y,0),at(hidden_on,floor_x,floor_y,0));
+                CHECK(std::abs(at(hidden_on,floor_x,floor_y,0)-at(hidden_off,floor_x,floor_y,0))<=1);
+                const uint64_t runs=renderer.pass_runs(uc::GpuPass::rt_reflections);
+                frame(false,uc::EffectLevel::off,1.f,false); frame(false,uc::EffectLevel::off,1.f,false);
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_reflections)==runs);   // off: nothing runs
+                const auto unmastered=settle(false,uc::EffectLevel::medium,1.f,false);
+                CHECK(std::abs(at(unmastered,floor_x,floor_y,0)-at(off,floor_x,floor_y,0))<=1);   // the master switch off with the level kept: nothing runs
+            }
+        }
         if (wanted("rt-denoise")) {
             // The own denoiser (rt_denoiser.h) on synthetic signals, outside the frame: two planes facing a still camera (view depth 2 on the left half,
             // 10 on the right), no motion. Noise averages out, a signal edge on the depth edge stays sharp, a reset (camera cut) drops the history.

@@ -12,6 +12,7 @@
 #include "rt_denoiser.h"
 #include "rt_material.h"
 #include "rt_scene.h"
+#include "rt_reflection_pass.h"
 #include "rt_shadow_pass.h"
 #include "streamline.h"
 #include "dlss_frame_generation.h"
@@ -104,7 +105,8 @@ public:
     // Ray-traced shadows (docs/superpowers/plans/2026-10-19-ray-tracing-p2.md): the sun and the local lights trace rays through the frame's TLAS. effects_ has the RT
     // levels masked by device support. rt_scene_active: the acceleration structures are built this frame; off, nothing ray tracing runs or allocates.
     bool rt_trace_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off || effects_.rt_ambient_occlusion!=EffectLevel::off); }   // the visibility pass (shadows and ambient occlusion)
-    bool rt_scene_active() const { return rt_trace_active(); }
+    bool rt_reflect_active() const { return motion_outputs_ && ray_tracing_ && effects_.rt_reflections!=EffectLevel::off; }
+    bool rt_scene_active() const { return rt_trace_active() || rt_reflect_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
     void set_rt_trace_lamps(bool on) { rt_trace_lamps_=on; }   // tests: trace the game's point lights instead of the synthetic key light (the lights are camera-relative in the game, so off in play)
     RtShadowPixels capture_rt_shadow_filtered();   // tests/tools: the denoiser's output for the same frame (what the composite multiplies by)
@@ -229,6 +231,9 @@ private:
     RtScene rt_;
     RtShadowPass rt_shadow_;
     RtDenoiser rt_shadow_denoiser_;
+    RtReflectionPass rt_reflection_;
+    RtDenoiser rt_reflection_denoiser_;
+    bool rt_reflect_ran_last_=false;
     bool rt_trace_lamps_=false;
     std::array<EffectLevel,3> rt_signal_levels_{};   // the levels (shadows, local shadows, ambient occlusion) the denoiser's history was accumulated under
     std::array<float,3> rt_key_direction_=kRtOverheadDirection;   // the synthetic key light's view-space direction, turned with the camera so that it stands still in the world
