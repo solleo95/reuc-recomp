@@ -520,11 +520,11 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
-                ImGui::Dummy({0,8*unit});
-                level_combo("##sss","screen_space_shadows","screen-space-shadows",options.effects.screen_space_shadows);
             }
             ImGui::Dummy({0,8*unit});
             toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
+            ImGui::Dummy({0,8*unit});
+            toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,features_ready && !features.effects && !options.effects.contact_shadows,tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,20*unit});

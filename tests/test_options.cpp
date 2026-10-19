@@ -131,12 +131,8 @@ int main() {
         CHECK(std::holds_alternative<std::string>(bad_blur) && std::get<std::string>(bad_blur)=="invalid value for --motion-blur");
         const auto missing_blur=parse(std::array<std::string_view,1>{"--motion-blur"});
         CHECK(std::holds_alternative<std::string>(missing_blur) && std::get<std::string>(missing_blur)=="missing value for --motion-blur");
-        CHECK(std::get<uc::Options>(defaults).effects.screen_space_shadows==uc::EffectLevel::off);
-        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--screen-space-shadows","ultra"})).effects.screen_space_shadows==uc::EffectLevel::ultra);
-        const auto bad_sss=parse(std::array<std::string_view,2>{"--screen-space-shadows","long"});
-        CHECK(std::holds_alternative<std::string>(bad_sss) && std::get<std::string>(bad_sss)=="invalid value for --screen-space-shadows");
-        const auto missing_sss=parse(std::array<std::string_view,1>{"--screen-space-shadows"});
-        CHECK(std::holds_alternative<std::string>(missing_sss) && std::get<std::string>(missing_sss)=="missing value for --screen-space-shadows");
+        CHECK(!std::get<uc::Options>(defaults).effects.contact_shadows);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--contact-shadows"})).effects.contact_shadows);
         CHECK(!std::get<uc::Options>(defaults).effects.per_pixel_lighting);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--per-pixel-lighting"})).effects.per_pixel_lighting);
         CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));

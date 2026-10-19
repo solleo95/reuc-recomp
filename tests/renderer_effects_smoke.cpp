@@ -366,8 +366,8 @@ int main(int argc, char** argv) {
                 uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
                 return draw;
             };
-            auto frame=[&](bool contact,uc::EffectLevel ao,bool directional,uc::EffectLevel reach=uc::EffectLevel::low) {
-                uc::GraphicsEffects effects; effects.anisotropy=1; effects.screen_space_shadows=contact ? reach : uc::EffectLevel::off; effects.ambient_occlusion=ao; renderer.set_effects(effects);
+            auto frame=[&](bool contact,uc::EffectLevel ao,bool directional) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.contact_shadows=contact; effects.ambient_occlusion=ao; renderer.set_effects(effects);
                 gx::FramePacket scene; scene.present=false;
                 scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},directional));   // the floor
                 scene.draws.push_back(surface({{{-0.5f,-0.4f,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,1,0},directional));   // the box's top
@@ -397,11 +397,6 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,"contact: base shadow %d, far floor %d, dominant light %s\n",shadow,far_floor,renderer.dominant_light() ? "found" : "none");
             CHECK(renderer.dominant_light().has_value() && renderer.dominant_light()->kind==gx::LightKind::directional);
             CHECK(shadow>=15 && far_floor<=1);
-            frame(true,uc::EffectLevel::off,true,uc::EffectLevel::ultra); const auto ultra=frame(true,uc::EffectLevel::off,true,uc::EffectLevel::ultra);
-            long low_total=0, ultra_total=0;
-            for(uint32_t y=240;y<330;++y) for(uint32_t x=640;x<900;++x) { low_total+=red(off,x,y)-red(on,x,y); ultra_total+=red(off,x,y)-red(ultra,x,y); }
-            std::fprintf(stderr,"sss: darkening around the box low %ld, ultra %ld\n",low_total,ultra_total);
-            CHECK(ultra_total>low_total+200);   // the longer ray reaches further from the box
             frame(false,uc::EffectLevel::off,false); const auto point_off=frame(false,uc::EffectLevel::off,false);
             frame(true,uc::EffectLevel::off,false); const auto point_on=frame(true,uc::EffectLevel::off,false);
             CHECK(!renderer.dominant_light().has_value() && point_on.rgba==point_off.rgba);   // a point light is no shadow caster: nothing changes

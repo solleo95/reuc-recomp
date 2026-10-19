@@ -21,13 +21,13 @@ struct GraphicsEffects {
     bool per_pixel_lighting=false;   // the GX lighting channels are evaluated per pixel instead of per vertex (needs the motion shader variants)
     EffectLevel ambient_occlusion=EffectLevel::off;   // GTAO on the scene targets (needs the G-buffer and the scene-target path)
     EffectLevel shadows=EffectLevel::off;   // a shadow map of the scene's dominant directional light, drawn inside the scene packets (docs/superpowers/plans/2026-10-19-graphics-enhancements-p4-6.md)
-    EffectLevel screen_space_shadows=EffectLevel::off;   // a screen-space ray march toward the scene's dominant directional or spot light: low is a contact ray, higher levels reach further (G-buffer, scene targets)
+    bool contact_shadows=false;   // a short screen-space ray march toward the scene's dominant directional or spot light (G-buffer, scene targets)
     EffectLevel motion_blur=EffectLevel::off;   // per-object blur along the motion vectors after the upscale (shutter 0.3 / 0.5 / 0.7 / 0.7 with more samples)
     bool operator==(const GraphicsEffects&) const=default;
 };
 // The screen-space effects run on the internal scene targets at the scene boundary; this says whether any of the chosen effects needs them
 // (the renderer then keeps the scene-target path alive even without an upscaler). Later effects add their conditions here.
-inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects.ambient_occlusion!=EffectLevel::off || effects.screen_space_shadows!=EffectLevel::off || effects.shadows!=EffectLevel::off || effects.motion_blur!=EffectLevel::off; }
+inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects.ambient_occlusion!=EffectLevel::off || effects.contact_shadows || effects.shadows!=EffectLevel::off || effects.motion_blur!=EffectLevel::off; }
 // Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
 constexpr uint32_t kEffectPerPixelLighting=1;
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }

@@ -13,8 +13,8 @@ void check(VkResult result, const char* what) { if (result != VK_SUCCESS) throw 
 // shaders/gtao.slang Params (push constants)
 struct Params {
     float viewport[4]; float view_a[4]; float view_b[2]; uint32_t region[2]; uint32_t ao_size[2];
-    float radius, falloff; uint32_t slices, steps, noise, flags; float strength, contact_length; float depth_range[2];
-    float light[4]; uint32_t contact_size[2]; uint32_t contact_steps, reserved;
+    float radius, falloff; uint32_t slices, steps, noise, flags; float strength, reserved; float depth_range[2];
+    float light[4]; uint32_t contact_size[2]; uint32_t reserved_size[2];
 };
 static_assert(sizeof(Params)==128 && offsetof(Params,region)==40 && offsetof(Params,radius)==56 && offsetof(Params,strength)==80 && offsetof(Params,depth_range)==88 && offsetof(Params,light)==96 && offsetof(Params,contact_size)==112);
 constexpr uint32_t kFlagOcclusion=1, kFlagContact=2, kFlagShadow=4;
@@ -44,16 +44,6 @@ void image_barrier(VkCommandBuffer command, VkImage image, VkImageLayout before,
     VkDependencyInfo info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; info.imageMemoryBarrierCount=1; info.pImageMemoryBarriers=&barrier;
     vkCmdPipelineBarrier2(command,&info);
 }
-}
-ContactPreset contact_preset(EffectLevel level) {
-    switch(level) {
-    case EffectLevel::low: return {0.f,16};
-    case EffectLevel::medium: return {0.4f,20};
-    case EffectLevel::high: return {0.8f,28};
-    case EffectLevel::ultra: return {1.5f,40};
-    case EffectLevel::off: break;
-    }
-    return {0.f,0};
 }
 AoPreset ao_preset(EffectLevel level) {
     switch(level) {
@@ -158,8 +148,7 @@ void OcclusionPass::resize(VkExtent2D ao_size, VkExtent2D contact_size) {
 }
 void OcclusionPass::record(const OcclusionInputs& in) {
     const auto preset=ao_preset(in.ao);
-    const auto contact_levels=contact_preset(in.contact);
-    const bool contact=contact_levels.steps && in.light.has_value();
+    const bool contact=in.contact && in.light.has_value();
     if ((!preset.slices && !contact && !in.shadow) || !in.region.width || !in.region.height) return;
     const VkExtent2D half{(in.region.width+1)/2,(in.region.height+1)/2};
     const VkExtent2D ao_size=preset.full_resolution ? in.region : half, contact_size=half;
@@ -188,7 +177,6 @@ void OcclusionPass::record(const OcclusionInputs& in) {
     params.radius=kRadius; params.falloff=kFalloff; params.slices=preset.slices; params.steps=preset.steps; params.noise=in.noise_frame; params.strength=kStrength;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.contact_size[0]=contact_size.width; params.contact_size[1]=contact_size.height;
-    params.contact_length=contact_levels.min_length; params.contact_steps=contact_levels.steps;
     params.flags=(preset.slices ? kFlagOcclusion : 0)|(contact ? kFlagContact : 0)|(in.shadow ? kFlagShadow : 0);
     const uint32_t block_offset=(in.slot%kShadowBlockSlots)*kShadowBlockStride;
     {
