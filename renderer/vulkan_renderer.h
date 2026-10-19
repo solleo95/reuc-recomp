@@ -5,6 +5,7 @@
 #include "prompt_overlay.h"
 #include "menu_overlay.h"
 #include "motion_tracker.h"
+#include "motion_blur_pass.h"
 #include "occlusion_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
@@ -229,6 +230,7 @@ private:
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
     OcclusionPass occlusion_;
+    MotionBlurPass motion_blur_;
     ShadowMap shadow_map_;
     VkShaderModule shadow_vertex_module_=VK_NULL_HANDLE;
     VkPipeline shadow_pipeline_=VK_NULL_HANDLE;

@@ -68,6 +68,12 @@ int main() {
         CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.contact_shadows);
         bool contact_not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":"on"}})"));}catch(const std::invalid_argument&){contact_not_boolean=true;}
         CHECK(contact_not_boolean);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"motion_blur":"ultra"}})")).effects.motion_blur==uc::EffectLevel::ultra);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.motion_blur==uc::EffectLevel::off);
+        auto blur_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto blur_options=uc::options_from_config(blur_doc);blur_options.effects.motion_blur=uc::EffectLevel::low;uc::store_options(blur_doc,blur_options);
+        CHECK(uc::options_from_config(blur_doc).effects.motion_blur==uc::EffectLevel::low && uc::serialize_config(blur_doc).find("\"motion_blur\": \"low\"")!=std::string::npos);
+        bool bad_blur=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"motion_blur":"extreme"}})"));}catch(const std::invalid_argument&){bad_blur=true;}
+        CHECK(bad_blur);
         bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}
         CHECK(not_boolean);
         auto stored=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto fresh=uc::options_from_config(stored);fresh.effects.anisotropy=2;uc::store_options(stored,fresh);

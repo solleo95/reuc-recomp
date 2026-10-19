@@ -83,6 +83,11 @@ Options options_from_config(const ConfigDocument& document) {
             if(!level)invalid("graphics.ambient_occlusion must be off, low, medium, high or ultra");
             options.effects.ambient_occlusion=*level;
         }
+        if(graphics.contains("motion_blur")) {
+            const auto level=graphics["motion_blur"].is_string() ? effect_level_from_name(graphics["motion_blur"].get<std::string>()) : std::nullopt;
+            if(!level)invalid("graphics.motion_blur must be off, low, medium, high or ultra");
+            options.effects.motion_blur=*level;
+        }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
             const auto mode=graphics["window_mode"].get<std::string>();
@@ -125,6 +130,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["contact_shadows"]=options.effects.contact_shadows;
     if(effect_level_name(options.effects.ambient_occlusion).empty())invalid("unknown ambient_occlusion");
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
+    if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");
+    graphics["motion_blur"]=std::string(effect_level_name(options.effects.motion_blur));
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

@@ -1048,6 +1048,15 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (fsr_generation_enabled()) fsr_g_->prepare(in,frame_index_);
     if (sharpening_ && upscaler_kind_!=UpscalerKind::off && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));   // the pass-through (off) never sharpens
     pass_timer_.end(command,timer_slot,timed_pass);
+    if (effects_.motion_blur!=EffectLevel::off && !in.reset) {   // a cut, a black frame or the first frame after a rebuild has no valid vectors
+        motion_blur_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"motion blur idle"); });
+        pass_timer_.begin(command,timer_slot,GpuPass::motion_blur);
+        MotionBlurInputs blur;
+        blur.command=command; blur.targets_generation=targets_generation_; blur.color=in.output; blur.motion=in.motion;
+        blur.output_size=in.output_size; blur.render_size=in.render_size; blur.level=effects_.motion_blur;
+        motion_blur_.record(blur);
+        pass_timer_.end(command,timer_slot,GpuPass::motion_blur);
+    }
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -1942,7 +1951,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown();
         destroy_scene_targets();
         for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
         stop_workers();

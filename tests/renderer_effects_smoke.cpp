@@ -508,6 +508,43 @@ int main(int argc, char** argv) {
             CHECK(std::abs(value(on,20,20)-value(off,20,20))<=4);   // the corners are where the vertices are: the same light there
             for(int channel=0;channel<3;++channel) CHECK(value(on,1100,100,channel)==value(off,1100,100,channel));   // the baked-colour quad is unchanged
         }
+        if (wanted("blur")) {
+            // A red quad moves 40 internal pixels between frames: its edge smears along the motion; a still scene and a camera cut (field of view jump) stay as drawn.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            auto frame=[&](uc::EffectLevel level,float shift,float zoom) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.motion_blur=level; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                auto red=quad(0x1234,-1,-1,0.1f,1,{255,0,0,255},true);
+                red.transforms.edit().position_rows[0][3]=shift;
+                red.transforms.edit().projection[0][0]=zoom;
+                scene.draws.push_back(std::move(red));
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto moved=[&](uc::EffectLevel level) { frame(level,0,1); frame(level,0,1); return frame(level,0.0625f,1); };
+            const auto distinct=[&](const uc::RenderPixels& pixels) {   // intermediate red values along the middle row
+                std::set<int> values;
+                for(uint32_t x=0;x<pixels.width;++x) { const int red=pixels.rgba[(size_t(360)*pixels.width+x)*4]; if(red>20 && red<250) values.insert(red); }
+                return values.size();
+            };
+            const auto off=moved(uc::EffectLevel::off), on=moved(uc::EffectLevel::high);
+            std::fprintf(stderr,"blur: distinct intermediate values off %zu, on %zu\n",distinct(off),distinct(on));
+            CHECK(distinct(off)<=2 && distinct(on)>=8);
+            CHECK(renderer.pass_runs(uc::GpuPass::motion_blur)>0);
+            frame(uc::EffectLevel::off,0.0625f,1); const auto still_off=frame(uc::EffectLevel::off,0.0625f,1);
+            frame(uc::EffectLevel::high,0.0625f,1); const auto still_on=frame(uc::EffectLevel::high,0.0625f,1);
+            CHECK(still_off.rgba==still_on.rgba);   // no motion: nothing to smear
+            frame(uc::EffectLevel::off,0,1); const auto cut_off=frame(uc::EffectLevel::off,0.0625f,2);
+            frame(uc::EffectLevel::high,0,1); const auto cut_on=frame(uc::EffectLevel::high,0.0625f,2);
+            CHECK(cut_off.rgba==cut_on.rgba);   // a camera cut skips the blur
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);

@@ -73,12 +73,12 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     CHECK(popup->Active && popup->DrawList->VtxBuffer.Size>50 && popup->ContentSize.y<500);
     io.AddKeyEvent(ImGuiKey_Escape,true); frame();
     io.AddKeyEvent(ImGuiKey_Escape,false); frame(); frame();
-    click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
-    CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
+    click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});
+    CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
     capture("controls");
     {   // the Effects tab: pick 4x anisotropic filtering through the combo
-        click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});
-        CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
+        click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
+        CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
         ImGuiWindow* effects=nullptr;
         for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow) && std::string_view(candidate->Name).find("effects")!=std::string_view::npos) effects=candidate;
         CHECK(effects);
@@ -103,14 +103,21 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
             click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+3*(text+style.ItemSpacing.y)+text*.5f});
             menu.commit(); CHECK(live.options().effects.ambient_occlusion==uc::EffectLevel::high && !live.error());
             CHECK(context.OpenPopupStack.empty());
+            CHECK(live.options().effects.motion_blur==uc::EffectLevel::off);
+            const float blur_center=combo_center+height+3*style.ItemSpacing.y+std::floor(6*unit)+text;   // the motion blur combo follows the occlusion one
+            click({effects->Pos.x+40,effects->Pos.y+blur_center});
+            popup=ImGui::FindWindowByName("##Combo_00"); CHECK(popup && popup->Active);
+            click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+1*(text+style.ItemSpacing.y)+text*.5f});
+            menu.commit(); CHECK(live.options().effects.motion_blur==uc::EffectLevel::low && !live.error());
+            CHECK(context.OpenPopupStack.empty());
             CHECK(!live.options().effects.contact_shadows);
-            io.AddMousePosEvent(effects->Pos.x+small_height*.5f,effects->Pos.y+combo_center+height*.5f+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
+            io.AddMousePosEvent(effects->Pos.x+small_height*.5f,effects->Pos.y+blur_center+height*.5f+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
             CHECK(context.HoveredId==effects->GetID("##contact"));
             click(io.MousePos);
             menu.commit(); CHECK(live.options().effects.contact_shadows && !live.error());
         }
-        click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
-        CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
+        click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
+        CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
     }
     const ImVec2 before=window->Pos;
     io.AddMousePosEvent(before.x+60,before.y+35); frame();
@@ -167,6 +174,6 @@ int main(int argc,char** argv) {
         ImGui::DestroyContext();
     }
     const auto saved=uc::options_from_config(uc::load_config(folder/"config.json"));
-    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4 && saved.effects.per_pixel_lighting && saved.effects.ambient_occlusion==uc::EffectLevel::high && saved.effects.contact_shadows);
+    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4 && saved.effects.per_pixel_lighting && saved.effects.ambient_occlusion==uc::EffectLevel::high && saved.effects.motion_blur==uc::EffectLevel::low && saved.effects.contact_shadows);
     std::filesystem::remove(folder/"config.json"); std::filesystem::remove(folder);
 }

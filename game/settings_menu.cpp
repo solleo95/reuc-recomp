@@ -61,8 +61,8 @@ void SettingsMenu::build() {
     ImGui::Dummy({0,6*unit});
     if(ImGui::BeginTabBar("tabs")) {
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     if(const auto& error=live_.error()) {
@@ -221,6 +221,7 @@ void SettingsMenu::effects_tab(float unit) {
         if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     };
     level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
+    level_combo("##blur","motion_blur",options.effects.motion_blur);
     ImGui::Dummy({0,6*unit});
     ImGui::BeginDisabled(!path && !options.effects.contact_shadows);
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
