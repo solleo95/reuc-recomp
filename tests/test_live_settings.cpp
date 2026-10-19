@@ -48,6 +48,8 @@ int main() {
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.motion_blur==uc::EffectLevel::medium);
         calls.clear(); next=live.options(); next.effects.ambient_occlusion=uc::EffectLevel::high; live.apply(next);
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.ambient_occlusion==uc::EffectLevel::high);
+        calls.clear(); next=live.options(); next.effects.ray_tracing=true; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.ray_tracing);
     }
     {   // frame rate limit, unlimited included
         calls.clear(); auto next=live.options(); next.fps_limit=144u; live.apply(next);

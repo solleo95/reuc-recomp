@@ -131,6 +131,17 @@ int main() {
         CHECK(std::holds_alternative<std::string>(bad_blur) && std::get<std::string>(bad_blur)=="invalid value for --motion-blur");
         const auto missing_blur=parse(std::array<std::string_view,1>{"--motion-blur"});
         CHECK(std::holds_alternative<std::string>(missing_blur) && std::get<std::string>(missing_blur)=="missing value for --motion-blur");
+        CHECK(!std::get<uc::Options>(defaults).effects.ray_tracing && std::get<uc::Options>(defaults).effects.rt_shadows==uc::EffectLevel::off);
+        const auto rt=std::get<uc::Options>(parse(std::array<std::string_view,3>{"--ray-tracing","--rt-shadows","high"}));
+        CHECK(rt.effects.ray_tracing && rt.effects.rt_shadows==uc::EffectLevel::high);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--rt-reflections","low"})).effects.rt_reflections==uc::EffectLevel::low);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--rt-lighting","medium"})).effects.rt_lighting==uc::EffectLevel::medium);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--rt-local-shadows","ultra"})).effects.rt_local_shadows==uc::EffectLevel::ultra);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--rt-ambient-occlusion","low"})).effects.rt_ambient_occlusion==uc::EffectLevel::low);
+        const auto bad_rt=parse(std::array<std::string_view,2>{"--rt-shadows","bogus"});
+        CHECK(std::holds_alternative<std::string>(bad_rt) && std::get<std::string>(bad_rt)=="invalid value for --rt-shadows");
+        const auto missing_rt=parse(std::array<std::string_view,1>{"--rt-lighting"});
+        CHECK(std::holds_alternative<std::string>(missing_rt) && std::get<std::string>(missing_rt)=="missing value for --rt-lighting");
         CHECK(!std::get<uc::Options>(defaults).effects.contact_shadows);
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--contact-shadows"})).effects.contact_shadows);
         CHECK(!std::get<uc::Options>(defaults).effects.per_pixel_lighting);

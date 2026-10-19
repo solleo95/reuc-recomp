@@ -551,7 +551,8 @@ void VulkanRenderer::destroy_samplers() {
 void VulkanRenderer::set_effects(const GraphicsEffects& effects) {
     owner();
     const bool anisotropy=effects.anisotropy!=effects_.anisotropy, path_before=scene_path_wanted();
-    effects_=effects;
+    chosen_effects_=effects;
+    effects_=effective_effects(chosen_effects_,ray_tracing_supported());
     apply_scene_path(anisotropy,path_before);
 }
 void VulkanRenderer::force_scene_targets(bool on) {

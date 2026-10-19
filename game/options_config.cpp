@@ -1,9 +1,13 @@
 #include "options_config.h"
+#include <array>
 #include <cmath>
 #include <stdexcept>
 namespace uc {
 namespace {
-[[noreturn]] void invalid(const char* message) {throw std::invalid_argument(std::string("config: ")+message);}
+[[noreturn]] void invalid(const std::string& message) {throw std::invalid_argument("config: "+message);}
+std::array<std::pair<const char*,EffectLevel*>,5> rt_level_fields(GraphicsEffects& effects) {   // the graphics.* keys of the ray tracing levels
+    return {{{"rt_reflections",&effects.rt_reflections},{"rt_lighting",&effects.rt_lighting},{"rt_shadows",&effects.rt_shadows},{"rt_local_shadows",&effects.rt_local_shadows},{"rt_ambient_occlusion",&effects.rt_ambient_occlusion}}};
+}
 bool boolean(const nlohmann::ordered_json& value) {if(!value.is_boolean())invalid("expected boolean setting");return value.get<bool>();}
 uint32_t extent(const nlohmann::ordered_json& value) {
     if(!value.is_number_unsigned() || value.get<uint64_t>()>INT32_MAX)invalid("invalid output extent");
@@ -88,6 +92,13 @@ Options options_from_config(const ConfigDocument& document) {
             if(!level)invalid("graphics.motion_blur must be off, low, medium, high or ultra");
             options.effects.motion_blur=*level;
         }
+        if(graphics.contains("ray_tracing"))options.effects.ray_tracing=boolean(graphics["ray_tracing"]);
+        for(const auto& [key,field]:rt_level_fields(options.effects)) {
+            if(!graphics.contains(key))continue;
+            const auto level=graphics[key].is_string() ? effect_level_from_name(graphics[key].get<std::string>()) : std::nullopt;
+            if(!level)invalid(std::string("graphics.")+key+" must be off, low, medium, high or ultra");
+            *field=*level;
+        }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
             const auto mode=graphics["window_mode"].get<std::string>();
@@ -132,6 +143,12 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
     if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");
     graphics["motion_blur"]=std::string(effect_level_name(options.effects.motion_blur));
+    graphics["ray_tracing"]=options.effects.ray_tracing;
+    auto effects=options.effects;
+    for(const auto& [key,field]:rt_level_fields(effects)) {
+        if(effect_level_name(*field).empty())invalid(std::string("unknown ")+key);
+        graphics[key]=std::string(effect_level_name(*field));
+    }
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

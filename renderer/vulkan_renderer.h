@@ -196,7 +196,8 @@ private:
     std::function<void()> menu_build_, menu_setup_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
     bool bloom_=true;
-    GraphicsEffects effects_;
+    GraphicsEffects chosen_effects_;   // as configured
+    GraphicsEffects effects_;   // effective_effects(chosen_effects_): what the passes run from
     bool anisotropy_supported_=false; float anisotropy_limit_=1;
     void create_samplers();
     void apply_scene_path(bool anisotropy_changed, bool path_before);

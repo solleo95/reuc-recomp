@@ -65,6 +65,15 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level) return "invalid value for --motion-blur";
             options.effects.motion_blur = *level;
         }
+        else if (arg == "--ray-tracing") options.effects.ray_tracing = true;
+        else if (arg == "--rt-reflections" || arg == "--rt-lighting" || arg == "--rt-shadows" || arg == "--rt-local-shadows" || arg == "--rt-ambient-occlusion") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
+            const auto level = effect_level_from_name(arguments[i]);
+            if (!level) return "invalid value for " + std::string(arg);
+            auto& effects = options.effects;
+            (arg == "--rt-reflections" ? effects.rt_reflections : arg == "--rt-lighting" ? effects.rt_lighting : arg == "--rt-shadows" ? effects.rt_shadows
+                : arg == "--rt-local-shadows" ? effects.rt_local_shadows : effects.rt_ambient_occlusion) = *level;
+        }
         else if (arg == "--anisotropy") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";
             uint32_t level = 0; const auto value = arguments[i];

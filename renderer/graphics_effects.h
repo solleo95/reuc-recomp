@@ -23,11 +23,30 @@ struct GraphicsEffects {
     EffectLevel shadows=EffectLevel::off;   // a shadow map of the scene's dominant directional light, drawn inside the scene packets (docs/superpowers/plans/2026-10-19-graphics-enhancements-p4-6.md)
     bool contact_shadows=false;   // a short screen-space ray march toward the scene's dominant directional or spot light (G-buffer, scene targets)
     EffectLevel motion_blur=EffectLevel::off;   // per-object blur along the motion vectors after the upscale (shutter 0.3 / 0.5 / 0.7 / 0.7 with more samples)
+    bool ray_tracing=false;   // master switch of the hardware ray tracing effects; each active RT effect replaces its raster counterpart
+    EffectLevel rt_reflections=EffectLevel::off, rt_lighting=EffectLevel::off, rt_shadows=EffectLevel::off, rt_local_shadows=EffectLevel::off, rt_ambient_occlusion=EffectLevel::off;
     bool operator==(const GraphicsEffects&) const=default;
 };
+// The level an RT effect runs at: its chosen one while the master switch is on and the device supports ray tracing, else off.
+inline EffectLevel rt_level(const GraphicsEffects& effects, EffectLevel level, bool rt_supported) { return effects.ray_tracing && rt_supported ? level : EffectLevel::off; }
+inline bool any_rt_active(const GraphicsEffects& effects, bool rt_supported) {
+    for(const auto level:{effects.rt_reflections,effects.rt_lighting,effects.rt_shadows,effects.rt_local_shadows,effects.rt_ambient_occlusion}) if(rt_level(effects,level,rt_supported)!=EffectLevel::off) return true;
+    return false;
+}
+// The block every pass runs from: RT levels masked by the master switch and device support, and an active RT shadow or occlusion switches its raster
+// counterpart off (RT replaces it, never stacks). The renderer keeps the chosen block for the config and derives this one.
+inline GraphicsEffects effective_effects(const GraphicsEffects& chosen, bool rt_supported) {
+    GraphicsEffects effective=chosen;
+    effective.rt_reflections=rt_level(chosen,chosen.rt_reflections,rt_supported); effective.rt_lighting=rt_level(chosen,chosen.rt_lighting,rt_supported);
+    effective.rt_shadows=rt_level(chosen,chosen.rt_shadows,rt_supported); effective.rt_local_shadows=rt_level(chosen,chosen.rt_local_shadows,rt_supported);
+    effective.rt_ambient_occlusion=rt_level(chosen,chosen.rt_ambient_occlusion,rt_supported);
+    if(effective.rt_shadows!=EffectLevel::off) { effective.shadows=EffectLevel::off; effective.contact_shadows=false; }
+    if(effective.rt_ambient_occlusion!=EffectLevel::off) effective.ambient_occlusion=EffectLevel::off;
+    return effective;
+}
 // The screen-space effects run on the internal scene targets at the scene boundary; this says whether any of the chosen effects needs them
-// (the renderer then keeps the scene-target path alive even without an upscaler). Later effects add their conditions here.
-inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects.ambient_occlusion!=EffectLevel::off || effects.contact_shadows || effects.shadows!=EffectLevel::off || effects.motion_blur!=EffectLevel::off; }
+// (the renderer then keeps the scene-target path alive even without an upscaler). Takes the effective block (RT levels already masked).
+inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects.ambient_occlusion!=EffectLevel::off || effects.contact_shadows || effects.shadows!=EffectLevel::off || effects.motion_blur!=EffectLevel::off || any_rt_active(effects,true); }
 // Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
 constexpr uint32_t kEffectPerPixelLighting=1;
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }
