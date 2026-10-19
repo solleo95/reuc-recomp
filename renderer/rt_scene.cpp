@@ -112,7 +112,8 @@ void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry>
     std::vector<RtGeometry> items;   // the per-frame view-space class: skinned draws (and any draw without a mesh identity)
     for (const RtGeometry& geometry : geometries) {
         if (geometry.skinned || !geometry.mesh_id) { items.push_back(geometry); continue; }
-        // A static mesh: its BLAS is cached in object space, the instance carries the draw's matrix
+        // A static mesh: its BLAS is cached in object space, the instance carries the draw's matrix. A cut-out never occludes (the rays cull non-opaque geometry): no BLAS for it
+        if (!geometry.opaque) continue;
         const uint64_t key=RtMeshCachePolicy::make_key(geometry.mesh_id,geometry.opaque);
         const auto action=policy_.request(key);
         if (action==RtMeshCachePolicy::Action::defer) { ++deferred_; continue; }
@@ -195,7 +196,7 @@ void RtScene::build_cached(VkCommandBuffer command, const RtGeometry& item, uint
     blas.storage=make_buffer(sizes.accelerationStructureSize,VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR|kAddress,false,false);
     VkAccelerationStructureCreateInfoKHR create{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
     create.buffer=blas.storage.buffer; create.size=sizes.accelerationStructureSize; create.type=VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    check(create_as_(device_,&create,nullptr,&blas.as),"cached BLAS");
+    try { check(create_as_(device_,&create,nullptr,&blas.as),"cached BLAS"); } catch (...) { destroy(blas.storage); throw; }
     VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR}; address.accelerationStructure=blas.as;
     blas.address=as_address_(device_,&address);
     ensure(frame,frame.scratch,sizes.buildScratchSize+scratch_alignment_,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,false);

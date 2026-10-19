@@ -9,7 +9,8 @@ namespace uc {
 class RtMeshCachePolicy {
 public:
     enum class Action { hit, build, defer };
-    RtMeshCachePolicy(uint64_t budget_bytes, uint32_t builds_per_frame) : budget_(budget_bytes), cap_(builds_per_frame) {}
+    // max_entries: every cached BLAS is its own device allocation, and drivers allow few (often 4096 per device)
+    RtMeshCachePolicy(uint64_t budget_bytes, uint32_t builds_per_frame, size_t max_entries=1024) : budget_(budget_bytes), cap_(builds_per_frame), max_entries_(max_entries) {}
     static uint64_t make_key(uint64_t mesh_id, bool opaque) { return mesh_id*2+(opaque ? 1 : 0); }
     void begin_frame(uint64_t frame) { frame_=frame; builds_=0; }
     // A draw of the mesh asks for its BLAS: resident (hit, marked used this frame), to be built now (build, at most `builds_per_frame` per frame; the caller then
@@ -26,7 +27,7 @@ public:
         if (const auto old=entries_.find(key); old!=entries_.end()) bytes_-=old->second.bytes;
         entries_[key]={bytes,frame_}; bytes_+=bytes;
         std::vector<uint64_t> evicted;
-        while (bytes_>budget_) {
+        while (bytes_>budget_ || entries_.size()>max_entries_) {
             uint64_t victim=0, oldest=UINT64_MAX; bool found=false;
             for (const auto& [candidate,entry] : entries_) if (candidate!=key && entry.last_use<frame_ && entry.last_use<oldest) { victim=candidate; oldest=entry.last_use; found=true; }
             if (!found) break;
@@ -54,5 +55,6 @@ private:
     std::unordered_map<uint64_t,Entry> entries_;
     uint64_t budget_, bytes_=0, frame_=0, hits_=0, builds_requested_=0, evictions_=0;
     uint32_t cap_, builds_=0;
+    size_t max_entries_;
 };
 }

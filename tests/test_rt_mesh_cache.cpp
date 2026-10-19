@@ -40,6 +40,19 @@ int main() {
         const auto next=cache.commit(40,30);
         CHECK(next.size()==1 && next[0]==20 && cache.bytes()==90);
     }
+    // The entry count is capped too (every BLAS is its own device allocation): the least recently used leaves, never one used this frame
+    {
+        RtMeshCachePolicy cache(1000000,8,3);
+        for(uint64_t frame=1;frame<=3;++frame) { cache.begin_frame(frame); cache.request(frame*10); cache.commit(frame*10,10); }
+        CHECK(cache.resident()==3);
+        cache.begin_frame(4); cache.request(40);
+        const auto evicted=cache.commit(40,10);
+        CHECK(evicted.size()==1 && evicted[0]==10 && cache.resident()==3 && cache.bytes()==30);
+        cache.begin_frame(5);
+        for(const uint64_t key:{20,30,40}) CHECK(cache.request(key)==Action::hit);
+        cache.request(50);
+        CHECK(cache.commit(50,10).empty() && cache.resident()==4);   // all used this frame: over the cap until the next frame
+    }
     // A freed mesh drops both of its variants
     {
         RtMeshCachePolicy cache(1000,8);

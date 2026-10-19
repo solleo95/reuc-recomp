@@ -125,7 +125,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                     }
                     // a rig light follows a character and ignores the level: only characters block it; a lamp is in the level: the whole scene blocks it
                     const float reach = directional[i] ? 1e4 : distanceTo[i] - params.lampClearance;
-                    if (reach > 0.0) blocked += occluded(origin, direction, reach, directional[i] ? 2u : 3u) ? 1.0 : 0.0;
+                    if (reach > 1e-3 * length(origin) + 1e-3) blocked += occluded(origin, direction, reach, directional[i] ? 2u : 3u) ? 1.0 : 0.0;
                 }
                 removed += contribution[i] * (blocked / float(rays));
             }
