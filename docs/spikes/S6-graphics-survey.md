@@ -16,6 +16,10 @@ Data: `build/survey/{train,fight}-lights.csv`, `build/survey/{train,fight}-packe
 | Normal coverage | 100% of the `80366E14` vertices carry a normal (381.35 M of 381.35 M); the unlit particle-style callsites carry none (`80357A68`, `80359464`, `8035B4CC`, ...). |
 | Tessellation candidates | Lit, triangle, depth-writing mesh draws with normals: about 84% of the `80366E14` draws, i.e. about 83% of all scene vertices. Distinct mesh count and shared-edge cracks are not measured; they decide whether phase 6 ships. |
 
+## Update 2026-10-19: the game-shadow candidates are the bloom chain
+
+`UC_PACKET_STATS` (`build/survey/*-packets.txt`) shows `800BAF88` and `800BADD8` as `tex 256x256 copy 320x180`: the same 27,271 draws per fight run each, one TEV stage, drawn in packets that copy to a 320x180 texture. That is the half-resolution workspace of the game's bloom chain (see `renderer/post_effects.h`), not shadow geometry. **The scene draws contain no game shadow callsite; nothing has to be suppressed when real shadows come.**
+
 ## Verdicts for phases 4–6
 
 - **Shadow maps + PCSS (9): go.** One callsite carries the casters; directional lights exist. With no spot lights, the shadow-casting light must be a directional light; if a scene has none, there is no shadow (design: "directional or spot").
