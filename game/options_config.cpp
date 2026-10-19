@@ -73,7 +73,7 @@ Options options_from_config(const ConfigDocument& document) {
         }
         if(graphics.contains("anisotropy")) {
             const auto& value=graphics["anisotropy"];
-            if(!value.is_number_unsigned() || !valid_anisotropy(value.get<uint32_t>()))invalid("graphics.anisotropy must be 1, 2, 4, 8 or 16");
+            if(!value.is_number_unsigned() || value.get<uint64_t>()>16 || !valid_anisotropy(value.get<uint32_t>()))invalid("graphics.anisotropy must be 1, 2, 4, 8 or 16");
             options.effects.anisotropy=value.get<uint32_t>();
         }
         if(graphics.contains("per_pixel_lighting"))options.effects.per_pixel_lighting=boolean(graphics["per_pixel_lighting"]);

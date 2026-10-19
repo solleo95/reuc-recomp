@@ -17,7 +17,8 @@ struct Image { VkImage image=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDL
 
 class SmaaUpscaler final : public Upscaler {
 public:
-    SmaaUpscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders) : device_(device), memory_(memory) {
+    SmaaUpscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, std::function<void()> idle)
+        : device_(device), memory_(memory), idle_(idle ? std::move(idle) : [device] { vkDeviceWaitIdle(device); }) {
         try { create(shaders); } catch (...) { destroy(); throw; }
     }
     ~SmaaUpscaler() override { destroy(); }
@@ -26,7 +27,7 @@ public:
     void evaluate(const UpscaleInputs& in) override {
         const VkExtent2D region = in.render_size;
         if (region.width != extent_.width || region.height != extent_.height) resize(region);
-        if (bound_output_ != in.output.view) bind_output(in.output.view);
+        if (bound_output_ != in.output.view || bound_generation_ != in.targets_generation) bind_output(in.output.view, in.targets_generation);
         const auto command = in.command;
         if (!lookup_uploaded_) upload_lookups(command);
         for (Image* image : {&source_, &edges_, &weights_}) if (!image->initialized) { barrier(command, image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); image->initialized = true; }
@@ -129,7 +130,7 @@ private:
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     }
     void resize(VkExtent2D region) {
-        check(vkDeviceWaitIdle(device_), "idle before resize");   // the set and the images may be used by frames in flight (render-scale change only)
+        idle_();   // the set and the images may be used by frames in flight (render-scale change only)
         destroy_image(source_); destroy_image(edges_); destroy_image(weights_);
         source_ = make_image(VK_FORMAT_R8G8B8A8_UNORM, region, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         edges_ = make_image(VK_FORMAT_R8G8_UNORM, region, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
@@ -139,10 +140,10 @@ private:
         write_image(7, edges_.view, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE); write_image(8, weights_.view, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
         extent_ = region;
     }
-    void bind_output(VkImageView view) {
-        if (bound_output_) check(vkDeviceWaitIdle(device_), "idle before rebinding");   // a new EFB after a rebuild
+    void bind_output(VkImageView view, uint64_t generation) {
+        if (bound_output_) idle_();   // a new EFB after a rebuild
         write_image(9, view, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        bound_output_ = view;
+        bound_output_ = view; bound_generation_ = generation;
     }
     void upload_lookups(VkCommandBuffer command) {
         barrier(command, area_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -201,10 +202,12 @@ private:
     VkBuffer staging_=VK_NULL_HANDLE; VkDeviceMemory staging_memory_=VK_NULL_HANDLE;
     VkExtent2D extent_{};
     VkImageView bound_output_=VK_NULL_HANDLE;
+    uint64_t bound_generation_=0;
+    std::function<void()> idle_;   // waits for the GPU through the renderer's presentation backend
     bool lookup_uploaded_=false;
 };
 }
-std::unique_ptr<Upscaler> make_smaa_upscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders) {
-    return std::make_unique<SmaaUpscaler>(device, memory, shaders);
+std::unique_ptr<Upscaler> make_smaa_upscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, std::function<void()> idle) {
+    return std::make_unique<SmaaUpscaler>(device, memory, shaders, std::move(idle));
 }
 }

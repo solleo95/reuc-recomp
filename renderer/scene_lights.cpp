@@ -25,7 +25,7 @@ float score(const CollectedLight& light) { return float(light.draws)*std::max({l
 bool shadow_caster(const CollectedLight& light) { return light.kind==LightKind::directional || light.kind==LightKind::spot; }
 }
 void SceneLightCollector::add(const DrawUniform& uniforms) {
-    std::vector<size_t> counted;   // lights of this draw already counted (both colour channels may use the same one)
+    std::array<size_t,16> counted; size_t counted_size=0;   // lights of this draw already counted (both colour channels may use the same one; no allocation per draw)
     for (size_t channel=0;channel<2;++channel) {
         const auto lighting=channel_lighting(uniforms.channels[channel]);
         if (!lighting.lit) continue;
@@ -37,7 +37,7 @@ void SceneLightCollector::add(const DrawUniform& uniforms) {
             size_t at=0;
             while (at<lights_.size() && !same_light(lights_[at],found)) ++at;
             if (at==lights_.size()) lights_.push_back(found);
-            if (std::find(counted.begin(),counted.end(),at)==counted.end()) { counted.push_back(at); ++lights_[at].draws; }
+            if (std::find(counted.begin(),counted.begin()+counted_size,at)==counted.begin()+counted_size) { counted[counted_size++]=at; ++lights_[at].draws; }
         }
     }
 }

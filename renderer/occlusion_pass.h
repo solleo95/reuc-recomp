@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 
 namespace uc {
@@ -21,7 +22,8 @@ struct OcclusionInputs {
     EffectLevel ao=EffectLevel::off;
     bool contact=false;                   // contact shadows toward `light` (nothing happens without one)
     std::optional<gx::CollectedLight> light;  // the scene's dominant directional or spot light
-    uint32_t noise_frame=0;              // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
+    uint64_t targets_generation=0;        // VulkanRenderer::targets_generation(): changes when the scene targets were recreated
+    uint32_t noise_frame=0;             // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
 };
 // The slices, steps and resolution of a preset.
 struct AoPreset { uint32_t slices, steps; bool full_resolution; };
@@ -30,7 +32,8 @@ AoPreset ao_preset(EffectLevel level);
 // composite that multiplies the colour of every pixel a depth-writing draw covered, faded by its GX fog. Compute only.
 class OcclusionPass {
 public:
-    void initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders);
+    // idle: how to wait for the GPU before images or bindings change (the renderer's presentation backend; vkDeviceWaitIdle when empty).
+    void initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, std::function<void()> idle={});
     void record(const OcclusionInputs& inputs);
     void shutdown();
 private:
@@ -52,5 +55,7 @@ private:
     Image raw_, blurred_, contact_;
     VkExtent2D ao_size_{}, contact_size_{};
     VkImageView bound_depth_=VK_NULL_HANDLE, bound_gbuffer_=VK_NULL_HANDLE, bound_color_=VK_NULL_HANDLE;
+    uint64_t bound_generation_=0;
+    std::function<void()> idle_;
 };
 }

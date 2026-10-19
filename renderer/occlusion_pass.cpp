@@ -80,9 +80,10 @@ void OcclusionPass::write_image(uint32_t binding, VkImageView view, VkDescriptor
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; write.dstSet=set_; write.dstBinding=binding; write.descriptorCount=1; write.descriptorType=type; write.pImageInfo=&info;
     vkUpdateDescriptorSets(device_,1,&write,0,nullptr);
 }
-void OcclusionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders) {
+void OcclusionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, std::function<void()> idle) {
     if (device_) return;
     device_=device; memory_=memory;
+    idle_=idle ? std::move(idle) : [device] { vkDeviceWaitIdle(device); };
     try {
         const char* names[4]={"gtao.ao.spv","gtao.denoise.spv","gtao.composite.spv","gtao.contact.spv"};
         for (size_t i=0;i<4;++i) {
@@ -117,7 +118,7 @@ void OcclusionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProp
     } catch (...) { shutdown(); throw; }
 }
 void OcclusionPass::resize(VkExtent2D ao_size, VkExtent2D contact_size) {
-    check(vkDeviceWaitIdle(device_),"idle before resize");   // the set and the images may be used by frames in flight (render scale or preset change)
+    idle_();   // the set and the images may be used by frames in flight (render scale or preset change)
     destroy_image(raw_); destroy_image(blurred_); destroy_image(contact_);
     raw_=make_image(VK_FORMAT_R8_UNORM,ao_size); blurred_=make_image(VK_FORMAT_R8_UNORM,ao_size); contact_=make_image(VK_FORMAT_R8_UNORM,contact_size);
     write_image(4,raw_.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); write_image(5,blurred_.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
@@ -132,8 +133,9 @@ void OcclusionPass::record(const OcclusionInputs& in) {
     const VkExtent2D half{(in.region.width+1)/2,(in.region.height+1)/2};
     const VkExtent2D ao_size=preset.full_resolution ? in.region : half, contact_size=half;
     if (ao_size.width!=ao_size_.width || ao_size.height!=ao_size_.height || contact_size.width!=contact_size_.width || contact_size.height!=contact_size_.height) resize(ao_size,contact_size);
-    if (bound_depth_!=in.depth.view || bound_gbuffer_!=in.gbuffer.view || bound_color_!=in.color.view) {
-        if (bound_depth_) check(vkDeviceWaitIdle(device_),"idle before rebinding");   // new scene targets after a rebuild
+    if (bound_depth_!=in.depth.view || bound_gbuffer_!=in.gbuffer.view || bound_color_!=in.color.view || bound_generation_!=in.targets_generation) {   // the generation catches a recreated view that got a destroyed one's handle
+        if (bound_depth_) idle_();   // new scene targets after a rebuild
+        bound_generation_=in.targets_generation;
         write_image(1,in.depth.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); write_image(2,in.gbuffer.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); write_image(3,in.color.view,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
         bound_depth_=in.depth.view; bound_gbuffer_=in.gbuffer.view; bound_color_=in.color.view;
     }

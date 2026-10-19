@@ -548,7 +548,7 @@ void VulkanRenderer::force_scene_targets(bool on) {
 void VulkanRenderer::apply_scene_path(bool anisotropy_changed, bool path_before) {
     const bool path_changed=scene_path_wanted()!=path_before;
     if(!layout_ || (!anisotropy_changed && !path_changed)) return;
-    vk_check(vkDeviceWaitIdle(device),"effects change");
+    vk_check(present_.wait_idle(device),"effects change");   // through the presentation backend: frame generation drains its presents first
     destroy_samplers(); create_samplers();   // the scene samplers' mip bias depends on the path too
     if(path_changed && upscaler_kind_==UpscalerKind::off) {   // with an upscaler the scene targets exist anyway
         scene_phase_=false; reset_next_=true; scene_restore_copy_.reset();
@@ -962,7 +962,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (effects_need_lights()) dominant_light_=gx::select_dominant(scene_lights_.lights(),dominant_light_);
     const auto now=std::chrono::steady_clock::now();
     UpscaleInputs in;
-    in.command=command;
+    in.command=command; in.targets_generation=targets_generation_;
     // Usage as make_attachment creates them with motion outputs on.
     const VkImageUsageFlags color_usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT;
     const VkImageUsageFlags depth_usage=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -992,10 +992,10 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
-        occlusion_.initialize(device,memory_,shaders_);
+        occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
         OcclusionInputs occlusion;
-        occlusion.command=command; occlusion.color=in.color; occlusion.depth=in.depth;
+        occlusion.command=command; occlusion.targets_generation=targets_generation_; occlusion.color=in.color; occlusion.depth=in.depth;
         occlusion.gbuffer={scene_gbuffer_,scene_gbuffer_view_,kGBufferFormat,scene_extent_,color_usage};
         occlusion.region=in.render_size;
         occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
@@ -1112,6 +1112,7 @@ RenderPixels VulkanRenderer::capture_scene() {
     return pixels;
 }
 void VulkanRenderer::destroy_scene_targets() {
+    ++targets_generation_;   // views of the images made next may reuse these handles: effect passes must rebind
     scene_restore_copy_.reset();
     for (auto [view,image,memory]:{std::tuple{&scene_color_view_,&scene_color_,&scene_color_memory_},{&scene_depth_view_,&scene_depth_,&scene_depth_memory_},{&scene_motion_view_,&scene_motion_,&scene_motion_memory_},{&scene_gbuffer_view_,&scene_gbuffer_,&scene_gbuffer_memory_}}) {
         if (*view) vkDestroyImageView(device,*view,nullptr);
@@ -1200,7 +1201,7 @@ void VulkanRenderer::rebuild() {
         if(efb_view_) vkDestroyImageView(device,efb_view_,nullptr);
         if(efb_) vkDestroyImage(device,efb_,nullptr);
         if(efb_memory_) vkFreeMemory(device,efb_memory_,nullptr);
-        efb_view_=VK_NULL_HANDLE; efb_=VK_NULL_HANDLE; efb_memory_=VK_NULL_HANDLE; efb_initialized_=false;
+        efb_view_=VK_NULL_HANDLE; efb_=VK_NULL_HANDLE; efb_memory_=VK_NULL_HANDLE; efb_initialized_=false; ++targets_generation_;
         sweep_meshes(true);
         for(auto& texture:recycled_copies_) destroy_texture(texture);
         recycled_copies_.clear(); recycled_copy_bytes_=0;
@@ -1212,7 +1213,7 @@ void VulkanRenderer::rebuild() {
     if (upscaler_ && upscaler_kind_==UpscalerKind::off && !scene_path_wanted()) { upscaler_.reset(); reset_next_=true; }   // the last effect that needed the scene targets went away
     if (motion_outputs_ && (upscaler_kind_!=UpscalerKind::off || scene_path_wanted()) && !upscaler_) {
         if (upscaler_kind_==UpscalerKind::off || upscaler_kind_==UpscalerKind::blit) upscaler_=make_blit_upscaler();   // off: the effects' pass-through at ratio 1
-        else if (upscaler_kind_==UpscalerKind::smaa) upscaler_=make_smaa_upscaler(device,memory_,shaders_);
+        else if (upscaler_kind_==UpscalerKind::smaa) upscaler_=make_smaa_upscaler(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"SMAA idle"); });
         else if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) upscaler_=make_dlss_upscaler(*streamline_,upscale_mode_);
         else if (upscaler_kind_==UpscalerKind::fsr) {
             try { upscaler_=make_fsr_upscaler(device,physical_,shaders_.parent_path().parent_path()); }

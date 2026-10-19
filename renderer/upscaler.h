@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 namespace uc {
@@ -12,6 +13,7 @@ struct UpscaleImage { VkImage image=VK_NULL_HANDLE; VkImageView view=VK_NULL_HAN
 // One reconstruction. Every image is in VK_IMAGE_LAYOUT_GENERAL on entry and must be left there; the renderer puts barriers around the call.
 struct UpscaleInputs {
     VkCommandBuffer command=VK_NULL_HANDLE;
+    uint64_t targets_generation=0;               // changes whenever the scene targets or the EFB were recreated (a new image may reuse a destroyed one's handle)
     UpscaleImage color, depth, motion, output;   // color/depth/motion: the internal scene targets; output: the output-resolution EFB
     VkExtent2D render_size{}, output_size{};     // top-left sub-rectangles holding the scene (the 640x360 viewport of the 640x480 EFB)
     std::array<float,2> jitter{};                // internal pixels, as added to the projection
@@ -32,7 +34,7 @@ public:
 };
 std::unique_ptr<Upscaler> make_blit_upscaler();   // test-only: linear blit of the scene into the output
 // SMAA 1x at ratio 1 (compute; smaa.{edges,weights,blend}.spv in `shaders`): no jitter, no motion vectors.
-std::unique_ptr<Upscaler> make_smaa_upscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders);
+std::unique_ptr<Upscaler> make_smaa_upscaler(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, std::function<void()> idle={});
 class Streamline;
 // DLSS 4.5 Super Resolution through Streamline; presets K (DLAA, Quality, Balanced), M (Performance), L (Ultra Performance).
 std::unique_ptr<Upscaler> make_dlss_upscaler(const Streamline& streamline, UpscaleMode mode);

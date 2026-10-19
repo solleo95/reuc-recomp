@@ -227,6 +227,7 @@ private:
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
     OcclusionPass occlusion_;
+    uint64_t targets_generation_=1;                        // bumped whenever the scene targets or the EFB are destroyed
     std::optional<gx::Projection> frame_projection_;       // the projection the scene's world was drawn with this frame (what the screen-space effects reconstruct with)
     gx::SceneLightCollector scene_lights_;                 // the scene draws' lights of this frame, filled while the scene is recorded
     std::optional<gx::CollectedLight> dominant_light_;     // chosen at the scene boundary, kept across frames (hysteresis)
