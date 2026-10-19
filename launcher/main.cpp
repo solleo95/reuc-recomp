@@ -518,7 +518,7 @@ int run(int argc,wchar_t** argv) {
                     if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)ImGui::SetTooltip("%s",hint);}
                     ImGui::PopFont();
                 };
-                level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion);
+                level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,uc::rt_ui(options.effects,features_ready,features.ray_tracing).ao_replaced,tr("replaced_by_rt"));   // ray-traced ambient occlusion replaces it
                 ImGui::Dummy({0,8*unit});
                 level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
                 // Ray tracing: the master checkbox, then the levels of the effects that work (RT shadows replace the shadow map and the contact shadows).
@@ -530,6 +530,8 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##rt-shadows","rt_shadows","rt-shadows",options.effects.rt_shadows,!rt.levels_enabled);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##rt-local-shadows","rt_local_shadows","rt-local-shadows",options.effects.rt_local_shadows,!rt.levels_enabled);
+                ImGui::Dummy({0,8*unit});
+                level_combo("##rt-ao","rt_ambient_occlusion","rt-ambient-occlusion",options.effects.rt_ambient_occlusion,!rt.levels_enabled);
             }
             const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
             ImGui::Dummy({0,8*unit});

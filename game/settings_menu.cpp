@@ -210,20 +210,20 @@ void SettingsMenu::effects_tab(float unit) {
     ImGui::EndDisabled();
     if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     const auto preset_label=[&](EffectLevel level) { return level==EffectLevel::off ? std::string(tr("off")) : std::string(tr(level==EffectLevel::low ? "level_low" : level==EffectLevel::medium ? "level_medium" : level==EffectLevel::high ? "level_high" : "level_ultra")); };
-    const auto level_combo=[&](const char* id,const char* title,EffectLevel& value) {   // the presets of an effect; greyed out like the other screen-space effects
+    const auto rt=rt_ui(options.effects,features!=nullptr,features && features->ray_tracing);
+    const auto level_combo=[&](const char* id,const char* title,EffectLevel& value,bool replaced=false) {   // the presets of an effect; greyed out like the other screen-space effects (replaced: ray tracing does it instead)
         ImGui::Dummy({0,6*unit});
         ImGui::TextUnformatted(tr(title));
-        ImGui::BeginDisabled(!path && value==EffectLevel::off);
+        ImGui::BeginDisabled((!path && value==EffectLevel::off) || replaced);
         if(ImGui::BeginCombo(id,preset_label(value).c_str())) {
             for(const auto level:{EffectLevel::off,EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) if(ImGui::Selectable(preset_label(level).c_str(),value==level)) value=level;
             ImGui::EndCombo();
         }
         ImGui::EndDisabled();
-        if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
+        if((!path || replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(replaced ? "replaced_by_rt" : "effects_unavailable"));
     };
-    level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion);
+    level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion,rt.ao_replaced);
     level_combo("##blur","motion_blur",options.effects.motion_blur);
-    const auto rt=rt_ui(options.effects,features!=nullptr,features && features->ray_tracing);
     ImGui::Dummy({0,6*unit});
     ImGui::BeginDisabled((!path && !options.effects.contact_shadows) || rt.contact_replaced);
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
@@ -238,7 +238,7 @@ void SettingsMenu::effects_tab(float unit) {
         const std::string why=std::string(tr("rt_unavailable"))+(features && !features->ray_tracing_reason.empty() ? " ("+features->ray_tracing_reason+")" : "");
         ImGui::SetTooltip("%s",why.c_str());
     }
-    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows}}) {
+    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows},{"##rt-ao","rt_ambient_occlusion",&options.effects.rt_ambient_occlusion}}) {
         ImGui::Dummy({0,6*unit});
         ImGui::TextUnformatted(tr(title));
         ImGui::BeginDisabled(!rt.levels_enabled);
