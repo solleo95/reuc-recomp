@@ -1,6 +1,6 @@
 // Ray-traced reflections (docs/superpowers/plans/2026-10-20-ray-tracing-p5-reflections.md). traceMain: per signal pixel of a reflective surface one ray along the mirror
 // direction (within a roughness cone); where it hits, the colour the camera itself sees at the hit's screen position (when the hit is on screen and not hidden) is the
-// reflected radiance; elsewhere the pixel's own colour (the denoiser blends it, the composite's lerp then changes nothing). compositeMain: the denoised radiance is lerped
+// reflected radiance, and the signal is its DIFFERENCE from the pixel's own colour (zero where nothing is reflected: the denoiser's blending and the divisor's subsampling then leave the surface's detail alone). compositeMain: the denoised difference, weighted, is added
 // into the scene colour by fresnel x reflectivity. renderer/rt_reflect_math.h is the CPU mirror.
 #include "gbuffer.slang"
 #include "view_space.slang"
@@ -55,36 +55,36 @@ float3 jitter(float3 d, float radius, float2 u) {
 }
 
 // The colour one reflection ray brings: the frame's colour at the hit when the hit is on screen and visible from the camera (faded toward the screen edge and with
-// the distance), else `own` (no reflection).
-float3 reflectedColor(float3 origin, float3 direction, float3 own) {
+// the distance, as its difference from `own`), else zero (no reflection).
+float3 reflectedDelta(float3 origin, float3 direction, float3 own) {
     RayDesc ray; ray.Origin = origin; ray.Direction = direction; ray.TMin = 1e-3 * length(origin) + 1e-3; ray.TMax = params.reach;
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE> query;
     query.TraceRayInline(scene, 0, 3u, ray);
     query.Proceed();
-    if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return own;
+    if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return float3(0.0, 0.0, 0.0);
     const float t = query.CommittedRayT();
     const float3 hit = origin + direction * t;
-    if (!(hit.z < -1e-4)) return own;
+    if (!(hit.z < -1e-4)) return float3(0.0, 0.0, 0.0);
     // the hit's screen position (rt_reflect_math.h rt_project) and the frame's own view of it
     const float2 ndc = float2(params.viewA.x * hit.x / -hit.z - params.viewA.z, params.viewA.y * hit.y / -hit.z - params.viewA.w);
     const float2 at = params.viewport.xy + (ndc * 0.5 + 0.5) * params.viewport.zw;
     const int2 hitPixel = int2(floor(at));
-    if (any(hitPixel < int2(0, 0)) || any(hitPixel >= int2(params.region))) return own;
+    if (any(hitPixel < int2(0, 0)) || any(hitPixel >= int2(params.region))) return float3(0.0, 0.0, 0.0);
     const float hitStored = sceneDepth.Load(int3(hitPixel, 0));
-    if (hitStored >= 1.0) return own;
+    if (hitStored >= 1.0) return float3(0.0, 0.0, 0.0);
     const float frameZ = abs(viewPositionAt(hitPixel, hitStored).z);
-    if (abs(frameZ - abs(hit.z)) > 0.03 * abs(hit.z)) return own;   // hidden from the camera: the frame shows something else there
+    if (abs(frameZ - abs(hit.z)) > 0.03 * abs(hit.z)) return float3(0.0, 0.0, 0.0);   // hidden from the camera: the frame shows something else there
     const float2 edge = saturate(min(at - params.viewport.xy, params.viewport.xy + params.viewport.zw - at) / (0.08 * params.viewport.zw));   // fade out toward the screen edge
     const float confidence = edge.x * edge.y * (1.0 - (t / params.reach) * (t / params.reach));
-    return lerp(own, sceneColor[hitPixel].rgb, saturate(confidence));
+    return (sceneColor[hitPixel].rgb - own) * saturate(confidence);
 }
 
 [shader("compute")] [numthreads(8, 8, 1)]
 void traceMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.signalSize)) return;
     const int2 pixel = int2(min(id.xy * params.divisor + params.divisor / 2, params.region - 1));
-    const float3 own = sceneColor[pixel].rgb;   // no reflection: the pixel's own colour, which the composite's lerp leaves as it is
-    float3 result = own;
+    const float3 own = sceneColor[pixel].rgb;
+    float3 result = float3(0.0, 0.0, 0.0);   // no reflection: no difference
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
     const uint index = sceneMaterial.Load(int3(pixel, 0));
@@ -100,7 +100,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 const uint seed = params.frame * 5u + r * 3u + 13u;
                 direction = jitter(mirror, params.cone, float2(interleavedGradientNoise(float2(pixel), seed), interleavedGradientNoise(float2(pixel.yx) + 59.0, seed)));
             }
-            sum += dot(direction, normal) > 0.02 ? reflectedColor(origin, direction, own) : own;   // a ray that would go into the surface brings nothing
+            sum += dot(direction, normal) > 0.02 ? reflectedDelta(origin, direction, own) : float3(0.0, 0.0, 0.0);   // a ray that would go into the surface brings nothing
         }
         result = sum / float(max(params.rays, 1u));
     }
@@ -118,7 +118,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (reflectivity <= 0.0) return;
     const float3 position = viewPositionAt(pixel, stored);
     const float centreDepth = abs(position.z);
-    // a depth-aware bilinear upsample of the denoised radiance (as rt_shadow.slang)
+    // a depth-aware bilinear upsample of the denoised difference (as rt_shadow.slang)
     const float d = float(params.divisor);
     const float2 at = (float2(pixel) + 0.5 - float(params.divisor / 2) - 0.5) / d;
     const int2 base = int2(floor(at));
@@ -132,10 +132,10 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
         const float w = (x == 0 ? 1.0 - f.x : f.x) * (y == 0 ? 1.0 - f.y : f.y) / (1.0 + 50.0 * abs(tapDepth - centreDepth) / centreDepth);
         sum += signalIn.Load(int3(tap, 0)).rgb * w; weights += w;
     }
-    const float3 radiance = weights > 0.0 ? sum / weights : sceneColor[id.xy].rgb;
+    const float3 delta = weights > 0.0 ? sum / weights : float3(0.0, 0.0, 0.0);
     const float3 normal = decodeGBufferNormal(texel.xy);
     const float weight = saturate(fresnel(dot(normal, -normalize(position))) * reflectivity * params.strength) * (1.0 - texel.z);   // faded by the GX fog
     float4 color = sceneColor[id.xy];
-    color.rgb = lerp(color.rgb, radiance, weight);
+    color.rgb = saturate(color.rgb + delta * weight);   // lerp(own, hit, w) = own + w (hit - own)
     sceneColor[id.xy] = color;
 }

@@ -32,6 +32,11 @@ Everything at High: about 113 FPS in the heavy fight (target about 100). The acc
 
 `renderer_effects_smoke --rt-reflections`: a glossy floor under a red plate: the floor point whose mirror ray reaches the plate takes `fresnel x reflectivity x 4` of the plate's colour (144, 107, 71 becomes 185, 67, 45 against 185, 67, 45 computed); a matte floor, a hit hidden by a nearer quad, the effect off and the master switch off leave the floor unchanged; validation clean. `test_rt_reflect_math`: presets, reflectivity, packing in the record flags, fresnel, mirror, projection round trip, depth agreement.
 
+## Review (fresh opus, 0 Critical, 2 Important)
+
+* The signal is the colour DIFFERENCE (hit minus the pixel's own colour, zero where nothing is reflected), added by the composite, not an absolute radiance lerped in: with an absolute signal a miss carried one block sample of the pixel's own colour (divisor 2 or 4), which blurred the texture of every glossy surface by the weight, and the denoiser's history of a moving picture trailed it.
+* Still true (deferred): the denoiser keeps up to 32 frames of a view-dependent signal and reprojects it with the surface's motion, so a moving enemy's reflection trails for a fraction of a second; the composite upsample and the à-trous pass have no material test, so a reflection fades within 1 to 4 pixels of a coplanar matte draw; the raster occlusion (GTAO, shadow map) runs after the reflections and darkens them again; the guide sample and the trace sample differ by up to a pixel when the region is not a multiple of the divisor (as in the shadow pass).
+
 ## Not covered
 
 * Windows and other blended draws (not in the structure), per-material overrides (`dist/rt_materials.json`: no tool to pick materials yet; the first-scene floor and seats could be marked if the owner wants them to mirror), rough reflections beyond the preset cone, reflections of what is off screen (no environment map).
