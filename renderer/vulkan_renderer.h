@@ -67,7 +67,8 @@ public:
     // At a guest frame boundary. False requires a new device; sharpening and off/on of the initialized kind preserve it.
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // SMAA works on the finished frame at the output size, whatever the quality setting says.
-    UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa ? UpscaleMode::native : upscale_mode_; }
+    UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
+    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_)); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
@@ -80,6 +81,7 @@ public:
     struct GBufferPixels { uint32_t width=0, height=0; std::vector<uint16_t> texels; };   // rgba per texel, as gbuffer.h encodes
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
+    void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
     bool effects_need_gbuffer() const { return motion_outputs_ && force_gbuffer_; }   // the screen-space effects add their own conditions
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
@@ -178,6 +180,7 @@ private:
     GraphicsEffects effects_;
     bool anisotropy_supported_=false; float anisotropy_limit_=1;
     void create_samplers();
+    void apply_scene_path(bool anisotropy_changed, bool path_before);
     void destroy_samplers();
     UpscalerKind upscaler_kind_=UpscalerKind::off;
     bool dlss_available_=false, dlss_g_available_=false;
@@ -216,7 +219,7 @@ private:
     VkExtent2D scene_extent_{};
     bool scene_initialized_=false, motion_initialized_=false, gbuffer_initialized_=false;
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
-    bool force_gbuffer_=false;
+    bool force_gbuffer_=false, force_scene_targets_=false;
     // The last present's EFB clear, applied to the scene targets by the next frame's first scene pass (GX clears the EFB at the present copy).
     struct SceneClear { bool pending=false; std::array<uint32_t,4> region{}; std::array<uint8_t,4> color{}; uint32_t depth=0xFFFFFF; } scene_clear_;
     gx::SceneBoundary boundary_;

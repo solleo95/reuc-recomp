@@ -9,6 +9,9 @@ struct GraphicsEffects {
     bool per_pixel_lighting=false;   // the GX lighting channels are evaluated per pixel instead of per vertex (needs the motion shader variants)
     bool operator==(const GraphicsEffects&) const=default;
 };
+// The screen-space effects run on the internal scene targets at the scene boundary; this says whether any of the chosen effects needs them
+// (the renderer then keeps the scene-target path alive even without an upscaler). Later effects add their conditions here.
+inline bool needs_scene_targets(const GraphicsEffects&) { return false; }
 // Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
 constexpr uint32_t kEffectPerPixelLighting=1;
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }

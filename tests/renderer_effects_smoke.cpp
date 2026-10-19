@@ -197,6 +197,44 @@ int main(int argc, char** argv) {
             CHECK(buffer.width==2560 && buffer.height==1920);
             CHECK(texel(buffer,200,720).flags==(uc::kGBufferHasNormal|uc::kGBufferLit));
             renderer.force_gbuffer(false);
+            renderer.set_render_scale(1.0);   // the sections after this one expect the 1280x960 EFB
+        }
+        if (wanted("passthrough")) {
+            // The scene-target path without an upscaler (what the screen-space effects run on): the picture equals the direct path, the targets follow the switch.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            uc::GraphicsEffects effects; effects.anisotropy=1; renderer.set_effects(effects);
+            auto frame=[&]() {
+                gx::FramePacket scene; scene.present=false;
+                auto triangle=quad(0x1234,-1,-1,1,1,{255,255,255,255},true);
+                triangle.vertices.resize(3); triangle.vertices[0].position={-1,-1,-1}; triangle.vertices[1].position={1,-1,-1}; triangle.vertices[2].position={-1,1,-1};
+                triangle.indices={0,1,2};
+                scene.draws.push_back(std::move(triangle));
+                scene.draws.push_back(quad(0x2345,-0.2f,-0.4f,0.3f,0.6f,{200,60,20,255},true));
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.5f,0.9f,0.5f,{0,255,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            frame(); const auto direct=frame();   // the first frame decides scene mode for the next one
+            CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{0,0}));
+            renderer.force_scene_targets(true);
+            frame(); const auto through=frame();
+            CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{1280,960}));   // ratio 1: the EFB size
+            CHECK(direct.rgba==through.rgba);
+            renderer.force_scene_targets(false);
+            frame(); const auto again=frame();
+            CHECK((renderer.upscale_internal_extent()==uc::RenderExtent{0,0}) && again.rgba==direct.rgba);
+            renderer.force_scene_targets(true); frame(); frame();
+            const auto pools=renderer.descriptor_pool_creations(), textures=renderer.texture_creations();
+            for(int i=0;i<10;++i) { renderer.force_scene_targets(i%2==1); frame(); frame(); }
+            CHECK(renderer.descriptor_pool_creations()-pools<=10 && renderer.texture_creations()-textures<=10);   // switching rebuilds targets, not the per-frame resources
+            renderer.force_scene_targets(false);
         }
         if (wanted("ppl")) {
             // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);

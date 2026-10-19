@@ -523,7 +523,7 @@ void VulkanRenderer::create_samplers() {
         sampler.anisotropyEnable=anisotropy>1 && (mode&128) && mip==2; sampler.maxAnisotropy=sampler.anisotropyEnable ? float(anisotropy) : 1.f;
         vk_check(vkCreateSampler(device,&sampler,nullptr,&texture_samplers_[mode]),"texture sampler");
         if(motion_outputs_) {   // scene draws sample as if at output resolution (DLSS/FSR guides: log2(internal/output) - 1)
-            auto biased=sampler; biased.mipLodBias=upscaler_kind_==UpscalerKind::smaa ? 0.f : float(-std::log2(upscale_ratio(upscale_mode_))-1.0);   // SMAA: no upscaling, no jitter, no bias
+            auto biased=sampler; biased.mipLodBias=(upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off) ? 0.f : float(-std::log2(upscale_ratio(upscale_mode_))-1.0);   // SMAA and the pass-through: no upscaling, no jitter, no bias
             vk_check(vkCreateSampler(device,&biased,nullptr,&scene_samplers_[mode]),"scene texture sampler");
         }
     }
@@ -534,11 +534,25 @@ void VulkanRenderer::destroy_samplers() {
 }
 void VulkanRenderer::set_effects(const GraphicsEffects& effects) {
     owner();
-    const bool anisotropy=effects.anisotropy!=effects_.anisotropy;
+    const bool anisotropy=effects.anisotropy!=effects_.anisotropy, path_before=scene_path_wanted();
     effects_=effects;
-    if(anisotropy && layout_) {   // the samplers exist: swap them while the GPU holds none (descriptor sets are rewritten every frame)
-        vk_check(vkDeviceWaitIdle(device),"anisotropy change");
-        destroy_samplers(); create_samplers();
+    apply_scene_path(anisotropy,path_before);
+}
+void VulkanRenderer::force_scene_targets(bool on) {
+    owner();
+    const bool path_before=scene_path_wanted();
+    force_scene_targets_=on;
+    apply_scene_path(false,path_before);
+}
+// The samplers and the scene targets follow a change of the anisotropy level or of whether the scene-target path is needed (both only once the device exists).
+void VulkanRenderer::apply_scene_path(bool anisotropy_changed, bool path_before) {
+    const bool path_changed=scene_path_wanted()!=path_before;
+    if(!layout_ || (!anisotropy_changed && !path_changed)) return;
+    vk_check(vkDeviceWaitIdle(device),"effects change");
+    destroy_samplers(); create_samplers();   // the scene samplers' mip bias depends on the path too
+    if(path_changed && upscaler_kind_==UpscalerKind::off) {   // with an upscaler the scene targets exist anyway
+        scene_phase_=false; reset_next_=true; scene_restore_copy_.reset();
+        resized_=true; rebuild();
     }
 }
 VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
@@ -980,7 +994,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
     if (fsr_generation_enabled()) fsr_g_->prepare(in,frame_index_);
-    if (sharpening_ && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));
+    if (sharpening_ && upscaler_kind_!=UpscalerKind::off && !upscaler_->sharpens()) rcas_.record(command,efb_,efb_view_,in.output_size,rcas_constant(sharpness_));   // the pass-through (off) never sharpens
     pass_timer_.end(command,timer_slot,timed_pass);
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
@@ -1180,8 +1194,9 @@ void VulkanRenderer::rebuild() {
     }
     if (!efb_) make_attachment(efb_,efb_memory_,efb_view_,efb_extent_);
     if (!depth_) make_attachment(depth_,depth_memory_,depth_view_,efb_extent_,true);
-    if (motion_outputs_ && upscaler_kind_!=UpscalerKind::off && !upscaler_) {
-        if (upscaler_kind_==UpscalerKind::blit) upscaler_=make_blit_upscaler();
+    if (upscaler_ && upscaler_kind_==UpscalerKind::off && !scene_path_wanted()) { upscaler_.reset(); reset_next_=true; }   // the last effect that needed the scene targets went away
+    if (motion_outputs_ && (upscaler_kind_!=UpscalerKind::off || scene_path_wanted()) && !upscaler_) {
+        if (upscaler_kind_==UpscalerKind::off || upscaler_kind_==UpscalerKind::blit) upscaler_=make_blit_upscaler();   // off: the effects' pass-through at ratio 1
         else if (upscaler_kind_==UpscalerKind::smaa) upscaler_=make_smaa_upscaler(device,memory_,shaders_);
         else if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) upscaler_=make_dlss_upscaler(*streamline_,upscale_mode_);
         else if (upscaler_kind_==UpscalerKind::fsr) {
@@ -1190,6 +1205,7 @@ void VulkanRenderer::rebuild() {
         }
         else std::fprintf(stderr, "Upscaling: %s is not available in this build\n", upscaler_kind_==UpscalerKind::dlss ? "DLSS" : "FSR");
     }
+    if (!upscaler_ && scene_color_) destroy_scene_targets();   // no reconstruction any more: the internal targets go too
     if (upscaler_) {
         const auto internal=internal_extent({efb_extent_.width,efb_extent_.height},effective_upscale_mode(),upscaler_->minimum_internal({efb_extent_.width,efb_extent_.height}));
         if (scene_extent_.width!=internal.width || scene_extent_.height!=internal.height) {
