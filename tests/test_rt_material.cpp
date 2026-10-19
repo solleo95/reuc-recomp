@@ -44,6 +44,20 @@ int main() {
     CHECK(uc::light_model_valid(game(4,0x8F8AF,0x28F80F,0x49),lit));    // ... followed by two pass-through stages
     CHECK(uc::light_model_valid(game(2,0x18F8AF,0x18FEA0,0x40),lit));   // texture x lit, then + konst x lit
     CHECK(uc::light_model_valid(game(2,0x18F8AF,0x18FAE0,0x40),lit));   // ... in the other operand order
+    // Channel 1 is the specular channel (attenuation function 1) of the game's draws: reading its rasteriser colour is a highlight that follows the same lights
+    const auto specular=gx::channel_lighting(2|(1<<2)|(1<<9)), diffuse1=gx::channel_lighting(2|(1<<2)|(3<<9)), unlit1=gx::channel_lighting(0);
+    const auto two_stage=[&](uint32_t color0,uint32_t order0,uint32_t color1,uint32_t order1) {
+        gx::TevMaterial material; material.stages=2; material.swaps={0xE4,0xE4,0xE4,0xE4};
+        material.stage[0].color=color0; material.stage[0].order=order0; material.stage[1].color=color1; material.stage[1].order=order1;
+        return material;
+    };
+    CHECK(uc::light_model_valid(two_stage(0x8F8AF,0x40,0x28F8A0,0xC9),lit,specular));    // texture x lit, + texture x ras1 (the 822 k records of the fight demo)
+    CHECK(uc::light_model_valid(two_stage(0x28F8AF,0x40,0x8AFF0,0xBF),lit,specular));    // texture x lit x4, + ras1
+    CHECK(!uc::light_model_valid(two_stage(0x8F8AF,0x40,0x28F8A0,0xC9),lit,diffuse1));   // a diffuse second channel is another light set the one factor cannot scale
+    CHECK(!uc::light_model_valid(two_stage(0x8F8AF,0x40,0x28F8A0,0xC9),lit,unlit1));     // ... and an unlit one is a baked colour
+    CHECK(!uc::light_model_valid(two_stage(0x8F8AF,0x40,0x28F8A0,0xC9),lit));            // the default second channel is unlit: the old two-argument behaviour
+    CHECK(!uc::light_model_valid(two_stage(0x8F8AF,0x40,env(15,10,10,0),0xC9),lit,specular));   // prev + ras1 x ras1 is not proportional
+    CHECK(!uc::light_model_valid(two_stage(0x8F8AF,0x40,0x28F8A0,0x149),lit,specular));  // channel 2 does not exist as a lit channel
     const auto vertex_ambient=gx::channel_lighting(2|(1<<2)|64);       // the ambient taken from the vertex colour, not the register the record stores
     CHECK(!uc::light_model_valid(modulate,vertex_ambient));
     gx::TevMaterial swapped=modulate; swapped.stage[0].alpha=1; swapped.swaps[1]=0x1B;   // rasteriser swap table 1 reverses the channels

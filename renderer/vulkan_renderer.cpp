@@ -1623,7 +1623,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto& uniforms=*draw.uniforms;
                 const auto lighting=gx::channel_lighting(uniforms.channels[0]);
                 const uint32_t index=first_record+uint32_t(records.size());
-                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,rt_record_flags(lighting,light_model_valid(draw.material,lighting)),0.f});
+                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,rt_record_flags(lighting,light_model_valid(draw.material,lighting,gx::channel_lighting(uniforms.channels[1]))),0.f});
                 record_uniforms.push_back(&uniforms);
                 draw_record[d]=index;
             }

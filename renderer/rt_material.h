@@ -22,10 +22,12 @@ inline uint32_t rt_record_flags(const gx::ChannelLighting& channel0, bool model_
 // Whether the RT estimate can model the draw's colour: channel 0 lit with its ambient from the register, and the TEV's final colour a sum of terms that are each
 // the rasterised colour of channel 0 times a light-independent factor (texture, konst, one, half) or a previous such result, so that scaling the light
 // scales the colour. Evaluated stage by stage over {zero, factor, proportional to the lit colour, unknown}; a stage with a bias, a subtraction, an
-// interpolation (a != zero), the rasterised colour twice or a light-independent term added to a proportional one makes the result unknown. The
+// interpolation other than a = zero or c = zero, the rasterised colour twice or a light-independent term added to a proportional one makes the result unknown. The
 // colour scale is free (it multiplies the lit colour too). Fog comes after the TEV and does not matter. No stage at all is the same form (tev.slang
 // evaluateTev: rasterised colour x texture 0). A stage that reads the rasterised colour needs the identity swap table and colour channel 0.
-inline bool light_model_valid(const gx::TevMaterial& material, const gx::ChannelLighting& channel0) {
+// A stage may also read the rasteriser colour of channel 1 when channel 1 is lit with the specular function only (the game's second channel: a highlight that follows
+// the same lights); it counts as proportional like channel 0, so the factor of channel 0's diffuse lights dims the highlight with the diffuse part (an approximation).
+inline bool light_model_valid(const gx::TevMaterial& material, const gx::ChannelLighting& channel0, const gx::ChannelLighting& channel1={}) {
     if (!channel0.lit || channel0.ambient_vertex || material.stages>16) return false;
     if (material.stages==0) return true;
     enum Kind { zero, factor, lit, unknown };
@@ -42,9 +44,11 @@ inline bool light_model_valid(const gx::TevMaterial& material, const gx::Channel
         };
         bool reads_rasterised=false;
         for (const uint32_t selector:selectors) reads_rasterised|=selector==10;
-        if (reads_rasterised && (material.swaps[stage.alpha&3]!=0xE4 || ((stage.order>>7)&7)!=0)) return false;   // a swizzled or another channel's colour is not the lit colour
+        const uint32_t channel=(stage.order>>7)&7;
+        if (reads_rasterised && (material.swaps[stage.alpha&3]!=0xE4 || (channel!=0 && !(channel==1 && channel1.lit && channel1.attenuation==1)))) return false;   // a swizzled colour, or a channel that is neither channel 0 nor a specular channel 1, is not the lit colour
         const bool plain=((env>>16)&7u)==0;   // no bias (bits 16-17), no subtraction (bit 18); the scale (20-21) is free
-        const Kind term=selectors[0]==15 ? product(kind(selectors[1]),kind(selectors[2])) : unknown;   // d + b x c; an interpolation with a != zero is not modelled
+        // d + lerp(a, b, c) = d + a x (1 − c) + b x c: with c = zero it is d + a, with a = zero it is d + b x c; another interpolation is not modelled
+        const Kind term=selectors[2]==15 ? kind(selectors[0]) : selectors[0]==15 ? product(kind(selectors[1]),kind(selectors[2])) : unknown;
         output=(env>>22)&3;
         registers[output]=plain ? sum(kind(selectors[3]),term) : unknown;
     }
