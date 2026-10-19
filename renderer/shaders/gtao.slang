@@ -51,7 +51,8 @@ bool surfaceAt(int2 pixel, out float3 position, out float3 normal) {
     position = float3(0.0, 0.0, -1.0); normal = float3(0.0, 0.0, 1.0);
     if (any(pixel < int2(0, 0)) || any(pixel >= int2(params.region))) return false;
     float4 texel = sceneGBuffer.Load(int3(pixel, 0));
-    if ((uint(round(texel.w * 65535.0)) & kGBufferHasNormal) == 0) return false;
+    const uint flags = uint(round(texel.w * 65535.0));
+    if ((flags & kGBufferHasNormal) == 0 || (flags & kGBufferCutout) != 0) return false;   // cut-outs are not surfaces: no shading and (via surfaceAt users) no tap
     float stored = sceneDepth.Load(int3(pixel, 0));
     if (stored >= 1.0) return false;
     float2 ndc = ((float2(pixel) + 0.5) - params.viewport.xy) / params.viewport.zw * 2.0 - 1.0;
@@ -68,6 +69,11 @@ float3 viewAt(float2 pixelCentre) {   // position of a (possibly off-surface) sa
 }
 // The cosine-weighted visible arc of one slice side up to horizon angle h (GTAO paper eq. 10, per side), for a normal at signed angle n.
 float gtaoArc(float h, float n, float cosN) { return 0.25 * (-cos(2.0 * h - n) + cosN + 2.0 * h * sin(n)); }
+// A cut-out pixel (net, grate): the depth there is a thin occluder with holes; it must not darken what lies behind it.
+bool cutoutAt(float2 pixelCentre) {
+    int2 pixel = clamp(int2(floor(pixelCentre)), int2(0, 0), int2(params.region) - 1);
+    return (uint(round(sceneGBuffer.Load(int3(pixel, 0)).w * 65535.0)) & kGBufferCutout) != 0;
+}
 float interleavedGradientNoise(float2 pixel, uint frame) {
     pixel += 5.588238 * float(frame);
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
@@ -108,9 +114,11 @@ void aoMain(uint3 id : SV_DispatchThreadID) {
             float s = (float(step) + noiseB) / float(params.steps);
             float2 offset = direction * max(s * s * radiusPixels, 1.0 + float(step));
             [unroll] for (int side = 0; side < 2; ++side) {   // side 0 walks along the slice direction (positive angles), side 1 against it
-                float3 delta = viewAt(centre + (side == 0 ? offset : -offset)) - position;
+                float2 samplePoint = centre + (side == 0 ? offset : -offset);
+                float3 delta = viewAt(samplePoint) - position;
                 float distance = length(delta);
                 float weight = saturate((params.radius - distance) / max(params.radius * params.falloff, 1e-5));
+                if (cutoutAt(samplePoint)) weight = 0.0;
                 float shc = dot(delta / max(distance, 1e-5), view);
                 if (side == 0) horizon0 = max(horizon0, lerp(lowHorizon0, shc, weight));
                 else horizon1 = max(horizon1, lerp(lowHorizon1, shc, weight));
@@ -154,25 +162,27 @@ void contactMain(uint3 id : SV_DispatchThreadID) {
     float3 position, normal;
     if (!surfaceAt(pixel, position, normal)) { contactOut[id.xy] = 1.0; return; }
     float3 toLight = params.light.w > 0.5 ? normalize(params.light.xyz - position) : normalize(params.light.xyz);
-    if (dot(normal, toLight) <= 0.0) { contactOut[id.xy] = 1.0; return; }   // facing away from the light: the lighting already darkened it
+    float facing = dot(normal, toLight);
+    if (facing <= 0.05) { contactOut[id.xy] = 1.0; return; }   // facing away from (or grazing) the light: the lighting already darkened it, and a grazing ray starts inside its own surface
     float distanceHere = -position.z;
     float maxLength = 0.03 * distanceHere;     // the ray is short: contact only
     float thickness = 0.005 * distanceHere;    // what counts as a blocker in front of the ray
+    float lift = (0.002 + 0.006 * (1.0 - facing)) * distanceHere;   // the start moves off the surface more the more the surface grazes the light (no self-shadowing speckle)
     float jitter = interleavedGradientNoise(float2(pixel), params.noise);
     float shadow = 0.0;
     [loop] for (uint step = 0; step < 16; ++step) {
         float t = (float(step) + 0.5 + 0.5 * jitter) / 16.0 * maxLength;
-        float3 sampled = position + toLight * t + normal * (0.002 * distanceHere);   // a small lift keeps a flat surface from shadowing itself
+        float3 sampled = position + toLight * t + normal * lift;
         float2 ndc = float2(params.viewA.x * sampled.x / -sampled.z - params.viewA.z, params.viewA.y * sampled.y / -sampled.z - params.viewA.w);
         float2 samplePixel = params.viewport.xy + (ndc * 0.5 + 0.5) * params.viewport.zw;
         if (any(samplePixel < float2(0.0, 0.0)) || any(samplePixel >= float2(params.region))) break;
         float stored = sceneDepth.Load(int3(int2(samplePixel), 0));
-        if (stored >= 1.0) continue;
+        if (stored >= 1.0 || cutoutAt(samplePixel)) continue;
         float sceneDistance = params.viewB.y / (projectionDepth(stored) + params.viewB.x);   // -z of the surface at that pixel
         float sampleDistance = -sampled.z;
-        if (sceneDistance < sampleDistance && sampleDistance - sceneDistance < thickness) { shadow = 1.0; break; }
+        if (sceneDistance < sampleDistance && sampleDistance - sceneDistance < thickness) shadow = max(shadow, 1.0 - 0.6 * float(step) / 16.0);   // a blocker nearer the surface shades more
     }
-    contactOut[id.xy] = 1.0 - shadow;
+    contactOut[id.xy] = 1.0 - shadow * smoothstep(0.05, 0.35, facing);
 }
 
 // A half-resolution occlusion image at a full-resolution pixel: bilinear taps, each weighted by how close its depth is to this pixel's.
@@ -238,6 +248,26 @@ float shadowVisibility(float3 position, float3 normal) {
     return lit / float(grid * grid);
 }
 
+// Like upsampleOcclusion with a wider tent (1.5 half-resolution pixels) over a 4x4 neighbourhood: the contact shadows are noisy by construction (jittered
+// 16-step rays), so they are filtered, with depth and normal weights keeping edges.
+float filterContact(uint2 pixel, float3 position, float3 normal) {
+    float scale = float(params.region.x) / float(params.contactSize.x);
+    float2 centre = (float2(pixel) + 0.5) / scale - 0.5;
+    int2 base = int2(floor(centre));
+    float sum = 0.0, total = 0.0;
+    for (int y = -1; y <= 2; ++y) for (int x = -1; x <= 2; ++x) {
+        int2 at = clamp(base + int2(x, y), int2(0, 0), int2(params.contactSize) - 1);
+        float2 d = abs(float2(base + int2(x, y)) - centre);
+        float tent = max(0.0, 1.5 - d.x) * max(0.0, 1.5 - d.y);
+        float3 tapPosition, tapNormal;
+        float weight = tent;
+        if (surfaceAt(int2((float2(at) + 0.5) * scale), tapPosition, tapNormal)) weight *= 1.0 / (0.01 + 50.0 * abs(tapPosition.z - position.z) / -position.z) * pow(saturate(dot(tapNormal, normal)), 4.0);
+        else weight = 0.0;
+        sum += contactTex.Load(int3(at, 0)) * weight; total += weight;
+    }
+    return total > 0.0 ? sum / total : 1.0;
+}
+
 [shader("compute")] [numthreads(8, 8, 1)]
 void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.region)) return;
@@ -245,7 +275,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (!surfaceAt(int2(id.xy), position, normal)) return;
     float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
     float ao = (params.flags & 1u) != 0 ? upsampleOcclusion(occlusion, params.aoSize, id.xy, position) : 1.0;
-    float contact = (params.flags & 2u) != 0 ? upsampleOcclusion(contactTex, params.contactSize, id.xy, position) : 1.0;
+    float contact = (params.flags & 2u) != 0 ? filterContact(id.xy, position, normal) : 1.0;
     float visibility = (params.flags & 4u) != 0 ? shadowVisibility(position, normal) : 1.0;
     bool lit = (uint(round(sceneGBuffer.Load(int3(int2(id.xy), 0)).w * 65535.0)) & kGBufferLit) != 0;
     float facing = lit ? smoothstep(0.0, 0.3, dot(normal, shadow.toLight.xyz)) : 1.0;   // a lit surface turned away from the light is dark already

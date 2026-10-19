@@ -125,6 +125,26 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,"aniso: flat square largest difference %d\n",largest);
             CHECK(largest<=2);
             CHECK(renderer.effective_anisotropy()==1);   // the last frame asked for 1
+            {   // The game's textures have ONE mip level and sampler mode 0x95 (linear, no mip filter): anisotropy has to work there too (87% of the scene's draws).
+                auto single=std::make_shared<gx::TexturePixels>(*checker()); single->levels.resize(1);
+                auto frame_single=[&](uint32_t level) {
+                    uc::GraphicsEffects effects; effects.anisotropy=level; renderer.set_effects(effects);
+                    gx::FramePacket packet; packet.present=true; packet.display_source={0,0,640,360};
+                    auto floor=quad(0x1111,-1,-1,1,1,{255,255,255,255},true);
+                    const float far_z=-12, near_z=-1, y=-0.5f, half=4;
+                    const std::array<std::array<float,3>,4> corner{{{-half,y,near_z},{half,y,near_z},{half,y,far_z},{-half,y,far_z}}};
+                    for(size_t i=0;i<4;++i) { floor.vertices[i].position=corner[i]; floor.vertices[i].texcoord[0]={corner[i][0],-corner[i][2]}; }
+                    floor.transforms.edit().projection[2]={0,0,-1.0256f,-0.5128f};
+                    textured(floor,single,0x95);
+                    packet.draws.push_back(std::move(floor));
+                    return renderer.capture(submit(std::move(packet)));
+                };
+                const auto sharp_single=frame_single(16), plain_single=frame_single(1);
+                int largest=0;
+                for(uint32_t y=318;y<340;++y) for(uint32_t x=300;x<980;++x) largest=std::max(largest,std::abs(int(sharp_single.rgba[(size_t(y)*sharp_single.width+x)*4])-int(plain_single.rgba[(size_t(y)*plain_single.width+x)*4])));
+                std::fprintf(stderr,"aniso: single-level texture, largest difference near the horizon %d\n",largest);
+                CHECK(largest>=16);
+            }
         }
         if (wanted("smaa")) {
             // SMAA 1x as the anti-aliasing choice: scene at the EFB size, no jitter, diagonal edges gain intermediate values, flat areas stay exact.
@@ -240,19 +260,20 @@ int main(int argc, char** argv) {
             // Ambient occlusion on a floor meeting a wall at 90 degrees: the crease darkens, flat areas and unfogged-away pixels stay put, fog fades it, menus skip it.
             CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
             const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };   // near 1, far 100, 90 degrees
-            const auto surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool fogged) {
+            const auto surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool fogged,bool cut_out=false) {
                 auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
                 for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
                 projection(draw);
+                if(cut_out) draw.uniforms.edit().pixel[0]=10u|(4u<<16)|(7u<<19);   // alpha compare "greater than 10" (everything passes here): a cut-out draw like the game's grates and nets
                 if(fogged) { auto& uniforms=draw.uniforms.edit(); uniforms.fog[0]=280480; uniforms.fog[3]=(2u<<21)|(1u<<20); uniforms.fog[4]=0x808080; }   // linear fog, orthographic form, fully fogged everywhere
                 return draw;
             };
-            auto frame=[&](uc::EffectLevel level,bool fogged,bool menu=false) {
+            auto frame=[&](uc::EffectLevel level,bool fogged,bool menu=false,bool cut_out_wall=false) {
                 uc::GraphicsEffects effects; effects.anisotropy=1; effects.ambient_occlusion=level; renderer.set_effects(effects);
                 gx::FramePacket scene; scene.present=false;
                 if(!menu) {
                     scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},fogged));   // the floor
-                    scene.draws.push_back(surface({{{-12,-1,-8},{12,-1,-8},{12,6,-8},{-12,6,-8}}},{0,0,1},fogged));      // the wall
+                    scene.draws.push_back(surface({{{-12,-1,-8},{12,-1,-8},{12,6,-8},{-12,6,-8}}},{0,0,1},fogged,cut_out_wall));      // the wall
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -279,6 +300,16 @@ int main(int argc, char** argv) {
                 if(std::getenv("UC_SMOKE_DUMP")) { std::fprintf(stderr,"  rows:"); for(uint32_t y=182;y<640;y+=24) std::fprintf(stderr," %u:%d",y,red(shaded,640,y)); std::fprintf(stderr,"\n"); }   // debugging aid
                 CHECK(darkest>=10);
                 CHECK(std::abs(red(base,640,190)-red(shaded,640,190))<=6 && std::abs(red(base,640,600)-red(shaded,640,600))<=6);   // far from the crease: at most the sampling noise of a few slices (the crease itself loses 30+)
+            }
+            {   // alpha cut-out draws (grates, nets) are neither shaded nor occluders: a hatched net used to leave a dark pattern on whatever lies behind it
+                frame(uc::EffectLevel::off,false,false,true);
+                const auto cut_base=frame(uc::EffectLevel::off,false,false,true);
+                frame(uc::EffectLevel::high,false,false,true);
+                const auto cut_shaded=frame(uc::EffectLevel::high,false,false,true);
+                int change=0;
+                for(uint32_t y=182;y<640;y+=3) change=std::max(change,std::abs(red(cut_base,640,y)-red(cut_shaded,640,y)));
+                std::fprintf(stderr,"gtao cut-out wall: largest change anywhere on the centre column %d\n",change);
+                CHECK(change<=24);   // an opaque wall darkens its crease by 50-60 levels (54 with the cut-out wall before the fix); what is left is the sampling noise of a few slices on a grazing floor
             }
             const auto fog_base=frame(uc::EffectLevel::off,true);
             frame(uc::EffectLevel::high,true);

@@ -522,7 +522,7 @@ void VulkanRenderer::create_samplers() {
         sampler.minFilter=(mode&128) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         sampler.mipmapMode=mip==2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
         sampler.maxLod=mip ? VK_LOD_CLAMP_NONE : 0.f;
-        sampler.anisotropyEnable=anisotropy>1 && (mode&128) && mip==2; sampler.maxAnisotropy=sampler.anisotropyEnable ? float(anisotropy) : 1.f;
+        sampler.anisotropyEnable=anisotropy>1 && (mode&128); sampler.maxAnisotropy=sampler.anisotropyEnable ? float(anisotropy) : 1.f;   // linear minification, with or without a mip filter: most of the game's textures have one level and sampler mode 0x9x
         vk_check(vkCreateSampler(device,&sampler,nullptr,&texture_samplers_[mode]),"texture sampler");
         if(motion_outputs_) {   // scene draws sample as if at output resolution (DLSS/FSR guides: log2(internal/output) - 1)
             auto biased=sampler; biased.mipLodBias=(upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off) ? 0.f : float(-std::log2(upscale_ratio(upscale_mode_))-1.0);   // SMAA and the pass-through: no upscaling, no jitter, no bias

@@ -161,6 +161,7 @@ public:
                 std::string texture="-";
                 if(draw.texture && !draw.texture->levels.empty()) texture=std::to_string(draw.texture->levels[0].width)+"x"+std::to_string(draw.texture->levels[0].height);
                 {bool tmi=false; for(size_t d=1;d<9;++d) tmi|=draw.state->descriptors[d]!=gx::Mode::none; if(tmi) texture+="+TMI";}
+                if(draw.texture && !draw.texture->levels.empty()) { char sampler[48]; std::snprintf(sampler,sizeof sampler," L%zu wrap%02X",draw.texture->levels.size(),unsigned(draw.texture_wrap[0])); texture+=sampler; }   // mip levels and the GX sampler mode (bits: wrap s/t 0-3, mip 5-6, mag 4, min 7)
                 const std::string blend=std::to_string(draw.blend.mode)+":"+std::to_string(draw.blend.source)+":"+std::to_string(draw.blend.destination);
                 ++stats_[{draw.callsite,blend,draw.material.stages,texture,copy}];
             }

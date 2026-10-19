@@ -188,8 +188,10 @@ struct Targets {
 float4 gbufferTexel(Output input) {
     const float lengthSquared = dot(input.viewNormal, input.viewNormal);
     const bool hasNormal = lengthSquared > 0.0;
+    const uint alphaWord = drawState.pixel.x;
+    const bool cutout = ((alphaWord >> 16) & 7u) != 7u || ((alphaWord >> 19) & 7u) != 7u;   // an alpha compare other than "always"
     const bool lit = ((drawState.channels[0] | drawState.channels[1] | drawState.channels[2] | drawState.channels[3]) & 2u) != 0;
-    return encodeGBuffer(hasNormal ? input.viewNormal * rsqrt(lengthSquared) : float3(0.0, 0.0, 0.0), fogAmount(input.position.z), (hasNormal ? kGBufferHasNormal : 0u) | (lit ? kGBufferLit : 0u));
+    return encodeGBuffer(hasNormal ? input.viewNormal * rsqrt(lengthSquared) : float3(0.0, 0.0, 0.0), fogAmount(input.position.z), (hasNormal ? kGBufferHasNormal : 0u) | (lit ? kGBufferLit : 0u) | (cutout ? kGBufferCutout : 0u));
 }
 #endif
 float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }
