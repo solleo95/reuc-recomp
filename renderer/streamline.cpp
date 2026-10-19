@@ -41,7 +41,9 @@ std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& direct
         reason="sl.interposer.dll lacks an expected export"; return nullptr;
     }
     // DLSS-G needs Reflex and PCL (latency markers); they load only with frame generation.
-    std::vector<sl::Feature> features{sl::kFeatureDLSS, sl::kFeatureDLSS_RR};
+    std::vector<sl::Feature> features{sl::kFeatureDLSS};
+    // Ray Reconstruction loads only when its plugin ships: a requested feature with no DLL must not fail slInit for DLSS.
+    if (std::filesystem::exists(directory / "sl.dlss_d.dll")) features.push_back(sl::kFeatureDLSS_RR);
     if (frame_generation) features.insert(features.end(), {sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL});
     const std::wstring plugins=std::filesystem::absolute(directory).wstring();
     const wchar_t* paths[]={plugins.c_str()};

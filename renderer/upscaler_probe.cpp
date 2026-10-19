@@ -15,7 +15,8 @@ const char* ray_tracing_gap(VkPhysicalDevice physical) {
     std::vector<VkExtensionProperties> extensions(n); vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, extensions.data());
     const auto has=[&](const char* name) { return std::any_of(extensions.begin(), extensions.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name)==0; }); };
     if (!has(VK_KHR_RAY_QUERY_EXTENSION_NAME)) return "the GPU lacks VK_KHR_ray_query";
-    if (!has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) || !has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) return "the GPU lacks VK_KHR_acceleration_structure";
+    if (!has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) return "the GPU lacks VK_KHR_acceleration_structure";
+    if (!has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) return "the GPU lacks VK_KHR_deferred_host_operations";
     VkPhysicalDeviceRayQueryFeaturesKHR query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
     VkPhysicalDeviceAccelerationStructureFeaturesKHR structure{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}; structure.pNext=&query;
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; features12.pNext=&structure;
