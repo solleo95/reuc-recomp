@@ -1,5 +1,6 @@
 // The normal G-buffer texel (renderer/gbuffer.h is the CPU mirror): octahedral view normal in rg, fog factor in b, flags in a, all unorm16.
 static const uint kGBufferHasNormal = 1, kGBufferLit = 2, kGBufferCutout = 16;   // cut-out: an alpha-tested draw (grates, nets, foliage): not a solid surface, neither shaded nor an occluder
+static const uint kGBufferModelValid = 32;   // the draw's material record is model-valid (rt_material.h); only while an RT effect is active
 float2 gbufferSignNotZero(float2 v) { return float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0); }
 float3 decodeGBufferNormal(float2 stored) {
     float2 p = stored * 2.0 - 1.0;

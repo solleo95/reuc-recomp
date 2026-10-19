@@ -9,6 +9,7 @@
 #include "occlusion_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
+#include "rt_material.h"
 #include "rt_scene.h"
 #include "streamline.h"
 #include "dlss_frame_generation.h"
@@ -88,10 +89,16 @@ public:
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
     void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
-    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active()); }
+    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active() || any_rt_active(effects_,true)); }
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
-    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active()); }
+    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active() || any_rt_active(effects_,true)); }
+    // RT effects' albedo and material-record targets (rt_material.h): written by the scene pass while any RT effect is active, absent otherwise.
+    bool rt_material_active() const { return motion_outputs_ && any_rt_active(effects_,true); }   // effects_ has the RT levels masked by device support
+    bool rt_material_targets() const { return scene_material_!=VK_NULL_HANDLE; }
+    struct RtMaterialPixels { uint32_t width=0, height=0; std::vector<uint32_t> records; std::vector<uint8_t> albedo; };   // albedo: rgba8 per texel
+    RtMaterialPixels capture_rt_material();   // tests/tools: both targets of the last scene (waits for the GPU); throws when no scene wrote them
+    std::vector<RtMaterialRecord> rt_material_records() const;   // tests/tools: the material records of the latest frame with a scene
     // Ray tracing debug probe (UC_RT_PROBE=1, phase 0): per-frame acceleration structures and one shadow ray per scene pixel, counted, nothing drawn.
     // Off, nothing ray tracing runs or allocates. set_rt_probe: tests (what the variable sets at initialize).
     bool rt_probe_active() const { return rt_probe_ && ray_tracing_; }
@@ -327,6 +334,18 @@ private:
     VkImageView depth_view_=VK_NULL_HANDLE;
     static constexpr size_t kFrameSlots = 6;   // GPU submissions in flight; the guest's queue window is larger (gx::kMaxOutstandingPackets)
     std::array<Slot, kFrameSlots> slots_{};
+    // RT albedo/material targets (scene extent, created and destroyed with rt_material_active()) and the records of the frame: per frame-in-flight
+    // buffers, grow-only, filled per scene packet from rt_record_count_ on. Read by RT passes at the scene boundary.
+    VkImage scene_material_=VK_NULL_HANDLE, scene_albedo_=VK_NULL_HANDLE;
+    VkDeviceMemory scene_material_memory_=VK_NULL_HANDLE, scene_albedo_memory_=VK_NULL_HANDLE;
+    VkImageView scene_material_view_=VK_NULL_HANDLE, scene_albedo_view_=VK_NULL_HANDLE;
+    VkImageLayout scene_rt_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;   // of both
+    bool rt_material_initialized_=false, rt_material_cleared_=false;   // cleared (and bound) by a scene pass of this frame
+    std::array<Buffer,kFrameSlots> rt_records_{}, rt_lights_{};   // RtMaterialRecord / 8 gx::LightUniform per record
+    uint32_t rt_record_slot_=0, rt_record_count_=0;
+    void sync_rt_material_targets();   // the GPU is idle or the targets are unused
+    void destroy_rt_material_targets();
+    uint32_t scene_color_attachments() const { return motion_outputs_ ? (ray_tracing_ ? 5 : 3) : 1; }   // the RT pair only on RT devices (maxColorAttachments may be 4 elsewhere)
     std::vector<PresentImage> images_;
     struct RetiredSwapchain { VkSwapchainKHR chain; std::vector<PresentImage> images; };
     std::vector<RetiredSwapchain> retired_;   // swapchains replaced by a resize, freed once their queued presentations finished

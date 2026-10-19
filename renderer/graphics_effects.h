@@ -49,6 +49,8 @@ inline GraphicsEffects effective_effects(const GraphicsEffects& chosen, bool rt_
 inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects.ambient_occlusion!=EffectLevel::off || effects.contact_shadows || effects.shadows!=EffectLevel::off || effects.motion_blur!=EffectLevel::off || any_rt_active(effects,true); }
 // Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
 constexpr uint32_t kEffectPerPixelLighting=1;
+constexpr uint32_t kEffectRtMaterial=2;     // write the albedo and material-record targets (any RT effect active); the draw's record index rides in the push constant
+constexpr uint32_t kEffectRtModelValid=4;   // the draw's record has kRtModelValid (rt_material.h): the G-buffer flags carry kGBufferModelValid
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }
 // The level a device runs: 1 without samplerAnisotropy, never above its maxSamplerAnisotropy.
 inline uint32_t clamp_anisotropy(uint32_t requested, bool supported, float device_max) {

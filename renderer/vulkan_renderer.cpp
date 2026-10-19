@@ -288,8 +288,9 @@ constexpr uint32_t kNoMotion=UINT32_MAX;
 constexpr VkFormat kMotionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kGBufferFormat=VK_FORMAT_R16G16B16A16_UNORM;   // gbuffer.h
 constexpr float kShadowDistance=30.f;   // how far from the camera the shadow map reaches, in view units (metres)
-struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, reserved[3]{}; };   // effects: kEffect* bits (graphics_effects.h)
-static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112);
+struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, record=kRtNoRecord, reserved[2]{}; };   // effects: kEffect* bits (graphics_effects.h); record: rt_material.h
+static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112 && offsetof(DrawPush,record)==116);
+constexpr VkFormat kMaterialFormat=VK_FORMAT_R32_UINT, kAlbedoFormat=VK_FORMAT_R8G8B8A8_UNORM;   // the RT pair (rt_material.h)
 struct MotionBlock { gx::Projection prev_rows; uint32_t prev_palette, kind, unused[2]; };   // smoke.slang MotionBlock (std430)
 static_assert(sizeof(MotionBlock)==80);
 uint32_t VulkanRenderer::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
@@ -550,10 +551,14 @@ void VulkanRenderer::destroy_samplers() {
 }
 void VulkanRenderer::set_effects(const GraphicsEffects& effects) {
     owner();
-    const bool anisotropy=effects.anisotropy!=effects_.anisotropy, path_before=scene_path_wanted();
+    const bool anisotropy=effects.anisotropy!=effects_.anisotropy, path_before=scene_path_wanted(), rt_before=rt_material_active();
     chosen_effects_=effects;
     effects_=effective_effects(chosen_effects_,ray_tracing_supported());
     apply_scene_path(anisotropy,path_before);
+    if (layout_ && rt_material_active()!=rt_before) {   // with an upscaler the scene targets stay: the RT pair comes and goes on its own
+        vk_check(present_.wait_idle(device),"RT material targets");
+        sync_rt_material_targets();
+    }
 }
 void VulkanRenderer::force_scene_targets(bool on) {
     owner();
@@ -662,15 +667,18 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         blend.srcColorBlendFactor=blend.srcAlphaBlendFactor=mode.mode==3 ? VK_BLEND_FACTOR_ONE : sources[mode.source];
         blend.dstColorBlendFactor=blend.dstAlphaBlendFactor=mode.mode==3 ? VK_BLEND_FACTOR_ONE : destinations[mode.destination];
         blend.colorBlendOp=blend.alphaBlendOp=mode.mode==3 ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD;
-        VkPipelineColorBlendAttachmentState blends[3]{blend,{},{}};
+        VkPipelineColorBlendAttachmentState blends[5]{blend,{},{},{},{}};
         blends[1].colorWriteMask=motion_write_mask(key);   // motion vectors: replaced, never blended
         blends[2].colorWriteMask=gbuffer_write_mask(key);  // G-buffer: replaced, never blended
-        VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = motion_outputs_ ? 3 : 1; blending.pAttachments = blends;
+        const bool rt_writes=rt_material_write(key);
+        blends[3].colorWriteMask=rt_writes ? VK_COLOR_COMPONENT_R_BIT : 0;   // material record index
+        blends[4].colorWriteMask=rt_writes ? gbuffer_write_mask(key) : 0;    // albedo
+        VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = scene_color_attachments(); blending.pAttachments = blends;
         blending.logicOpEnable=mode.mode==2; blending.logicOp=VkLogicOp(mode.logic);
         VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = 2; dynamic.pDynamicStates = dynamic_states;
-        const VkFormat formats[3] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat, kGBufferFormat};
-        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = motion_outputs_ ? 3 : 1; rendering.pColorAttachmentFormats = formats;
+        const VkFormat formats[5] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat, kGBufferFormat, kMaterialFormat, kAlbedoFormat};
+        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachmentFormats = formats;
         rendering.depthAttachmentFormat=VK_FORMAT_D32_SFLOAT;
         VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depth.depthTestEnable=bool(key[68]&1); depth.depthWriteEnable=bool(key[68]&16);
@@ -1047,6 +1055,10 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,scene_motion_,scene_motion_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
     if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
+    if (rt_material_cleared_) {   // likewise the RT pair
+        for (VkImage image:{scene_material_,scene_albedo_}) barrier(command,image,scene_rt_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
+        scene_rt_layout_=VK_IMAGE_LAYOUT_GENERAL;
+    }
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
@@ -1175,6 +1187,44 @@ VulkanRenderer::GBufferPixels VulkanRenderer::capture_gbuffer() {
     destroy_buffer(buffer);
     return pixels;
 }
+VulkanRenderer::RtMaterialPixels VulkanRenderer::capture_rt_material() {
+    owner();
+    if (!scene_material_ || !rt_material_initialized_) throw std::logic_error("no RT material targets to capture");
+    vk_check(present_.wait_idle(device),"RT material capture idle");
+    const VkDeviceSize texels=VkDeviceSize(scene_extent_.width)*scene_extent_.height;
+    Buffer buffer=make_buffer(texels*8,VK_BUFFER_USAGE_TRANSFER_DST_BIT);   // records, then albedo (4 bytes each)
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool=pool_; allocation.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount=1;
+    VkCommandBuffer command=VK_NULL_HANDLE; vk_check(vkAllocateCommandBuffers(device,&allocation,&command),"RT material capture command");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vk_check(vkBeginCommandBuffer(command,&begin),"begin RT material capture");
+    const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+    VkDeviceSize offset=0;
+    for (VkImage image:{scene_material_,scene_albedo_}) {
+        barrier(command,image,scene_rt_layout_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
+        VkBufferImageCopy copy{}; copy.bufferOffset=offset; copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent={scene_extent_.width,scene_extent_.height,1};
+        vkCmdCopyImageToBuffer(command,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer.buffer,1,&copy);
+        barrier(command,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,scene_rt_layout_,all,any,all,any);
+        offset+=texels*4;
+    }
+    vk_check(vkEndCommandBuffer(command),"end RT material capture");
+    VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command_info.commandBuffer=command;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.commandBufferInfoCount=1; submit.pCommandBufferInfos=&command_info;
+    vk_check(vkQueueSubmit2(queue_,1,&submit,VK_NULL_HANDLE),"submit RT material capture");
+    vk_check(vkQueueWaitIdle(queue_),"RT material capture wait");
+    vkFreeCommandBuffers(device,pool_,1,&command);
+    const auto* records=static_cast<const uint32_t*>(buffer.mapped);
+    const auto* albedo=static_cast<const uint8_t*>(buffer.mapped)+texels*4;
+    RtMaterialPixels pixels{scene_extent_.width,scene_extent_.height,{records,records+texels},{albedo,albedo+texels*4}};
+    destroy_buffer(buffer);
+    return pixels;
+}
+std::vector<RtMaterialRecord> VulkanRenderer::rt_material_records() const {
+    owner();
+    const auto& buffer=rt_records_[rt_record_slot_];
+    if (!buffer.mapped) return {};
+    const auto* records=static_cast<const RtMaterialRecord*>(buffer.mapped);
+    return {records,records+rt_record_count_};
+}
 RenderPixels VulkanRenderer::capture_scene() {
     owner();
     if (!scene_color_ || !scene_initialized_) throw std::logic_error("no scene target to capture");
@@ -1209,6 +1259,24 @@ void VulkanRenderer::destroy_scene_targets() {
     }
     scene_extent_={}; scene_initialized_=motion_initialized_=gbuffer_initialized_=gbuffer_cleared_=false;
     scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL; scene_motion_layout_=scene_gbuffer_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    destroy_rt_material_targets();
+}
+void VulkanRenderer::destroy_rt_material_targets() {
+    for (auto [view,image,memory]:{std::tuple{&scene_material_view_,&scene_material_,&scene_material_memory_},{&scene_albedo_view_,&scene_albedo_,&scene_albedo_memory_}}) {
+        if (*view) vkDestroyImageView(device,*view,nullptr);
+        if (*image) vkDestroyImage(device,*image,nullptr);
+        if (*memory) vkFreeMemory(device,*memory,nullptr);
+        *view=VK_NULL_HANDLE; *image=VK_NULL_HANDLE; *memory=VK_NULL_HANDLE;
+    }
+    rt_material_initialized_=rt_material_cleared_=false; scene_rt_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+}
+// The RT pair exists exactly while an RT effect is active and the scene targets exist (same extent).
+void VulkanRenderer::sync_rt_material_targets() {
+    const bool wanted=rt_material_active() && scene_color_;
+    if (!wanted) { destroy_rt_material_targets(); return; }
+    if (scene_material_) return;
+    make_attachment(scene_material_,scene_material_memory_,scene_material_view_,scene_extent_,false,kMaterialFormat);
+    make_attachment(scene_albedo_,scene_albedo_memory_,scene_albedo_view_,scene_extent_,false,kAlbedoFormat);
 }
 void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkImageView& target_view,VkExtent2D extent,bool depth,VkFormat format) {
     VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; image.imageType = VK_IMAGE_TYPE_2D; image.format = format!=VK_FORMAT_UNDEFINED ? format : depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
@@ -1323,6 +1391,7 @@ void VulkanRenderer::rebuild() {
                 upscaler_kind_==UpscalerKind::dlss ? "DLSS" : upscaler_kind_==UpscalerKind::fsr ? "FSR" : upscaler_kind_==UpscalerKind::smaa ? "SMAA" : "blit");
         }
     }
+    sync_rt_material_targets();
     configure_generation();
     for (auto& slot : slots_) make_attachment(slot.image,slot.memory,slot.view,extent_);
     resized_ = false;
@@ -1396,8 +1465,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     // Upscaling: a frame whose predecessor had a 3D scene draws into the internal scene targets until the scene boundary (the game's
     // copy of the finished scene, gx::SceneBoundary), is upscaled into efb_ there, and draws the rest (post chain, HUD) into efb_.
-    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; std::optional<gx::Projection> frame_projection; std::optional<ShadowFit> shadow_fit; bool shadow_cleared; }
-        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint(),frame_projection_,shadow_fit_,shadow_cleared_};
+    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; std::optional<gx::Projection> frame_projection; std::optional<ShadowFit> shadow_fit; bool shadow_cleared, rt_material_cleared; uint32_t rt_record_slot, rt_record_count; }
+        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint(),frame_projection_,shadow_fit_,shadow_cleared_,rt_material_cleared_,rt_record_slot_,rt_record_count_};
     gx::PacketSummary summary;
     size_t scene_draws=0;          // draws [0, scene_draws) of this packet go to the scene targets
     bool upscale_here=false;       // the upscale runs after those draws, before the rest and before the packet's copy/present
@@ -1407,6 +1476,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
             scene_lights_.clear(); frame_projection_.reset(); shadow_fit_.reset(); shadow_cleared_=false;
+            rt_material_cleared_=false; rt_record_slot_=frame_index_%kFrameSlots; rt_record_count_=0;   // the slot's previous frame has completed (see rt_ below)
             rt_frame_=rt_probe_active();
             if (rt_frame_) {   // frame index modulo the in-flight slots: a frame has at least one submission, so the slot's previous frame has completed
                 rt_.initialize(device,physical_,memory_,shaders_,uint32_t(kFrameSlots));
@@ -1435,6 +1505,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     std::vector<MotionBlock> motion_blocks;
     std::vector<uint32_t> draw_motion(scene_draws,kNoMotion);
+    // RT material records (rt_material.h) of this packet's depth-writing scene draws, appended to the frame's at rt_record_count_.
+    const bool rt_records=rt_material_active() && scene_material_;
+    const uint32_t first_record=rt_record_count_;
+    std::vector<uint32_t> draw_record(scene_draws,kRtNoRecord);
+    std::vector<RtMaterialRecord> records;
+    std::vector<const gx::DrawUniform*> record_uniforms;
     std::unordered_set<const gx::TexturePixels*> used_textures;
     for(const auto& draw:packet.draws) for(size_t map=0;map<8;++map) used_textures.insert(draw_texture(draw,map).get());
     std::unordered_map<const gx::TexturePixels*,size_t> renderer_references;
@@ -1503,6 +1579,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 } else { block.kind=2; block.prev_rows=tracker_.clip_to_prev_clip(); }
                 draw_motion[d]=uint32_t(motion_blocks.size()); motion_blocks.push_back(block);
             }
+            if (rt_records && rt_material_write(info.key)) {
+                const auto& uniforms=*draw.uniforms;
+                const auto lighting=gx::channel_lighting(uniforms.channels[0]);
+                const uint32_t index=first_record+uint32_t(records.size());
+                records.push_back({uniforms.materials[0],uniforms.ambient[0],lighting.mask,index*8,light_model_valid(draw.material,lighting) ? kRtModelValid : 0u,0.f});
+                record_uniforms.push_back(&uniforms);
+                draw_record[d]=index;
+            }
             tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
             if (summary.draws[d].perspective) scene_projection_=draw.transforms->projection;
             if (summary.draws[d].perspective && summary.draws[d].z_write && !frame_projection_) {   // the world's projection: the first depth-writing perspective draw (the weapon comes later with its own)
@@ -1545,6 +1629,23 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         const VkDeviceSize motion_bytes=VkDeviceSize(std::max<size_t>(motion_blocks.size(),1))*sizeof(MotionBlock);
         if (slot.motions.size < motion_bytes) { destroy_buffer(slot.motions); slot.motions = make_buffer(motion_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); }
         if (!motion_blocks.empty()) std::memcpy(slot.motions.mapped, motion_blocks.data(), motion_blocks.size()*sizeof(MotionBlock));
+    }
+    if (!records.empty()) {   // the frame's record and light arrays: grow-only per frame-in-flight slot
+        constexpr VkDeviceSize kLightsBytes=8*sizeof(gx::LightUniform);
+        const auto grow=[&](Buffer& buffer, VkDeviceSize used, VkDeviceSize needed) {
+            if (buffer.size>=needed) return;
+            Buffer bigger=make_buffer(std::max(needed,buffer.size*2),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            if (used) std::memcpy(bigger.mapped,buffer.mapped,size_t(used));   // the frame's earlier packets (no GPU work reads these buffers before the boundary)
+            destroy_buffer(buffer); buffer=bigger;
+        };
+        Buffer& record_buffer=rt_records_[rt_record_slot_]; Buffer& light_buffer=rt_lights_[rt_record_slot_];
+        const VkDeviceSize total=first_record+records.size();
+        grow(record_buffer,first_record*sizeof(RtMaterialRecord),total*sizeof(RtMaterialRecord));
+        grow(light_buffer,first_record*kLightsBytes,total*kLightsBytes);
+        std::memcpy(static_cast<RtMaterialRecord*>(record_buffer.mapped)+first_record,records.data(),records.size()*sizeof(RtMaterialRecord));
+        auto* lights=static_cast<std::byte*>(light_buffer.mapped)+first_record*kLightsBytes;
+        for (size_t i=0;i<record_uniforms.size();++i) std::memcpy(lights+i*kLightsBytes,record_uniforms[i]->lights.data(),kLightsBytes);
+        rt_record_count_=uint32_t(total);
     }
     if (!packet.draws.empty()) {
         if (packet.draws.size()>UINT32_MAX) throw std::invalid_argument("too many native texture descriptors");
@@ -1630,6 +1731,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {   // retried later: the packet must look unseen to the per-frame upscaling state
             boundary_=upscale_before.boundary; frame_start_=upscale_before.frame_start; scene_phase_=upscale_before.scene_phase; scene_mode_=upscale_before.scene_mode;
             motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales; frame_projection_=upscale_before.frame_projection; shadow_fit_=upscale_before.shadow_fit; shadow_cleared_=upscale_before.shadow_cleared;
+            rt_material_cleared_=upscale_before.rt_material_cleared; rt_record_slot_=upscale_before.rt_record_slot; rt_record_count_=upscale_before.rt_record_count;
             tracker_.rollback(upscale_before.tracker);
             return false;
         }
@@ -1688,7 +1790,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; color.imageView = target.color_view; color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = initialized ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     for (size_t i=0;i<4;++i) color.clearValue.color.float32[i]=packet.clear_color[i]/255.f;
-    VkRenderingAttachmentInfo colors[3]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, [2]: G-buffer; none bound outside the scene pass
+    VkRenderingAttachmentInfo colors[5]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, [2]: G-buffer, [3], [4]: RT material and albedo; none bound outside the scene pass
     const bool bind_motion=scene && (!motion_cleared_ || std::any_of(draw_motion.begin()+first,draw_motion.begin()+last,[](uint32_t index) { return index!=kNoMotion; }));
     if (bind_motion) {   // clear once, then bind only for passes whose depth-writing draws produce vectors
         barrier(slot.command,scene_motion_,motion_initialized_ && motion_cleared_ ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1706,7 +1808,19 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         gbuffer_cleared_=gbuffer_initialized_=true;
         scene_gbuffer_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = motion_outputs_ ? 3 : 1; rendering.pColorAttachments = colors;
+    if (scene && rt_records) {   // the RT pair the same way: cleared once per frame (no record, no albedo), then loaded
+        for (VkImage image:{scene_material_,scene_albedo_})
+            barrier(slot.command,image,rt_material_initialized_ && rt_material_cleared_ ? scene_rt_layout_ : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        for (auto [attachment,view]:{std::pair{&colors[3],scene_material_view_},std::pair{&colors[4],scene_albedo_view_}}) {
+            attachment->imageView=view; attachment->imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            attachment->loadOp=rt_material_cleared_ ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; attachment->storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+        }
+        colors[3].clearValue.color.uint32[0]=kRtNoRecord;
+        rt_material_cleared_=rt_material_initialized_=true;
+        scene_rt_layout_=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachments = colors;
     const VkImageLayout depth_before=!initialized ? VK_IMAGE_LAYOUT_UNDEFINED : scene ? scene_depth_layout_ : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     barrier(slot.command,target.depth,depth_before,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
@@ -1768,6 +1882,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (scene) {
                 push.motion=draw_motion[d];
                 if (summary.draws[d].perspective) { push.jitter[0]=jitter_[0]; push.jitter[1]=jitter_[1]; }   // post-style quads stay unjittered
+                if (draw_record[d]!=kRtNoRecord) {
+                    push.record=draw_record[d];
+                    push.effects|=kEffectRtMaterial|(records[draw_record[d]-first_record].flags&kRtModelValid ? kEffectRtModelValid : 0u);
+                }
             }
             vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push);
             vkCmdDrawIndexed(slot.command, info.index_count, 1, info.first_index, info.first_vertex, 0);
@@ -1911,22 +2029,28 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     auto clear_region=[&](const PassTarget& active, bool with_motion) {   // after a copy: GX clears the copied EFB region when asked
             barrier(slot.command,active.depth,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
             barrier(slot.command,active.color,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            VkRenderingAttachmentInfo colors[3]{{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}},depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            VkRenderingAttachmentInfo colors[5]{{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}},depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             const bool clear_motion=with_motion && active.motion_view && motion_cleared_;   // the scene's vectors in the cleared region go with it
             const bool clear_gbuffer=with_motion && active.gbuffer_view && gbuffer_cleared_ && scene_gbuffer_layout_==VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;   // and so do its surfaces
-            for (auto [attachment,view]:{std::pair{&colors[0],active.color_view},std::pair{&colors[1],clear_motion ? active.motion_view : VK_NULL_HANDLE},std::pair{&colors[2],clear_gbuffer ? active.gbuffer_view : VK_NULL_HANDLE}}) {
+            const bool clear_rt=with_motion && active.gbuffer_view && scene_material_ && rt_material_cleared_ && scene_rt_layout_==VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;   // and their records
+            for (auto [attachment,view]:{std::pair{&colors[0],active.color_view},std::pair{&colors[1],clear_motion ? active.motion_view : VK_NULL_HANDLE},std::pair{&colors[2],clear_gbuffer ? active.gbuffer_view : VK_NULL_HANDLE},
+                                         std::pair{&colors[3],clear_rt ? scene_material_view_ : VK_NULL_HANDLE},std::pair{&colors[4],clear_rt ? scene_albedo_view_ : VK_NULL_HANDLE}}) {
                 attachment->imageView=view; attachment->imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; attachment->loadOp=VK_ATTACHMENT_LOAD_OP_LOAD; attachment->storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             }
             depth.imageView=active.depth_view; depth.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL; depth.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD; depth.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
-            VkRenderingInfo clear_render{VK_STRUCTURE_TYPE_RENDERING_INFO}; clear_render.renderArea.extent=active.extent; clear_render.layerCount=1; clear_render.colorAttachmentCount=clear_gbuffer ? 3 : clear_motion ? 2 : 1; clear_render.pColorAttachments=colors; clear_render.pDepthAttachment=&depth;
+            VkRenderingInfo clear_render{VK_STRUCTURE_TYPE_RENDERING_INFO}; clear_render.renderArea.extent=active.extent; clear_render.layerCount=1; clear_render.colorAttachmentCount=clear_rt ? 5 : clear_gbuffer ? 3 : clear_motion ? 2 : 1; clear_render.pColorAttachments=colors; clear_render.pDepthAttachment=&depth;
             const auto& source=copy_target ? packet.texture_copy->source : packet.display_source;
             const uint32_t x=uint64_t(source[0])*active.extent.width/640,y=uint64_t(source[1])*active.extent.height/480;
             const uint32_t right=std::max(x+1,uint32_t(uint64_t(source[0]+source[2])*active.extent.width/640)),bottom=std::max(y+1,uint32_t(uint64_t(source[1]+source[3])*active.extent.height/480));
             VkClearRect rectangle{{{int32_t(x),int32_t(y)},{right-x,bottom-y}},0,1};
-            VkClearAttachment clears[4]{}; clears[0].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[1].aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;
+            VkClearAttachment clears[6]{}; clears[0].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[1].aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;
             uint32_t clear_count=2;
             if (clear_motion) { clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count++].colorAttachment=1; }
             if (clear_gbuffer) { clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count++].colorAttachment=2; }   // cleared to zero: no surface
+            if (clear_rt) {   // no record, no albedo
+                clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count].clearValue.color.uint32[0]=kRtNoRecord; clears[clear_count++].colorAttachment=3;
+                clears[clear_count].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT; clears[clear_count++].colorAttachment=4;
+            }
             for(size_t i=0;i<4;++i) clears[0].clearValue.color.float32[i]=packet.clear_color[i]/255.f;
             clears[1].clearValue.depthStencil={packet.clear_depth/float(0xFFFFFF),0};
             vkCmdBeginRendering(slot.command,&clear_render);
@@ -2020,6 +2144,9 @@ void VulkanRenderer::shutdown() {
         upscaler_.reset();
         rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
+        for (auto& buffer:rt_records_) destroy_buffer(buffer);
+        for (auto& buffer:rt_lights_) destroy_buffer(buffer);
+        rt_record_count_=0;
         for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
         stop_workers();
         for (auto [key,pipeline]:pipelines_) vkDestroyPipeline(device,pipeline,nullptr);

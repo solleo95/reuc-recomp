@@ -19,8 +19,9 @@ struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
 // alphaPass: ubershader only. motion/jitter/viewport: the MOTION variant (upscaling) only; jitter in target pixels, viewport = the draw's
 // Vulkan viewport (x, y, width, height) in target pixels.
-// effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting); the MOTION variant only.
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; };
+// effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting), bit 1 = albedo and material targets (kEffectRtMaterial), bit 2 = the draw's record is
+// model-valid (kEffectRtModelValid); the MOTION variant only. record: the draw's material record index (rt_material.h), ~0u = none.
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; uint record; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 // Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
 // (prevRows = clip_to_prev_clip applied to the current clip position).
@@ -182,6 +183,8 @@ struct Targets {
 #ifdef MOTION
     float4 motion : SV_Target1;   // rg: previous minus current position in target pixels (unjittered); written only by depth-writing draws
     float4 gbuffer : SV_Target2;  // normal, fog and flags (gbuffer.slang); written only by depth-writing draws, and bound only while an effect reads it
+    uint material : SV_Target3;   // material record index (rt_material.h) and albedo (stage-0 texture x material colour, unlit): depth-writing draws,
+    float4 albedo : SV_Target4;   // bound only while an RT effect is active
 #endif
 };
 #ifdef MOTION
@@ -191,7 +194,15 @@ float4 gbufferTexel(Output input) {
     const uint alphaWord = drawState.pixel.x;
     const bool cutout = ((alphaWord >> 16) & 7u) != 7u || ((alphaWord >> 19) & 7u) != 7u;   // an alpha compare other than "always"
     const bool lit = ((drawState.channels[0] | drawState.channels[1] | drawState.channels[2] | drawState.channels[3]) & 2u) != 0;
-    return encodeGBuffer(hasNormal ? input.viewNormal * rsqrt(lengthSquared) : float3(0.0, 0.0, 0.0), fogAmount(input.position.z), (hasNormal ? kGBufferHasNormal : 0u) | (lit ? kGBufferLit : 0u) | (cutout ? kGBufferCutout : 0u));
+    const bool modelValid = (projection.effects & 4u) != 0;
+    return encodeGBuffer(hasNormal ? input.viewNormal * rsqrt(lengthSquared) : float3(0.0, 0.0, 0.0), fogAmount(input.position.z), (hasNormal ? kGBufferHasNormal : 0u) | (lit ? kGBufferLit : 0u) | (cutout ? kGBufferCutout : 0u) | (modelValid ? kGBufferModelValid : 0u));
+}
+// Stage-0 texture (when the stage samples one) times channel 0's material colour, no lighting. After shadeFragment (the ubershader loads order0 there).
+float4 albedoTexel(Output input) {
+    const float4 material = (drawState.channels[0] & 1u) != 0 ? input.rawColor0 : drawState.materials[0];
+    if ((order0 & 64u) == 0) return material;
+    const float3 coord = input.texcoords[(order0 >> 3) & 7];
+    return material * sampleImage(order0 & 7, coord.xy / (coord.z != 0.0 ? coord.z : 1.0));
 }
 #endif
 float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }
@@ -203,6 +214,8 @@ Targets fragmentMain(Output input) {
     targets.color = shadeFragment(input);
 #ifdef MOTION
     targets.gbuffer = gbufferTexel(input);
+    targets.material = projection.record;
+    targets.albedo = (projection.effects & 2u) != 0 ? albedoTexel(input) : float4(0.0);
 #endif
     return targets;
 }

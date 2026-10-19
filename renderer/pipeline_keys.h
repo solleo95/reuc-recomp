@@ -37,6 +37,11 @@ inline VkColorComponentFlags gbuffer_write_mask(const PipelineKey& key) {
     return (key[68]&17)==17 ? VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT : 0;
 }
 
+// Whether a draw writes the RT material-record and albedo attachments: the G-buffer's draws, except logic-op ones (the op would apply to the record index).
+inline bool rt_material_write(const PipelineKey& key) {
+    return gbuffer_write_mask(key) && (key[0]&3)!=2;
+}
+
 inline std::vector<PipelineKey> load_pipeline_keys(const std::filesystem::path& path) {
     std::vector<PipelineKey> keys;
     std::unique_ptr<FILE,int(*)(FILE*)> file(std::fopen(path.string().c_str(),"rb"),std::fclose);

@@ -545,6 +545,68 @@ int main(int argc, char** argv) {
             frame(uc::EffectLevel::high,0,1); const auto cut_on=frame(uc::EffectLevel::high,0.0625f,2);
             CHECK(cut_off.rgba==cut_on.rgba);   // a camera cut skips the blur
         }
+        if (wanted("rt-material")) {
+            // The albedo and material-record targets of the RT effects: a textured, lit box on a floor. With an RT option active every depth-writing scene
+            // pixel names its draw's material record and holds stage-0 texture x material colour; with RT off the targets do not exist and the picture is the same.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-material: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                auto solid=std::make_shared<gx::TexturePixels>();
+                solid->levels.push_back({4,4,{}});
+                for(int i=0;i<16;++i) solid->levels[0].rgba.insert(solid->levels[0].rgba.end(),{200,100,50,255});
+                const std::array<float,4> material{0.8f,0.6f,0.4f,1.f};
+                const auto surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool box) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
+                    draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);   // depth test "less or equal" with update
+                    uniforms.channels[0]=2|(1<<2)|(2<<7);   // material register, lighting on, light 0, clamped diffuse
+                    uniforms.materials[0]=material; uniforms.ambient[0]={0.35f,0.35f,0.35f,1};
+                    uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0}; uniforms.lights[0].position={-1e6f,1e6f,1e6f,0};
+                    uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                    if(box) {   // stage 0: texture x rasterised colour
+                        draw.texture=solid; draw.texture_wrap[0]=0x95; draw.material.stages=1; draw.material.swaps={0xE4,0xE4,0xE4,0xE4};
+                        draw.material.stage[0]={0x8F8AF,0x8FFC0,64,0,0};
+                    }
+                    return draw;
+                };
+                auto frame=[&](bool rt) {
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_shadows=uc::EffectLevel::medium; renderer.set_effects(effects);
+                    gx::FramePacket scene; scene.present=false;
+                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},false));   // the floor (vertex-colour TEV: no stage)
+                    scene.draws.push_back(surface({{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,0,1},true));   // the box's front
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    return renderer.capture(submit(std::move(hud)));
+                };
+                frame(false); const auto off=frame(false);   // the first frame decides scene mode for the next one
+                CHECK(!renderer.rt_material_targets());
+                frame(true); const auto on=frame(true);
+                CHECK(renderer.rt_material_targets());
+                const auto targets=renderer.capture_rt_material();
+                const auto records=renderer.rt_material_records();
+                CHECK(targets.width==1280 && targets.height==960);
+                const auto at=[&](uint32_t x,uint32_t y) { return targets.records[size_t(y)*targets.width+x]; };
+                const uint32_t box=at(640,297), floor=at(640,200), empty=at(640,50);   // the box's front, the floor behind it, nothing drawn
+                const size_t i=(size_t(297)*targets.width+640)*4;
+                std::fprintf(stderr,"rt-material: records %zu, box %u floor %u empty %u; box albedo %u %u %u\n",records.size(),box,floor,empty,targets.albedo[i],targets.albedo[i+1],targets.albedo[i+2]);
+                CHECK(box<records.size() && floor<records.size() && box!=floor && empty==~0u);
+                CHECK(records[box].material_color==material && (records[box].flags&uc::kRtModelValid) && records[box].light_mask==1);
+                CHECK(!(records[floor].flags&uc::kRtModelValid));   // no TEV stage: not the modelled form
+                CHECK(std::abs(int(targets.albedo[i])-160)<=1 && std::abs(int(targets.albedo[i+1])-60)<=1 && std::abs(int(targets.albedo[i+2])-20)<=1);   // texture x material colour, unlit
+                CHECK(on.rgba==off.rgba);   // writing the targets leaves the picture alone
+                frame(false); frame(false);
+                CHECK(!renderer.rt_material_targets());
+            }
+        }
         if (wanted("rt-as")) {
             // Per-frame acceleration structures and the UC_RT_PROBE debug probe: the contact-shadow fixture (a box on a floor under a directional light) as
             // mesh draws. The probe's count of occluded pixels must equal a CPU ray cast of the same geometry.

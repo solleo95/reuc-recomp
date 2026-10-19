@@ -6,7 +6,8 @@ namespace uc {
 // The normal G-buffer: one RGBA16 unorm attachment next to colour, depth and motion (docs/superpowers/specs/2026-10-19-graphics-enhancements-design.md).
 //   r,g = octahedral view-space normal, b = GX fog factor (0 = clear, 1 = fully fogged), a = flags below. A texel of zeros is "no surface".
 // shaders/gbuffer.slang writes the same encoding.
-constexpr uint16_t kGBufferHasNormal=1, kGBufferLit=2, kGBufferTessellated=4, kGBufferReflective=8;   // the middle two are reserved for later effects
+constexpr uint16_t kGBufferHasNormal=1, kGBufferLit=2, kGBufferTessellated=4, kGBufferReflective=8;   // the last two are reserved for later effects
+constexpr uint16_t kGBufferModelValid=32;   // the draw's material record is kRtModelValid (rt_material.h); written only while an RT effect is active
 constexpr uint16_t kGBufferCutout=16;   // an alpha-tested draw (grates, nets, foliage): not a solid surface, neither shaded nor an occluder
 struct GBufferTexel { std::array<float,3> normal; float fog; uint16_t flags; };
 inline float gbuffer_sign(float value) { return value>=0.f ? 1.f : -1.f; }
