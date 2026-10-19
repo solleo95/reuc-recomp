@@ -545,6 +545,55 @@ int main(int argc, char** argv) {
             frame(uc::EffectLevel::high,0,1); const auto cut_on=frame(uc::EffectLevel::high,0.0625f,2);
             CHECK(cut_off.rgba==cut_on.rgba);   // a camera cut skips the blur
         }
+        if (wanted("shafts")) {
+            // A dark wall with a bright strip right of the screen centre, lit by a directional light whose far point projects to the centre: the wall
+            // beyond the strip (seen from the light) gets light shafts. No light, or a light behind the camera, changes nothing.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };
+            auto frame=[&](uc::EffectLevel level,int light) {   // light: 0 none, 1 in front (far point at the centre), 2 behind the camera
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.volumetric_lighting=level; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                auto wall=quad(0x1000,-1,-1,1,1,{30,30,30,255},true);
+                const std::array<std::array<float,3>,4> corners{{{-10,-10,-5},{10,-10,-5},{10,10,-5},{-10,10,-5}}};
+                for(size_t i=0;i<4;++i) { wall.vertices[i].position=corners[i]; wall.vertices[i].normal={0,0,1,0,0,0,0,0,0}; }
+                projection(wall);
+                if(light) {
+                    auto& uniforms=wall.uniforms.edit();
+                    uniforms.channels[0]=1|2|(1<<2)|(2<<7);
+                    uniforms.ambient[0]={255,255,255,255};
+                    uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0};
+                    uniforms.lights[0].position={0,0,light==1 ? -1e6f : 1e6f,0};
+                    uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                }
+                scene.draws.push_back(std::move(wall));
+                auto strip=quad(0x2000,-1,-1,1,1,{255,255,255,255},true);
+                const std::array<std::array<float,3>,4> strip_corners{{{0.4f,-0.2f,-2},{0.6f,-0.2f,-2},{0.6f,0.2f,-2},{0.4f,0.2f,-2}}};
+                for(size_t i=0;i<4;++i) strip.vertices[i].position=strip_corners[i];
+                projection(strip);
+                scene.draws.push_back(std::move(strip));
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto twice=[&](uc::EffectLevel level,int light) { frame(level,light); return frame(level,light); };
+            const auto off=twice(uc::EffectLevel::off,1), on=twice(uc::EffectLevel::medium,1);
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) { uc::save_png(off,std::filesystem::path(dump)/"shafts-off.png"); uc::save_png(on,std::filesystem::path(dump)/"shafts-on.png"); }   // debugging aid
+            int brighter=0;
+            for(uint32_t x=900;x<1200;x+=10) brighter=std::max(brighter,int(on.rgba[(size_t(360)*on.width+x)*4])-int(off.rgba[(size_t(360)*off.width+x)*4]));
+            std::fprintf(stderr,"shafts: brightening beyond the strip %d, light %s\n",brighter,renderer.dominant_light() ? "found" : "none");
+            CHECK(brighter>=10);
+            CHECK(renderer.pass_runs(uc::GpuPass::volumetric)>0);
+            const auto none_off=twice(uc::EffectLevel::off,0), none_on=twice(uc::EffectLevel::medium,0);
+            CHECK(none_off.rgba==none_on.rgba);   // no light
+            const auto behind_off=twice(uc::EffectLevel::off,2), behind_on=twice(uc::EffectLevel::medium,2);
+            CHECK(behind_off.rgba==behind_on.rgba);   // the light is behind the camera
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);

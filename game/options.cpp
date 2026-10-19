@@ -59,6 +59,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level) return "invalid value for --ambient-occlusion";
             options.effects.ambient_occlusion = *level;
         }
+        else if (arg == "--volumetric-lighting") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --volumetric-lighting";
+            const auto level = effect_level_from_name(arguments[i]);
+            if (!level) return "invalid value for --volumetric-lighting";
+            options.effects.volumetric_lighting = *level;
+        }
         else if (arg == "--motion-blur") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --motion-blur";
             const auto level = effect_level_from_name(arguments[i]);

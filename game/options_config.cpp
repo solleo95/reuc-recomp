@@ -83,6 +83,11 @@ Options options_from_config(const ConfigDocument& document) {
             if(!level)invalid("graphics.ambient_occlusion must be off, low, medium, high or ultra");
             options.effects.ambient_occlusion=*level;
         }
+        if(graphics.contains("volumetric_lighting")) {
+            const auto level=graphics["volumetric_lighting"].is_string() ? effect_level_from_name(graphics["volumetric_lighting"].get<std::string>()) : std::nullopt;
+            if(!level)invalid("graphics.volumetric_lighting must be off, low, medium, high or ultra");
+            options.effects.volumetric_lighting=*level;
+        }
         if(graphics.contains("motion_blur")) {
             const auto level=graphics["motion_blur"].is_string() ? effect_level_from_name(graphics["motion_blur"].get<std::string>()) : std::nullopt;
             if(!level)invalid("graphics.motion_blur must be off, low, medium, high or ultra");
@@ -130,6 +135,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["contact_shadows"]=options.effects.contact_shadows;
     if(effect_level_name(options.effects.ambient_occlusion).empty())invalid("unknown ambient_occlusion");
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
+    if(effect_level_name(options.effects.volumetric_lighting).empty())invalid("unknown volumetric_lighting");
+    graphics["volumetric_lighting"]=std::string(effect_level_name(options.effects.volumetric_lighting));
     if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");
     graphics["motion_blur"]=std::string(effect_level_name(options.effects.motion_blur));
     options_from_config(replacement);

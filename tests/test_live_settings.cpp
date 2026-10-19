@@ -44,6 +44,8 @@ int main() {
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.per_pixel_lighting);
         calls.clear(); next=live.options(); next.effects.contact_shadows=true; live.apply(next);
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.contact_shadows);
+        calls.clear(); next=live.options(); next.effects.volumetric_lighting=uc::EffectLevel::low; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.volumetric_lighting==uc::EffectLevel::low);
         calls.clear(); next=live.options(); next.effects.motion_blur=uc::EffectLevel::medium; live.apply(next);
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.motion_blur==uc::EffectLevel::medium);
         calls.clear(); next=live.options(); next.effects.ambient_occlusion=uc::EffectLevel::high; live.apply(next);
