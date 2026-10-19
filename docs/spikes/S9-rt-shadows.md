@@ -40,6 +40,15 @@ The final review's follow-up check counted the material records of the fight dem
 
 A matched pair of frames from the live run (`options` command toggling the effect, 100 ms apart, dining car floor) now shows the shadows under the tables and chairs.
 
+## Found by the owner in the first live test: characters turned black, the level did not change
+
+With every mesh draw in the acceleration structure the zombies and Rebecca went almost black while the walls, floor and tables hardly changed. Two causes, both found with a debug tint of the composite (blue = unlit, magenta = lit but not model-valid, green/red = factor) on matched on/off frames:
+
+1. **The level occludes the character lights.** The characters' GX lights are directional or point rigs placed without regard to the level; a ray toward them from inside a train car hits the ceiling or a wall, so the visibility is 0 for every light and, with a low ambient, the factor goes to 0. With only skinned draws (`DrawGpu::indexed`, per-vertex matrices) in the structure the same scene shows ordinary shading (live frames, zombies and leeches) and the structure shrinks as well.
+2. **The level barely changes because most of it is skipped.** In the dining car the walls, ceiling and chairs are model-valid but receive factor about 1 (no occluder in front of them under their own lights), while the tables, the floor, the leeches and the monster are lit but model-invalid: about a third of all records (822 k of 3.1 M: `0x8F8AF` + `0x28F8A0` with stage 1 reading channel 1 of the rasteriser, plus `ras1` added by stage 2 in other shapes) mix a second lighting channel into the colour, which the one-channel factor cannot scale.
+
+What this leaves: ray-traced shadows from characters onto lit static surfaces and onto each other, not level shadows. A level-wide shadow would need geometry the lights actually see (the light rigs are not in the level), the second lighting channel in the record and in the factor (its lights, ambient and material), and a way to keep walls from occluding their own room lights. That is a design question for the owner, not a tuning one.
+
 ## Carried forward
 
 - The fixed acceleration-structure and capture cost (about 0.9 ms end to end) decides how much of the High budget the remaining effects get.

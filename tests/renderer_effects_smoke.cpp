@@ -627,8 +627,9 @@ int main(int argc, char** argv) {
                 const Quad floor_quad{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}};
                 const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
                 const std::array<float,3> light{-1e6f,1e6f,1e6f};
-                const auto surface=[&](const Quad& corners,bool mesh) {
+                const auto surface=[&](const Quad& corners,bool mesh,bool skinned=false) {   // only skinned draws (per-vertex matrices) occlude: the box is skinned, the floor is not
                     auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    if(skinned) draw.state.edit().descriptors[0]=gx::Mode::direct;
                     for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={0,1,0,0,0,0,0,0,0}; }
                     draw.transforms.edit().projection=projection;
                     auto& uniforms=draw.uniforms.edit();
@@ -646,7 +647,7 @@ int main(int argc, char** argv) {
                     gx::FramePacket scene; scene.present=false;
                     if(!menu) {
                         scene.draws.push_back(surface(floor_quad,meshes));
-                        for(const auto& face:box(shift)) scene.draws.push_back(surface(face,meshes));
+                        for(const auto& face:box(shift)) scene.draws.push_back(surface(face,meshes,true));
                         submit(std::move(scene));
                         gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                         auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -665,9 +666,9 @@ int main(int argc, char** argv) {
                 frame(0); frame(0);   // the first frame decides scene mode for the next one
                 const auto stats=renderer.rt_stats();
                 std::fprintf(stderr,"rt-as: %u BLAS, %u geometries, %llu triangles; as %.3f ms\n",stats.blas,stats.geometries,(unsigned long long)stats.triangles,renderer.pass_ms(uc::GpuPass::rt_as));
-                CHECK(stats.blas==1 && stats.geometries==4 && stats.triangles==8);
+                CHECK(stats.blas==1 && stats.geometries==3 && stats.triangles==6);   // the three skinned box faces; the floor (a static draw) is no occluder
                 frame(30); frame(30);   // the box far right: the structures follow the geometry
-                CHECK(renderer.rt_stats().blas==1 && renderer.rt_stats().triangles==8);
+                CHECK(renderer.rt_stats().blas==1 && renderer.rt_stats().triangles==6);
                 auto as_runs=renderer.pass_runs(uc::GpuPass::rt_as), shadow_runs=renderer.pass_runs(uc::GpuPass::rt_shadows);
                 frame(0,true);   // no scene this frame: nothing built, no shadows (Review Focus 1)
                 CHECK(renderer.rt_stats().blas==0 && renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_shadows)==shadow_runs);
@@ -703,8 +704,10 @@ int main(int argc, char** argv) {
                     light.position=kind==Light::directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{1.5f,1.5f,-3.f,0};
                     return light;
                 };
+                bool plate_skinned=true;   // only skinned draws (per-vertex matrices: characters) occlude; the game's static level geometry does not (see below)
                 auto surface=[&](const std::array<std::array<float,3>,4>& corners,std::array<float,3> normal,bool plate,Light kind,bool lit) {
                     auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    if(plate && plate_skinned) draw.state.edit().descriptors[0]=gx::Mode::direct;
                     for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
                     draw.transforms.edit().projection=projection;
                     auto& uniforms=draw.uniforms.edit();
@@ -723,6 +726,11 @@ int main(int argc, char** argv) {
                     auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
                     auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
                     scene.draws.push_back(std::move(floor)); scene.draws.push_back(std::move(plate));
+                    if(!plate_skinned) {   // a skinned decoy far off to the side keeps the acceleration structure (and the pass) alive while the plate is static
+                        auto decoy=surface({{{30,-1,-6},{31,-1,-6},{31,-0.9f,-6},{30,-0.9f,-6}}},{0,0,1},false,kind,lit);
+                        decoy.state.edit().descriptors[0]=gx::Mode::direct; decoy.transforms.edit().projection[0][0]=zoom;
+                        scene.draws.push_back(std::move(decoy));
+                    }
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
                     auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
@@ -779,6 +787,14 @@ int main(int argc, char** argv) {
                 const double sun_shadow=signal_at(signal,shadowed_sun,2), sun_lit=signal_at(signal,lit_sun,2);
                 std::fprintf(stderr,"rt-shadows: sun signal shadowed %.3f lit %.3f\n",sun_shadow,sun_lit);
                 CHECK(std::abs(sun_shadow-expected(shadowed_sun,Light::directional))<=0.05 && std::abs(sun_lit-1.0)<=0.01);
+                // (a2) GX lights are art-directed rigs that ignore walls and ceilings: a static (non-skinned) plate must not occlude, or every character lit from above would be black indoors
+                plate_skinned=false;
+                frame(sun_only,Light::directional); frame(sun_only,Light::directional);
+                signal=renderer.capture_rt_shadow_signal();
+                CHECK(std::abs(signal_at(signal,shadowed_sun,2)-1.0)<=0.01);
+                plate_skinned=true;
+                frame(sun_only,Light::directional); frame(sun_only,Light::directional);
+                signal=renderer.capture_rt_shadow_signal();
                 // (b) the point light is a local light: it is traced by rt_local_shadows only
                 frame(local_only,Light::point); frame(local_only,Light::point);
                 signal=renderer.capture_rt_shadow_signal();
