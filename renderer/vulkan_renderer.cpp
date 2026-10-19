@@ -67,6 +67,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (instance_) throw std::logic_error("renderer already initialized");
     owner_ = std::this_thread::get_id(); window_ = window;
     render_aspect_=render_aspect;
+    if (const char* probe=std::getenv("UC_RT_PROBE")) rt_probe_=std::strcmp(probe,"1")==0;
     set_render_scale(render_scale);
     if (!window) throw std::invalid_argument("Vulkan requires an SDL window");
     uint32_t version = 0; vk_check(vkEnumerateInstanceVersion(&version), "vkEnumerateInstanceVersion");
@@ -303,6 +304,8 @@ VulkanRenderer::Buffer VulkanRenderer::make_buffer(VkDeviceSize size, VkBufferUs
     try {
         VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device, buffer.buffer, &requirements);
         VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize = requirements.size;
+        VkMemoryAllocateFlagsInfo address{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO}; address.flags=VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) allocate.pNext=&address;   // rt_input_usage(): the ray tracing builder reads it by address
         // A small BAR heap can fill up even when ordinary host memory is still available.
         vk_check(allocate_host_buffer(memory_, requirements.memoryTypeBits, prefer_device_local, [&](uint32_t type) {
             allocate.memoryTypeIndex=type;
@@ -557,6 +560,17 @@ void VulkanRenderer::force_scene_targets(bool on) {
     force_scene_targets_=on;
     apply_scene_path(false,path_before);
 }
+void VulkanRenderer::set_rt_probe(bool on) {
+    owner();
+    const bool path_before=scene_path_wanted();
+    rt_probe_=on;
+    apply_scene_path(false,path_before);
+}
+uint32_t VulkanRenderer::rt_probe_occluded() {
+    owner();
+    vk_check(present_.wait_idle(device),"probe readback");
+    return rt_.probe_occluded();
+}
 // The samplers and the scene targets follow a change of the anisotropy level or of whether the scene-target path is needed (both only once the device exists).
 void VulkanRenderer::apply_scene_path(bool anisotropy_changed, bool path_before) {
     const bool path_changed=scene_path_wanted()!=path_before;
@@ -775,7 +789,7 @@ VulkanRenderer::GpuMesh& VulkanRenderer::gpu_mesh(const std::shared_ptr<const gx
     const VkDeviceSize total=(vertex_bytes+15)/16*16+(index_bytes+15)/16*16;
     if (mesh_slabs_.empty() || mesh_slabs_.back()->buffer.size-mesh_slabs_.back()->used<total) {
         auto slab=std::make_unique<MeshSlab>();
-        slab->buffer=make_buffer(std::max<VkDeviceSize>(VkDeviceSize(32)<<20,total),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT|VK_BUFFER_USAGE_INDEX_BUFFER_BIT,true);
+        slab->buffer=make_buffer(std::max<VkDeviceSize>(VkDeviceSize(32)<<20,total),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT|VK_BUFFER_USAGE_INDEX_BUFFER_BIT|rt_input_usage(),true);
         mesh_slabs_.push_back(std::move(slab));
     }
     MeshSlab& slab=*mesh_slabs_.back();
@@ -1035,6 +1049,21 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
+    const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
+    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the debug probe
+        if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
+        rt_as_open_=false; rt_frame_=false;
+        rt_.build_tlas(command);
+        pass_timer_.end(command,timer_slot,GpuPass::rt_as);
+        if (frame_projection_ && dominant_light_ && dominant_light_->kind==gx::LightKind::directional) {
+            const auto& p=dominant_light_->position; const float length=std::sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]);
+            RtProbeInputs probe; probe.depth=scene_depth_view_; probe.region=in.render_size; probe.viewport=scene_viewport; probe.view=view_params(*frame_projection_);
+            probe.to_light={p[0]/length,p[1]/length,p[2]/length};
+            pass_timer_.begin(command,timer_slot,GpuPass::rt_probe);
+            rt_.record_probe(command,probe);
+            pass_timer_.end(command,timer_slot,GpuPass::rt_probe);
+        }
+    }
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
@@ -1042,7 +1071,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion.command=command; occlusion.targets_generation=targets_generation_; occlusion.color=in.color; occlusion.depth=in.depth;
         occlusion.gbuffer={scene_gbuffer_,scene_gbuffer_view_,kGBufferFormat,scene_extent_,color_usage};
         occlusion.region=in.render_size;
-        occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
+        occlusion.viewport=scene_viewport;
         occlusion.view=view_params(*frame_projection_);
         occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.contact_shadows; occlusion.light=dominant_light_; occlusion.slot=timer_slot;
         if (shadow_cleared_ && shadow_fit_ && dominant_light_) {
@@ -1377,6 +1406,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
             scene_lights_.clear(); frame_projection_.reset(); shadow_fit_.reset(); shadow_cleared_=false;
+            rt_frame_=rt_probe_active();
+            if (rt_frame_) {   // frame index modulo the in-flight slots: a frame has at least one submission, so the slot's previous frame has completed
+                rt_.initialize(device,physical_,memory_,shaders_,uint32_t(kFrameSlots));
+                rt_.begin_frame(frame_index_);
+            }
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
@@ -1497,7 +1531,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     if (!palette_blocks.empty()) {
         const VkDeviceSize palette_bytes=VkDeviceSize(palette_blocks.size())*sizeof(gx::PaletteBlock);
-        if (slot.palettes.size < palette_bytes) { destroy_buffer(slot.palettes); slot.palettes = make_buffer(palette_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT); }
+        if (slot.palettes.size < palette_bytes) { destroy_buffer(slot.palettes); slot.palettes = make_buffer(palette_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|rt_input_usage()); }
         auto* palettes=static_cast<gx::PaletteBlock*>(slot.palettes.mapped);
         for (size_t i=0;i<palette_blocks.size();++i) gx::fill_palette(palettes[i], *palette_blocks[i]);
     }
@@ -1756,9 +1790,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         std::vector<size_t> casters;
         for (size_t d=first;d<last;++d) {
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
-            const auto alpha_word=draw.uniforms->pixel[0];
-            const bool cut_out=((alpha_word>>16)&7)!=7 || ((alpha_word>>19)&7)!=7;   // an alpha compare other than "always": foliage, fences (a limit: they cast no shadow)
-            if (draw.mesh && info.index_count && info.vertices && summary.draws[d].perspective && summary.draws[d].z_write && !cut_out && info.key[69]==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) casters.push_back(d);
+            // the ray tracing instance rule; alpha cut-outs (foliage, fences) are not opaque and cast no shadow here (a limit)
+            if (rt_instance_opaque(draw.mesh && info.vertices,info.index_count!=0,summary.draws[d].perspective,summary.draws[d].z_write,draw.uniforms->pixel[0],VkPrimitiveTopology(info.key[69]))==true) casters.push_back(d);
         }
         if (casters.empty()) return;
         const uint32_t resolution=shadow_preset(effects_.shadows).resolution;
@@ -1793,9 +1826,31 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         shadow_cleared_=true;
         pass_timer_.end(slot.command,timer_slot,GpuPass::shadow);
     };
+    // Ray tracing: this packet's instances (the caster rule, cut-outs included as non-opaque) into one BLAS, in the packet's own command buffer.
+    auto record_rt=[&](size_t first, size_t last) {
+        if (!rt_frame_) return;
+        const auto address=[&](const Buffer& buffer) { VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO}; info.buffer=buffer.buffer; return vkGetBufferDeviceAddress(device,&info); };
+        std::vector<RtGeometry> geometries;
+        for (size_t d=first;d<last;++d) {
+            const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
+            const auto opaque=rt_instance_opaque(draw.mesh && info.vertices,info.index_count!=0,summary.draws[d].perspective,summary.draws[d].z_write,draw.uniforms->pixel[0],VkPrimitiveTopology(info.key[69]));
+            if (!opaque) continue;
+            RtGeometry geometry;
+            geometry.vertices=address(*info.vertices)+info.vertex_offset; geometry.indices=address(*info.indices)+info.index_offset;
+            geometry.vertex_count=uint32_t(draw.mesh->vertices.size()); geometry.index_count=info.index_count; geometry.first_index=info.first_index; geometry.first_vertex=info.first_vertex;
+            geometry.palette=info.palette; geometry.current=info.current; geometry.indexed=info.indexed; geometry.opaque=*opaque; geometry.palettes=address(slot.palettes);
+            geometries.push_back(geometry);
+        }
+        if (geometries.empty()) return;
+        const auto timer_slot=uint32_t(next_slot_);
+        pass_timer_.begin(slot.command,timer_slot,GpuPass::rt_as);
+        rt_.record_packet(slot.command,geometries);
+        if (upscale_here) rt_as_open_=true;   // the boundary's TLAS build follows in this submission: one timed span (a query is written once per submission)
+        else pass_timer_.end(slot.command,timer_slot,GpuPass::rt_as);
+    };
     const bool scene_only=scene_phase_ && !upscale_here;   // the whole packet belongs to the scene: copy and clear act on the scene targets
     const bool writes_scene=scene_phase_ && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
-    if (writes_scene) { record_pass(scene_target,0,scene_draws,true); record_shadow(0,scene_draws); }
+    if (writes_scene) { record_pass(scene_target,0,scene_draws,true); record_shadow(0,scene_draws); record_rt(0,scene_draws); }
     if (upscale_here) {
         if (scene_draws || packet.present) scene_restore_copy_.reset();   // another draw changed the scene since the saved copy
         record_upscale(slot.command,packet.black_output);
@@ -1962,7 +2017,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for(auto& sampler:scene_samplers_) { if(sampler) vkDestroySampler(device,sampler,nullptr); sampler=VK_NULL_HANDLE; }
         stop_workers();

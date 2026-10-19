@@ -9,6 +9,7 @@
 #include "occlusion_pass.h"
 #include "pass_timer.h"
 #include "rcas_pass.h"
+#include "rt_scene.h"
 #include "streamline.h"
 #include "dlss_frame_generation.h"
 #include "fsr_frame_generation.h"
@@ -73,7 +74,7 @@ public:
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // SMAA works on the finished frame at the output size, whatever the quality setting says.
     UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
-    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_)); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
+    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || rt_probe_active()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
@@ -87,10 +88,18 @@ public:
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
     void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
-    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
+    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active()); }
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
-    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
+    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off || rt_probe_active()); }
+    // Ray tracing debug probe (UC_RT_PROBE=1, phase 0): per-frame acceleration structures and one shadow ray per scene pixel, counted, nothing drawn.
+    // Off, nothing ray tracing runs or allocates. set_rt_probe: tests (what the variable sets at initialize).
+    bool rt_probe_active() const { return rt_probe_ && ray_tracing_; }
+    void set_rt_probe(bool on);
+    uint32_t rt_probe_occluded();   // tests/tools: the occluded pixels the latest probe counted (waits for the GPU)
+    RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
+    uint64_t rt_buffer_growths() const { return rt_.buffer_growths(); }
+    double take_pass_total_ms(GpuPass pass) { return pass_timer_.take_total_ms(pass); }   // summed GPU time of a pass over the submissions retired since the last call (frame log)
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
@@ -199,6 +208,9 @@ private:
     double sharpness_=0.5;
     uint32_t frame_generation_multiplier_=2;
     bool ray_tracing_=false;
+    bool rt_probe_=false, rt_frame_=false, rt_as_open_=false;   // rt_frame_: the probe was on at this frame's start; rt_as_open_: the rt_as timer runs on to the TLAS
+    RtScene rt_;
+    VkBufferUsageFlags rt_input_usage() const { return ray_tracing_ ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT|VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0; }   // mesh and palette buffers the AS builder reads
     bool motion_outputs_=false;   // upscaling: pipelines carry the motion attachment and the jitter (smoke.motion.*.spv)
     // Upscaling: the 3D scene of a guest frame renders into these internal-resolution targets up to the scene boundary, then the upscaler
     // fills efb_ and the rest of the frame (post chain, HUD) draws into efb_ at output resolution.

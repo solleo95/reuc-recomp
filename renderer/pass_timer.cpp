@@ -24,7 +24,7 @@ void PassTimer::collect(uint32_t slot) {
         if (!recorded_[slot][pass]) continue;
         uint64_t stamps[2];
         if (vkGetQueryPoolResults(device_,pool_,query(slot,GpuPass(pass)),2,sizeof stamps,stamps,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT)==VK_SUCCESS && stamps[1]>=stamps[0])
-            last_[pass]=double(stamps[1]-stamps[0])*period_/1e6;
+            { last_[pass]=double(stamps[1]-stamps[0])*period_/1e6; total_[pass]+=last_[pass]; }
         recorded_[slot][pass]=false;
     }
 }

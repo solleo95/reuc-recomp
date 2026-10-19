@@ -545,6 +545,124 @@ int main(int argc, char** argv) {
             frame(uc::EffectLevel::high,0,1); const auto cut_on=frame(uc::EffectLevel::high,0.0625f,2);
             CHECK(cut_off.rgba==cut_on.rgba);   // a camera cut skips the blur
         }
+        if (wanted("rt-as")) {
+            // Per-frame acceleration structures and the UC_RT_PROBE debug probe: the contact-shadow fixture (a box on a floor under a directional light) as
+            // mesh draws. The probe's count of occluded pixels must equal a CPU ray cast of the same geometry.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-as: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                uc::GraphicsEffects effects; effects.anisotropy=1; renderer.set_effects(effects);   // no raster effect: the probe alone keeps the scene path
+                using Quad=std::array<std::array<float,3>,4>;
+                const auto box=[](float shift) {
+                    std::vector<Quad> faces{{{{-0.5f,-0.4f,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{{{0.5f,-1,-4},{0.5f,-1,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4}}}};
+                    for(auto& face:faces) for(auto& corner:face) corner[0]+=shift;
+                    return faces;
+                };
+                const Quad floor_quad{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}};
+                const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                const std::array<float,3> light{-1e6f,1e6f,1e6f};
+                const auto surface=[&](const Quad& corners,bool mesh) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={0,1,0,0,0,0,0,0,0}; }
+                    draw.transforms.edit().projection=projection;
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);   // depth test "less or equal" with update (quad() compares "always"): the nearest surface is what the CPU reference sees
+                    uniforms.channels[0]=1|2|(1<<2)|(2<<7);
+                    uniforms.ambient[0]={90,90,90,255};
+                    uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0};
+                    uniforms.lights[0].position={light[0],light[1],light[2],0};
+                    uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                    if(mesh) { draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices}); draw.vertices.clear(); draw.indices.clear(); }
+                    return draw;
+                };
+                // menu: no scene this frame; meshes=false: a scene whose draws are all inline (no instance at all)
+                auto frame=[&](float shift,bool menu=false,bool meshes=true) {
+                    gx::FramePacket scene; scene.present=false;
+                    if(!menu) {
+                        scene.draws.push_back(surface(floor_quad,meshes));
+                        for(const auto& face:box(shift)) scene.draws.push_back(surface(face,meshes));
+                        submit(std::move(scene));
+                        gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                        auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                        boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                        submit(std::move(boundary));
+                        gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                        submit(std::move(empty));
+                    }
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    submit(std::move(hud));
+                };
+                // The CPU reference: a ray through every pixel centre of the 1280x720 scene region to the nearest triangle, then from there toward the light
+                // with the probe's offset (rt_probe.slang TMin).
+                const auto expected=[&](float shift) {
+                    std::vector<std::array<std::array<double,3>,3>> triangles;
+                    std::vector<Quad> quads{floor_quad}; for(const auto& face:box(shift)) quads.push_back(face);
+                    for(const auto& q:quads) for(const auto& t:{std::array<int,3>{0,1,2},std::array<int,3>{0,2,3}}) {
+                        std::array<std::array<double,3>,3> triangle; for(int v=0;v<3;++v) for(int a=0;a<3;++a) triangle[v][a]=q[t[v]][a];
+                        triangles.push_back(triangle);
+                    }
+                    const auto hit=[&](const std::array<double,3>& o,const std::array<double,3>& d,double tmin) {   // Moeller-Trumbore: nearest t > tmin, or -1
+                        double best=-1;
+                        for(const auto& t:triangles) {
+                            const std::array<double,3> e1{t[1][0]-t[0][0],t[1][1]-t[0][1],t[1][2]-t[0][2]}, e2{t[2][0]-t[0][0],t[2][1]-t[0][1],t[2][2]-t[0][2]};
+                            const std::array<double,3> p{d[1]*e2[2]-d[2]*e2[1],d[2]*e2[0]-d[0]*e2[2],d[0]*e2[1]-d[1]*e2[0]};
+                            const double det=e1[0]*p[0]+e1[1]*p[1]+e1[2]*p[2];
+                            if(std::abs(det)<1e-12) continue;
+                            const std::array<double,3> s{o[0]-t[0][0],o[1]-t[0][1],o[2]-t[0][2]};
+                            const double u=(s[0]*p[0]+s[1]*p[1]+s[2]*p[2])/det;
+                            if(u<0 || u>1) continue;
+                            const std::array<double,3> q{s[1]*e1[2]-s[2]*e1[1],s[2]*e1[0]-s[0]*e1[2],s[0]*e1[1]-s[1]*e1[0]};
+                            const double v=(d[0]*q[0]+d[1]*q[1]+d[2]*q[2])/det;
+                            if(v<0 || u+v>1) continue;
+                            const double t_hit=(e2[0]*q[0]+e2[1]*q[1]+e2[2]*q[2])/det;
+                            if(t_hit>tmin && (best<0 || t_hit<best)) best=t_hit;
+                        }
+                        return best;
+                    };
+                    const double length=std::sqrt(double(light[0])*light[0]+double(light[1])*light[1]+double(light[2])*light[2]);
+                    const std::array<double,3> to_light{light[0]/length,light[1]/length,light[2]/length};
+                    size_t count=0;
+                    for(uint32_t y=0;y<720;++y) for(uint32_t x=0;x<1280;++x) {
+                        const std::array<double,3> direction{(x+0.5)/1280*2-1,(y+0.5)/720*2-1,-1};   // the projection has unit scales and no offsets
+                        const double t=hit({0,0,0},direction,0);
+                        if(t<0) continue;
+                        const std::array<double,3> at{direction[0]*t,direction[1]*t,direction[2]*t};
+                        const double distance=std::sqrt(at[0]*at[0]+at[1]*at[1]+at[2]*at[2]);
+                        count+=hit(at,to_light,1e-3*distance+1e-3)>=0;
+                    }
+                    return count;
+                };
+                renderer.set_rt_probe(true);
+                frame(0); frame(0);   // the first frame decides scene mode for the next one
+                const auto occluded=renderer.rt_probe_occluded();
+                const auto reference=expected(0);
+                const auto stats=renderer.rt_stats();
+                std::fprintf(stderr,"rt-as: probe %u occluded pixels, CPU %zu; %u BLAS, %u geometries, %llu triangles; as %.3f ms, probe %.3f ms\n",occluded,reference,stats.blas,stats.geometries,(unsigned long long)stats.triangles,renderer.pass_ms(uc::GpuPass::rt_as),renderer.pass_ms(uc::GpuPass::rt_probe));
+                frame(30); frame(30);   // the box far right: its shadow misses the floor
+                const auto moved=renderer.rt_probe_occluded();
+                std::fprintf(stderr,"rt-as: box moved, probe %u, CPU %zu\n",moved,expected(30));
+                CHECK(reference>1000 && occluded>0 && std::abs(double(occluded)-double(reference))<=0.02*double(reference));
+                CHECK(stats.blas==1 && stats.geometries==4 && stats.triangles==8);
+                CHECK(moved==0 && expected(30)==0);
+                auto as_runs=renderer.pass_runs(uc::GpuPass::rt_as), probe_runs=renderer.pass_runs(uc::GpuPass::rt_probe);
+                frame(0,true);   // no scene this frame: nothing built, no probe (Review Focus 1)
+                CHECK(renderer.rt_stats().blas==0 && renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_probe)==probe_runs);
+                frame(0,false,false); frame(0,false,false);   // a scene without a single instance (inline draws only)
+                CHECK(renderer.rt_stats().blas==0 && renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_probe)==probe_runs);
+                for(int i=0;i<8;++i) frame(0);   // every frame-in-flight slot has built once
+                const auto growths=renderer.rt_buffer_growths();
+                for(int i=0;i<20;++i) { renderer.set_rt_probe(i%2==1); frame(0); frame(0); }   // switched mid-session: no stale structure, no new buffers (Review Focus 2, 4)
+                std::fprintf(stderr,"rt-as: buffer growths %llu, after 20 toggles %llu\n",(unsigned long long)growths,(unsigned long long)renderer.rt_buffer_growths());
+                CHECK(renderer.rt_buffer_growths()==growths);
+                CHECK(renderer.rt_probe_occluded()==occluded);   // the last toggle left it on: the same picture, the same count
+                renderer.set_rt_probe(false);
+                frame(0); frame(0);
+                as_runs=renderer.pass_runs(uc::GpuPass::rt_as); probe_runs=renderer.pass_runs(uc::GpuPass::rt_probe);
+                frame(0); frame(0);   // probe off: nothing RT runs
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_probe)==probe_runs);
+            }
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);
