@@ -11,6 +11,7 @@ All effects live in the renderer (GPU passes recorded on the render thread); the
 | Per-pixel lighting | `per_pixel_lighting` | `--per-pixel-lighting` | on/off (off) | the effects path |
 | Ambient occlusion (GTAO) | `ambient_occlusion` | `--ambient-occlusion` | off, low, medium, high, ultra (off) | the effects path |
 | Contact shadows | `contact_shadows` | `--contact-shadows` | on/off (off) | the effects path, a directional or spot light in the scene |
+| Motion blur | `motion_blur` | `--motion-blur` | off, low, medium, high, ultra (off) | the effects path; skipped on camera cuts |
 
 "The effects path" = `VK_EXT_dynamic_rendering_unused_attachments` + `independentBlend` (the same the upscalers need); without it those options are greyed out with a reason (`uc.exe --features` reports `effects`, `effects_reason`, `anisotropy_max`).
 
