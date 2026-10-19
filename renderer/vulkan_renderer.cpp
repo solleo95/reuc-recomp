@@ -1059,7 +1059,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         rt_as_open_=false; rt_frame_=false;
         const bool tlas_built=rt_.build_tlas(command);
         pass_timer_.end(command,timer_slot,GpuPass::rt_as);
-        if (tlas_built && rt_shadows_active() && gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_) {   // ray-traced shadows: trace, denoise, composite into the scene colour
+        if (tlas_built && rt_trace_active() && gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_) {   // ray-traced shadows: trace, denoise, composite into the scene colour
             const auto idle=[this] { vk_check(present_.wait_idle(device),"rt shadows idle"); };
             rt_shadow_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
             rt_shadow_denoiser_.initialize(device,memory_,shaders_,idle);
@@ -1068,7 +1068,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.command=command; shadow.tlas=rt_.tlas(); shadow.depth=scene_depth_view_; shadow.gbuffer=scene_gbuffer_view_; shadow.material=scene_material_view_; shadow.color=scene_color_view_;
             shadow.records=rt_records_[rt_record_slot_].buffer; shadow.lights=rt_lights_[rt_record_slot_].buffer;
             shadow.region=in.render_size; shadow.viewport=scene_viewport; shadow.view=view_params(*frame_projection_);
-            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_; shadow.trace_lamps=rt_trace_lamps_; shadow.key_direction=rt_key_direction_;   // the test mode traces the lamps instead of the key light
+            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.ao=effects_.rt_ambient_occlusion; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_; shadow.trace_lamps=rt_trace_lamps_; shadow.key_direction=rt_key_direction_;   // the test mode traces the lamps instead of the key light
             shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
             rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
@@ -1076,7 +1076,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             DenoiseInputs denoise;
             denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
             denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
-            const bool high=int(effects_.rt_shadows)>=int(EffectLevel::high) || int(effects_.rt_local_shadows)>=int(EffectLevel::high);
+            const bool high=int(effects_.rt_shadows)>=int(EffectLevel::high) || int(effects_.rt_local_shadows)>=int(EffectLevel::high) || int(effects_.rt_ambient_occlusion)>=int(EffectLevel::high);
             rt_shadow_.composite(shadow,rt_shadow_denoiser_.denoise(command,RtSignal::visibility,noisy,denoise,high ? 3 : 2));
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
             rt_shadow_traced_=rt_shadow_ran=true;

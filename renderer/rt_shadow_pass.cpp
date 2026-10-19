@@ -15,10 +15,11 @@ struct PushParams {
     uint32_t region[2], signal_size[2];
     uint32_t divisor, frame, sun_rays, local_lights;
     float sun_cone, light_radius;
-    float lamp_clearance;
+    float ao_radius;       // ray-traced ambient occlusion: the rays' length in view units
     float trace_lamps;     // 1: the game's point lights cast rays (tests); 0: they do not
     float overhead[4];     // direction toward the synthetic key light, then its shadow strength (0: none)
-    float overhead_cone, overhead_reach, padding[2];
+    float overhead_cone, overhead_reach;
+    float ao_strength, ao_rays;   // rays per pixel as a float (0: no ambient occlusion)
 };
 static_assert(sizeof(PushParams)==128 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,sun_cone)==80);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16_SFLOAT;
@@ -111,8 +112,9 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     if (in.slot>=slots_) throw std::invalid_argument("rt shadows: frame slot out of range");
     const RtShadowPreset sun=rt_shadow_preset(in.sun);
     const RtLocalPreset local=rt_local_preset(in.local);
-    divisor_=std::min(sun.divisor ? sun.divisor : UINT32_MAX,local.divisor ? local.divisor : UINT32_MAX);
-    if (divisor_==UINT32_MAX || !in.region.width || !in.region.height) throw std::logic_error("rt shadows: trace() with both effects off");
+    const RtAoPreset ao=rt_ao_preset(in.ao);
+    divisor_=std::min({sun.divisor ? sun.divisor : UINT32_MAX,local.divisor ? local.divisor : UINT32_MAX,ao.divisor ? ao.divisor : UINT32_MAX});
+    if (divisor_==UINT32_MAX || !in.region.width || !in.region.height) throw std::logic_error("rt shadows: trace() with every effect off");
     ensure_signal({(in.region.width+divisor_-1)/divisor_,(in.region.height+divisor_-1)/divisor_});
     if (!signal_initialized_) {   // a new image to VK_IMAGE_LAYOUT_GENERAL
         VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -131,7 +133,8 @@ VkImageView RtShadowPass::trace(const RtShadowInputs& in) {
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal_extent_.width; params.signal_size[1]=signal_extent_.height;
     params.divisor=divisor_; params.frame=in.frame; params.sun_rays=sun.divisor ? sun.rays : 0; params.local_lights=local.divisor ? local.lights : 0;
-    params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f; params.lamp_clearance=kRtLampClearance;
+    params.sun_cone=sun.soft ? kRtSunConeRadians : 0.f; params.light_radius=local.soft ? kRtLightRadiusFraction : 0.f;
+    params.ao_radius=ao.radius; params.ao_strength=ao.strength; params.ao_rays=float(ao.rays);
     params.trace_lamps=in.trace_lamps ? 1.f : 0.f;
     if (in.level_light) {   // the level's shadows come from the synthetic key light
         for (size_t axis=0;axis<3;++axis) params.overhead[axis]=in.key_direction[axis];

@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_effects.h"
+#include "rt_ao_math.h"
 #include "rt_shadow_math.h"
 #include "view_reconstruct.h"
 #include <vulkan/vulkan.h>
@@ -20,7 +21,7 @@ struct RtShadowInputs {
     VkExtent2D region{};                  // the top-left part of the targets that holds the scene
     std::array<float,6> viewport{};       // x, y, width, height in target pixels, then the viewport's near and far depth
     ViewParams view{};
-    EffectLevel sun=EffectLevel::off, local=EffectLevel::off;   // the rt_shadows and rt_local_shadows levels
+    EffectLevel sun=EffectLevel::off, local=EffectLevel::off, ao=EffectLevel::off;   // the rt_shadows, rt_local_shadows and rt_ambient_occlusion levels
     bool trace_lamps=false;               // the game's point lights cast rays: they are camera-relative, so only tests ask (VulkanRenderer::set_rt_trace_lamps)
     bool level_light=false;              // trace the synthetic key light (rt_shadow_math.h): the level's shadows; renderer: rt_local_shadows is on
     std::array<float,3> key_direction=kRtOverheadDirection;   // the key light's view-space direction this frame (rt_key_direction_after: fixed in the world)

@@ -103,8 +103,8 @@ public:
     std::vector<RtMaterialRecord> rt_material_records() const;   // tests/tools: the material records of the latest frame with a scene
     // Ray-traced shadows (docs/superpowers/plans/2026-10-19-ray-tracing-p2.md): the sun and the local lights trace rays through the frame's TLAS. effects_ has the RT
     // levels masked by device support. rt_scene_active: the acceleration structures are built this frame; off, nothing ray tracing runs or allocates.
-    bool rt_shadows_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off); }
-    bool rt_scene_active() const { return rt_shadows_active(); }
+    bool rt_trace_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off || effects_.rt_ambient_occlusion!=EffectLevel::off); }   // the visibility pass (shadows and ambient occlusion)
+    bool rt_scene_active() const { return rt_trace_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
     void set_rt_trace_lamps(bool on) { rt_trace_lamps_=on; }   // tests: trace the game's point lights instead of the synthetic key light (the lights are camera-relative in the game, so off in play)
     RtShadowPixels capture_rt_shadow_filtered();   // tests/tools: the denoiser's output for the same frame (what the composite multiplies by)

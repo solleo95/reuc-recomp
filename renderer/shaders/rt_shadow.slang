@@ -16,12 +16,16 @@ struct Params {
     uint localLights;     // the strongest point/spot lights traced per pixel (0: none)
     float sunCone;        // half angle of the soft-shadow cone, radians (0: hard)
     float lightRadius;    // soft-shadow disc radius as a fraction of the distance to a local light (0: hard)
-    float lampClearance;  // a lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced
+    float aoRadius;       // ray-traced ambient occlusion: the rays' length in view units
     float traceLamps;     // 0: the game's point lights are not traced (they are camera-relative: their shadows would swim); 1: they are (tests)
     float4 overhead;      // the synthetic overhead light: xyz = unit direction toward it (view space), w = the shadow strength (0: none), rt_shadow_math.h
     float overheadCone;   // its soft-shadow cone half angle, radians
     float overheadReach;  // its rays are blocked only within this many view units
+    float aoStrength;     // what a fully blocked hemisphere removes of the colour
+    float aoRays;         // rays per pixel (0: no ambient occlusion)
 };
+// A lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced (rt_shadow_math.h kRtLampClearance)
+static const float kLampClearance = 1.0;
 [[vk::push_constant]] ConstantBuffer<Params> params;
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
 struct NativeLight { float4 color; float4 cosine; float4 distance; float4 position; float4 direction; };                          // gx::LightUniform
@@ -45,6 +49,19 @@ float3 viewPositionAt(int2 pixel, float stored) {
 bool shadedSurface(float4 texel) {
     const uint flags = uint(round(texel.w * 65535.0));
     return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0 && (flags & kGBufferLit) != 0 && (flags & kGBufferModelValid) != 0;
+}
+// A surface of the scene that the occlusion applies to: any depth-writing draw with a normal that is not a cut-out (no light model needed)
+bool opaqueSurface(float4 texel) {
+    const uint flags = uint(round(texel.w * 65535.0));
+    return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0;
+}
+// rt_ao_math.h rt_ao_direction: a cosine-weighted direction in the hemisphere of the unit normal (u in [0, 1))
+float3 aoDirection(float3 normal, float2 u) {
+    const float radius = sqrt(u.x), angle = 6.2831853 * u.y;
+    const float3 local = float3(radius * cos(angle), radius * sin(angle), sqrt(max(1.0 - u.x, 0.0)));
+    const float sgn = normal.z >= 0.0 ? 1.0 : -1.0, a = -1.0 / (sgn + normal.z), b = normal.x * normal.y * a;
+    const float3 tangent = float3(1.0 + sgn * normal.x * normal.x * a, sgn * b, -sgn * normal.x), bitangent = float3(b, sgn + normal.y * normal.y * a, -normal.y);
+    return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
 }
 float interleavedGradientNoise(float2 pixel, uint frame) {
     pixel += 5.588238 * float(frame);
@@ -128,7 +145,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                         direction = jitter(direction, radius, u);
                     }
                     // a rig light follows a character and ignores the level: only characters block it; a lamp is in the level: the whole scene blocks it
-                    const float reach = directional[i] ? 1e4 : distanceTo[i] - params.lampClearance;
+                    const float reach = directional[i] ? 1e4 : distanceTo[i] - kLampClearance;
                     if (reach > 1e-3 * length(origin) + 1e-3) blocked += occluded(origin, direction, reach, directional[i] ? 2u : 3u) ? 1.0 : 0.0;
                 }
                 removed += contribution[i] * (blocked / float(rays));
@@ -145,6 +162,19 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             }
         }
     }
+    if (params.aoRays > 0.5 && opaqueSurface(texel) && stored < 1.0) {   // ambient occlusion: cosine-weighted rays of a limited length, on any surface with a normal (rt_ao_math.h)
+        const float3 position = viewPositionAt(pixel, stored);
+        const float3 normal = decodeGBufferNormal(texel.xy);
+        const float3 start = position + normal * (6e-3 * length(position) + 6e-3);   // a larger bias than the shadows': the cosine-weighted rays include grazing ones, and the reconstructed depth is a little off the surface
+        const uint rays = uint(params.aoRays);
+        float blocked = 0.0;
+        for (uint r = 0; r < rays; ++r) {
+            const uint seed = params.frame * 7u + r * 3u + 11u;
+            const float2 u = float2(interleavedGradientNoise(float2(pixel), seed), interleavedGradientNoise(float2(pixel.yx) + 43.0, seed));
+            blocked += occluded(start, aoDirection(normal, u), params.aoRadius, 3u) ? 1.0 : 0.0;
+        }
+        factor *= 1.0 - params.aoStrength * blocked / float(rays);
+    }
     signalOut[id.xy] = factor;
 }
 
@@ -154,7 +184,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     const int2 pixel = int2(id.xy);
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
-    if (!shadedSurface(texel) || stored >= 1.0) return;
+    if (!opaqueSurface(texel) || stored >= 1.0) return;   // the signal is 1 where an effect does not apply (an unlit or unmodelled surface has no shadow term)
     const float centreDepth = abs(viewPositionAt(pixel, stored).z);
     // a depth-aware bilinear upsample of the signal: its taps are weighted by how close their pixel's view depth is
     // signal pixel t was traced at scene pixel t*divisor + divisor/2, whose centre is t*divisor + divisor/2 + 0.5: the tap position of a scene pixel centre is its offset from there

@@ -727,11 +727,13 @@ int main(int argc, char** argv) {
                     draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices}); draw.vertices.clear(); draw.indices.clear();   // an RT instance needs a mesh draw
                     return draw;
                 };
-                struct Setting { bool master; uc::EffectLevel sun, local, raster; };
+                struct Setting { bool master; uc::EffectLevel sun, local, raster; uc::EffectLevel ao=uc::EffectLevel::off, gtao=uc::EffectLevel::off; };   // ao: rt_ambient_occlusion, gtao: the raster ambient occlusion
+                bool wall=false;   // a wall across the floor at z = -5 facing the camera (the crease of the ambient occlusion check)
                 auto frame=[&](Setting s,Light kind,bool lit=true,float zoom=1.f) {
-                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=s.master; effects.rt_shadows=s.sun; effects.rt_local_shadows=s.local; effects.shadows=s.raster; renderer.set_effects(effects);
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=s.master; effects.rt_shadows=s.sun; effects.rt_local_shadows=s.local; effects.shadows=s.raster; effects.rt_ambient_occlusion=s.ao; effects.ambient_occlusion=s.gtao; renderer.set_effects(effects);
                     gx::FramePacket scene; scene.present=false;
                     auto floor=surface(floor_corners,{0,1,0},false,kind,lit); floor.transforms.edit().projection[0][0]=zoom;
+                    if(wall) { auto draw=surface({{{-12,-1,-2.8f},{12,-1,-2.8f},{12,3,-2.8f},{-12,3,-2.8f}}},{0,0,1},true,kind,lit); draw.transforms.edit().projection[0][0]=zoom; scene.draws.push_back(std::move(draw)); }
                     auto plate=surface(plate_corners,{0,0,1},true,kind,lit); plate.transforms.edit().projection[0][0]=zoom;
                     scene.draws.push_back(std::move(floor)); if(vertical_plate) scene.draws.push_back(std::move(plate));
                     if(roof) { auto draw=surface(roof_corners(),{0,-1,0},true,kind,lit); draw.state.edit().descriptors[0]=gx::Mode::none; draw.transforms.edit().projection[0][0]=zoom; scene.draws.push_back(std::move(draw)); }   // static: a level ceiling
@@ -904,6 +906,46 @@ int main(int argc, char** argv) {
                     for(size_t i=0;i<still.factor.size();++i) { const double d=std::abs(double(still.factor[i])-double(moved.factor[i])); sum+=d; worst=std::max(worst,d); differing+=d>0.1; }
                     std::fprintf(stderr,"rt-shadows: dolly vs still: mean %.4f, worst %.3f, %.2f%% of the pixels differ by more than 0.1\n",sum/double(still.factor.size()),worst,100.0*double(differing)/double(still.factor.size()));
                     CHECK(sum/double(still.factor.size())<0.005 && double(differing)/double(still.factor.size())<0.01);
+                }
+                // (b6) ray-traced ambient occlusion alone (plan p4): the floor at distance d from a wall is occluded by the share of cosine-weighted rays that reach the wall
+                // within the radius (a CPU estimate with the same direction function); far from the wall nothing changes; GTAO does not run while it is on
+                {
+                    renderer.set_rt_trace_lamps(false); vertical_plate=false; wall=true;
+                    const auto preset=uc::rt_ao_preset(uc::EffectLevel::ultra);
+                    const auto occluded_share=[&](double d) {   // floor point at distance d from the wall plane z = -2.8: a ray of direction v reaches it when v.z < 0 and d / -v.z <= radius
+                        int hit=0, total=0;
+                        for(int i=0;i<128;++i) for(int j=0;j<128;++j) {
+                            const auto v=uc::rt_ao_direction({0,1,0},(float(i)+0.5f)/128.f,(float(j)+0.5f)/128.f);
+                            if(v[2]<-1e-6f && d/-double(v[2])<=preset.radius) ++hit;
+                            ++total;
+                        }
+                        return double(hit)/total;
+                    };
+                    const Setting ao_only{true,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::ultra};
+                    const auto occlusion_runs=renderer.pass_runs(uc::GpuPass::occlusion);
+                    Setting both=ao_only; both.gtao=uc::EffectLevel::high;
+                    for(int i=0;i<48;++i) frame(both,Light::point);
+                    CHECK(renderer.pass_runs(uc::GpuPass::occlusion)==occlusion_runs);   // replaced: GTAO does not run while RT AO is on
+                    const auto filtered=renderer.capture_rt_shadow_filtered();
+                    const auto filtered_at=[&](const Vec& p) { const auto at=pixel_of(p); return double(filtered.factor[size_t(at[1]/1)*filtered.width+at[0]]); };
+                    CHECK(filtered.width==1280 && filtered.height==720);   // ultra traces at full resolution
+                    std::fprintf(stderr,"rt-shadows: ambient occlusion signal: minimum %.3f, runs of the visibility pass %llu\n",double(*std::min_element(filtered.factor.begin(),filtered.factor.end())),(unsigned long long)renderer.pass_runs(uc::GpuPass::rt_shadows));
+                    for(const double d:{0.15,0.35,0.6}) {
+                        const Vec p{0.0,-1.0,-2.8+d};
+                        const double expected_factor=uc::rt_ao_factor(float(occluded_share(d)),preset.strength), got=filtered_at(p);
+                        std::fprintf(stderr,"rt-shadows: ambient occlusion at %.2f from the wall: %.3f (expected %.3f)\n",d,got,expected_factor);
+                        CHECK(std::abs(got-expected_factor)<=0.12);
+                    }
+                    wall=false;   // the same floor point without the wall: open floor, nothing occluded
+                    for(int i=0;i<200;++i) frame(ao_only,Light::point);   // the denoiser's history (up to 32 frames) forgets the wall
+                    const auto open=renderer.capture_rt_shadow_filtered();
+                    const auto open_at=[&](const Vec& p) { const auto at=pixel_of(p); return double(open.factor[size_t(at[1])*open.width+at[0]]); };
+                    std::fprintf(stderr,"rt-shadows: ambient occlusion on open floor: %.3f (z -2.65), %.3f (z -2.2), %.3f (z -4), minimum %.3f\n",open_at({0.0,-1.0,-2.65}),open_at({0.0,-1.0,-2.2}),open_at({0.0,-1.0,-4.0}),double(*std::min_element(open.factor.begin(),open.factor.end())));
+                    CHECK(std::abs(open_at({0.0,-1.0,-2.65})-1.0)<=0.03);
+                    Setting gtao_only{false,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::off,uc::EffectLevel::high};
+                    for(int i=0;i<3;++i) frame(gtao_only,Light::point);
+                    CHECK(renderer.pass_runs(uc::GpuPass::occlusion)>occlusion_runs);   // without RT AO the raster one runs again
+                    vertical_plate=true; wall=false; renderer.set_rt_trace_lamps(true);
                 }
                 // (c) nothing is lit: every factor is 1 (Review Focus 1)
                 frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
