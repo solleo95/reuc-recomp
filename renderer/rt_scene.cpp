@@ -56,7 +56,7 @@ void RtScene::initialize(VkDevice device, VkPhysicalDevice physical, const VkPhy
         frames_.resize(frames_in_flight);
     } catch (...) { shutdown(); throw; }
 }
-RtScene::Buffer RtScene::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host) {
+RtScene::Buffer RtScene::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host, bool count) {
     Buffer buffer; buffer.size=size;
     VkBufferCreateInfo create{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; create.size=size; create.usage=usage;
     check(vkCreateBuffer(device_,&create,nullptr,&buffer.buffer),"buffer");
@@ -74,7 +74,7 @@ RtScene::Buffer RtScene::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage
         if (host) check(vkMapMemory(device_,buffer.memory,0,VK_WHOLE_SIZE,0,&buffer.mapped),"map buffer");
         if (usage&kAddress) { VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO}; info.buffer=buffer.buffer; buffer.address=vkGetBufferDeviceAddress(device_,&info); }
     } catch (...) { destroy(buffer); throw; }
-    ++growths_;
+    if (count) ++growths_;   // the cached BLASes come and go with the level's meshes: not a per-frame growth
     return buffer;
 }
 void RtScene::destroy(Buffer& buffer) {
@@ -93,6 +93,13 @@ bool RtScene::ensure(Frame& frame, Buffer& buffer, VkDeviceSize size, VkBufferUs
 void RtScene::begin_frame(uint32_t frame_slot) {
     slot_=frame_slot%uint32_t(frames_.size());
     frame_=&frames_[slot_];
+    frame_number_=frame_slot;   // the renderer's frame index: monotonic
+    policy_.begin_frame(frame_number_);
+    for (auto it=retired_.begin();it!=retired_.end();) {   // a BLAS leaves the cache while up to frames_.size() earlier frames may still trace it
+        if (frame_number_>=it->frame+frames_.size()+1) { destroy_as_(device_,it->blas.as,nullptr); destroy(it->blas.storage); it=retired_.erase(it); }
+        else ++it;
+    }
+    frame_->static_instances.clear();
     for (auto blas : frame_->blas) destroy_as_(device_,blas,nullptr);
     frame_->blas.clear(); frame_->blas_addresses.clear(); frame_->blas_masks.clear(); frame_->blas_used=0;
     for (auto& buffer : frame_->retired) destroy(buffer);
@@ -102,7 +109,18 @@ void RtScene::begin_frame(uint32_t frame_slot) {
 void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry> geometries) {
     if (!frame_ || geometries.empty()) return;
     Frame& frame=*frame_;
-    std::vector<RtGeometry> items(geometries.begin(),geometries.end());
+    std::vector<RtGeometry> items;   // the per-frame view-space class: skinned draws (and any draw without a mesh identity)
+    for (const RtGeometry& geometry : geometries) {
+        if (geometry.skinned || !geometry.mesh_id) { items.push_back(geometry); continue; }
+        // A static mesh: its BLAS is cached in object space, the instance carries the draw's matrix
+        const uint64_t key=RtMeshCachePolicy::make_key(geometry.mesh_id,geometry.opaque);
+        const auto action=policy_.request(key);
+        if (action==RtMeshCachePolicy::Action::defer) { ++deferred_; continue; }
+        if (action==RtMeshCachePolicy::Action::build) build_cached(command,geometry,key);
+        frame.static_instances.push_back({geometry.transform,cached_.at(key).address});
+        ++frame.stats.static_instances; ++frame.stats.instances;
+    }
+    if (items.empty()) return;
     VkDeviceSize positions_bytes=0;
     for (auto& item : items) { item.positions_out=positions_bytes; positions_bytes+=align(VkDeviceSize(item.vertex_count)*12,16); }
     ensure(frame,frame.positions,positions_bytes,VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,false);
@@ -157,20 +175,69 @@ void RtScene::build_blas(VkCommandBuffer command, std::span<const RtGeometry> it
     memory_barrier(command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,VK_ACCESS_2_SHADER_READ_BIT);
     const VkAccelerationStructureBuildRangeInfoKHR* range_pointer=ranges.data();
     build_(command,1,&build,&range_pointer);
-    ++frame.stats.blas; (mask==kRtStatic ? frame.stats.static_blas : frame.stats.skinned_blas)++; frame.stats.geometries+=uint32_t(items.size());
+    ++frame.stats.blas; ++frame.stats.instances; if (mask==kRtSkinned) ++frame.stats.skinned_blas; frame.stats.geometries+=uint32_t(items.size());
+}
+void RtScene::build_cached(VkCommandBuffer command, const RtGeometry& item, uint64_t key) {
+    Frame& frame=*frame_;
+    VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR}; geometry.geometryType=VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags=item.opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+    auto& data=geometry.geometry.triangles;
+    data.sType=VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    data.vertexFormat=VK_FORMAT_R32G32B32_SFLOAT; data.vertexData.deviceAddress=item.vertices; data.vertexStride=108; data.maxVertex=item.vertex_count ? item.vertex_count-1 : 0;   // gx::GpuMeshVertex: the position is its first member
+    data.indexType=VK_INDEX_TYPE_UINT32; data.indexData.deviceAddress=item.indices+VkDeviceAddress(item.first_index)*4;
+    const uint32_t triangles=item.index_count/3;
+    VkAccelerationStructureBuildGeometryInfoKHR build{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type=VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR; build.flags=VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;   // built once, traced for many frames
+    build.mode=VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; build.geometryCount=1; build.pGeometries=&geometry;
+    VkAccelerationStructureBuildSizesInfoKHR sizes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    build_sizes_(device_,VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,&build,&triangles,&sizes);
+    CachedBlas blas;
+    blas.storage=make_buffer(sizes.accelerationStructureSize,VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR|kAddress,false,false);
+    VkAccelerationStructureCreateInfoKHR create{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    create.buffer=blas.storage.buffer; create.size=sizes.accelerationStructureSize; create.type=VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    check(create_as_(device_,&create,nullptr,&blas.as),"cached BLAS");
+    VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR}; address.accelerationStructure=blas.as;
+    blas.address=as_address_(device_,&address);
+    ensure(frame,frame.scratch,sizes.buildScratchSize+scratch_alignment_,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,false);
+    build.dstAccelerationStructure=blas.as; build.scratchData.deviceAddress=align(frame.scratch.address,scratch_alignment_);
+    memory_barrier(command,VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,   // the scratch of the previous build in this frame
+        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR|VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    const VkAccelerationStructureBuildRangeInfoKHR range{triangles,0,0,0}; const auto* range_pointer=&range;
+    build_(command,1,&build,&range_pointer);
+    const uint64_t bytes=blas.storage.size;
+    cached_.emplace(key,std::move(blas));
+    for (const uint64_t evicted : policy_.commit(key,bytes)) retire(evicted);
+}
+void RtScene::retire(uint64_t key) {
+    const auto found=cached_.find(key);
+    if (found==cached_.end()) return;
+    retired_.push_back({std::move(found->second),frame_number_});
+    cached_.erase(found);
+}
+void RtScene::invalidate_mesh(uint64_t mesh_id) {
+    for (const uint64_t key : policy_.invalidate(mesh_id)) { retire(key); ++invalidated_; }
+}
+RtScene::CacheStats RtScene::cache_stats() const {
+    return {policy_.builds_requested(),policy_.hits(),policy_.evictions(),invalidated_,deferred_,policy_.bytes(),uint32_t(policy_.resident())};
 }
 bool RtScene::build_tlas(VkCommandBuffer command) {
-    if (!frame_ || frame_->blas.empty()) return false;
+    if (!frame_ || (frame_->blas.empty() && frame_->static_instances.empty())) return false;
     Frame& frame=*frame_;
-    const uint32_t count=uint32_t(frame.blas.size());
+    const uint32_t count=uint32_t(frame.blas.size()+frame.static_instances.size());
     ensure(frame,frame.instances,VkDeviceSize(count)*sizeof(VkAccelerationStructureInstanceKHR),VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,true);
     auto* instances=static_cast<VkAccelerationStructureInstanceKHR*>(frame.instances.mapped);
     for (uint32_t i=0;i<count;++i) {
         VkAccelerationStructureInstanceKHR instance{};
-        instance.transform.matrix[0][0]=instance.transform.matrix[1][1]=instance.transform.matrix[2][2]=1;   // the BLASes are in view space already
-        instance.instanceCustomIndex=i; instance.mask=frame.blas_masks[i];
-        instance.flags=VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-        instance.accelerationStructureReference=frame.blas_addresses[i];
+        instance.instanceCustomIndex=i;
+        instance.flags=VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;   // also covers a mirrored matrix, which flips the winding
+        if (i<frame.blas.size()) {   // a per-frame BLAS: in view space already
+            instance.transform.matrix[0][0]=instance.transform.matrix[1][1]=instance.transform.matrix[2][2]=1;
+            instance.mask=frame.blas_masks[i]; instance.accelerationStructureReference=frame.blas_addresses[i];
+        } else {   // an instance of a cached object-space BLAS: the draw's object-to-view rows
+            const auto& staged=frame.static_instances[i-frame.blas.size()];
+            for (int row=0;row<3;++row) for (int column=0;column<4;++column) instance.transform.matrix[row][column]=staged.matrix[row][column];
+            instance.mask=kRtStatic; instance.accelerationStructureReference=staged.blas;
+        }
         instances[i]=instance;
     }
     VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR}; geometry.geometryType=VK_GEOMETRY_TYPE_INSTANCES_KHR;
@@ -207,6 +274,8 @@ void RtScene::shutdown() {
         for (auto& buffer : frame.retired) destroy(buffer);
         for (Buffer* buffer : {&frame.positions,&frame.scratch,&frame.blas_storage,&frame.tlas_storage,&frame.instances}) destroy(*buffer);
     }
+    for (auto& [key,blas] : cached_) { destroy_as_(device_,blas.as,nullptr); destroy(blas.storage); }
+    for (auto& retired : retired_) { destroy_as_(device_,retired.blas.as,nullptr); destroy(retired.blas.storage); }
     if (transform_) vkDestroyPipeline(device_,transform_,nullptr);
     if (transform_layout_) vkDestroyPipelineLayout(device_,transform_layout_,nullptr);
     if (transform_module_) vkDestroyShaderModule(device_,transform_module_,nullptr);

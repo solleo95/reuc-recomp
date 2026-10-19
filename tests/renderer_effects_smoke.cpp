@@ -666,9 +666,9 @@ int main(int argc, char** argv) {
                 frame(0); frame(0);   // the first frame decides scene mode for the next one
                 const auto stats=renderer.rt_stats();
                 std::fprintf(stderr,"rt-as: %u BLAS, %u geometries, %llu triangles; as %.3f ms\n",stats.blas,stats.geometries,(unsigned long long)stats.triangles,renderer.pass_ms(uc::GpuPass::rt_as));
-                CHECK(stats.blas==2 && stats.static_blas==1 && stats.skinned_blas==1 && stats.geometries==4 && stats.triangles==8);   // the floor (static) and the three box faces (skinned) are one BLAS each
+                CHECK(stats.blas==1 && stats.skinned_blas==1 && stats.static_instances==1 && stats.instances==2 && stats.geometries==3 && stats.triangles==6);   // the three skinned box faces: one per-frame BLAS; the floor (static): an instance of a cached BLAS
                 frame(30); frame(30);   // the box far right: the structures follow the geometry
-                CHECK(renderer.rt_stats().blas==2 && renderer.rt_stats().triangles==8);
+                CHECK(renderer.rt_stats().blas==1 && renderer.rt_stats().instances==2 && renderer.rt_stats().triangles==6);
                 auto as_runs=renderer.pass_runs(uc::GpuPass::rt_as), shadow_runs=renderer.pass_runs(uc::GpuPass::rt_shadows);
                 frame(0,true);   // no scene this frame: nothing built, no shadows (Review Focus 1)
                 CHECK(renderer.rt_stats().blas==0 && renderer.pass_runs(uc::GpuPass::rt_as)==as_runs && renderer.pass_runs(uc::GpuPass::rt_shadows)==shadow_runs);
@@ -894,6 +894,110 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,"rt-shadows: soft shadow over 8 still frames: mean %.1f deviation %.2f\n",mean,deviation);
                 CHECK(deviation<2.0);
                 frame(off,Light::directional); frame(off,Light::directional);
+            }
+        }
+        if (wanted("rt-cache")) {
+            // The cached object-space BLASes of static meshes (rt_mesh_cache.h, plan p3 Task 17): a floor and one plate mesh drawn twice (the second time mirrored and moved
+            // by its matrix) under a point lamp. The BLAS of a mesh is built once whatever its matrix; the shadows follow the instances' transforms.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-cache: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                using Vec=std::array<double,3>;
+                const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                const std::array<float,4> material{0.8f,0.6f,0.4f,1.f}, ambient{0.35f,0.35f,0.35f,1.f};
+                const std::array<std::array<float,3>,4> floor_corners{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}}, plate_corners{{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}};
+                const std::array<float,4> lamp_position{1.5f,1.5f,-3.f,0};
+                const auto make_mesh=[&](const std::array<std::array<float,3>,4>& corners) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={0,1,0,0,0,0,0,0,0}; }
+                    return std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices});
+                };
+                auto floor_mesh=make_mesh(floor_corners), plate_mesh=make_mesh(plate_corners);
+                const auto surface=[&](const std::shared_ptr<const gx::MeshBuffers>& mesh,bool plate,std::array<float,4> row0) {   // row0: the x row of the object-to-view matrix
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    draw.transforms.edit().projection=projection; draw.transforms.edit().position_rows[0]=row0;
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);
+                    uniforms.channels[0]=2|(1<<2)|(2<<7)|(3<<9);
+                    uniforms.materials[0]=material; uniforms.ambient[0]=ambient;
+                    uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0}; uniforms.lights[0].position=lamp_position;
+                    uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                    if(plate) { draw.material.stages=1; draw.material.swaps={0xE4,0xE4,0xE4,0xE4}; draw.material.stage[0]={0x8F8AF,0x8FFC0,64,0,0}; }
+                    draw.mesh=mesh; draw.vertices.clear(); draw.indices.clear();
+                    return draw;
+                };
+                const std::array<float,4> mirrored{-1,0,0,-3};   // x' = -x - 3: the plate mirrored to x in [-3.5, -2.5]
+                auto frame=[&](float shift,bool fresh_meshes,bool rt=true) {
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_local_shadows=uc::EffectLevel::medium; renderer.set_effects(effects);
+                    if(fresh_meshes) { floor_mesh=make_mesh(floor_corners); plate_mesh=make_mesh(plate_corners); }   // a new identity every frame: the cache must not grow without bound
+                    gx::FramePacket scene; scene.present=false;
+                    scene.draws.push_back(surface(floor_mesh,false,{1,0,0,0}));
+                    scene.draws.push_back(surface(plate_mesh,true,{1,0,0,shift}));
+                    scene.draws.push_back(surface(plate_mesh,true,mirrored));
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    submit(std::move(hud));
+                };
+                // The CPU reference: the lamp's ray from a floor point crosses the plane z = -4 at (x, y); a plate blocks it when x is in its range and y in [-1, -0.4].
+                const auto crossing=[&](const Vec& p) { const double t=(-4-p[2])/(lamp_position[2]-p[2]); return std::array<double,3>{p[0]+(lamp_position[0]-p[0])*t,p[1]+(lamp_position[1]-p[1])*t,t}; };
+                const auto blocked_by=[&](const Vec& p,double x0,double x1) { const auto c=crossing(p); return c[2]>0 && c[2]<1 && c[0]>=x0 && c[0]<=x1 && c[1]>=-1 && c[1]<=-0.4; };
+                const auto pixel_of=[&](const Vec& p) { return std::array<uint32_t,2>{uint32_t((p[0]/-p[2]+1)/2*1280),uint32_t((p[1]/-p[2]+1)/2*720)}; };
+                const auto hidden_behind=[&](const Vec& p,double x0,double x1) { const auto at=pixel_of(p); return at[0]>=uint32_t((x0/4+1)/2*1280)-15 && at[0]<=uint32_t((x1/4+1)/2*1280)+15 && at[1]>=260 && at[1]<=335; };
+                const auto expected=[&](const Vec& p,bool blocked) {
+                    gx::LightUniform lamp; lamp.color={255,255,255,255}; lamp.direction={0,0,1,0}; lamp.position=lamp_position; lamp.distance={1,0,0,0}; lamp.cosine={1,0,0,0};
+                    const float contribution=uc::gx_light_contribution(lamp,3,2,{float(p[0]),float(p[1]),float(p[2])},{0,1,0});
+                    const float visibility[]={blocked ? 0.f : 1.f};
+                    return uc::shadow_factor(ambient[0],std::array<float,1>{contribution},visibility);
+                };
+                // A floor point the camera sees whose lamp ray is blocked by exactly the given plate (the widest margin the grid offers) and by no other.
+                const auto pick=[&](double plate_x0,double plate_x1,double other_x0,double other_x1,double hide_a0,double hide_a1,double hide_b0,double hide_b1) {
+                    for(const double margin:{0.2,0.12,0.08}) {
+                        std::vector<Vec> found;
+                        for(double x=-6;x<=6;x+=0.05) for(double z=-5.5;z<=-4.2;z+=0.05) {
+                            const Vec p{x,-1,z}; bool good=!hidden_behind(p,hide_a0,hide_a1) && !hidden_behind(p,hide_b0,hide_b1);
+                            for(const double dx:{-margin,0.0,margin}) for(const double dz:{-margin,0.0,margin}) { const Vec q{p[0]+dx,p[1],p[2]+dz}; good=good && blocked_by(q,plate_x0,plate_x1) && !blocked_by(q,other_x0,other_x1); }
+                            if(good) found.push_back(p);
+                        }
+                        if(!found.empty()) return found[found.size()/2];
+                    }
+                    throw std::runtime_error("rt-cache: no sample point");
+                };
+                const auto signal_at=[&](const uc::VulkanRenderer::RtShadowPixels& signal,const Vec& p) { const auto at=pixel_of(p); return double(signal.factor[size_t(at[1]/2)*signal.width+(at[0]/2)]); };
+                // (a) two instances of one mesh, one mirrored: one BLAS built for the mesh, both shadows right
+                const auto base=renderer.rt_cache_stats();   // other sections of this process may have cached meshes already: count what this one adds
+                frame(0,false); frame(0,false);
+                auto signal=renderer.capture_rt_shadow_signal();
+                const Vec behind_plate_one=pick(-0.5,0.5,-3.5,-2.5,-0.5,0.5,-3.5,-2.5), behind_mirrored=pick(-3.5,-2.5,-0.5,0.5,-0.5,0.5,-3.5,-2.5);
+                const double one=signal_at(signal,behind_plate_one), two=signal_at(signal,behind_mirrored);
+                std::fprintf(stderr,"rt-cache: shadow of the plate %.3f (expected %.3f), of its mirrored instance %.3f (expected %.3f)\n",one,expected(behind_plate_one,true),two,expected(behind_mirrored,true));
+                CHECK(std::abs(one-expected(behind_plate_one,true))<=0.05 && std::abs(two-expected(behind_mirrored,true))<=0.05);
+                auto cache=renderer.rt_cache_stats();
+                std::fprintf(stderr,"rt-cache: builds %llu hits %llu resident %u, static instances %u\n",(unsigned long long)cache.builds,(unsigned long long)cache.hits,cache.resident,renderer.rt_stats().static_instances);
+                CHECK(cache.builds-base.builds==2 && cache.hits>base.hits && renderer.rt_stats().static_instances==3 && renderer.rt_stats().skinned_blas==0);   // the floor mesh and the plate mesh (one BLAS for both plate instances); three instances
+                // (b) a new matrix, no new BLAS: the plate moves to x in [-1.5, -0.5] (its shadow then reaches past its own silhouette, where the camera sees it)
+                const uint64_t builds=cache.builds;
+                frame(-1.0f,false); frame(-1.0f,false);
+                signal=renderer.capture_rt_shadow_signal();
+                const Vec behind_moved=pick(-1.5,-0.5,-3.5,-2.5,-1.5,-0.5,-3.5,-2.5);
+                CHECK(renderer.rt_cache_stats().builds==builds);
+                const Vec old_shadow=pick(-0.5,0.5,-1.5,-0.5,-1.5,-0.5,-3.5,-2.5);   // in the old plate's shadow, outside the moved plate's; only the moved plate and the mirrored one hide floor
+                CHECK(std::abs(signal_at(signal,behind_moved)-expected(behind_moved,true))<=0.05 && std::abs(signal_at(signal,old_shadow)-1.0)<=0.01);   // the old shadow is gone, the new one is there
+                // (c) a new mesh identity every frame (the guest frees and re-creates meshes): the swept meshes' BLASes are dropped, nothing grows without bound
+                for(int i=0;i<120;++i) frame(0,true);
+                cache=renderer.rt_cache_stats();
+                std::fprintf(stderr,"rt-cache: after 120 frames with fresh meshes: resident %u, builds %llu, invalidated %llu\n",cache.resident,(unsigned long long)cache.builds,(unsigned long long)cache.invalidated);
+                CHECK(cache.invalidated>0 && cache.resident<200);
+                // (d) off again: the cache is not consulted
+                const uint64_t after=renderer.rt_cache_stats().builds;
+                frame(0,false,false); frame(0,false,false);
+                CHECK(renderer.rt_cache_stats().builds==after);
             }
         }
         if (wanted("rt-denoise")) {

@@ -109,6 +109,7 @@ public:
     RtShadowPixels capture_rt_shadow_signal();   // tests/tools: the noisy signal of the latest traced frame (waits for the GPU); throws when none was traced
     uint32_t rt_shadow_signal_images() const { return rt_shadow_.signal_images_created(); }
     RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
+    RtScene::CacheStats rt_cache_stats() const { return rt_.cache_stats(); }   // the cached BLASes of static meshes
     uint64_t rt_buffer_growths() const { return rt_.buffer_growths(); }
     double take_pass_total_ms(GpuPass pass) { return pass_timer_.take_total_ms(pass); }   // summed GPU time of a pass over the submissions retired since the last call (frame log)
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
@@ -165,7 +166,7 @@ private:
     // A mesh uploaded once and drawn from every frame; freed once the guest dropped it (owner expired) and no submission still holds it.
     // Meshes live in a few large buffers (one vkAllocateMemory per slab, not per mesh): vertices then indices at the given offsets.
     struct MeshSlab { Buffer buffer; VkDeviceSize used=0; uint32_t live=0; };
-    struct GpuMesh { MeshSlab* slab=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0; uint64_t rows=0; std::weak_ptr<const gx::MeshBuffers> owner; };
+    struct GpuMesh { MeshSlab* slab=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0; uint64_t rows=0; std::weak_ptr<const gx::MeshBuffers> owner; uint64_t id=0; };   // id: never reused; the ray tracing cache keys its BLAS by it
     struct PresentImage {
         VkImage image = VK_NULL_HANDLE;
         VkSemaphore ready = VK_NULL_HANDLE;
@@ -324,6 +325,7 @@ private:
     std::unordered_set<const gx::TexturePixels*> lost_copies_;   // EFB copies made by a previous renderer (lost_copies)
     std::shared_ptr<const gx::TexturePixels> blank_;             // what a lost copy is drawn as
     std::unordered_map<const gx::MeshBuffers*,GpuMesh> meshes_;
+    uint64_t next_mesh_id_=1;
     std::vector<std::unique_ptr<MeshSlab>> mesh_slabs_;   // the last one is the one being filled
     uint64_t renders_=0;
     std::vector<Texture> recycled_copies_;

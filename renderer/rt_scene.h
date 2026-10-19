@@ -1,4 +1,5 @@
 #pragma once
+#include "rt_mesh_cache.h"
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
@@ -25,6 +26,10 @@ struct RtGeometry {
     bool opaque=true;
     VkDeviceAddress palettes=0;
     bool skinned=false;   // per-vertex matrices (a character or an enemy): its instance carries kRtSkinned, a static draw's kRtStatic
+    // A static draw of a cached mesh (mesh_id != 0, not skinned) is not transformed per frame: its object-space BLAS is built once (RtMeshCachePolicy) straight from
+    // the mesh's vertex/index buffers (`vertices` addresses gx::GpuMeshVertex records) and the TLAS instance carries `transform`, the draw's object-to-view rows.
+    uint64_t mesh_id=0;
+    std::array<std::array<float,4>,3> transform{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
 };
 // Instance masks of the two occluder classes (docs/superpowers/specs/2026-10-19-rt-level-shadows-design.md): a lamp's ray sees both, a rig light's only the skinned one.
 constexpr uint32_t kRtStatic=1, kRtSkinned=2;
@@ -40,8 +45,13 @@ public:
     bool build_tlas(VkCommandBuffer command);   // false when the frame has no BLAS (nothing recorded)
     VkAccelerationStructureKHR tlas() const;
     uint64_t buffer_growths() const { return growths_; }   // tests: how often a buffer was (re)allocated
-    struct Stats { uint32_t blas=0, static_blas=0, skinned_blas=0, geometries=0; uint64_t triangles=0; };
+    // The latest frame: blas/skinned_blas/geometries/triangles are the per-frame view-space builds (skinned draws), static_instances the instances of cached BLASes,
+    // instances the TLAS total.
+    struct Stats { uint32_t blas=0, skinned_blas=0, static_instances=0, instances=0, geometries=0; uint64_t triangles=0; };
     Stats stats() const { return frame_ ? frame_->stats : Stats{}; }
+    struct CacheStats { uint64_t builds=0, hits=0, evictions=0, invalidated=0, deferred=0, bytes=0; uint32_t resident=0; };
+    CacheStats cache_stats() const;
+    void invalidate_mesh(uint64_t mesh_id);   // the mesh was freed: its cached BLASes are retired (destroyed once no frame in flight can use them)
     void shutdown();
 private:
     struct Buffer { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; VkDeviceAddress address=0; void* mapped=nullptr; VkDeviceSize size=0; };
@@ -51,13 +61,18 @@ private:
         std::vector<VkAccelerationStructureKHR> blas;
         std::vector<VkDeviceAddress> blas_addresses;
         std::vector<uint32_t> blas_masks;   // the instance mask of each BLAS (kRtStatic or kRtSkinned)
+        struct StaticInstance { std::array<std::array<float,4>,3> matrix; VkDeviceAddress blas; };
+        std::vector<StaticInstance> static_instances;   // this frame's instances of cached BLASes
         VkAccelerationStructureKHR tlas=VK_NULL_HANDLE;
         std::vector<Buffer> retired;   // replaced by a growth during the frame: earlier packets of the frame may still read them
         Stats stats;
     };
     void build_blas(VkCommandBuffer command, std::span<const RtGeometry> items, uint32_t mask);   // one BLAS over `items` (positions_out assigned), after their positions were allocated
+    struct CachedBlas { VkAccelerationStructureKHR as=VK_NULL_HANDLE; Buffer storage; VkDeviceAddress address=0; };
+    void build_cached(VkCommandBuffer command, const RtGeometry& item, uint64_t key);   // the object-space BLAS of a static mesh, straight from its buffers
+    void retire(uint64_t key);   // out of the cache; destroyed once no frame in flight can use it
     bool ensure(Frame& frame, Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage, bool host);   // true when it was (re)allocated
-    Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host);
+    Buffer make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host, bool count=true);
     void destroy(Buffer& buffer);
     VkDevice device_=VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_{};
@@ -73,6 +88,14 @@ private:
     std::vector<Frame> frames_;
     Frame* frame_=nullptr;
     uint32_t slot_=0;
+    uint64_t frame_number_=0;
+    static constexpr uint64_t kMeshCacheBytes=uint64_t(256)<<20;   // the byte budget of the cached BLASes
+    static constexpr uint32_t kBuildsPerFrame=16;                  // BLAS builds of cache misses per frame; the rest wait (their draws do not occlude meanwhile)
+    RtMeshCachePolicy policy_{kMeshCacheBytes,kBuildsPerFrame};
+    std::unordered_map<uint64_t,CachedBlas> cached_;
+    struct Retired { CachedBlas blas; uint64_t frame; };
+    std::vector<Retired> retired_;
+    uint64_t invalidated_=0, deferred_=0;
     uint64_t growths_=0;
 };
 }

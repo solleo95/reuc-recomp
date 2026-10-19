@@ -796,12 +796,13 @@ VulkanRenderer::GpuMesh& VulkanRenderer::gpu_mesh(const std::shared_ptr<const gx
     for (size_t i=0;i<vertices.size();++i) target[i]=gx::mesh_vertex(vertices[i]);
     std::memcpy(static_cast<std::byte*>(slab.buffer.mapped)+mesh.index_offset,indices.data(),index_bytes);
     slab.used+=total; ++slab.live;
-    mesh.index_count=uint32_t(indices.size()); mesh.rows=gx::used_rows(vertices); mesh.owner=source;
+    mesh.index_count=uint32_t(indices.size()); mesh.rows=gx::used_rows(vertices); mesh.owner=source; mesh.id=next_mesh_id_++;
     if (const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-created_at).count(); ms>2) std::fprintf(stderr,"[gpu-mesh] %zu vertices %zu indices uploaded in %.2f ms (%zu meshes resident)\n",vertices.size(),indices.size(),ms,meshes_.size()+1);
     return meshes_.emplace(source.get(),std::move(mesh)).first->second;
 }
 // A slab other than the one being filled is freed with its last mesh (every mesh in it expired, so no submission can still read it).
 void VulkanRenderer::release_mesh(GpuMesh& mesh) {
+    if (rt_.initialized()) rt_.invalidate_mesh(mesh.id);   // its cached BLAS goes with it (the id is never reused, but the memory should)
     MeshSlab* slab=mesh.slab; mesh.slab=nullptr;
     if (!slab || --slab->live) return;
     if (mesh_slabs_.back().get()==slab) { slab->used=0; return; }   // empty current slab: reuse it from the start
@@ -1052,7 +1053,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
     bool rt_shadow_ran=false;
-    if (rt_frame_ && (rt_as_open_ || rt_.stats().blas)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
+    if (rt_frame_ && (rt_as_open_ || rt_.stats().instances)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
         const bool tlas_built=rt_.build_tlas(command);
@@ -1563,7 +1564,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         else { if (it->initialized) destroy_buffer(it->upload); ++it; }
     }
     // Per draw: where its vertices live (a persistent mesh buffer, or this frame's dynamic buffer for non-mesh draws) and which palette it reads.
-    struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0, bank=kNoBank; };
+    struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0, bank=kNoBank; uint64_t mesh_id=0; };   // mesh_id: GpuMesh::id of a cached mesh draw (0 for an inline draw)
     std::vector<DrawGpu> gpu_draws; gpu_draws.reserve(packet.draws.size());
     std::unordered_map<const gx::TextureBank*,uint32_t> bank_of;   // one bank per distinct texture matrix set
     std::vector<const gx::TextureBank*> banks;
@@ -1587,7 +1588,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (mesh.index_count % group != 0) throw std::invalid_argument("index count does not match native draw topology");
             gx::validate_draw_rows(*draw.transforms,indexed,mesh.rows,draw.callsite);
             if (slot.mesh_refs.empty() || slot.mesh_refs.back()!=draw.mesh) slot.mesh_refs.push_back(draw.mesh);
-            info.vertices=info.indices=&mesh.slab->buffer; info.vertex_offset=mesh.vertex_offset; info.index_offset=mesh.index_offset; info.index_count=mesh.index_count;
+            info.vertices=info.indices=&mesh.slab->buffer; info.vertex_offset=mesh.vertex_offset; info.index_offset=mesh.index_offset; info.index_count=mesh.index_count; info.mesh_id=mesh.id;
         } else {
             const auto vertices = draw.vertex_view(); const auto indices = draw.index_view();
             if (indices.size() % group != 0) throw std::invalid_argument("index count does not match native draw topology");
@@ -1999,6 +2000,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             geometry.vertex_count=uint32_t(draw.mesh->vertices.size()); geometry.index_count=info.index_count; geometry.first_index=info.first_index; geometry.first_vertex=info.first_vertex;
             geometry.palette=info.palette; geometry.current=info.current; geometry.indexed=info.indexed; geometry.opaque=*opaque; geometry.palettes=address(slot.palettes);
             geometry.skinned=info.indexed!=0;   // characters and enemies: a rig light's rays see only these (the instance mask), a lamp's rays see the whole scene
+            if (!geometry.skinned) {   // a static draw: its mesh's BLAS is cached in object space, the instance carries the draw's object-to-view rows (current row and the two after it)
+                geometry.mesh_id=info.mesh_id;
+                for (uint32_t row=0;row<3;++row) geometry.transform[row]=draw.transforms->position_rows[info.current+row];
+            }
             geometries.push_back(geometry);
         }
         if (geometries.empty()) return;
