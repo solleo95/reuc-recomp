@@ -40,6 +40,8 @@ int main() {
     {   // an effects change reaches the effects target once and is saved
         calls.clear(); auto next=live.options(); next.effects.anisotropy=4; live.apply(next);
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.anisotropy==4);
+        calls.clear(); next=live.options(); next.effects.per_pixel_lighting=true; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.per_pixel_lighting);
     }
     {   // frame rate limit, unlimited included
         calls.clear(); auto next=live.options(); next.fps_limit=144u; live.apply(next);

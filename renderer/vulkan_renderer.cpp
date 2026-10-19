@@ -273,8 +273,8 @@ constexpr uint32_t kNoBank=UINT32_MAX;
 // are read by the upscaling variant only.
 constexpr uint32_t kNoMotion=UINT32_MAX;
 constexpr VkFormat kMotionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
-struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; };
-static_assert(sizeof(DrawPush)==112 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96);
+struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, reserved[3]{}; };   // effects: kEffect* bits (graphics_effects.h)
+static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112);
 struct MotionBlock { gx::Projection prev_rows; uint32_t prev_palette, kind, unused[2]; };   // smoke.slang MotionBlock (std430)
 static_assert(sizeof(MotionBlock)==80);
 uint32_t VulkanRenderer::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
@@ -1594,6 +1594,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[set_index],0,nullptr);
             DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0,info.bank};
             push.viewport[0]=draw_viewport.x; push.viewport[1]=draw_viewport.y; push.viewport[2]=draw_viewport.width; push.viewport[3]=draw_viewport.height;
+            if (effects_.per_pixel_lighting && motion_outputs_) push.effects|=kEffectPerPixelLighting;   // only lit draws change: nothing else has a lighting channel on
             if (scene) {
                 push.motion=draw_motion[d];
                 if (summary.draws[d].perspective) { push.jitter[0]=jitter_[0]; push.jitter[1]=jitter_[1]; }   // post-style quads stay unjittered

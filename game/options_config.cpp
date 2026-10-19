@@ -76,6 +76,7 @@ Options options_from_config(const ConfigDocument& document) {
             if(!value.is_number_unsigned() || !valid_anisotropy(value.get<uint32_t>()))invalid("graphics.anisotropy must be 1, 2, 4, 8 or 16");
             options.effects.anisotropy=value.get<uint32_t>();
         }
+        if(graphics.contains("per_pixel_lighting"))options.effects.per_pixel_lighting=boolean(graphics["per_pixel_lighting"]);
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
             const auto mode=graphics["window_mode"].get<std::string>();
@@ -114,6 +115,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["frame_generation"]=options.frame_generation;
     graphics["frame_generation_multiplier"]=options.frame_generation_multiplier;
     graphics["anisotropy"]=options.effects.anisotropy;
+    graphics["per_pixel_lighting"]=options.effects.per_pixel_lighting;
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

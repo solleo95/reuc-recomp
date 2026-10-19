@@ -158,6 +158,32 @@ int main(int argc, char** argv) {
             CHECK(first.rgba==second.rgba);   // no jitter: repeated frames are identical
             CHECK(renderer.pass_ms(uc::GpuPass::smaa)>0);
         }
+        if (wanted("ppl")) {
+            // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);
+            // per pixel the centre is lit by the near light. Baked-colour (unlit) draws stay identical.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            auto frame=[&](bool per_pixel) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.per_pixel_lighting=per_pixel; renderer.set_effects(effects);
+                gx::FramePacket packet; packet.present=true; packet.display_source={0,0,640,360};
+                auto lit=quad(0x3333,-1,-1,1,1,{255,255,255,255},true);
+                for(auto& vertex:lit.vertices) vertex.normal={0,0,1,0,0,0,0,0,0};
+                auto& uniforms=lit.uniforms.edit();
+                uniforms.channels[0]=1|2|(1<<2)|(2<<7)|(3<<9);   // vertex colour as material, lighting on, light 0, clamped diffuse, distance attenuation
+                auto& light=uniforms.lights[0];
+                light.color={255,255,255,255}; light.cosine={1,0,0,0}; light.distance={1,0,4,0}; light.position={0,0,-0.8f,0}; light.direction={0,0,1,0};
+                packet.draws.push_back(std::move(lit));
+                auto baked=quad(0x4444,0.5f,-0.9f,0.9f,-0.5f,{200,100,50,255},true);
+                for(auto& vertex:baked.vertices) vertex.normal={0,0,1,0,0,0,0,0,0};
+                packet.draws.push_back(std::move(baked));
+                return renderer.capture(submit(std::move(packet)));
+            };
+            const auto off=frame(false), on=frame(true);
+            const auto value=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y,int channel=0) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4+channel]); };
+            std::fprintf(stderr,"ppl: centre off %d on %d, corner off %d on %d\n",value(off,640,360),value(on,640,360),value(off,20,20),value(on,20,20));
+            CHECK(value(on,640,360)>=value(off,640,360)+40);   // the light is near the centre
+            CHECK(std::abs(value(on,20,20)-value(off,20,20))<=4);   // the corners are where the vertices are: the same light there
+            for(int channel=0;channel<3;++channel) CHECK(value(on,1100,100,channel)==value(off,1100,100,channel));   // the baked-colour quad is unchanged
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);

@@ -201,6 +201,13 @@ void SettingsMenu::effects_tab(float unit) {
         }
         ImGui::EndCombo();
     }
+    ImGui::Dummy({0,6*unit});
+    // Effects that need the screen-space path are greyed out on a GPU without it; a saved "on" stays visible and can be switched off.
+    const bool path=!features || features->effects;
+    ImGui::BeginDisabled(!path && !options.effects.per_pixel_lighting);
+    compact_checkbox("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,unit);
+    ImGui::EndDisabled();
+    if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

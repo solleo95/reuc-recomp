@@ -18,7 +18,8 @@ struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
 // alphaPass: ubershader only. motion/jitter/viewport: the MOTION variant (upscaling) only; jitter in target pixels, viewport = the draw's
 // Vulkan viewport (x, y, width, height) in target pixels.
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; };
+// effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting); the MOTION variant only.
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 // Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
 // (prevRows = clip_to_prev_clip applied to the current clip position).
@@ -32,6 +33,10 @@ struct Output {
 #ifdef MOTION
     [[vk::location(10)]] float4 currentClip : TEXCOORD8;    // unjittered
     [[vk::location(11)]] float4 previousClip : TEXCOORD9;
+    [[vk::location(12)]] float4 rawColor0 : TEXCOORD10;     // per-pixel lighting: the vertex colours the channels take as material and ambient, the view position and the unnormalised view normal
+    [[vk::location(13)]] float4 rawColor1 : TEXCOORD11;
+    [[vk::location(14)]] float3 viewPosition : TEXCOORD12;
+    [[vk::location(15)]] float3 viewNormal : TEXCOORD13;
 #endif
 };
 float4 clipOf(float4 rows[4], float4 v) { return float4(dot(rows[0], v), dot(rows[1], v), dot(rows[2], v), dot(rows[3], v)); }
@@ -127,6 +132,9 @@ Output vertexMain(Input input) {
     float3 normal = dot(viewNormal,viewNormal)>0.0 ? normalize(viewNormal) : float3(0.0);
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
+#ifdef MOTION
+    output.rawColor0 = input.color; output.rawColor1 = input.color1; output.viewPosition = viewPosition.xyz; output.viewNormal = viewNormal;
+#endif
     [unroll] for (uint id = 0; id < 8; ++id) output.texcoords[id] = generateTexcoord(id, input);
     return output;
 }
@@ -183,7 +191,15 @@ float4 shadeFragment(Output input) {
 #endif
     float2 uv[8];
     [unroll] for(uint i=0;i<8;++i) uv[i]=input.texcoords[i].xy / (input.texcoords[i].z != 0.0 ? input.texcoords[i].z : 1.0);
-    float4 result=evaluateTev(uv,input.color,input.color1);
+    float4 rasterColor0=input.color, rasterColor1=input.color1;
+#ifdef MOTION
+    if((projection.effects&1u)!=0) {   // the lighting channels again, at the pixel: the same GX equations on the interpolated normal and position
+        const float3 normal = dot(input.viewNormal,input.viewNormal)>0.0 ? normalize(input.viewNormal) : float3(0.0);
+        if(((drawState.channels[0]|drawState.channels[2])&2u)!=0) rasterColor0 = shadeChannel(input.rawColor0,0,input.viewPosition,normal);
+        if(((drawState.channels[1]|drawState.channels[3])&2u)!=0) rasterColor1 = shadeChannel(input.rawColor1,1,input.viewPosition,normal);
+    }
+#endif
+    float4 result=evaluateTev(uv,rasterColor0,rasterColor1);
     uint alpha=uint(round(saturate(result.a)*255.0)), word=drawState.pixel.x;
     bool first=alphaCompare(alpha,word&255,(word>>16)&7);
     bool second=alphaCompare(alpha,(word>>8)&255,(word>>19)&7);

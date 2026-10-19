@@ -6,8 +6,11 @@ namespace uc {
 // field; each later feature adds one. All off with anisotropy 1 is the picture of the original renderer.
 struct GraphicsEffects {
     uint32_t anisotropy=16;   // 1, 2, 4, 8 or 16: anisotropic filtering of mipmapped scene textures (clamped to the device)
+    bool per_pixel_lighting=false;   // the GX lighting channels are evaluated per pixel instead of per vertex (needs the motion shader variants)
     bool operator==(const GraphicsEffects&) const=default;
 };
+// Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
+constexpr uint32_t kEffectPerPixelLighting=1;
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }
 // The level a device runs: 1 without samplerAnisotropy, never above its maxSamplerAnisotropy.
 inline uint32_t clamp_anisotropy(uint32_t requested, bool supported, float device_max) {

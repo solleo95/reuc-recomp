@@ -117,6 +117,8 @@ int main() {
         CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--anisotropy","8"})).effects.anisotropy==8);
         const auto bad=parse(std::array<std::string_view,2>{"--anisotropy","3"});
         CHECK(std::holds_alternative<std::string>(bad) && std::get<std::string>(bad)=="invalid value for --anisotropy");
+        CHECK(!std::get<uc::Options>(defaults).effects.per_pixel_lighting);
+        CHECK(std::get<uc::Options>(parse(std::array<std::string_view,1>{"--per-pixel-lighting"})).effects.per_pixel_lighting);
         CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));
         CHECK(uc::clamp_anisotropy(16,true,8.f)==8 && uc::clamp_anisotropy(16,false,16.f)==1 && uc::clamp_anisotropy(4,true,16.f)==4 && uc::clamp_anisotropy(16,true,0.5f)==1);
     }

@@ -51,6 +51,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
         else if (arg == "--no-sharpening") options.sharpening = false;
         else if (arg == "--features") options.features = true;
+        else if (arg == "--per-pixel-lighting") options.effects.per_pixel_lighting = true;
         else if (arg == "--anisotropy") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";
             uint32_t level = 0; const auto value = arguments[i];

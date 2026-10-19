@@ -89,6 +89,11 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
         click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+2*(text+style.ItemSpacing.y)+text*.5f});
         menu.commit(); CHECK(live.options().effects.anisotropy==4 && !live.error());
         CHECK(context.OpenPopupStack.empty());
+        CHECK(!live.options().effects.per_pixel_lighting);
+        io.AddMousePosEvent(effects->Pos.x+small_height*.5f,effects->Pos.y+first+height+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
+        CHECK(context.HoveredId==effects->GetID("##ppl"));
+        click(io.MousePos);
+        menu.commit(); CHECK(live.options().effects.per_pixel_lighting && !live.error());
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
         CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
     }

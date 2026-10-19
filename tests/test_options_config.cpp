@@ -54,6 +54,10 @@ int main() {
     {   // graphics.anisotropy
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"anisotropy":4}})")).effects.anisotropy==4);
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.anisotropy==16);
+        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.per_pixel_lighting);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":true}})")).effects.per_pixel_lighting);
+        bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}
+        CHECK(not_boolean);
         auto stored=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto fresh=uc::options_from_config(stored);fresh.effects.anisotropy=2;uc::store_options(stored,fresh);
         CHECK(uc::options_from_config(stored).effects.anisotropy==2 && uc::serialize_config(stored).find("\"anisotropy\": 2")!=std::string::npos);
         bool caught=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"anisotropy":5}})"));}catch(const std::invalid_argument& error){caught=std::string(error.what()).find("graphics.anisotropy must be 1, 2, 4, 8 or 16")!=std::string::npos;}
