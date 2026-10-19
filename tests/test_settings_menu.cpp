@@ -108,15 +108,6 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
             CHECK(context.HoveredId==effects->GetID("##contact"));
             click(io.MousePos);
             menu.commit(); CHECK(live.options().effects.contact_shadows && !live.error());
-            CHECK(live.options().effects.shadows==uc::EffectLevel::off);
-            {   // shadow maps: the preset combo below the contact-shadow checkbox, pick "medium" (the third entry)
-                const float contact_top=combo_center+height*.5f+2*style.ItemSpacing.y+std::floor(6*unit);
-                const float shadows_center=contact_top+small_height+style.ItemSpacing.y+std::floor(6*unit)+style.ItemSpacing.y+text+style.ItemSpacing.y+height*.5f;
-                click({effects->Pos.x+40,effects->Pos.y+shadows_center});
-                popup=ImGui::FindWindowByName("##Combo_00"); CHECK(popup && popup->Active);
-                click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+2*(text+style.ItemSpacing.y)+text*.5f});
-                menu.commit(); CHECK(live.options().effects.shadows==uc::EffectLevel::medium && !live.error());
-            }
         }
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
         CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
@@ -176,6 +167,6 @@ int main(int argc,char** argv) {
         ImGui::DestroyContext();
     }
     const auto saved=uc::options_from_config(uc::load_config(folder/"config.json"));
-    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4 && saved.effects.per_pixel_lighting && saved.effects.ambient_occlusion==uc::EffectLevel::high && saved.effects.contact_shadows && saved.effects.shadows==uc::EffectLevel::medium);
+    CHECK(saved.render_scale==1 && saved.sharpening && saved.sharpness>.65 && saved.effects.anisotropy==4 && saved.effects.per_pixel_lighting && saved.effects.ambient_occlusion==uc::EffectLevel::high && saved.effects.contact_shadows);
     std::filesystem::remove(folder/"config.json"); std::filesystem::remove(folder);
 }

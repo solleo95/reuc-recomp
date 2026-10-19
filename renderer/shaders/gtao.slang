@@ -69,6 +69,20 @@ float3 viewAt(float2 pixelCentre) {   // position of a (possibly off-surface) sa
 }
 // The cosine-weighted visible arc of one slice side up to horizon angle h (GTAO paper eq. 10, per side), for a normal at signed angle n.
 float gtaoArc(float h, float n, float cosN) { return 0.25 * (-cos(2.0 * h - n) + cosN + 2.0 * h * sin(n)); }
+// The normal of the geometry as the depth buffer shows it: the 2005 meshes are low-poly with smooth vertex normals that disagree with their flat facets, and a
+// horizon search against such a normal sees the facets as occluders (a rod turned almost black). Per axis the nearer neighbour is used, so silhouettes keep
+// the normal of the surface in front.
+float3 geometricNormal(int2 pixel, float3 position, float3 fallback) {
+    float3 left = viewAt(float2(pixel) + float2(-0.5, 0.5)), right = viewAt(float2(pixel) + float2(1.5, 0.5));
+    float3 up = viewAt(float2(pixel) + float2(0.5, -0.5)), down = viewAt(float2(pixel) + float2(0.5, 1.5));
+    float3 dx = abs(left.z - position.z) < abs(right.z - position.z) ? position - left : right - position;
+    float3 dy = abs(up.z - position.z) < abs(down.z - position.z) ? position - up : down - position;
+    float3 n = cross(dx, dy);
+    float len = length(n);
+    if (len < 1e-8) return fallback;
+    n /= len;
+    return dot(n, -position) < 0.0 ? -n : n;   // facing the viewer
+}
 // A cut-out pixel (net, grate): the depth there is a thin occluder with holes; it must not darken what lies behind it.
 bool cutoutAt(float2 pixelCentre) {
     int2 pixel = clamp(int2(floor(pixelCentre)), int2(0, 0), int2(params.region) - 1);
@@ -86,6 +100,7 @@ void aoMain(uint3 id : SV_DispatchThreadID) {
     int2 pixel = int2((float2(id.xy) + 0.5) * scale);
     float3 position, normal;
     if (!surfaceAt(pixel, position, normal)) { rawOcclusionOut[id.xy] = 1.0; return; }
+    normal = geometricNormal(pixel, position, normal);
     float3 view = normalize(-position);
     if (dot(normal, view) < 0.0) normal = -normal;   // two-sided: back faces and flipped normals still occlude from the viewer's side
     float2 centre = float2(pixel) + 0.5;
@@ -161,6 +176,7 @@ void contactMain(uint3 id : SV_DispatchThreadID) {
     int2 pixel = int2((float2(id.xy) + 0.5) * scale);
     float3 position, normal;
     if (!surfaceAt(pixel, position, normal)) { contactOut[id.xy] = 1.0; return; }
+    normal = geometricNormal(pixel, position, normal);
     float3 toLight = params.light.w > 0.5 ? normalize(params.light.xyz - position) : normalize(params.light.xyz);
     float facing = dot(normal, toLight);
     if (facing <= 0.05) { contactOut[id.xy] = 1.0; return; }   // facing away from (or grazing) the light: the lighting already darkened it, and a grazing ray starts inside its own surface
@@ -180,9 +196,9 @@ void contactMain(uint3 id : SV_DispatchThreadID) {
         if (stored >= 1.0 || cutoutAt(samplePixel)) continue;
         float sceneDistance = params.viewB.y / (projectionDepth(stored) + params.viewB.x);   // -z of the surface at that pixel
         float sampleDistance = -sampled.z;
-        if (sceneDistance < sampleDistance && sampleDistance - sceneDistance < thickness) shadow = max(shadow, 1.0 - 0.6 * float(step) / 16.0);   // a blocker nearer the surface shades more
+        if (sceneDistance < sampleDistance - 0.1 * thickness && sampleDistance - sceneDistance < thickness) shadow += (1.0 - 0.5 * float(step) / 16.0) / 5.0;   // every blocked step adds a little: a thin ridge hit by one or two steps stays faint, a real contact adds up
     }
-    contactOut[id.xy] = 1.0 - shadow * smoothstep(0.05, 0.35, facing);
+    contactOut[id.xy] = 1.0 - saturate(shadow) * smoothstep(0.05, 0.35, facing);
 }
 
 // A half-resolution occlusion image at a full-resolution pixel: bilinear taps, each weighted by how close its depth is to this pixel's.
@@ -261,7 +277,7 @@ float filterContact(uint2 pixel, float3 position, float3 normal) {
         float tent = max(0.0, 1.5 - d.x) * max(0.0, 1.5 - d.y);
         float3 tapPosition, tapNormal;
         float weight = tent;
-        if (surfaceAt(int2((float2(at) + 0.5) * scale), tapPosition, tapNormal)) weight *= 1.0 / (0.01 + 50.0 * abs(tapPosition.z - position.z) / -position.z) * pow(saturate(dot(tapNormal, normal)), 4.0);
+        if (surfaceAt(int2((float2(at) + 0.5) * scale), tapPosition, tapNormal)) weight *= 1.0 / (0.01 + 50.0 * abs(tapPosition.z - position.z) / -position.z) * saturate(dot(tapNormal, normal));   // the normals only keep the filter from crossing a crease
         else weight = 0.0;
         sum += contactTex.Load(int3(at, 0)) * weight; total += weight;
     }
@@ -275,6 +291,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (!surfaceAt(int2(id.xy), position, normal)) return;
     float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
     float ao = (params.flags & 1u) != 0 ? upsampleOcclusion(occlusion, params.aoSize, id.xy, position) : 1.0;
+    ao = lerp(0.3, 1.0, ao);   // occlusion never takes more than 70% of the light: a fully black result is always an artefact
     float contact = (params.flags & 2u) != 0 ? filterContact(id.xy, position, normal) : 1.0;
     float visibility = (params.flags & 4u) != 0 ? shadowVisibility(position, normal) : 1.0;
     bool lit = (uint(round(sceneGBuffer.Load(int3(int2(id.xy), 0)).w * 65535.0)) & kGBufferLit) != 0;

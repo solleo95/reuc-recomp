@@ -268,11 +268,13 @@ int main(int argc, char** argv) {
                 if(fogged) { auto& uniforms=draw.uniforms.edit(); uniforms.fog[0]=280480; uniforms.fog[3]=(2u<<21)|(1u<<20); uniforms.fog[4]=0x808080; }   // linear fog, orthographic form, fully fogged everywhere
                 return draw;
             };
-            auto frame=[&](uc::EffectLevel level,bool fogged,bool menu=false,bool cut_out_wall=false) {
+            float bend_sign=1.f;
+            auto frame=[&](uc::EffectLevel level,bool fogged,bool menu=false,bool cut_out_wall=false,bool bent_normals=false) {
                 uc::GraphicsEffects effects; effects.anisotropy=1; effects.ambient_occlusion=level; renderer.set_effects(effects);
                 gx::FramePacket scene; scene.present=false;
                 if(!menu) {
-                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},fogged));   // the floor
+                    // bent_normals: the floor's vertex normals lean 40 degrees toward the camera, as the smooth normals of a low-poly rod do against its flat facets
+                    scene.draws.push_back(surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},bent_normals ? std::array<float,3>{0,0.77f,bend_sign*0.64f} : std::array<float,3>{0,1,0},fogged));   // the floor
                     scene.draws.push_back(surface({{{-12,-1,-8},{12,-1,-8},{12,6,-8},{-12,6,-8}}},{0,0,1},fogged,cut_out_wall));      // the wall
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
@@ -310,6 +312,23 @@ int main(int argc, char** argv) {
                 for(uint32_t y=182;y<640;y+=3) change=std::max(change,std::abs(red(cut_base,640,y)-red(cut_shaded,640,y)));
                 std::fprintf(stderr,"gtao cut-out wall: largest change anywhere on the centre column %d\n",change);
                 CHECK(change<=24);   // an opaque wall darkens its crease by 50-60 levels (54 with the cut-out wall before the fix); what is left is the sampling noise of a few slices on a grazing floor
+            }
+            {   // occlusion follows the geometry, not the vertex normals: a flat floor with bent normals stays as bright as it is (and no AO result is ever black)
+                int worst=0;
+                for(const float sign:{1.f,-1.f}) {
+                    bend_sign=sign;
+                    frame(uc::EffectLevel::off,false,false,true,true);
+                    const auto bent_base=frame(uc::EffectLevel::off,false,false,true,true);
+                    for(const auto level:{uc::EffectLevel::low,uc::EffectLevel::high}) {
+                        frame(level,false,false,true,true);
+                        const auto bent_shaded=frame(level,false,false,true,true);
+                        for(uint32_t y=190;y<310;y+=3) worst=std::max(worst,red(bent_base,640,y)-red(bent_shaded,640,y));   // the floor is the upper band of the picture here
+                    }
+                }
+                bend_sign=1.f;
+                if(std::getenv("UC_SMOKE_DUMP")) { const auto g=renderer.capture_gbuffer(); const size_t i=(size_t(250)*g.width+640)*4; const auto t=uc::decode_gbuffer({g.texels[i],g.texels[i+1],g.texels[i+2],g.texels[i+3]}); std::fprintf(stderr,"  floor normal in the G-buffer: %.2f %.2f %.2f flags %u\n",t.normal[0],t.normal[1],t.normal[2],t.flags); }
+                std::fprintf(stderr,"gtao bent normals: largest darkening of the flat floor %d\n",worst);
+                CHECK(worst<=12);   // was 177 with the vertex normals; what is left is the sampling noise of a grazing floor
             }
             const auto fog_base=frame(uc::EffectLevel::off,true);
             frame(uc::EffectLevel::high,true);

@@ -66,12 +66,6 @@ int main() {
         }
         CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":true}})")).effects.contact_shadows);
         CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.contact_shadows);
-        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"shadows":"medium"}})")).effects.shadows==uc::EffectLevel::medium);
-        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects.shadows==uc::EffectLevel::off);
-        auto shadow_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto shadow_options=uc::options_from_config(shadow_doc);shadow_options.effects.shadows=uc::EffectLevel::high;uc::store_options(shadow_doc,shadow_options);
-        CHECK(uc::options_from_config(shadow_doc).effects.shadows==uc::EffectLevel::high);
-        bool bad_shadow=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"shadows":"soft"}})"));}catch(const std::invalid_argument&){bad_shadow=true;}
-        CHECK(bad_shadow);
         bool contact_not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"contact_shadows":"on"}})"));}catch(const std::invalid_argument&){contact_not_boolean=true;}
         CHECK(contact_not_boolean);
         bool not_boolean=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"per_pixel_lighting":1}})"));}catch(const std::invalid_argument&){not_boolean=true;}

@@ -521,24 +521,6 @@ int run(int argc,wchar_t** argv) {
             ImGui::Dummy({0,8*unit});
             toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,features_ready && !features.effects && !options.effects.contact_shadows,tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
-            {   // shadow maps: off and four presets, greyed out like the other screen-space effects
-                const auto level_label=[&](uc::EffectLevel level) -> std::string {return level==uc::EffectLevel::off ? tr("off") : tr(level==uc::EffectLevel::low ? "level_low" : level==uc::EffectLevel::medium ? "level_medium" : level==uc::EffectLevel::high ? "level_high" : "level_ultra");};
-                const bool blocked=features_ready && !features.effects && options.effects.shadows==uc::EffectLevel::off;
-                ImGui::TextUnformatted(tr("shadows"));push_font(ui.sans,22);
-                ImGui::BeginDisabled(blocked);
-                const bool shadows_open=combo("##shadows",level_label(options.effects.shadows).c_str());track("shadows");
-                if(shadows_open) {
-                    for(const auto level:{uc::EffectLevel::off,uc::EffectLevel::low,uc::EffectLevel::medium,uc::EffectLevel::high,uc::EffectLevel::ultra}) {
-                        if(ImGui::Selectable(level_label(level).c_str(),options.effects.shadows==level))options.effects.shadows=level;
-                        track("shadows-"+std::string(uc::effect_level_name(level)));
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::EndDisabled();
-                if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("effects_unavailable"));
-                ImGui::PopFont();
-            }
-            ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);
