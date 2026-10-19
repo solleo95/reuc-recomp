@@ -698,9 +698,11 @@ int main(int argc, char** argv) {
                 std::array<float,4> ambient{0.35f,0.35f,0.35f,1.f};   // the fixtures' ambient register (the saturation check raises it)
                 const std::array<std::array<float,3>,4> floor_corners{{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}}, plate_corners{{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}};
                 enum class Light { directional, point };
+                bool dual=false;   // light 0 a rig (directional), light 1 a lamp (point), both in the record's mask; dimmer lights so that the GX clamp at 1 does not hide the shares
                 auto light_uniform=[&](Light kind) {
                     gx::LightUniform light;
-                    light.color={255,255,255,255}; light.direction={0,0,1,0}; light.cosine={1,0,0,0}; light.distance={1,0,0,0};
+                    const float level=dual ? 110.f : 255.f;
+                    light.color={level,level,level,255}; light.direction={0,0,1,0}; light.cosine={1,0,0,0}; light.distance={1,0,0,0};
                     light.position=kind==Light::directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{1.5f,1.5f,-3.f,0};
                     return light;
                 };
@@ -715,6 +717,7 @@ int main(int argc, char** argv) {
                     uniforms.channels[0]=lit ? 2|(1<<2)|(2<<7)|(kind==Light::point ? 3<<9 : 0) : 0;   // material register, lighting on, light 0, clamped diffuse, distance attenuation for the point light
                     uniforms.materials[0]=material; uniforms.ambient[0]=ambient;
                     uniforms.lights[0]=light_uniform(kind);
+                    if(dual && lit) { uniforms.lights[0]=light_uniform(Light::directional); uniforms.lights[1]=light_uniform(Light::point); uniforms.channels[0]=2|(1<<2)|(1<<3)|(2<<7)|(3<<9); }
                     if(plate) { draw.material.stages=1; draw.material.swaps={0xE4,0xE4,0xE4,0xE4}; draw.material.stage[0]={0x8F8AF,0x8FFC0,64,0,0}; }   // stage 0: texture x rasterised colour (the model-valid form)
                     draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices}); draw.vertices.clear(); draw.indices.clear();   // an RT instance needs a mesh draw
                     return draw;
@@ -812,6 +815,25 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,"rt-shadows: bright ambient: shadowed %.3f, expected %.3f\n",bright_shadow,expected(shadowed_sun,Light::directional));
                 CHECK(std::abs(bright_shadow-expected(shadowed_sun,Light::directional))<=0.05 && bright_shadow>0.8);
                 ambient={0.35f,0.35f,0.35f,1.f};
+                // (b3) light classes: one record with a rig (directional) and a lamp (point): rt_shadows removes only the rig's share, rt_local_shadows only the lamp's
+                dual=true; ambient={0.1f,0.1f,0.1f,1.f};
+                const auto expected_dual=[&](const Vec& p,bool rig_traced,bool lamp_traced) {
+                    const std::array<float,2> contributions{uc::gx_light_contribution(light_uniform(Light::directional),3,2,{float(p[0]),float(p[1]),float(p[2])},{0,1,0}),
+                                                            uc::gx_light_contribution(light_uniform(Light::point),3,2,{float(p[0]),float(p[1]),float(p[2])},{0,1,0})};
+                    const std::array<float,2> visibility{rig_traced && blocked(p,Light::directional) ? 0.f : 1.f,lamp_traced && blocked(p,Light::point) ? 0.f : 1.f};
+                    return uc::shadow_factor(ambient[0],contributions,visibility);
+                };
+                for(const auto& [name,setting,rig_traced,lamp_traced]:{std::tuple{"rig only",sun_only,true,false},std::tuple{"lamp only",local_only,false,true},std::tuple{"both",Setting{true,uc::EffectLevel::medium,uc::EffectLevel::medium,uc::EffectLevel::off},true,true}}) {
+                    frame(setting,Light::directional); frame(setting,Light::directional);
+                    signal=renderer.capture_rt_shadow_signal();
+                    for(const Vec& p:{shadowed_sun,shadowed_point}) {
+                        const double got=signal_at(signal,p,2), want=expected_dual(p,rig_traced,lamp_traced);
+                        std::fprintf(stderr,"rt-shadows: dual %s at (%.2f %.2f %.2f): signal %.3f, expected %.3f\n",name,p[0],p[1],p[2],got,want);
+                        CHECK(std::abs(got-want)<=0.05);
+                    }
+                }
+                CHECK(blocked(shadowed_sun,Light::directional) && blocked(shadowed_point,Light::point));   // the two points exercise a blocked rig and a blocked lamp
+                dual=false; ambient={0.35f,0.35f,0.35f,1.f};
                 // (c) nothing is lit: every factor is 1 (Review Focus 1)
                 frame(sun_only,Light::directional,false); frame(sun_only,Light::directional,false);
                 signal=renderer.capture_rt_shadow_signal();

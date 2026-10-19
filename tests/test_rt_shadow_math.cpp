@@ -46,5 +46,13 @@ int main() {
     CHECK(uc::gx_light_contribution(point,1,2,origin,up)==0.f);   // the specular function is not a diffuse light
     gx::LightUniform dim=directional; dim.color={0.f,255.f,0.f,0.f};
     CHECK(near(uc::gx_light_contribution(dim,0,2,origin,up),0.587f,1e-3f));   // luminance weights
+    // Light classes of the shadow pass (spec: a lamp is a physical point/spot light of the level, a rig a character's directional fill light, a specular light is never traced)
+    gx::LightUniform lamp; lamp.position={0.f,5.f,70.f,0.f}; lamp.color={185.f,155.f,60.f,0.f};   // a car lamp of the first scene
+    gx::LightUniform rig; rig.position={-5.2e9f,6.9e9f,4.9e9f,0.f}; rig.color={29.f,29.f,29.f,0.f};   // a character rig light
+    gx::LightUniform spot; spot.position={1.f,2.f,3.f,0.f}; spot.cosine={1.f,0.5f,0.f,0.f};
+    CHECK(uc::rt_light_class(lamp,3)==uc::RtLightClass::lamp);
+    CHECK(uc::rt_light_class(rig,0)==uc::RtLightClass::rig);
+    CHECK(uc::rt_light_class(spot,3)==uc::RtLightClass::lamp);
+    CHECK(uc::rt_light_class(lamp,1)==uc::RtLightClass::specular && uc::rt_light_class(rig,1)==uc::RtLightClass::specular);   // the specular function wins over the position
     return 0;
 }

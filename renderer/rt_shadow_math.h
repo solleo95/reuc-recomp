@@ -28,6 +28,15 @@ inline RtLocalPreset rt_local_preset(EffectLevel level) {
         default: return {0,0,false};
     }
 }
+// What a light of a record is to the shadow pass (docs/superpowers/specs/2026-10-19-rt-level-shadows-design.md): a lamp (point or spot: a physical light of the
+// level, traced against the whole scene under rt_local_shadows), a rig (a directional fill light that follows a character, traced against characters only under
+// rt_shadows) or specular (the specular function of a channel: its share is never removed). `attenuation` is the channel's function from the record flags.
+enum class RtLightClass { lamp, rig, specular };
+inline RtLightClass rt_light_class(const gx::LightUniform& light, uint32_t attenuation) {
+    if (attenuation==1) return RtLightClass::specular;
+    const float x=light.position[0], y=light.position[1], z=light.position[2];
+    return x*x+y*y+z*z>1e10f ? RtLightClass::rig : RtLightClass::lamp;   // a position beyond 1e5 units stands for a direction (scene_lights.cpp classify_light)
+}
 constexpr float kRtSunConeRadians=0.02f;      // half angle of the sun's soft-shadow cone
 constexpr float kRtLightRadiusFraction=0.03f; // a point light's soft-shadow disc radius as a fraction of the distance to it
 // The factor that removes the shadowed lights' contribution from a pixel's light: GX clamps ambient + lights at 1 before it multiplies the material
