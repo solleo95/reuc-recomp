@@ -258,6 +258,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     }
     shaders_=shaders; cache_dir_=shaders_.parent_path();
     const std::string variant=motion_outputs_ ? "smoke.motion." : "smoke.";
+    if (motion_outputs_) { shadow_vertex_module_=shader(device, shaders_ / "smoke.shadow.vert.spv"); shadow_map_.initialize(device,memory_); }
     vertex_module_=shader(device, shaders_ / (variant+"vert.spv")); fragment_module_=shader(device, shaders_ / (variant+"frag.spv")); uber_module_=shader(device, shaders_ / (variant+"uber.spv"));
     load_pipeline_cache();
     if (motion_outputs_ && sharpening_) rcas_.initialize(device, memory_, shaders_);
@@ -274,6 +275,7 @@ constexpr uint32_t kNoBank=UINT32_MAX;
 constexpr uint32_t kNoMotion=UINT32_MAX;
 constexpr VkFormat kMotionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kGBufferFormat=VK_FORMAT_R16G16B16A16_UNORM;   // gbuffer.h
+constexpr float kShadowDistance=30.f;   // how far from the camera the shadow map reaches, in view units (metres)
 struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, reserved[3]{}; };   // effects: kEffect* bits (graphics_effects.h)
 static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112);
 struct MotionBlock { gx::Projection prev_rows; uint32_t prev_palette, kind, unused[2]; };   // smoke.slang MotionBlock (std430)
@@ -555,6 +557,43 @@ void VulkanRenderer::apply_scene_path(bool anisotropy_changed, bool path_before)
         resized_=true; rebuild();
     }
 }
+// The vertex layout of every mesh draw (gx::GpuMeshVertex); the colour pipelines and the shadow pipeline share it.
+static void mesh_vertex_input(VkVertexInputBindingDescription& binding, std::array<VkVertexInputAttributeDescription,14>& attributes) {
+    binding={0, uint32_t(sizeof(gx::GpuMeshVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
+    attributes={{
+        {0,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,position))},
+        {1,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color))},
+        {2,0,VK_FORMAT_R32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,row))},
+        {3,0,VK_FORMAT_R32G32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,texture_matrix))},
+        {14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color1))},
+        {15,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,object_normal))}}};
+    for(uint32_t i=0;i<8;++i) attributes[6+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,texcoords)+i*8)};
+}
+// The shadow map's pipeline: the shadow vertex stage (no lighting) into a depth-only target, no fragment stage, no culling, a small depth bias.
+VkPipeline VulkanRenderer::make_shadow_pipeline() {
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage=VK_SHADER_STAGE_VERTEX_BIT; stage.module=shadow_vertex_module_; stage.pName="vertexMain";
+    VkVertexInputBindingDescription binding; std::array<VkVertexInputAttributeDescription,14> attributes;
+    mesh_vertex_input(binding,attributes);
+    const std::array<VkVertexInputAttributeDescription,2> used{attributes[0],attributes[2]};   // the shadow vertex stage reads the position (0) and the matrix row (2) only
+    VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount=1; input.pVertexBindingDescriptions=&binding; input.vertexAttributeDescriptionCount=uint32_t(used.size()); input.pVertexAttributeDescriptions=used.data();
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount=viewport.scissorCount=1;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode=VK_POLYGON_MODE_FILL; raster.cullMode=VK_CULL_MODE_NONE; raster.frontFace=VK_FRONT_FACE_CLOCKWISE; raster.lineWidth=1;
+    raster.depthBiasEnable=VK_TRUE; raster.depthBiasConstantFactor=2.f; raster.depthBiasSlopeFactor=2.f;
+    VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; samples.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; depth.depthTestEnable=VK_TRUE; depth.depthWriteEnable=VK_TRUE; depth.depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL;
+    VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount=2; dynamic.pDynamicStates=dynamic_states;
+    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.depthAttachmentFormat=VK_FORMAT_D32_SFLOAT;
+    VkGraphicsPipelineCreateInfo create{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; create.pNext=&rendering; create.stageCount=1; create.pStages=&stage; create.pVertexInputState=&input;
+    create.pInputAssemblyState=&assembly; create.pViewportState=&viewport; create.pRasterizationState=&raster; create.pMultisampleState=&samples; create.pDepthStencilState=&depth;
+    create.pColorBlendState=&blending; create.pDynamicState=&dynamic; create.layout=layout_;
+    VkPipeline pipeline=VK_NULL_HANDLE;
+    vk_check(vkCreateGraphicsPipelines(device,pipeline_cache_,1,&create,nullptr,&pipeline),"shadow pipeline");
+    return pipeline;
+}
 VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
     gx::BlendState mode;
     mode.mode=key[0]&3; mode.source=(key[0]>>2)&7; mode.destination=(key[0]>>5)&7; mode.logic=(key[0]>>8)&15;
@@ -581,15 +620,8 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
         if (!uber) stages[1].pSpecializationInfo=&specialization;
         static_assert(sizeof(gx::GpuMeshVertex)==108 && sizeof(gx::Projection)==64);
-        VkVertexInputBindingDescription binding{0, uint32_t(sizeof(gx::GpuMeshVertex)), VK_VERTEX_INPUT_RATE_VERTEX};
-        std::array<VkVertexInputAttributeDescription,14> attributes{{
-            {0,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,position))},
-            {1,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color))},
-            {2,0,VK_FORMAT_R32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,row))},
-            {3,0,VK_FORMAT_R32G32_UINT,uint32_t(offsetof(gx::GpuMeshVertex,texture_matrix))},
-            {14,0,VK_FORMAT_R8G8B8A8_UNORM,uint32_t(offsetof(gx::GpuMeshVertex,color1))},
-            {15,0,VK_FORMAT_R32G32B32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,object_normal))}}};
-        for(uint32_t i=0;i<8;++i) attributes[6+i]={5+i,0,VK_FORMAT_R32G32_SFLOAT,uint32_t(offsetof(gx::GpuMeshVertex,texcoords)+i*8)};
+        VkVertexInputBindingDescription binding; std::array<VkVertexInputAttributeDescription,14> attributes;
+        mesh_vertex_input(binding,attributes);
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
@@ -991,7 +1023,8 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
     barrier(command,efb_,efb_initialized_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     const auto timer_slot=uint32_t(next_slot_);
-    if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
+    if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
+    if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
         occlusion_.initialize(device,memory_,shaders_,[this] { vk_check(present_.wait_idle(device),"occlusion idle"); });
         pass_timer_.begin(command,timer_slot,GpuPass::occlusion);
         OcclusionInputs occlusion;
@@ -1000,7 +1033,11 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         occlusion.region=in.render_size;
         occlusion.viewport={viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
         occlusion.view=view_params(*frame_projection_);
-        occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.contact_shadows; occlusion.light=dominant_light_;
+        occlusion.ao=effects_.ambient_occlusion; occlusion.contact=effects_.contact_shadows; occlusion.light=dominant_light_; occlusion.slot=timer_slot;
+        if (shadow_cleared_ && shadow_fit_ && dominant_light_) {
+            const auto& p=dominant_light_->position; const float length=std::sqrt(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]);
+            occlusion.shadow=ShadowInputs{shadow_map_.view(),shadow_map_.generation(),*shadow_fit_,shadow_preset(effects_.shadows),{p[0]/length,p[1]/length,p[2]/length}};
+        }
         occlusion.noise_frame=(upscaler_kind_==UpscalerKind::dlss || upscaler_kind_==UpscalerKind::fsr) ? uint32_t(upscale_frame_%8)+1 : 0;   // the upscaler's history averages the pattern; otherwise it stays fixed
         occlusion_.record(occlusion);
         pass_timer_.end(command,timer_slot,GpuPass::occlusion);
@@ -1309,8 +1346,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     }
     // Upscaling: a frame whose predecessor had a 3D scene draws into the internal scene targets until the scene boundary (the game's
     // copy of the finished scene, gx::SceneBoundary), is upscaled into efb_ there, and draws the rest (post chain, HUD) into efb_.
-    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; std::optional<gx::Projection> frame_projection; }
-        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint(),frame_projection_};
+    const struct { gx::SceneBoundary boundary; bool frame_start, scene_phase, scene_mode, motion_cleared, gbuffer_cleared, reset_next; std::array<float,2> jitter; uint64_t whole_frame_upscales; size_t tracker; std::optional<gx::Projection> frame_projection; std::optional<ShadowFit> shadow_fit; bool shadow_cleared; }
+        upscale_before{boundary_,frame_start_,scene_phase_,scene_mode_,motion_cleared_,gbuffer_cleared_,reset_next_,jitter_,whole_frame_upscales_,tracker_.checkpoint(),frame_projection_,shadow_fit_,shadow_cleared_};
     gx::PacketSummary summary;
     size_t scene_draws=0;          // draws [0, scene_draws) of this packet go to the scene targets
     bool upscale_here=false;       // the upscale runs after those draws, before the rest and before the packet's copy/present
@@ -1319,7 +1356,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
-            scene_lights_.clear(); frame_projection_.reset();
+            scene_lights_.clear(); frame_projection_.reset(); shadow_fit_.reset(); shadow_cleared_=false;
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
                 streamline_->begin_frame(frame_index_);
                 streamline_->marker(Streamline::Marker::simulation_start);
@@ -1413,7 +1450,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             }
             tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
             if (summary.draws[d].perspective) scene_projection_=draw.transforms->projection;
-            if (summary.draws[d].perspective && summary.draws[d].z_write && !frame_projection_) frame_projection_=draw.transforms->projection;   // the world's projection: the first depth-writing perspective draw (the weapon comes later with its own)
+            if (summary.draws[d].perspective && summary.draws[d].z_write && !frame_projection_) {   // the world's projection: the first depth-writing perspective draw (the weapon comes later with its own)
+                frame_projection_=draw.transforms->projection;
+                // The map uses last frame's dominant light (stable by its hysteresis), so the casters can be drawn as the scene packets arrive.
+                if (effects_.shadows!=EffectLevel::off && dominant_light_ && dominant_light_->kind==gx::LightKind::directional)
+                    shadow_fit_=fit_shadow(*frame_projection_,*dominant_light_,kShadowDistance,shadow_preset(effects_.shadows).resolution);
+            }
         }
         gpu_draws.push_back(info);
     }
@@ -1532,7 +1574,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {   // retried later: the packet must look unseen to the per-frame upscaling state
             boundary_=upscale_before.boundary; frame_start_=upscale_before.frame_start; scene_phase_=upscale_before.scene_phase; scene_mode_=upscale_before.scene_mode;
-            motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales; frame_projection_=upscale_before.frame_projection;
+            motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales; frame_projection_=upscale_before.frame_projection; shadow_fit_=upscale_before.shadow_fit; shadow_cleared_=upscale_before.shadow_cleared;
             tracker_.rollback(upscale_before.tracker);
             return false;
         }
@@ -1688,9 +1730,52 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     barrier(slot.command, target.color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
     *target.initialized=true;
     };
+    // The shadow map: this packet's casters (mesh draws that write depth, in the scene, without an alpha cut-out) drawn from the light, in the packet's own command buffer.
+    auto record_shadow=[&](size_t first, size_t last) {
+        if (!shadow_fit_ || effects_.shadows==EffectLevel::off || !shadow_vertex_module_) return;
+        std::vector<size_t> casters;
+        for (size_t d=first;d<last;++d) {
+            const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
+            const auto alpha_word=draw.uniforms->pixel[0];
+            const bool cut_out=((alpha_word>>16)&7)!=7 || ((alpha_word>>19)&7)!=7;   // an alpha compare other than "always": foliage, fences (a limit: they cast no shadow)
+            if (draw.mesh && info.index_count && info.vertices && summary.draws[d].perspective && summary.draws[d].z_write && !cut_out && info.key[69]==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) casters.push_back(d);
+        }
+        if (casters.empty()) return;
+        const uint32_t resolution=shadow_preset(effects_.shadows).resolution;
+        if (shadow_map_.resolution()!=resolution) {   // a preset change: the map is recreated and this frame's earlier casters are lost
+            vk_check(present_.wait_idle(device),"shadow map resize");
+            shadow_map_.ensure(resolution); shadow_cleared_=false;
+        }
+        const auto timer_slot=uint32_t(next_slot_);
+        pass_timer_.begin(slot.command,timer_slot,GpuPass::shadow);
+        barrier(slot.command,shadow_map_.image(),shadow_cleared_ ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; depth.imageView=shadow_map_.view(); depth.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp=shadow_cleared_ ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; depth.storeOp=VK_ATTACHMENT_STORE_OP_STORE; depth.clearValue.depthStencil={1.f,0};
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea={{0,0},{resolution,resolution}}; rendering.layerCount=1; rendering.pDepthAttachment=&depth;
+        vkCmdBeginRendering(slot.command,&rendering);
+        if (!shadow_pipeline_) shadow_pipeline_=make_shadow_pipeline();
+        vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,shadow_pipeline_);
+        const VkViewport viewport{0,0,float(resolution),float(resolution),0,1}; const VkRect2D scissor{{0,0},{resolution,resolution}};
+        vkCmdSetViewport(slot.command,0,1,&viewport); vkCmdSetScissor(slot.command,0,1,&scissor);
+        for (const size_t d:casters) {
+            const auto& info=gpu_draws[d];
+            VkDeviceSize vertex_offset=info.vertex_offset;
+            vkCmdBindVertexBuffers(slot.command,0,1,&info.vertices->buffer,&vertex_offset);
+            vkCmdBindIndexBuffer(slot.command,info.indices->buffer,info.index_offset,VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[d],0,nullptr);
+            DrawPush push{shadow_fit_->view_to_light,info.palette,info.current,info.indexed,0,info.bank};   // the light's matrix takes the place of the projection; motion stays "none"
+            push.viewport[2]=push.viewport[3]=float(resolution);   // the vertex stage divides its jitter by the viewport (zero jitter here)
+            vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push);
+            vkCmdDrawIndexed(slot.command,info.index_count,1,info.first_index,info.first_vertex,0);
+        }
+        vkCmdEndRendering(slot.command);
+        shadow_cleared_=true;
+        pass_timer_.end(slot.command,timer_slot,GpuPass::shadow);
+    };
     const bool scene_only=scene_phase_ && !upscale_here;   // the whole packet belongs to the scene: copy and clear act on the scene targets
     const bool writes_scene=scene_phase_ && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
-    if (writes_scene) record_pass(scene_target,0,scene_draws,true);
+    if (writes_scene) { record_pass(scene_target,0,scene_draws,true); record_shadow(0,scene_draws); }
     if (upscale_here) {
         if (scene_draws || packet.present) scene_restore_copy_.reset();   // another draw changed the scene since the saved copy
         record_upscale(slot.command,packet.black_output);
@@ -1865,7 +1950,10 @@ void VulkanRenderer::shutdown() {
         for (auto [key,pipeline]:uber_pipelines_) vkDestroyPipeline(device,pipeline,nullptr);
         pipelines_.clear(); uber_pipelines_.clear();
         if (pipeline_cache_) { save_pipeline_cache(); vkDestroyPipelineCache(device,pipeline_cache_,nullptr); pipeline_cache_=VK_NULL_HANDLE; }
-        for (auto module:{vertex_module_,fragment_module_,uber_module_}) if (module) vkDestroyShaderModule(device,module,nullptr);
+        if (shadow_pipeline_) vkDestroyPipeline(device,shadow_pipeline_,nullptr);
+        shadow_pipeline_=VK_NULL_HANDLE; shadow_map_.shutdown();
+        for (auto module:{vertex_module_,fragment_module_,uber_module_,shadow_vertex_module_}) if (module) vkDestroyShaderModule(device,module,nullptr);
+        shadow_vertex_module_=VK_NULL_HANDLE;
         vertex_module_=fragment_module_=uber_module_=VK_NULL_HANDLE;
         if (layout_) vkDestroyPipelineLayout(device, layout_, nullptr);
         if (texture_layout_) vkDestroyDescriptorSetLayout(device,texture_layout_,nullptr);

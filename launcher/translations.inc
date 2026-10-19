@@ -19,6 +19,7 @@
 {"per_pixel_lighting",{"Per-pixel lighting","Попиксельное освещение","Pixelgenaue Beleuchtung","Éclairage par pixel","Iluminación por píxel","Illuminazione per pixel","Iluminação por pixel","Oświetlenie na piksel","Попіксельне освітлення","Piksel başına aydınlatma","ピクセル単位のライティング","픽셀 단위 조명","逐像素光照"}},
 {"ambient_occlusion",{"Ambient occlusion (GTAO)","Затенение окружающего света (GTAO)","Umgebungsverdeckung (GTAO)","Occlusion ambiante (GTAO)","Oclusión ambiental (GTAO)","Occlusione ambientale (GTAO)","Oclusão de ambiente (GTAO)","Okluzja otoczenia (GTAO)","Затінення навколишнього світла (GTAO)","Ortam tıkanması (GTAO)","アンビエントオクルージョン（GTAO）","앰비언트 오클루전(GTAO)","环境光遮蔽（GTAO）"}},
 {"contact_shadows",{"Contact shadows","Контактные тени","Kontaktschatten","Ombres de contact","Sombras de contacto","Ombre di contatto","Sombras de contato","Cienie kontaktowe","Контактні тіні","Temas gölgeleri","コンタクトシャドウ","접촉 그림자","接触阴影"}},
+{"shadows",{"Shadows","Тени","Schatten","Ombres","Sombras","Ombre","Sombras","Cienie","Тіні","Gölgeler","シャドウ","그림자","阴影"}},
 {"level_low",{"Low","Низкое","Niedrig","Faible","Bajo","Basso","Baixo","Niski","Низьке","Düşük","低","낮음","低"}},
 {"level_medium",{"Medium","Среднее","Mittel","Moyen","Medio","Medio","Médio","Średni","Середнє","Orta","中","보통","中"}},
 {"level_high",{"High","Высокое","Hoch","Élevé","Alto","Alto","Alto","Wysoki","Високе","Yüksek","高","높음","高"}},

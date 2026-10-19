@@ -1,6 +1,7 @@
 #pragma once
 #include "graphics_effects.h"
 #include "scene_lights.h"
+#include "shadow_math.h"
 #include "upscaler.h"
 #include "view_reconstruct.h"
 #include <vulkan/vulkan.h>
@@ -11,6 +12,8 @@
 #include <optional>
 
 namespace uc {
+// The shadow map of this frame (renderer/shadow_map.h, in VK_IMAGE_LAYOUT_GENERAL) and what the composite needs to read it.
+struct ShadowInputs { VkImageView map=VK_NULL_HANDLE; uint64_t generation=0; ShadowFit fit{}; ShadowPreset preset{}; std::array<float,3> to_light{}; };
 // What the screen-space occlusion needs of a scene: the internal scene targets in VK_IMAGE_LAYOUT_GENERAL (left there), the scene viewport in pixels of
 // those targets and the projection the scene was drawn with.
 struct OcclusionInputs {
@@ -22,7 +25,9 @@ struct OcclusionInputs {
     EffectLevel ao=EffectLevel::off;
     bool contact=false;                   // contact shadows toward `light` (nothing happens without one)
     std::optional<gx::CollectedLight> light;  // the scene's dominant directional or spot light
-    uint64_t targets_generation=0;        // VulkanRenderer::targets_generation(): changes when the scene targets were recreated
+    std::optional<ShadowInputs> shadow;   // shadow maps: multiplied into the colour together with the occlusion
+    uint32_t slot=0;                      // the frame slot: picks this frame's shadow parameter block (frames overlap on the GPU)
+    uint64_t targets_generation=0;       // VulkanRenderer::targets_generation(): changes when the scene targets were recreated
     uint32_t noise_frame=0;             // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
 };
 // The slices, steps and resolution of a preset.
@@ -39,6 +44,7 @@ public:
 private:
     struct Image { VkImage image=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; VkImageView view=VK_NULL_HANDLE; bool initialized=false; };
     uint32_t memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const;
+    void create_shadow_block();
     Image make_image(VkFormat format, VkExtent2D extent);
     void destroy_image(Image& image);
     void write_image(uint32_t binding, VkImageView view, VkDescriptorType type);
@@ -55,7 +61,9 @@ private:
     Image raw_, blurred_, contact_;
     VkExtent2D ao_size_{}, contact_size_{};
     VkImageView bound_depth_=VK_NULL_HANDLE, bound_gbuffer_=VK_NULL_HANDLE, bound_color_=VK_NULL_HANDLE;
-    uint64_t bound_generation_=0;
+    uint64_t bound_generation_=0, bound_shadow_generation_=0;
+    VkImageView bound_shadow_=VK_NULL_HANDLE;
+    VkBuffer shadow_block_=VK_NULL_HANDLE; VkDeviceMemory shadow_block_memory_=VK_NULL_HANDLE; void* shadow_block_mapped_=nullptr;   // one 256-byte block per frame slot
     std::function<void()> idle_;
 };
 }

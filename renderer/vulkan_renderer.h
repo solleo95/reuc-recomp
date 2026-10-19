@@ -13,6 +13,8 @@
 #include "fsr_frame_generation.h"
 #include "scene_boundary.h"
 #include "scene_lights.h"
+#include "shadow_map.h"
+#include "shadow_math.h"
 #include "upscale_mode.h"
 #include "upscaler.h"
 #ifdef _WIN32
@@ -84,10 +86,10 @@ public:
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one
     void force_gbuffer(bool on) { owner(); force_gbuffer_=on; }   // tests: write the G-buffer although no effect reads it yet
     void force_lights(bool on) { owner(); force_lights_=on; }   // tests: collect the scene's lights although no effect reads them yet
-    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows); }   // the shadow maps will add theirs
+    bool effects_need_lights() const { return motion_outputs_ && (force_lights_ || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
     const std::optional<gx::CollectedLight>& dominant_light() const { return dominant_light_; }   // the directional or spot light of the last scene, if any
     void force_scene_targets(bool on);   // tests: keep the scene-target path (blit pass-through without an upscaler) although no effect needs it
-    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows); }
+    bool effects_need_gbuffer() const { return motion_outputs_ && (force_gbuffer_ || effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || effects_.shadows!=EffectLevel::off); }
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
     bool wait_for_pending(uint64_t timeout_ns); // True when an unfinished batch was waited on, including timeout.
@@ -227,6 +229,12 @@ private:
     bool gbuffer_cleared_=false;   // the G-buffer was cleared (and bound) by a scene pass of this frame
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
     OcclusionPass occlusion_;
+    ShadowMap shadow_map_;
+    VkShaderModule shadow_vertex_module_=VK_NULL_HANDLE;
+    VkPipeline shadow_pipeline_=VK_NULL_HANDLE;
+    VkPipeline make_shadow_pipeline();
+    std::optional<ShadowFit> shadow_fit_;                  // this frame's light box (last frame's dominant directional light), set with the world projection
+    bool shadow_cleared_=false;                            // the map was cleared (and drawn into) by a scene packet of this frame
     uint64_t targets_generation_=1;                        // bumped whenever the scene targets or the EFB are destroyed
     std::optional<gx::Projection> frame_projection_;       // the projection the scene's world was drawn with this frame (what the screen-space effects reconstruct with)
     gx::SceneLightCollector scene_lights_;                 // the scene draws' lights of this frame, filled while the scene is recorded

@@ -31,6 +31,15 @@ struct Params {
 [[vk::binding(5, 0)]] Texture2D<float> occlusion;
 [[vk::binding(6, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> rawOcclusionOut;
 [[vk::binding(7, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> occlusionOut;
+// Shadows (renderer/occlusion_pass.cpp ShadowBlock, dynamic offset per frame slot): the view -> light-box matrix, the map's texel size and the preset.
+struct ShadowBlock {
+    float4 rows[3];       // view -> light: x, y in -1..1 over the box, z in 0..1 along the light
+    float4 info;          // x = resolution, y = texel size in view units, z = depth range in view units, w = penumbra width per view unit of occluder distance
+    uint4 taps;           // x = filter taps, y = blocker-search taps, z = soft (PCSS), w = enabled
+    float4 toLight;       // xyz = unit view-space direction to the light
+};
+[[vk::binding(10, 0)]] ConstantBuffer<ShadowBlock> shadow;
+[[vk::binding(11, 0)]] Texture2D<float> shadowMap;
 [[vk::binding(8, 0)]] Texture2D<float> contactTex;
 [[vk::binding(9, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> contactOut;
 
@@ -185,6 +194,50 @@ float upsampleOcclusion(Texture2D<float> source, uint2 size, uint2 pixel, float3
     return total > 0.0 ? sum / total : 1.0;
 }
 
+// Visibility of a view-space point from the light: 1 lit .. 0 shadowed. The point is pushed along its normal by 1.5 texels (the receiver bias), then
+// compared against the map with PCF (a grid of taps) or PCSS (a blocker search sets the filter radius).
+float shadowAt(float3 lightPosition, float depthBias, float2 offsetTexels) {
+    float2 uv = lightPosition.xy * 0.5 + 0.5 + offsetTexels / shadow.info.x;
+    if (any(uv < 0.0) || any(uv >= 1.0)) return 1.0;
+    float stored = shadowMap.Load(int3(int2(uv * shadow.info.x), 0));
+    return stored + depthBias >= lightPosition.z ? 1.0 : 0.0;
+}
+float shadowVisibility(float3 position, float3 normal) {
+    if (shadow.taps.w == 0) return 1.0;
+    float texel = shadow.info.y;
+    float3 p = position + normal * (1.5 * texel) + shadow.toLight.xyz * (0.5 * texel);
+    float3 lp = float3(dot(shadow.rows[0].xyz, p) + shadow.rows[0].w, dot(shadow.rows[1].xyz, p) + shadow.rows[1].w, dot(shadow.rows[2].xyz, p) + shadow.rows[2].w);
+    if (any(abs(lp.xy) >= 1.0) || lp.z <= 0.0 || lp.z >= 1.0) return 1.0;
+    float bias = 1.5 * texel / shadow.info.z;
+    float radius = 1.0;   // filter radius in texels
+    if (shadow.taps.z != 0) {   // PCSS: the average depth of the blockers near the receiver gives the penumbra
+        float blockerSum = 0.0, blockers = 0.0;
+        for (uint i = 0; i < shadow.taps.y; ++i) {
+            float r = 6.0 * sqrt((float(i) + 0.5) / float(shadow.taps.y)), a = float(i) * 2.39996323;
+            float2 offset = r * float2(cos(a), sin(a));
+            float2 uv = lp.xy * 0.5 + 0.5 + offset / shadow.info.x;
+            if (any(uv < 0.0) || any(uv >= 1.0)) continue;
+            float stored = shadowMap.Load(int3(int2(uv * shadow.info.x), 0));
+            if (stored + bias < lp.z) { blockerSum += stored; blockers += 1.0; }
+        }
+        if (blockers == 0.0) return 1.0;
+        float distanceToBlocker = (lp.z - blockerSum / blockers) * shadow.info.z;   // view units
+        radius = clamp(distanceToBlocker * shadow.info.w / texel, 1.0, 8.0);
+    }
+    float lit = 0.0;
+    if (shadow.taps.z != 0) {
+        for (uint i = 0; i < shadow.taps.x; ++i) {
+            float r = radius * sqrt((float(i) + 0.5) / float(shadow.taps.x)), a = float(i) * 2.39996323;
+            lit += shadowAt(lp, bias, r * float2(cos(a), sin(a)));
+        }
+        return lit / float(shadow.taps.x);
+    }
+    uint grid = max(2u, uint(round(sqrt(float(shadow.taps.x)))));   // low 2x2, medium 3x3
+    for (uint y = 0; y < grid; ++y) for (uint x = 0; x < grid; ++x)
+        lit += shadowAt(lp, bias, (float2(x, y) - 0.5 * float(grid - 1)) * radius);
+    return lit / float(grid * grid);
+}
+
 [shader("compute")] [numthreads(8, 8, 1)]
 void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.region)) return;
@@ -193,7 +246,10 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
     float ao = (params.flags & 1u) != 0 ? upsampleOcclusion(occlusion, params.aoSize, id.xy, position) : 1.0;
     float contact = (params.flags & 2u) != 0 ? upsampleOcclusion(contactTex, params.contactSize, id.xy, position) : 1.0;
+    float visibility = (params.flags & 4u) != 0 ? shadowVisibility(position, normal) : 1.0;
+    bool lit = (uint(round(sceneGBuffer.Load(int3(int2(id.xy), 0)).w * 65535.0)) & kGBufferLit) != 0;
+    float facing = lit ? smoothstep(0.0, 0.3, dot(normal, shadow.toLight.xyz)) : 1.0;   // a lit surface turned away from the light is dark already
     float4 color = sceneColor[id.xy];
-    color.rgb *= lerp(1.0, ao, saturate(params.strength) * (1.0 - fog)) * lerp(1.0, contact, 0.6 * (1.0 - fog));
+    color.rgb *= lerp(1.0, ao, saturate(params.strength) * (1.0 - fog)) * lerp(1.0, contact, 0.6 * (1.0 - fog)) * lerp(1.0, visibility, 0.55 * facing * (1.0 - fog));
     sceneColor[id.xy] = color;
 }

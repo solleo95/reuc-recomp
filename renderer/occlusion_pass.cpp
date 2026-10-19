@@ -1,6 +1,7 @@
 #include "occlusion_pass.h"
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -16,7 +17,11 @@ struct Params {
     float light[4]; uint32_t contact_size[2]; uint32_t reserved_size[2];
 };
 static_assert(sizeof(Params)==128 && offsetof(Params,region)==40 && offsetof(Params,radius)==56 && offsetof(Params,strength)==80 && offsetof(Params,depth_range)==88 && offsetof(Params,light)==96 && offsetof(Params,contact_size)==112);
-constexpr uint32_t kFlagOcclusion=1, kFlagContact=2;
+constexpr uint32_t kFlagOcclusion=1, kFlagContact=2, kFlagShadow=4;
+constexpr uint32_t kShadowBlockStride=256, kShadowBlockSlots=8;   // gtao.slang ShadowBlock, one per frame slot, aligned to the largest uniform offset alignment
+struct ShadowBlock { float rows[3][4]; float info[4]; uint32_t taps[4]; float to_light[4]; };
+static_assert(sizeof(ShadowBlock)==96);
+constexpr float kLightAngle=0.04f;   // the light's angular size for the penumbra, in radians (wider than the real sun: the game's light is artistic)
 constexpr float kRadius=0.5f;      // view-space units: the game's units are metres (projection near 0.01, far 1000)
 constexpr float kFalloff=0.6f;
 constexpr float kStrength=1.0f;
@@ -96,10 +101,11 @@ void OcclusionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProp
         VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; sampler.magFilter=sampler.minFilter=VK_FILTER_LINEAR;
         check(vkCreateSampler(device_,&sampler,nullptr,&sampler_),"sampler");
-        VkDescriptorSetLayoutBinding bindings[10]{};   // 0 sampler; 1 depth, 2 G-buffer (sampled); 3 colour (storage); 4 raw AO, 5 AO (sampled); 6, 7 AO outputs (storage); 8 contact (sampled); 9 contact output (storage)
+        VkDescriptorSetLayoutBinding bindings[12]{};   // 0 sampler; 1 depth, 2 G-buffer (sampled); 3 colour (storage); 4 raw AO, 5 AO (sampled); 6, 7 AO outputs (storage); 8 contact (sampled); 9 contact output (storage)
         bindings[0]={0,VK_DESCRIPTOR_TYPE_SAMPLER,1,VK_SHADER_STAGE_COMPUTE_BIT,&sampler_};
         for (uint32_t i=1;i<10;++i) bindings[i]={i,(i==3 || i==6 || i==7 || i==9) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
-        VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=10; set.pBindings=bindings;
+        bindings[10]={10,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr}; bindings[11]={11,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};   // 10 shadow parameters, 11 shadow map
+        VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=12; set.pBindings=bindings;
         check(vkCreateDescriptorSetLayout(device_,&set,nullptr,&set_layout_),"descriptor layout");
         const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(Params)};
         VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout.setLayoutCount=1; layout.pSetLayouts=&set_layout_; layout.pushConstantRangeCount=1; layout.pPushConstantRanges=&push;
@@ -110,12 +116,26 @@ void OcclusionPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProp
             pipeline.layout=layout_;
             check(vkCreateComputePipelines(device_,VK_NULL_HANDLE,1,&pipeline,nullptr,&pipelines_[i]),"pipeline");
         }
-        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLER,1},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,5},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,4}};
-        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=1; pool.poolSizeCount=3; pool.pPoolSizes=sizes;
+        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLER,1},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,6},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,4},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1}};
+        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=1; pool.poolSizeCount=4; pool.pPoolSizes=sizes;
         check(vkCreateDescriptorPool(device_,&pool,nullptr,&pool_),"descriptor pool");
         VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; allocate.descriptorPool=pool_; allocate.descriptorSetCount=1; allocate.pSetLayouts=&set_layout_;
         check(vkAllocateDescriptorSets(device_,&allocate,&set_),"descriptor set");
+        create_shadow_block();
     } catch (...) { shutdown(); throw; }
+}
+void OcclusionPass::create_shadow_block() {
+    VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; buffer.size=kShadowBlockStride*kShadowBlockSlots; buffer.usage=VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    check(vkCreateBuffer(device_,&buffer,nullptr,&shadow_block_),"shadow block");
+    VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device_,shadow_block_,&requirements);
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size;
+    allocate.memoryTypeIndex=memory_type(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    check(vkAllocateMemory(device_,&allocate,nullptr,&shadow_block_memory_),"shadow block memory");
+    check(vkBindBufferMemory(device_,shadow_block_,shadow_block_memory_,0),"bind shadow block");
+    check(vkMapMemory(device_,shadow_block_memory_,0,VK_WHOLE_SIZE,0,&shadow_block_mapped_),"map shadow block");
+    const VkDescriptorBufferInfo info{shadow_block_,0,sizeof(ShadowBlock)};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; write.dstSet=set_; write.dstBinding=10; write.descriptorCount=1; write.descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC; write.pBufferInfo=&info;
+    vkUpdateDescriptorSets(device_,1,&write,0,nullptr);
 }
 void OcclusionPass::resize(VkExtent2D ao_size, VkExtent2D contact_size) {
     idle_();   // the set and the images may be used by frames in flight (render scale or preset change)
@@ -129,7 +149,7 @@ void OcclusionPass::resize(VkExtent2D ao_size, VkExtent2D contact_size) {
 void OcclusionPass::record(const OcclusionInputs& in) {
     const auto preset=ao_preset(in.ao);
     const bool contact=in.contact && in.light.has_value();
-    if ((!preset.slices && !contact) || !in.region.width || !in.region.height) return;
+    if ((!preset.slices && !contact && !in.shadow) || !in.region.width || !in.region.height) return;
     const VkExtent2D half{(in.region.width+1)/2,(in.region.height+1)/2};
     const VkExtent2D ao_size=preset.full_resolution ? in.region : half, contact_size=half;
     if (ao_size.width!=ao_size_.width || ao_size.height!=ao_size_.height || contact_size.width!=contact_size_.width || contact_size.height!=contact_size_.height) resize(ao_size,contact_size);
@@ -138,6 +158,14 @@ void OcclusionPass::record(const OcclusionInputs& in) {
         bound_generation_=in.targets_generation;
         write_image(1,in.depth.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); write_image(2,in.gbuffer.view,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); write_image(3,in.color.view,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
         bound_depth_=in.depth.view; bound_gbuffer_=in.gbuffer.view; bound_color_=in.color.view;
+    }
+    {   // the shadow map binding: the real map, or the scene depth as a valid stand-in while no shadow is drawn
+        const VkImageView wanted=in.shadow ? in.shadow->map : in.depth.view;
+        const uint64_t generation=in.shadow ? in.shadow->generation : 0;
+        if (bound_shadow_!=wanted || bound_shadow_generation_!=generation) {
+            if (bound_shadow_) idle_();
+            write_image(11,wanted,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE); bound_shadow_=wanted; bound_shadow_generation_=generation;
+        }
     }
     const auto command=in.command;
     for (Image* image : {&raw_,&blurred_,&contact_}) if (!image->initialized) { image_barrier(command,image->image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL); image->initialized=true; }
@@ -149,12 +177,24 @@ void OcclusionPass::record(const OcclusionInputs& in) {
     params.radius=kRadius; params.falloff=kFalloff; params.slices=preset.slices; params.steps=preset.steps; params.noise=in.noise_frame; params.strength=kStrength;
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.contact_size[0]=contact_size.width; params.contact_size[1]=contact_size.height;
-    params.flags=(preset.slices ? kFlagOcclusion : 0)|(contact ? kFlagContact : 0);
+    params.flags=(preset.slices ? kFlagOcclusion : 0)|(contact ? kFlagContact : 0)|(in.shadow ? kFlagShadow : 0);
+    const uint32_t block_offset=(in.slot%kShadowBlockSlots)*kShadowBlockStride;
+    {
+        ShadowBlock block{};
+        if (in.shadow) {
+            const auto& s=*in.shadow;
+            for (int row=0;row<3;++row) for (int column=0;column<4;++column) block.rows[row][column]=s.fit.view_to_light[row][column];
+            block.info[0]=float(s.preset.resolution); block.info[1]=s.fit.texel_world; block.info[2]=s.fit.depth_range; block.info[3]=kLightAngle;
+            block.taps[0]=s.preset.filter_taps; block.taps[1]=s.preset.blocker_taps; block.taps[2]=s.preset.soft ? 1 : 0; block.taps[3]=1;
+            block.to_light[0]=s.to_light[0]; block.to_light[1]=s.to_light[1]; block.to_light[2]=s.to_light[2];
+        }
+        std::memcpy(static_cast<char*>(shadow_block_mapped_)+block_offset,&block,sizeof block);
+    }
     if (contact) {   // a directional light's position is a far point: the shader normalises it; a spot light's is a real position
         const auto& light=*in.light;
         params.light[0]=light.position[0]; params.light[1]=light.position[1]; params.light[2]=light.position[2]; params.light[3]=light.kind==gx::LightKind::spot ? 1.f : 0.f;
     }
-    vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set_,0,nullptr);
+    vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set_,1,&block_offset);
     vkCmdPushConstants(command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
     struct Step { size_t pipeline; VkExtent2D size; };   // pipelines_: 0 occlusion search, 1 blur, 2 composite, 3 contact shadows
     std::vector<Step> steps;
@@ -171,6 +211,9 @@ void OcclusionPass::shutdown() {
     if (!device_) return;
     vkDeviceWaitIdle(device_);
     destroy_image(raw_); destroy_image(blurred_); destroy_image(contact_);
+    if (shadow_block_mapped_) vkUnmapMemory(device_,shadow_block_memory_);
+    if (shadow_block_) vkDestroyBuffer(device_,shadow_block_,nullptr);
+    if (shadow_block_memory_) vkFreeMemory(device_,shadow_block_memory_,nullptr);
     if (pool_) vkDestroyDescriptorPool(device_,pool_,nullptr);
     for (auto pipeline:pipelines_) if (pipeline) vkDestroyPipeline(device_,pipeline,nullptr);
     if (layout_) vkDestroyPipelineLayout(device_,layout_,nullptr);

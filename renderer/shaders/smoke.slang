@@ -130,6 +130,7 @@ Output vertexMain(Input input) {
     [unroll] for (uint i = 0; i < 3; ++i) { uint r = normalRow + i; uint word = r < 32 ? loaded.x : loaded.y; allLoaded = allLoaded && (((word >> (r & 31)) & 1u) != 0); }
     float3 viewNormal = input.objectNormal;
     if (allLoaded) viewNormal = float3(dot(palettes[projection.palette].normal[normalRow].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 1].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 2].xyz, input.objectNormal));
+#ifndef SHADOW   // the shadow map's vertex stage (smoke.shadow.vert.spv) stops here: position only, no lighting, no texture coordinates
     float3 normal = dot(viewNormal,viewNormal)>0.0 ? normalize(viewNormal) : float3(0.0);
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
@@ -137,6 +138,7 @@ Output vertexMain(Input input) {
     output.rawColor0 = input.color; output.rawColor1 = input.color1; output.viewPosition = viewPosition.xyz; output.viewNormal = viewNormal;
 #endif
     [unroll] for (uint id = 0; id < 8; ++id) output.texcoords[id] = generateTexcoord(id, input);
+#endif
     return output;
 }
 bool alphaCompare(uint value, uint reference, uint operation) {

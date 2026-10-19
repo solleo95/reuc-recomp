@@ -226,6 +226,7 @@ void SettingsMenu::effects_tab(float unit) {
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
     ImGui::EndDisabled();
     if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
+    level_combo("##shadows","shadows",options.effects.shadows);
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

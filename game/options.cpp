@@ -53,6 +53,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--features") options.features = true;
         else if (arg == "--per-pixel-lighting") options.effects.per_pixel_lighting = true;
         else if (arg == "--contact-shadows") options.effects.contact_shadows = true;
+        else if (arg == "--shadows") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --shadows";
+            const auto level = effect_level_from_name(arguments[i]);
+            if (!level) return "invalid value for --shadows";
+            options.effects.shadows = *level;
+        }
         else if (arg == "--ambient-occlusion") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --ambient-occlusion";
             const auto level = effect_level_from_name(arguments[i]);

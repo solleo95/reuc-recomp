@@ -356,6 +356,82 @@ int main(int argc, char** argv) {
             CHECK(added>=10);   // both effects darken: the contact shadows go on top of the occlusion
             frame(false,uc::EffectLevel::off,true); frame(false,uc::EffectLevel::off,true);
         }
+        if (wanted("shadows")) {
+            // Shadow maps: the contact-shadow fixture (a box on a floor under a directional light) as mesh draws, which are the shadow casters.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };
+            const auto mesh_surface=[&](std::array<std::array<float,3>,4> corners,std::array<float,3> normal,bool directional) {
+                auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; }
+                projection(draw);
+                auto& uniforms=draw.uniforms.edit();
+                uniforms.channels[0]=1|2|(1<<2)|(2<<7);
+                uniforms.ambient[0]={90,90,90,255};
+                uniforms.lights[0].color={255,255,255,255}; uniforms.lights[0].direction={0,0,1,0};
+                uniforms.lights[0].position=directional ? std::array<float,4>{-1e6f,1e6f,1e6f,0} : std::array<float,4>{-0.5f,1.f,-3.f,0};
+                uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices});   // meshes cast shadows; inline vertices do not
+                draw.vertices.clear(); draw.indices.clear();
+                return draw;
+            };
+            auto frame=[&](uc::EffectLevel level,bool directional,bool menu=false) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.shadows=level; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                if(!menu) {
+                    scene.draws.push_back(mesh_surface({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{0,1,0},directional));
+                    scene.draws.push_back(mesh_surface({{{-0.5f,-0.4f,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,1,0},directional));
+                    scene.draws.push_back(mesh_surface({{{-0.5f,-1,-4},{0.5f,-1,-4},{0.5f,-0.4f,-4},{-0.5f,-0.4f,-4}}},{0,0,1},directional));
+                    scene.draws.push_back(mesh_surface({{{0.5f,-1,-4},{0.5f,-1,-5},{0.5f,-0.4f,-5},{0.5f,-0.4f,-4}}},{1,0,0},directional));
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                }
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto red=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4]); };
+            renderer.force_lights(true);   // the light of the previous frame is what the map is drawn with: collect it without the shadows being on yet
+            frame(uc::EffectLevel::off,true); frame(uc::EffectLevel::off,true);
+            const auto off=frame(uc::EffectLevel::off,true);
+            frame(uc::EffectLevel::medium,true); frame(uc::EffectLevel::medium,true);
+            const auto on=frame(uc::EffectLevel::medium,true);
+            if(const char* dump=std::getenv("UC_SMOKE_DUMP")) { uc::save_png(off,std::filesystem::path(dump)/"shadow-off.png"); uc::save_png(on,std::filesystem::path(dump)/"shadow-on.png"); }   // debugging aid
+            int shadow=0, far_floor=0;
+            for(uint32_t y=262;y<340;++y) for(uint32_t x=640;x<900;++x) shadow=std::max(shadow,red(off,x,y)-red(on,x,y));   // the floor right of and behind the box
+            for(uint32_t x=100;x<500;x+=20) far_floor=std::max(far_floor,std::abs(red(off,x,200)-red(on,x,200)));
+            std::fprintf(stderr,"shadows: floor shadow %d, far floor %d, shadow pass runs %llu\n",shadow,far_floor,(unsigned long long)renderer.pass_runs(uc::GpuPass::shadow));
+            CHECK(shadow>=25 && far_floor<=1 && renderer.pass_runs(uc::GpuPass::shadow)>0);
+            for(const auto level:{uc::EffectLevel::low,uc::EffectLevel::high,uc::EffectLevel::ultra}) {   // every preset shadows the floor and leaves the far floor alone
+                frame(level,true); frame(level,true);
+                const auto shaded=frame(level,true);
+                int dark=0, distant=0;
+                for(uint32_t y=262;y<340;++y) for(uint32_t x=640;x<900;++x) dark=std::max(dark,red(off,x,y)-red(shaded,x,y));
+                for(uint32_t x=100;x<500;x+=20) distant=std::max(distant,std::abs(red(off,x,200)-red(shaded,x,200)));
+                std::fprintf(stderr,"shadows %s: floor shadow %d, far floor %d\n",std::string(uc::effect_level_name(level)).c_str(),dark,distant);
+                CHECK(dark>=25 && distant<=1);
+            }
+            frame(uc::EffectLevel::off,false); frame(uc::EffectLevel::off,false); const auto point_off=frame(uc::EffectLevel::off,false);
+            frame(uc::EffectLevel::medium,false); frame(uc::EffectLevel::medium,false);
+            CHECK(frame(uc::EffectLevel::medium,false).rgba==point_off.rgba);   // a point light is no shadow caster: nothing changes (Review Focus 1)
+            frame(uc::EffectLevel::medium,true); frame(uc::EffectLevel::medium,true);
+            const auto runs=renderer.pass_runs(uc::GpuPass::shadow);
+            const auto menu=frame(uc::EffectLevel::medium,true,true);   // no scene this frame: no shadow pass (Review Focus 2)
+            CHECK(renderer.pass_runs(uc::GpuPass::shadow)==runs && red(menu,100,100)==16);
+            frame(uc::EffectLevel::medium,true); frame(uc::EffectLevel::medium,true);
+            auto before_pools=renderer.descriptor_pool_creations(), before_textures=renderer.texture_creations();
+            for(int i=0;i<10;++i) frame(uc::EffectLevel::medium,true);
+            const auto steady_pools=renderer.descriptor_pool_creations()-before_pools, steady_textures=renderer.texture_creations()-before_textures;
+            before_pools=renderer.descriptor_pool_creations(); before_textures=renderer.texture_creations();
+            for(int i=0;i<20;++i) frame(i%2 ? uc::EffectLevel::low : uc::EffectLevel::medium,true);   // a preset change swaps the map, not the per-frame resources
+            CHECK(renderer.descriptor_pool_creations()-before_pools<=2*steady_pools+2 && renderer.texture_creations()-before_textures<=2*steady_textures+2);
+            renderer.force_lights(false);
+            frame(uc::EffectLevel::off,true); frame(uc::EffectLevel::off,true);
+        }
         if (wanted("ppl")) {
             // Per-pixel lighting: a GX point light in front of a quad facing the camera. Per vertex the light reaches every corner equally (a flat dim quad);
             // per pixel the centre is lit by the near light. Baked-colour (unlit) draws stay identical.

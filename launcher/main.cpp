@@ -213,6 +213,7 @@ int run(int argc,wchar_t** argv) {
                 const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
                 if(frame==when || frame==when+1)io.AddMouseButtonEvent(0,frame==when);
             }
+            if(frame==464) {const auto point=positions.at("sharpness");io.AddMousePosEvent(point.x,point.y);io.AddMouseWheelEvent(0,-100);}
             if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,41},true);}
             if(frame==480) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
             if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=!other.properties.value("smoke_external_edit",false);uc::save_config(config_path,other);}
@@ -387,7 +388,11 @@ int run(int argc,wchar_t** argv) {
             }
             ImGui::PopFont();ImGui::PopItemWidth();ImGui::EndChild();
             ImGui::SameLine(0,column_gap);
-            ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_None);ImGui::PushItemWidth(-1);
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,0});
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::PushItemWidth(-1);
             ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
             const bool checking=features_query.valid();
             const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : kind==uc::UpscalerKind::smaa ? "SMAA" : tr("off");};
@@ -494,8 +499,6 @@ int run(int argc,wchar_t** argv) {
             }
             ImGui::PopFont();
             ImGui::Dummy({0,8*unit});
-            toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
-            ImGui::Dummy({0,8*unit});
             {   // ambient occlusion: off and four presets; greyed out on a GPU without the screen-space path (a saved choice stays visible and can be left)
                 const auto level_label=[&](uc::EffectLevel level) -> std::string {return level==uc::EffectLevel::off ? tr("off") : tr(level==uc::EffectLevel::low ? "level_low" : level==uc::EffectLevel::medium ? "level_medium" : level==uc::EffectLevel::high ? "level_high" : "level_ultra");};
                 const bool blocked=features_ready && !features.effects && options.effects.ambient_occlusion==uc::EffectLevel::off;
@@ -514,11 +517,32 @@ int run(int argc,wchar_t** argv) {
                 ImGui::PopFont();
             }
             ImGui::Dummy({0,8*unit});
+            toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
+            ImGui::Dummy({0,8*unit});
             toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,features_ready && !features.effects && !options.effects.contact_shadows,tr("effects_unavailable"));
+            ImGui::Dummy({0,8*unit});
+            {   // shadow maps: off and four presets, greyed out like the other screen-space effects
+                const auto level_label=[&](uc::EffectLevel level) -> std::string {return level==uc::EffectLevel::off ? tr("off") : tr(level==uc::EffectLevel::low ? "level_low" : level==uc::EffectLevel::medium ? "level_medium" : level==uc::EffectLevel::high ? "level_high" : "level_ultra");};
+                const bool blocked=features_ready && !features.effects && options.effects.shadows==uc::EffectLevel::off;
+                ImGui::TextUnformatted(tr("shadows"));push_font(ui.sans,22);
+                ImGui::BeginDisabled(blocked);
+                const bool shadows_open=combo("##shadows",level_label(options.effects.shadows).c_str());track("shadows");
+                if(shadows_open) {
+                    for(const auto level:{uc::EffectLevel::off,uc::EffectLevel::low,uc::EffectLevel::medium,uc::EffectLevel::high,uc::EffectLevel::ultra}) {
+                        if(ImGui::Selectable(level_label(level).c_str(),options.effects.shadows==level))options.effects.shadows=level;
+                        track("shadows-"+std::string(uc::effect_level_name(level)));
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::EndDisabled();
+                if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("effects_unavailable"));
+                ImGui::PopFont();
+            }
             ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
             ImGui::Dummy({0,8*unit});toggle("##skip",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials",tr("skip_tutorials"),options.skip_tutorials);
+            ImGui::Dummy({0,20*unit});
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {
             push_font(ui.sans,22);
@@ -541,6 +565,8 @@ int run(int argc,wchar_t** argv) {
             if(editor.capturing())ImGui::TextWrapped("%s",tr("capture"));
             if(editor.error()) {ImGui::TextWrapped("%s",tr("rejected"));if(ImGui::TreeNode(tr("details"))) {ImGui::TextWrapped("%s",editor.error()->c_str());ImGui::TreePop();}}
             ImGui::BeginDisabled(editor.capturing().has_value());
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_PadOuterX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
                 ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);
                 ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
@@ -581,6 +607,7 @@ int run(int argc,wchar_t** argv) {
                 }
                 ImGui::EndTable();
             }
+            ImGui::PopStyleColor();ImGui::PopStyleVar();
             ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
@@ -698,6 +725,7 @@ int run(int argc,wchar_t** argv) {
                 if(uc::load_config(config_path).input[size_t(uc::Action::weapon_previous)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,26},{}}})throw std::runtime_error("grid replacement/save failed");
                 ui.capture(smoke/L"grid-replaced.bmp");
             }
+            if(frame==466)ui.capture(smoke/L"graphics-bottom.bmp");
             if(frame>=492) {
                 if(smoke_exe.empty())done=true;
                 else {
