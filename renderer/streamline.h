@@ -13,7 +13,7 @@ struct StreamlineApi;   // streamline_api.h: the loaded sl* entry points (DLSS u
 class Streamline {
 public:
     // nullptr and `reason` when Streamline cannot run (missing or unsigned DLLs, slInit failure).
-    static std::unique_ptr<Streamline> load(const std::filesystem::path& directory, bool frame_generation, std::string& reason);
+    static std::unique_ptr<Streamline> load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction=false);
     ~Streamline();
     Streamline(const Streamline&)=delete;
     Streamline& operator=(const Streamline&)=delete;

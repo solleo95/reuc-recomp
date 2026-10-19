@@ -22,6 +22,8 @@ const char* ray_tracing_gap(VkPhysicalDevice physical) {
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; features12.pNext=&structure;
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext=&features12;
     vkGetPhysicalDeviceFeatures2(physical, &features);
+    VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical, &properties);
+    if (properties.limits.maxColorAttachments<5) return "the GPU supports fewer than 5 colour attachments";
     if (!query.rayQuery) return "the GPU lacks VK_KHR_ray_query";
     if (!structure.accelerationStructure || !features12.bufferDeviceAddress) return "the GPU lacks VK_KHR_acceleration_structure";
     if (!features12.descriptorIndexing || !features12.runtimeDescriptorArray || !features12.shaderSampledImageArrayNonUniformIndexing) return "the GPU lacks descriptor indexing";
@@ -31,7 +33,14 @@ namespace {
 // DLSS and DLSS-G through Streamline on the first NVIDIA GPU (the one the game picks: discrete first).
 void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support) {
     std::string reason;
-    auto sl=Streamline::load(directory, true, reason);
+    const bool rr=std::filesystem::exists(directory / "sl.dlss_d.dll");
+    auto sl=Streamline::load(directory, true, reason, rr);
+    std::string rr_failed;
+    if (!sl && rr) {   // a Ray Reconstruction plugin that fails slInit must not take DLSS down: retry once without it
+        std::string retry_reason;
+        sl=Streamline::load(directory, true, retry_reason);
+        if (sl) rr_failed="the Ray Reconstruction plugin failed to initialise";
+    }
     if (!sl) { support.dlss_reason=support.dlss_g_reason=support.ray_reconstruction_reason=reason; return; }
     VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion=VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo=&application;
@@ -49,7 +58,8 @@ void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support
     }
     if (!chosen) support.dlss_reason=support.dlss_g_reason=support.ray_reconstruction_reason="no Vulkan GPU";
     else {
-        support.ray_reconstruction=sl->ray_reconstruction_supported(chosen, support.ray_reconstruction_reason);
+        if (rr_failed.empty()) support.ray_reconstruction=sl->ray_reconstruction_supported(chosen, support.ray_reconstruction_reason);
+        else support.ray_reconstruction_reason=rr_failed;
         support.dlss=sl->dlss_supported(chosen, support.dlss_reason);
         support.dlss_g=support.dlss && sl->dlss_g_supported(chosen, support.dlss_g_reason);
         if (!support.dlss) support.dlss_g_reason=support.dlss_reason;

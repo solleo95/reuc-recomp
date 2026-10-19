@@ -23,7 +23,7 @@ extern "C" sl::Result slGetFeatureFunction(sl::Feature feature, const char* name
 }
 
 namespace uc {
-std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& directory, bool frame_generation, std::string& reason) {
+std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction) {
     const auto interposer=std::filesystem::absolute(directory / "sl.interposer.dll");
     if (!std::filesystem::exists(interposer)) { reason="sl.interposer.dll missing"; return nullptr; }
     if (!sl::security::verifyEmbeddedSignature(interposer.c_str())) { reason="sl.interposer.dll is not signed by NVIDIA"; return nullptr; }
@@ -42,8 +42,8 @@ std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& direct
     }
     // DLSS-G needs Reflex and PCL (latency markers); they load only with frame generation.
     std::vector<sl::Feature> features{sl::kFeatureDLSS};
-    // Ray Reconstruction loads only when its plugin ships: a requested feature with no DLL must not fail slInit for DLSS.
-    if (std::filesystem::exists(directory / "sl.dlss_d.dll")) features.push_back(sl::kFeatureDLSS_RR);
+    // Ray Reconstruction is requested by the probe only, and only when its plugin ships: a requested feature with no DLL must not fail slInit for DLSS.
+    if (ray_reconstruction && std::filesystem::exists(directory / "sl.dlss_d.dll")) features.push_back(sl::kFeatureDLSS_RR);
     if (frame_generation) features.insert(features.end(), {sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL});
     const std::wstring plugins=std::filesystem::absolute(directory).wstring();
     const wchar_t* paths[]={plugins.c_str()};
