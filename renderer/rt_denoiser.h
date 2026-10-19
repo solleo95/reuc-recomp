@@ -30,6 +30,8 @@ public:
     // noisy: the signal at the resize() extent, sampled, in VK_IMAGE_LAYOUT_GENERAL, written before this call with its own barrier. Pass the same view
     // every frame: a new one rebinds (and waits for the GPU). Returns the filtered signal (RGBA16F, VK_IMAGE_LAYOUT_GENERAL), valid until the next call.
     VkImageView denoise(VkCommandBuffer command, RtSignal signal, VkImageView noisy, const DenoiseInputs& inputs, uint32_t atrous_iterations);
+    // The longest history in frames (default kDenoiseMaxHistory): a signal that depends on the view (reflections) moves differently from its surface, so it keeps less.
+    void set_max_history(uint32_t frames) { max_history_=std::clamp(frames,1u,kDenoiseMaxHistory); }
     void reset() { reset_=true; }            // camera cut: the next frame starts a new history
     VkImage output_image() const { return output_; }   // tests/tools: the image behind the view denoise() returned last
     void shutdown();
@@ -50,7 +52,7 @@ private:
     VkDescriptorSet sets_[2][3]{};
     Image history_[2], moments_[2], guide_[2], filtered_[2];   // ping-pong by frame parity (history, moments, guide) or by filter pass
     VkExtent2D extent_{};
-    uint32_t parity_=0;
+    uint32_t parity_=0, max_history_=kDenoiseMaxHistory;
     bool reset_=true, initialized_=false;   // initialized_: the images were moved to VK_IMAGE_LAYOUT_GENERAL
     VkImageView bound_noisy_=VK_NULL_HANDLE, bound_depth_=VK_NULL_HANDLE, bound_motion_=VK_NULL_HANDLE, bound_gbuffer_=VK_NULL_HANDLE;
     uint64_t bound_generation_=0;

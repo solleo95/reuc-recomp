@@ -10,8 +10,8 @@ namespace uc {
 namespace {
 void check(VkResult result, const char* what) { if (result != VK_SUCCESS) throw std::runtime_error(std::string("rt denoiser: ") + what + " failed: VkResult " + std::to_string(result)); }
 // shaders/rt_denoise.slang Params (push constants)
-struct Params { uint32_t size[2], region[2]; float depth[2], depth_range[2]; uint32_t signal, flags, step, first; };
-static_assert(sizeof(Params)==48 && offsetof(Params,depth)==16 && offsetof(Params,signal)==32);
+struct Params { uint32_t size[2], region[2]; float depth[2], depth_range[2]; uint32_t signal, flags, step, first, max_history; };
+static_assert(sizeof(Params)==52 && offsetof(Params,depth)==16 && offsetof(Params,signal)==32);
 constexpr uint32_t kFlagReset=1;
 constexpr VkFormat kFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr uint32_t kBindings=12;   // 0-3 noisy, depth, motion, G-buffer (sampled); 4-6 previous history, moments, guide; 7-9 current ones; 10, 11 filter in, out
@@ -129,7 +129,7 @@ VkImageView RtDenoiser::denoise(VkCommandBuffer command, RtSignal signal, VkImag
     }
     parity_^=1;
     Params params{{extent_.width,extent_.height},{in.region.width,in.region.height},{in.view.depth_a,in.view.depth_b},{in.depth_range[0],in.depth_range[1]},
-        uint32_t(signal),reset_ ? kFlagReset : 0u,1,1};
+        uint32_t(signal),reset_ ? kFlagReset : 0u,1,1,max_history_};
     reset_=false;
     const uint32_t groups_x=(extent_.width+7)/8, groups_y=(extent_.height+7)/8;
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);

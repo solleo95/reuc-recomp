@@ -23,6 +23,7 @@ int main() {
         const uint32_t flags=uc::rt_reflect_pack(r,uc::kRtModelValid|(3u<<8));   // model-valid, attenuation 3: untouched by the packing
         CHECK((flags&uc::kRtModelValid) && ((flags>>8)&3u)==3u && near(uc::rt_reflect_unpack(flags),r,1.f/255.f/2+1e-4f) && ((flags&uc::kRtReflective)!=0)==(r>0.f));
     }
+    CHECK(uc::kRtReflectHistory>=2 && uc::kRtReflectHistory<uc::kDenoiseMaxHistory);   // shorter than a shadow's history
     // Schlick: F0 at the normal, 1 at grazing
     CHECK(near(uc::rt_fresnel(1.f),uc::kRtFresnelF0,1e-5f) && near(uc::rt_fresnel(0.f),1.f,1e-5f) && uc::rt_fresnel(0.3f)>uc::rt_fresnel(0.8f));
     // The mirror direction of a view ray about a normal; a ray leaving the surface stays on the normal's side

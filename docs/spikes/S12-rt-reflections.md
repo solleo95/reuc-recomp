@@ -37,6 +37,13 @@ Everything at High: about 113 FPS in the heavy fight (target about 100). The acc
 * The signal is the colour DIFFERENCE (hit minus the pixel's own colour, zero where nothing is reflected), added by the composite, not an absolute radiance lerped in: with an absolute signal a miss carried one block sample of the pixel's own colour (divisor 2 or 4), which blurred the texture of every glossy surface by the weight, and the denoiser's history of a moving picture trailed it.
 * Still true (deferred): the denoiser keeps up to 32 frames of a view-dependent signal and reprojects it with the surface's motion, so a moving enemy's reflection trails for a fraction of a second; the composite upsample and the à-trous pass have no material test, so a reflection fades within 1 to 4 pixels of a coplanar matte draw; the raster occlusion (GTAO, shadow map) runs after the reflections and darkens them again; the guide sample and the trace sample differ by up to a pixel when the region is not a multiple of the divisor (as in the shadow pass).
 
+## Follow-up (owner: do windows and the review's minors)
+
+* **Windows: not done, the game gives no way to tell them from other draws.** Survey of the first scene: the 48-vertex alpha-blended lit meshes near the camera (blend 1:4:5, no depth write) are the glass shades of the wall lamps, not windows (a ray-traced glass pass with its own small TLAS and primary rays found exactly four of them and changed nothing visible: tried and reverted). The windows are solid draws that the effect colours show as unlit (baked outside) in the G-buffer, but so are the chandelier panels and other baked draws: treating every unlit solid static mesh within 150 units as glass reflected on the chandelier shades and left the windows untouched (their draws are not in that class). Without a material list there is no safe rule; picking the window draws by hand (their mesh/texture identity) is what is missing.
+* **Trail:** the reflection denoiser keeps 8 frames instead of 32 (`kRtReflectHistory`); smoke: 20 frames after the reflected plate disappears the floor is back within 2 grey levels.
+* **Order:** the reflections now run after the raster occlusion (GTAO, shadow map, contact shadows), so those no longer darken them a second time.
+* The edge halo of the review is gone with the difference signal (a matte neighbour contributes zero).
+
 ## Not covered
 
 * Windows and other blended draws (not in the structure), per-material overrides (`dist/rt_materials.json`: no tool to pick materials yet; the first-scene floor and seats could be marked if the owner wants them to mirror), rough reflections beyond the preset cone, reflections of what is off screen (no environment map).

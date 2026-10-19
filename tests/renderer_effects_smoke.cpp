@@ -1160,11 +1160,12 @@ int main(int argc, char** argv) {
                     draw.mesh=mesh; draw.vertices.clear(); draw.indices.clear();
                     return draw;
                 };
+                bool plate_on=true;
                 auto frame=[&](bool rt,uc::EffectLevel level,float specular,bool cover) {
                     uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.rt_reflections=level; renderer.set_effects(effects);
                     gx::FramePacket scene; scene.present=false;
                     scene.draws.push_back(draw_of(floor_mesh,true,specular));
-                    scene.draws.push_back(draw_of(plate_mesh,false,0.f));
+                    if(plate_on) scene.draws.push_back(draw_of(plate_mesh,false,0.f));
                     if(cover) scene.draws.push_back(draw_of(cover_mesh,false,0.f));
                     submit(std::move(scene));
                     gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
@@ -1197,6 +1198,15 @@ int main(int argc, char** argv) {
                 const auto hidden_off=settle(false,uc::EffectLevel::off,1.f,true), hidden_on=settle(true,uc::EffectLevel::medium,1.f,true);
                 std::fprintf(stderr,"rt-reflections: hit hidden by a nearer quad: floor off %d on %d\n",at(hidden_off,floor_x,floor_y,0),at(hidden_on,floor_x,floor_y,0));
                 CHECK(std::abs(at(hidden_on,floor_x,floor_y,0)-at(hidden_off,floor_x,floor_y,0))<=1);
+                // a reflection follows what it reflects: after the plate is gone the floor is back to its own colour within a few frames (a long history would keep the plate's trail)
+                settle(true,uc::EffectLevel::medium,1.f,false);
+                plate_on=false;
+                for(int i=0;i<20;++i) frame(true,uc::EffectLevel::medium,1.f,false);
+                const auto trail=frame(true,uc::EffectLevel::medium,1.f,false);
+                const auto bare=settle(false,uc::EffectLevel::off,1.f,false);
+                std::fprintf(stderr,"rt-reflections: 20 frames after the plate is gone: floor red %d (bare %d)\n",at(trail,floor_x,floor_y,0),at(bare,floor_x,floor_y,0));
+                CHECK(std::abs(at(trail,floor_x,floor_y,0)-at(bare,floor_x,floor_y,0))<=3);
+                plate_on=true;
                 const uint64_t runs=renderer.pass_runs(uc::GpuPass::rt_reflections);
                 frame(false,uc::EffectLevel::off,1.f,false); frame(false,uc::EffectLevel::off,1.f,false);
                 CHECK(renderer.pass_runs(uc::GpuPass::rt_reflections)==runs);   // off: nothing runs

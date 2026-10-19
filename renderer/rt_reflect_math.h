@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_effects.h"
+#include "rt_denoise_math.h"
 #include "rt_material.h"
 #include "view_reconstruct.h"
 #include <algorithm>
@@ -35,6 +36,8 @@ inline uint32_t rt_reflect_pack(float reflectivity, uint32_t flags) {
 inline float rt_reflect_unpack(uint32_t flags) { return float((flags>>kRtReflectivityShift)&255u)/255.f; }
 // The composite's weight is fresnel x reflectivity x this: the game's gloss values are small (S12) and its scenes dark, so the plain product would show nothing.
 constexpr float kRtReflectStrength=4.f;
+// The denoiser keeps this many frames of the reflection signal: it depends on the view, so it does not follow its surface's motion like a shadow does (S12).
+constexpr uint32_t kRtReflectHistory=8;
 constexpr float kRtFresnelF0=0.04f;
 inline float rt_fresnel(float n_dot_v) { const float m=1.f-std::clamp(n_dot_v,0.f,1.f), m2=m*m; return kRtFresnelF0+(1.f-kRtFresnelF0)*m2*m2*m; }
 inline std::array<float,3> rt_reflect(const std::array<float,3>& incident, const std::array<float,3>& normal) {

@@ -11,6 +11,7 @@ struct Params {
     uint flags;          // bit 0: no history (reset)
     uint step;           // à-trous: tap spacing in pixels
     uint first;          // à-trous: the first pass (its variance is in the moments, its input the history)
+    uint maxHistory;     // temporal: the longest history in frames
 };
 [[vk::push_constant]] ConstantBuffer<Params> params;
 [[vk::binding(0, 0)]] Texture2D<float4> noisy;
@@ -30,14 +31,13 @@ struct Params {
 [[vk::binding(11, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> filterOut;
 
 static const uint kReset = 1, kRadiance = 2;
-static const float kMaxHistory = 32.0;            // rt_denoise_math.h kDenoiseMaxHistory
 static const float kDepthTolerance = 0.02;        // kDenoiseDepthTolerance
 static const float kNormalCos = 0.906307787;      // kDenoiseNormalCos (25 degrees)
 // shortcut: a history shorter than 4 frames has no usable variance; a fixed large one keeps the luminance weight loose. SVGF estimates it spatially (upgrade if young radiance looks noisy).
 static const float kYoungVariance = 1.0;
 static const float kSigmaDepth = 1.0, kDepthFloor = 0.01, kSigmaNormal = 128.0, kSigmaLuminance = 4.0;
 
-float historyAlpha(float length) { return max(1.0 / max(length, 1.0), 1.0 / kMaxHistory); }
+float historyAlpha(float length) { return max(1.0 / max(length, 1.0), 1.0 / float(params.maxHistory)); }   // rt_denoise_math.h history_alpha, kDenoiseMaxHistory = the default
 bool reprojectValid(float distance, float historyDistance, float normalDot) { return abs(distance - historyDistance) <= kDepthTolerance * distance && normalDot >= kNormalCos; }
 float luminance(float3 c) { return params.signal == kRadiance ? dot(c, float3(0.2126, 0.7152, 0.0722)) : c.r; }
 
@@ -76,7 +76,7 @@ void temporalMain(uint3 id : SV_DispatchThreadID) {
             const float4 previous = previousHistory[q];
             const float4 previousSurface = previousGuide[q];
             if (previous.a > 0.0 && reprojectValid(distance, previousSurface.x, dot(normal, previousSurface.yzw))) {
-                length = min(previous.a + 1.0, kMaxHistory);
+                length = min(previous.a + 1.0, float(params.maxHistory));
                 const float alpha = historyAlpha(length);
                 color = lerp(previous.rgb, current, alpha);
                 m = lerp(previousMoments[q].rg, m, alpha);
