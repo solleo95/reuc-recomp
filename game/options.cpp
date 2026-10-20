@@ -67,6 +67,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         }
         else if (arg == "--ray-tracing") options.effects.ray_tracing = true;
         else if (arg == "--ray-reconstruction") options.effects.ray_reconstruction = true;
+        else if (arg == "--path-tracing") options.effects.path_tracing = true;
         else if (arg == "--rt-reflections" || arg == "--rt-lighting" || arg == "--rt-shadows" || arg == "--rt-local-shadows" || arg == "--rt-ambient-occlusion") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             const auto level = effect_level_from_name(arguments[i]);

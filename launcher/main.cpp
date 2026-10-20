@@ -538,6 +538,8 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##rt-lighting","rt_lighting","rt-lighting",options.effects.rt_lighting,!rt.levels_enabled);
                 ImGui::Dummy({0,8*unit});
                 toggle("##rr",tr("ray_reconstruction"),options.effects.ray_reconstruction,!rt.levels_enabled||(features_ready&&!features.ray_reconstruction),features.ray_reconstruction_reason.c_str());   // DLSS Ray Reconstruction: only with DLSS and a supporting GPU
+                ImGui::Dummy({0,8*unit});
+                toggle("##pt",tr("path_tracing"),options.effects.path_tracing,!rt.levels_enabled,features.ray_tracing_reason.c_str());   // path tracing: any ray tracing GPU
             }
             const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
             ImGui::Dummy({0,8*unit});

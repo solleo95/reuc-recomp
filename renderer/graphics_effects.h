@@ -25,12 +25,14 @@ struct GraphicsEffects {
     EffectLevel motion_blur=EffectLevel::off;   // per-object blur along the motion vectors after the upscale (shutter 0.3 / 0.5 / 0.7 / 0.7 with more samples)
     bool ray_tracing=false;   // master switch of the hardware ray tracing effects; each active RT effect replaces its raster counterpart
     bool ray_reconstruction=false;   // DLSS Ray Reconstruction denoises and upscales the ray-traced picture on DLSS frames (it needs the GPU, DLSS and an active RT effect); off: the own denoiser and DLSS Super Resolution
+    bool path_tracing=false;   // the scene's lighting is path traced (several bounces, light from emissive surfaces) instead of the game's own; needs the ray tracing master switch
     EffectLevel rt_reflections=EffectLevel::off, rt_lighting=EffectLevel::off, rt_shadows=EffectLevel::off, rt_local_shadows=EffectLevel::off, rt_ambient_occlusion=EffectLevel::off;
     bool operator==(const GraphicsEffects&) const=default;
 };
 // The level an RT effect runs at: its chosen one while the master switch is on and the device supports ray tracing, else off.
 inline EffectLevel rt_level(const GraphicsEffects& effects, EffectLevel level, bool rt_supported) { return effects.ray_tracing && rt_supported ? level : EffectLevel::off; }
 inline bool any_rt_active(const GraphicsEffects& effects, bool rt_supported) {
+    if(effects.ray_tracing && rt_supported && effects.path_tracing) return true;
     for(const auto level:{effects.rt_reflections,effects.rt_lighting,effects.rt_shadows,effects.rt_local_shadows,effects.rt_ambient_occlusion}) if(rt_level(effects,level,rt_supported)!=EffectLevel::off) return true;
     return false;
 }
@@ -41,6 +43,11 @@ inline GraphicsEffects effective_effects(const GraphicsEffects& chosen, bool rt_
     effective.rt_reflections=rt_level(chosen,chosen.rt_reflections,rt_supported); effective.rt_lighting=rt_level(chosen,chosen.rt_lighting,rt_supported);
     effective.rt_shadows=rt_level(chosen,chosen.rt_shadows,rt_supported); effective.rt_local_shadows=rt_level(chosen,chosen.rt_local_shadows,rt_supported);
     effective.rt_ambient_occlusion=rt_level(chosen,chosen.rt_ambient_occlusion,rt_supported);
+    effective.path_tracing=chosen.path_tracing && chosen.ray_tracing && rt_supported;
+    if(effective.path_tracing) {   // path tracing lights the scene itself: shadows, occlusion and diffuse bounce are part of it (the reflections stay their own pass)
+        effective.rt_shadows=effective.rt_local_shadows=effective.rt_ambient_occlusion=effective.rt_lighting=EffectLevel::off;
+        effective.shadows=EffectLevel::off; effective.contact_shadows=false; effective.ambient_occlusion=EffectLevel::off;
+    }
     if(effective.rt_shadows!=EffectLevel::off) { effective.shadows=EffectLevel::off; effective.contact_shadows=false; }
     if(effective.rt_ambient_occlusion!=EffectLevel::off) effective.ambient_occlusion=EffectLevel::off;
     return effective;

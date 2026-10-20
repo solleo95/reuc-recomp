@@ -252,6 +252,10 @@ void SettingsMenu::effects_tab(float unit) {
     ImGui::BeginDisabled(!rt.levels_enabled || (features && !features->ray_reconstruction));
     compact_checkbox("##rr",tr("ray_reconstruction"),options.effects.ray_reconstruction,unit);
     ImGui::EndDisabled();
+    ImGui::Dummy({0,6*unit});
+    ImGui::BeginDisabled(!rt.levels_enabled);
+    compact_checkbox("##pt",tr("path_tracing"),options.effects.path_tracing,unit);
+    ImGui::EndDisabled();
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;
