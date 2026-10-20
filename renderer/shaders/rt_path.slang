@@ -51,6 +51,7 @@ bool litSurface(float4 texel) {
     const uint flags = uint(round(texel.w * 65535.0));
     return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0 && (flags & kGBufferLit) != 0;
 }
+static const float3 kWarm = float3(1.0, 0.86, 0.66);   // rt_path_math.h kRtPathWarm: the colour of the dome and of the overhead light
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 uint pcg(uint v) { const uint state = v * 747796405u + 2891336453u; const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u; return (word >> 22u) ^ word; }
 float nextRandom(inout uint state) { state = pcg(state); return float(state >> 8) * (1.0 / 16777216.0); }
@@ -121,7 +122,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 RayQuery<RAY_FLAG_CULL_NON_OPAQUE> query;
                 query.TraceRayInline(scene, 0, 3u, ray);
                 query.Proceed();
-                if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { sum += throughput * params.ambient; break; }   // the dome
+                if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { sum += throughput * params.ambient * kWarm; break; }   // the dome
                 const HitGeometry geometry = hitTable[hitBases[query.CommittedInstanceID()] + query.CommittedGeometryIndex()];
                 float3 albedo = float3(0.4, 0.4, 0.4);
                 bool emitter = false;
@@ -131,7 +132,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 }
                 if (emitter) { sum += throughput * albedo * params.emission; break; }
                 throughput *= albedo;
-                if (b + 1 == params.bounces) { sum += throughput * params.ambient; break; }   // out of bounces: the dome stands for the rest
+                if (b + 1 == params.bounces) { sum += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
                 const float t = query.CommittedRayT();
                 float3 hitNormalView = hitNormal(geometry, query.CommittedPrimitiveIndex(), query.CommittedObjectToWorld3x4());
                 if (dot(hitNormalView, direction) > 0.0) hitNormalView = -hitNormalView;
@@ -143,7 +144,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
         light = sum / float(max(params.paths, 1u));
         if (params.key > 0.0) {   // the synthetic overhead light: a short shadow ray, the surfaces that face it
             const float facing = saturate(dot(normal, params.overhead.xyz));
-            if (facing > 0.0 && !occluded(start, params.overhead.xyz, params.overhead.w)) light += params.key * facing;
+            if (facing > 0.0 && !occluded(start, params.overhead.xyz, params.overhead.w)) light += params.key * facing * kWarm;
         }
     }
     signalOut[id.xy] = float4(light, 1.0);

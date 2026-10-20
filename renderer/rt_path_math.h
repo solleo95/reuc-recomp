@@ -13,14 +13,16 @@ struct RtPathSettings {
     uint32_t paths=1;        // paths per signal pixel per frame
     uint32_t bounces=3;      // surface hits a path may follow
     float reach=80.f;        // a ray's length in view units
-    float emission=6.f;      // an emitter's radiance relative to its albedo
-    float ambient=0.12f;     // what a ray that leaves the scene (or a path out of bounces) sees: the dome
-    float key=0.35f;         // the synthetic overhead light (rt_shadow_math.h kRtOverheadDirection), a short shadow ray
+    float emission=12.f;     // an emitter's radiance relative to its albedo
+    float ambient=0.35f;     // what a ray that leaves the scene (or a path out of bounces) sees: the dome (warm, kRtPathWarm)
+    float key=0.5f;          // the synthetic overhead light (rt_shadow_math.h kRtOverheadDirection), a short shadow ray (warm as well)
     float key_reach=8.f;     // the overhead light's rays are blocked only within this many view units (as the shadow pass)
     float mix=1.f;           // 1: the path-traced lighting replaces the game's on lit surfaces; 0: nothing changes
     float threshold=0.45f;   // an unlit surface shines when its mean albedo is brighter than this
 };
 inline RtPathSettings rt_path_settings() { return {}; }
+// The colour of the dome and of the overhead light: the game's lamp-lit warmth (a neutral dome greyed the picture); the shader has the same constant.
+constexpr std::array<float,3> kRtPathWarm{1.0f,0.86f,0.66f};
 inline float rt_path_luminance(const std::array<float,3>& colour) { return 0.2126f*colour[0]+0.7152f*colour[1]+0.0722f*colour[2]; }
 // The mean albedo of a record from the screen accumulation (the sums of 8-bit channels and the pixel count); `fallback` for a record that is not on screen this frame.
 inline std::array<float,3> rt_path_mean_albedo(const std::array<uint32_t,3>& sums, uint32_t count, const std::array<float,3>& fallback={0.4f,0.4f,0.4f}) {

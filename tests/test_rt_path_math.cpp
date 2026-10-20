@@ -4,6 +4,7 @@
 int main() {
     const auto settings=uc::rt_path_settings();
     CHECK(settings.divisor>=1 && settings.paths>=1 && settings.bounces>=1 && settings.reach>0.f && settings.mix>=0.f && settings.mix<=1.f);
+    for (const float channel : uc::kRtPathWarm) CHECK(channel>0.f && channel<=1.f);
     // The mean albedo: the sums of 8-bit channels over the pixel count, a grey fallback for a record that is not on screen
     const auto mean=uc::rt_path_mean_albedo({510,255,0},3);
     CHECK(std::fabs(mean[0]-2.f/3.f)<1e-6f && std::fabs(mean[1]-1.f/3.f)<1e-6f && mean[2]==0.f);
