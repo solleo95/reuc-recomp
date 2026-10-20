@@ -131,6 +131,7 @@ int main() {
         CHECK(std::holds_alternative<std::string>(bad_blur) && std::get<std::string>(bad_blur)=="invalid value for --motion-blur");
         const auto missing_blur=parse(std::array<std::string_view,1>{"--motion-blur"});
         CHECK(std::holds_alternative<std::string>(missing_blur) && std::get<std::string>(missing_blur)=="missing value for --motion-blur");
+        CHECK(std::get<uc::Options>(defaults).effects.ray_reconstruction && !std::get<uc::Options>(parse(std::array<std::string_view,1>{"--no-ray-reconstruction"})).effects.ray_reconstruction);   // on by default, off by its flag
         CHECK(!std::get<uc::Options>(defaults).effects.ray_tracing && std::get<uc::Options>(defaults).effects.rt_shadows==uc::EffectLevel::off);
         const auto rt=std::get<uc::Options>(parse(std::array<std::string_view,3>{"--ray-tracing","--rt-shadows","high"}));
         CHECK(rt.effects.ray_tracing && rt.effects.rt_shadows==uc::EffectLevel::high);

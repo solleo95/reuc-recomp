@@ -4,6 +4,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>
 #include <sl_dlss_g.h>
 #include <sl_reflex.h>
 #include <sl_pcl.h>

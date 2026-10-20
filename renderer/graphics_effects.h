@@ -24,6 +24,7 @@ struct GraphicsEffects {
     bool contact_shadows=false;   // a short screen-space ray march toward the scene's dominant directional or spot light (G-buffer, scene targets)
     EffectLevel motion_blur=EffectLevel::off;   // per-object blur along the motion vectors after the upscale (shutter 0.3 / 0.5 / 0.7 / 0.7 with more samples)
     bool ray_tracing=false;   // master switch of the hardware ray tracing effects; each active RT effect replaces its raster counterpart
+    bool ray_reconstruction=true;   // DLSS Ray Reconstruction denoises and upscales the ray-traced picture on DLSS frames (it needs the GPU, DLSS and an active RT effect); off: the own denoiser and DLSS Super Resolution
     EffectLevel rt_reflections=EffectLevel::off, rt_lighting=EffectLevel::off, rt_shadows=EffectLevel::off, rt_local_shadows=EffectLevel::off, rt_ambient_occlusion=EffectLevel::off;
     bool operator==(const GraphicsEffects&) const=default;
 };

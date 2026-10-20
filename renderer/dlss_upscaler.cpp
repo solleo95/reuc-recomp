@@ -44,7 +44,10 @@ public:
         options_.colorBuffersHDR=sl::Boolean::eFalse;   // the game is LDR (RGBA8)
         options_.preExposure=1.0f;
     }
-    ~DlssUpscaler() override { api_.free_resources(sl::kFeatureDLSS, viewport_); }
+    ~DlssUpscaler() override {
+        api_.free_resources(sl::kFeatureDLSS, viewport_);
+        if (rr_options_set_) api_.free_resources(sl::kFeatureDLSS_RR, viewport_);
+    }
     void evaluate(const UpscaleInputs& in) override {
         sl::FrameToken* token=api_.frame;   // taken by the renderer for this guest frame (Streamline::begin_frame)
         if (!token) throw std::runtime_error("DLSS: no frame token");
@@ -53,7 +56,9 @@ public:
             check(UC_SL_CALL(sl::kFeatureDLSS,slDLSSSetOptions,viewport_,options_),"options");
             std::fprintf(stderr,"DLSS: %ux%u <- %ux%u preset %c\n",in.output_size.width,in.output_size.height,in.render_size.width,in.render_size.height,
                 char('A'+dlss_preset(mode_)-1));
+            rr_options_.outputWidth=0;   // the Ray Reconstruction options follow the size too
         }
+        set_ray_reconstruction(in);
         sl::Constants constants{};
         constants.cameraViewToClip=to_sl(in.projection);
         sl::matrixFullInvert(constants.clipToCameraView,constants.cameraViewToClip);
@@ -89,8 +94,18 @@ public:
             {&depth,sl::kBufferTypeDepth,sl::ResourceLifecycle::eValidUntilPresent,&render},
             {&motion,sl::kBufferTypeMotionVectors,sl::ResourceLifecycle::eValidUntilPresent,&render},
             {&output,sl::kBufferTypeScalingOutputColor,sl::ResourceLifecycle::eOnlyValidNow,&shown}};
-        check(api_.set_tag_for_frame(*token,viewport_,tags,4,in.command),"tags");
         const sl::BaseStructure* inputs[]={&viewport_};
+        if (in.ray_reconstruction) {   // Ray Reconstruction replaces Super Resolution for this frame: the same tags and the three guides
+            auto diffuse=image(in.diffuse_albedo), specular=image(in.specular_albedo), normals=image(in.normal_roughness);
+            const sl::ResourceTag rr_tags[]={tags[0],tags[1],tags[2],tags[3],
+                {&diffuse,sl::kBufferTypeAlbedo,sl::ResourceLifecycle::eValidUntilPresent,&render},
+                {&specular,sl::kBufferTypeSpecularAlbedo,sl::ResourceLifecycle::eValidUntilPresent,&render},
+                {&normals,sl::kBufferTypeNormalRoughness,sl::ResourceLifecycle::eValidUntilPresent,&render}};
+            check(api_.set_tag_for_frame(*token,viewport_,rr_tags,7,in.command),"RR tags");
+            check(api_.evaluate_feature(sl::kFeatureDLSS_RR,*token,inputs,1,in.command),"RR evaluate");
+            return;
+        }
+        check(api_.set_tag_for_frame(*token,viewport_,tags,4,in.command),"tags");
         check(api_.evaluate_feature(sl::kFeatureDLSS,*token,inputs,1,in.command),"evaluate");
     }
     bool sharpens() const override { return false; }
@@ -102,10 +117,27 @@ public:
         return {settings.renderWidthMin,settings.renderHeightMin};
     }
 private:
+    // Ray Reconstruction is an extension of DLSS (it runs at the same quality mode): its options are set when the frame type changes (or the size did) and it is turned off
+    // again when a frame goes through Super Resolution.
+    void set_ray_reconstruction(const UpscaleInputs& in) {
+        if (in.ray_reconstruction==rr_on_ && rr_options_.outputWidth==in.output_size.width && rr_options_.outputHeight==in.output_size.height) return;
+        if (!in.ray_reconstruction && !rr_options_set_) { rr_on_=false; return; }   // never used: nothing to turn off
+        rr_options_.mode=in.ray_reconstruction ? dlss_mode(mode_) : sl::DLSSMode::eOff;
+        rr_options_.outputWidth=in.output_size.width; rr_options_.outputHeight=in.output_size.height;
+        rr_options_.colorBuffersHDR=sl::Boolean::eTrue;   // the guide: Ray Reconstruction takes HDR inputs only; the game's display-range colour goes in as it is, exposure 1
+        rr_options_.preExposure=1.0f; rr_options_.exposureScale=1.0f;
+        rr_options_.normalRoughnessMode=sl::DLSSDNormalRoughnessMode::ePacked;   // roughness in the normals' alpha
+        rr_options_.dlaaPreset=rr_options_.qualityPreset=rr_options_.balancedPreset=rr_options_.performancePreset=rr_options_.ultraPerformancePreset=rr_options_.ultraQualityPreset=sl::DLSSDPreset::ePresetD;
+        check(UC_SL_CALL(sl::kFeatureDLSS_RR,slDLSSDSetOptions,viewport_,rr_options_),"RR options");
+        rr_on_=in.ray_reconstruction; rr_options_set_=true;
+        std::fprintf(stderr,"DLSS: Ray Reconstruction %s\n",rr_on_ ? "on" : "off");
+    }
     const StreamlineApi& api_;
     UpscaleMode mode_;
     sl::ViewportHandle viewport_{0};
     sl::DLSSOptions options_{};
+    sl::DLSSDOptions rr_options_{};
+    bool rr_on_=false, rr_options_set_=false;
 };
 }
 std::unique_ptr<Upscaler> make_dlss_upscaler(const Streamline& streamline, UpscaleMode mode) { return std::make_unique<DlssUpscaler>(streamline,mode); }

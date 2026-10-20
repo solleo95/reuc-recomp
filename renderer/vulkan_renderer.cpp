@@ -102,7 +102,14 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (validation) { instance_info.enabledLayerCount = 1; instance_info.ppEnabledLayerNames = &layer; instance_info.pNext = &debug_info; }
     {   // Optional backends must be ready before the instance, so live picks never need a new device.
         std::string reason;
-        streamline_ = Streamline::load(shaders.parent_path().parent_path(), true, reason);
+        const auto directory=shaders.parent_path().parent_path();
+        rr_loaded_=std::filesystem::exists(directory/"sl.dlss_d.dll");
+        streamline_ = Streamline::load(directory, true, reason, rr_loaded_);
+        if (!streamline_ && rr_loaded_) {   // a Ray Reconstruction plugin that fails slInit must not take DLSS down
+            rr_loaded_=false; std::string retry;
+            streamline_ = Streamline::load(directory, true, retry);
+            if (streamline_) std::fprintf(stderr, "Ray Reconstruction unavailable: its plugin failed to initialise (%s)\n", reason.c_str());
+        }
         if (!streamline_) {
             std::fprintf(stderr, "DLSS unavailable: %s\n", reason.c_str());
             if (upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
@@ -166,6 +173,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         } else {
             dlss_g_available_=streamline_->dlss_g_supported(physical_,reason);
             if (!dlss_g_available_ && upscaler_kind_==UpscalerKind::dlss) frame_generation_=false;
+            if (rr_loaded_) { std::string rr_reason; rr_available_=streamline_->ray_reconstruction_supported(physical_,rr_reason); if (!rr_available_) std::fprintf(stderr,"Ray Reconstruction unavailable: %s\n",rr_reason.c_str()); }
         }
     }
     bool through_streamline = streamline_ && streamline_->active();
@@ -1054,6 +1062,11 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
     bool rt_shadow_ran=false, rt_reflect_go=false, rt_light_go=false;
+    // DLSS Ray Reconstruction (plan p7): when an RT effect is active on a DLSS frame the effects composite their noisy signals and RR denoises and upscales the picture;
+    // it needs the guides, hence the same preconditions as the RT effects themselves
+    static const bool rr_disabled=std::getenv("UC_NO_RR")!=nullptr;   // debug: A/B against the own denoiser with DLSS Super Resolution
+    const bool rr_frame=!rr_disabled && effects_.ray_reconstruction && rr_use(upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active(),rr_available_,rt_scene_active()) &&
+        gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_ && scene_albedo_;
     if (rt_frame_ && (rt_as_open_ || rt_.stats().instances)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;
@@ -1072,17 +1085,20 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.ao=effects_.rt_ambient_occlusion; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_; shadow.trace_lamps=rt_trace_lamps_; shadow.key_direction=rt_key_direction_;   // the test mode traces the lamps instead of the key light
             shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
-            rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
-            const std::array<EffectLevel,3> signal_levels{effects_.rt_shadows,effects_.rt_local_shadows,effects_.rt_ambient_occlusion};
-            if (in.reset || !rt_shadow_ran_last_ || signal_levels!=rt_signal_levels_) rt_shadow_denoiser_.reset();   // a cut, a black frame, a frame without the effect or another mix of effects in the signal: the history is stale
-            rt_signal_levels_=signal_levels;
-            DenoiseInputs denoise;
-            denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
-            denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
-            const bool high=int(effects_.rt_shadows)>=int(EffectLevel::high) || int(effects_.rt_local_shadows)>=int(EffectLevel::high) || int(effects_.rt_ambient_occlusion)>=int(EffectLevel::high);
-            rt_shadow_.composite(shadow,rt_shadow_denoiser_.denoise(command,RtSignal::visibility,noisy,denoise,high ? 3 : 2));
+            if (rr_frame) rt_shadow_.composite(shadow,noisy);   // Ray Reconstruction denoises the picture with the noisy signal composited into it
+            else {
+                rt_shadow_denoiser_.resize(rt_shadow_.signal_extent());
+                const std::array<EffectLevel,3> signal_levels{effects_.rt_shadows,effects_.rt_local_shadows,effects_.rt_ambient_occlusion};
+                if (in.reset || !rt_shadow_ran_last_ || signal_levels!=rt_signal_levels_) rt_shadow_denoiser_.reset();   // a cut, a black frame, a frame without the effect or another mix of effects in the signal: the history is stale
+                rt_signal_levels_=signal_levels;
+                DenoiseInputs denoise;
+                denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
+                denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
+                const bool high=int(effects_.rt_shadows)>=int(EffectLevel::high) || int(effects_.rt_local_shadows)>=int(EffectLevel::high) || int(effects_.rt_ambient_occlusion)>=int(EffectLevel::high);
+                rt_shadow_.composite(shadow,rt_shadow_denoiser_.denoise(command,RtSignal::visibility,noisy,denoise,high ? 3 : 2));
+            }
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
-            rt_shadow_traced_=rt_shadow_ran=true;
+            rt_shadow_traced_=true; rt_shadow_ran=!rr_frame;   // the own denoiser's history is stale after an RR frame
         }
         rt_reflect_go=rt_ready && rt_reflect_active(); rt_light_go=rt_ready && rt_light_active();   // they run after the raster occlusion below: they read the colour all the shading finished
     }
@@ -1118,17 +1134,31 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         inputs.records=rt_records_[rt_record_slot_].buffer; inputs.region=in.render_size; inputs.viewport=scene_viewport; inputs.view=view_params(*frame_projection_);
         inputs.level=level; inputs.slot=timer_slot; inputs.frame=uint32_t(upscale_frame_%64)+1;   // more directions than the shadows' 8: one ray per pixel would otherwise average eight fixed samples
         const VkImageView noisy=pass.trace(inputs);
-        denoiser.resize(pass.signal_extent());
-        if (in.reset || !ran_last) denoiser.reset();
-        DenoiseInputs denoise;
-        denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
-        denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
-        pass.composite(inputs,denoiser.denoise(command,RtSignal::radiance,noisy,denoise,int(level)>=int(EffectLevel::high) ? 3 : 2));
+        if (rr_frame) pass.composite(inputs,noisy);   // Ray Reconstruction denoises
+        else {
+            denoiser.resize(pass.signal_extent());
+            if (in.reset || !ran_last) denoiser.reset();
+            DenoiseInputs denoise;
+            denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
+            denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
+            pass.composite(inputs,denoiser.denoise(command,RtSignal::radiance,noisy,denoise,int(level)>=int(EffectLevel::high) ? 3 : 2));
+        }
         pass_timer_.end(command,timer_slot,timed);
     };
     if (rt_light_go) radiance_pass(rt_lighting_,rt_lighting_denoiser_,RtRadianceMode::lighting,effects_.rt_lighting,kRtLightHistory,rt_light_ran_last_,GpuPass::rt_lighting);
     if (rt_reflect_go) radiance_pass(rt_reflection_,rt_reflection_denoiser_,RtRadianceMode::reflections,effects_.rt_reflections,kRtReflectHistory,rt_reflect_ran_last_,GpuPass::rt_reflections);
-    rt_light_ran_last_=rt_light_go; rt_reflect_ran_last_=rt_reflect_go;
+    rt_light_ran_last_=rt_light_go && !rr_frame; rt_reflect_ran_last_=rt_reflect_go && !rr_frame;
+    if (rr_frame) {   // the guides Ray Reconstruction takes besides the colour, depth, motion and the albedo target
+        rr_inputs_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),[this] { vk_check(present_.wait_idle(device),"rr inputs idle"); });
+        RrInputs guides;
+        guides.command=command; guides.depth=scene_depth_view_; guides.gbuffer=scene_gbuffer_view_; guides.material=scene_material_view_;
+        guides.records=rt_records_[rt_record_slot_].buffer; guides.region=in.render_size; guides.extent=scene_extent_; guides.viewport=scene_viewport; guides.view=view_params(*frame_projection_); guides.slot=timer_slot;
+        rr_inputs_.record(guides);
+        in.ray_reconstruction=true;
+        in.diffuse_albedo={scene_albedo_,scene_albedo_view_,kAlbedoFormat,scene_extent_,color_usage};
+        in.specular_albedo=rr_inputs_.specular_albedo(); in.normal_roughness=rr_inputs_.normal_roughness();
+    }
+    rr_frame_=rr_frame;
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -2238,7 +2268,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

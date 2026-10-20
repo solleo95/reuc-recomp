@@ -12,6 +12,8 @@
 #include "rt_denoiser.h"
 #include "rt_material.h"
 #include "rt_scene.h"
+#include "rr_inputs_pass.h"
+#include "rr_math.h"
 #include "rt_reflection_pass.h"
 #include "rt_shadow_pass.h"
 #include "streamline.h"
@@ -130,6 +132,8 @@ public:
     uint64_t gpu_busy_ns() const { return gpu_busy_ns_.load(); }   // summed GPU execution time of retired frame submissions
     uint64_t texture_creations() const { owner(); return texture_creations_; }
     uint64_t descriptor_pool_creations() const { owner(); return descriptor_pool_creations_; }
+    bool ray_reconstruction_supported() const { return rr_available_; }   // the Ray Reconstruction plugin loaded and the GPU supports it
+    bool ray_reconstruction_active() const { return rr_frame_; }          // the latest frame went through Ray Reconstruction (tests, diagnostics)
     bool ray_tracing_supported() const { return ray_tracing_; }   // the device was created with ray query, acceleration structures and descriptor indexing, and the effects path
     const VkPhysicalDeviceMemoryProperties& memory_properties() const { return memory_; }
     void run_commands(const std::function<void(VkCommandBuffer)>& record);   // tests/tools: records a one-time command buffer on the render queue, submits it and waits for the GPU
@@ -228,6 +232,9 @@ private:
     double sharpness_=0.5;
     uint32_t frame_generation_multiplier_=2;
     bool ray_tracing_=false;
+    RrInputsPass rr_inputs_;
+    bool rr_frame_=false;   // the latest frame went through Ray Reconstruction (RR_active())
+    bool rr_loaded_=false, rr_available_=false;   // the Ray Reconstruction plugin loaded with Streamline / the GPU supports it (docs/superpowers/plans/2026-10-20-ray-tracing-p7-ray-reconstruction.md)
     bool rt_frame_=false, rt_as_open_=false;   // rt_frame_: ray tracing was active at this frame's start; rt_as_open_: the rt_as timer runs on to the TLAS
     RtScene rt_;
     RtShadowPass rt_shadow_;

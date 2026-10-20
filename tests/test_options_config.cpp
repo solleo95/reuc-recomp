@@ -79,9 +79,10 @@ int main() {
             CHECK(!defaults.ray_tracing && defaults.rt_reflections==uc::EffectLevel::off && defaults.rt_lighting==uc::EffectLevel::off && defaults.rt_shadows==uc::EffectLevel::off
                 && defaults.rt_local_shadows==uc::EffectLevel::off && defaults.rt_ambient_occlusion==uc::EffectLevel::off);
             auto rt_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto rt_options=uc::options_from_config(rt_doc);
-            auto& e=rt_options.effects;e.ray_tracing=true;e.rt_reflections=uc::EffectLevel::low;e.rt_lighting=uc::EffectLevel::medium;e.rt_shadows=uc::EffectLevel::high;e.rt_local_shadows=uc::EffectLevel::ultra;e.rt_ambient_occlusion=uc::EffectLevel::low;
+            CHECK(defaults.ray_reconstruction);   // on by default
+            auto& e=rt_options.effects;e.ray_reconstruction=false;e.ray_tracing=true;e.rt_reflections=uc::EffectLevel::low;e.rt_lighting=uc::EffectLevel::medium;e.rt_shadows=uc::EffectLevel::high;e.rt_local_shadows=uc::EffectLevel::ultra;e.rt_ambient_occlusion=uc::EffectLevel::low;
             uc::store_options(rt_doc,rt_options);
-            CHECK(uc::options_from_config(rt_doc).effects==e && uc::serialize_config(rt_doc).find("\"rt_local_shadows\": \"ultra\"")!=std::string::npos);
+            CHECK(uc::options_from_config(rt_doc).effects==e && uc::serialize_config(rt_doc).find("\"rt_local_shadows\": \"ultra\"")!=std::string::npos && uc::serialize_config(rt_doc).find("\"ray_reconstruction\": false")!=std::string::npos);
             for(const char* text:{R"({"game":"S:/Games/Test/game","graphics":{"rt_shadows":"extreme"}})",R"({"game":"S:/Games/Test/game","graphics":{"rt_reflections":1}})",R"({"game":"S:/Games/Test/game","graphics":{"ray_tracing":"on"}})"}) {
                 bool bad=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){bad=true;}
                 CHECK(bad);

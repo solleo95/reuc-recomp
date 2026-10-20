@@ -536,6 +536,8 @@ int run(int argc,wchar_t** argv) {
                 level_combo("##rt-reflections","rt_reflections","rt-reflections",options.effects.rt_reflections,!rt.levels_enabled);
                 ImGui::Dummy({0,8*unit});
                 level_combo("##rt-lighting","rt_lighting","rt-lighting",options.effects.rt_lighting,!rt.levels_enabled);
+                ImGui::Dummy({0,8*unit});
+                toggle("##rr",tr("ray_reconstruction"),options.effects.ray_reconstruction,!rt.levels_enabled||(features_ready&&!features.ray_reconstruction),features.ray_reconstruction_reason.c_str());   // DLSS Ray Reconstruction: only with DLSS and a supporting GPU
             }
             const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
             ImGui::Dummy({0,8*unit});

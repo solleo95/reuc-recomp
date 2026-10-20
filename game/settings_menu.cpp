@@ -248,6 +248,10 @@ void SettingsMenu::effects_tab(float unit) {
         }
         ImGui::EndDisabled();
     }
+    ImGui::Dummy({0,6*unit});   // DLSS Ray Reconstruction: only with DLSS and a supporting GPU
+    ImGui::BeginDisabled(!rt.levels_enabled || (features && !features->ray_reconstruction));
+    compact_checkbox("##rr",tr("ray_reconstruction"),options.effects.ray_reconstruction,unit);
+    ImGui::EndDisabled();
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

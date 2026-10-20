@@ -15,6 +15,10 @@ struct UpscaleInputs {
     VkCommandBuffer command=VK_NULL_HANDLE;
     uint64_t targets_generation=0;               // changes whenever the scene targets or the EFB were recreated (a new image may reuse a destroyed one's handle)
     UpscaleImage color, depth, motion, output;   // color/depth/motion: the internal scene targets; output: the output-resolution EFB
+    // DLSS Ray Reconstruction (docs/superpowers/plans/2026-10-20-ray-tracing-p7-ray-reconstruction.md): `color` then holds the noisy ray-traced picture and the guides below
+    // are valid; only the DLSS upscaler reads them (it evaluates Ray Reconstruction instead of Super Resolution when the flag is set).
+    bool ray_reconstruction=false;
+    UpscaleImage diffuse_albedo, specular_albedo, normal_roughness;
     VkExtent2D render_size{}, output_size{};     // top-left sub-rectangles holding the scene (the 640x360 viewport of the 640x480 EFB)
     std::array<float,2> jitter{};                // internal pixels, as added to the projection
     bool reset=false;                            // history is invalid: camera cut, scene-mode change, first frame

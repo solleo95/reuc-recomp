@@ -93,6 +93,7 @@ Options options_from_config(const ConfigDocument& document) {
             options.effects.motion_blur=*level;
         }
         if(graphics.contains("ray_tracing"))options.effects.ray_tracing=boolean(graphics["ray_tracing"]);
+        if(graphics.contains("ray_reconstruction"))options.effects.ray_reconstruction=boolean(graphics["ray_reconstruction"]);
         for(const auto& [key,field]:rt_level_fields(options.effects)) {
             if(!graphics.contains(key))continue;
             const auto level=graphics[key].is_string() ? effect_level_from_name(graphics[key].get<std::string>()) : std::nullopt;
@@ -144,6 +145,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");
     graphics["motion_blur"]=std::string(effect_level_name(options.effects.motion_blur));
     graphics["ray_tracing"]=options.effects.ray_tracing;
+    graphics["ray_reconstruction"]=options.effects.ray_reconstruction;
     auto effects=options.effects;
     for(const auto& [key,field]:rt_level_fields(effects)) {
         if(effect_level_name(*field).empty())invalid(std::string("unknown ")+key);
