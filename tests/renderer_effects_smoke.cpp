@@ -668,6 +668,7 @@ int main(int argc, char** argv) {
                 const auto stats=renderer.rt_stats();
                 std::fprintf(stderr,"rt-as: %u BLAS, %u geometries, %llu triangles; as %.3f ms\n",stats.blas,stats.geometries,(unsigned long long)stats.triangles,renderer.pass_ms(uc::GpuPass::rt_as));
                 CHECK(stats.blas==1 && stats.skinned_blas==1 && stats.static_instances==1 && stats.instances==2 && stats.geometries==3 && stats.triangles==6);   // the three skinned box faces: one per-frame BLAS; the floor (static): an instance of a cached BLAS
+                CHECK(stats.hit_geometries==4 && stats.hit_records==4);   // the table a path's hit reads: the three box faces and the floor, each with its material record
                 frame(30); frame(30);   // the box far right: the structures follow the geometry
                 CHECK(renderer.rt_stats().blas==1 && renderer.rt_stats().instances==2 && renderer.rt_stats().triangles==6);
                 auto as_runs=renderer.pass_runs(uc::GpuPass::rt_as), shadow_runs=renderer.pass_runs(uc::GpuPass::rt_shadows);

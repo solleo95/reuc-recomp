@@ -2079,6 +2079,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             geometry.vertices=address(*info.vertices)+info.vertex_offset; geometry.indices=address(*info.indices)+info.index_offset;
             geometry.vertex_count=uint32_t(draw.mesh->vertices.size()); geometry.index_count=info.index_count; geometry.first_index=info.first_index; geometry.first_vertex=info.first_vertex;
             geometry.palette=info.palette; geometry.current=info.current; geometry.indexed=info.indexed; geometry.opaque=*opaque; geometry.palettes=address(slot.palettes);
+            if (rt_records && d<draw_record.size()) geometry.record=draw_record[d];
             geometry.skinned=info.indexed!=0;   // characters and enemies: a rig light's rays see only these (the instance mask), a lamp's rays see the whole scene
             if (!geometry.skinned) {   // a static draw: its mesh's BLAS is cached in object space, the instance carries the draw's object-to-view rows (current row and the two after it)
                 geometry.mesh_id=info.mesh_id;

@@ -25,12 +25,20 @@ struct RtGeometry {
     uint32_t palette=0, current=0, indexed=0;
     bool opaque=true;
     VkDeviceAddress palettes=0;
+    uint32_t record=~0u;   // the draw's material record (rt_material.h), ~0u without one: what a ray that hits this geometry looks up (RtHitGeometry)
     bool skinned=false;   // per-vertex matrices (a character or an enemy): its instance carries kRtSkinned, a static draw's kRtStatic
     // A static draw of a cached mesh (mesh_id != 0, not skinned) is not transformed per frame: its object-space BLAS is built once (RtMeshCachePolicy) straight from
     // the mesh's vertex/index buffers (`vertices` addresses gx::GpuMeshVertex records) and the TLAS instance carries `transform`, the draw's object-to-view rows.
     uint64_t mesh_id=0;
     std::array<std::array<float,4>,3> transform{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
 };
+// What a ray that hit a triangle of a BLAS geometry needs to know about it (the path tracer, docs/superpowers/plans/2026-10-20-path-tracing-spike.md). std430, 32 bytes.
+// positions/indices: device addresses of the geometry's vertex positions (float3 at `stride_words` words apart: 3 for a per-frame view-space buffer, 27 for a cached
+// gx::GpuMeshVertex buffer in object space) and of its triangle-list indices; the instance's object-to-world rows bring the positions to view space.
+// The table is the frame's flat list in build order; `bases` gives, per TLAS instance (instanceCustomIndex), where its geometries start, so the entry of a hit is
+// table[bases[instance] + geometry index].
+struct RtHitGeometry { VkDeviceAddress positions=0, indices=0; uint32_t record=~0u, stride_words=3, flags=0, padding=0; };
+static_assert(sizeof(RtHitGeometry)==32);
 // Instance masks of the two occluder classes (docs/superpowers/specs/2026-10-19-rt-level-shadows-design.md): a lamp's ray sees both, a rig light's only the skinned one.
 constexpr uint32_t kRtStatic=1, kRtSkinned=2;
 // Per-frame acceleration structures (docs/superpowers/plans/2026-10-19-ray-tracing-p0-1.md, Ruling 1): every scene packet's instances go through a transform pass
@@ -47,7 +55,11 @@ public:
     uint64_t buffer_growths() const { return growths_; }   // tests: how often a buffer was (re)allocated
     // The latest frame: blas/skinned_blas/geometries/triangles are the per-frame view-space builds (skinned draws), static_instances the instances of cached BLASes,
     // instances the TLAS total.
-    struct Stats { uint32_t blas=0, skinned_blas=0, static_instances=0, instances=0, geometries=0; uint64_t triangles=0; };
+    struct Stats { uint32_t blas=0, skinned_blas=0, static_instances=0, instances=0, geometries=0, hit_geometries=0, hit_records=0; uint64_t triangles=0; };   // hit_*: entries of the hit table (all, and those with a record)
+    VkBuffer hit_table() const { return frame_ ? frame_->hits.buffer : VK_NULL_HANDLE; }     // RtHitGeometry per geometry; valid after build_tlas
+    VkBuffer hit_bases() const { return frame_ ? frame_->bases.buffer : VK_NULL_HANDLE; }    // uint32 per TLAS instance: its first table entry
+    VkDeviceSize hit_table_size() const { return frame_ ? frame_->hits.size : 0; }
+    VkDeviceSize hit_bases_size() const { return frame_ ? frame_->bases.size : 0; }
     Stats stats() const { return frame_ ? frame_->stats : Stats{}; }
     struct CacheStats { uint64_t builds=0, hits=0, evictions=0, invalidated=0, deferred=0, bytes=0; uint32_t resident=0; };
     CacheStats cache_stats() const;
@@ -56,12 +68,14 @@ public:
 private:
     struct Buffer { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; VkDeviceAddress address=0; void* mapped=nullptr; VkDeviceSize size=0; };
     struct Frame {
-        Buffer positions, scratch, blas_storage, tlas_storage, instances;
+        Buffer positions, scratch, blas_storage, tlas_storage, instances, hits, bases;
+        std::vector<RtHitGeometry> hit_geometries;   // the hit table in build order (copied to `hits` with the TLAS)
+        std::vector<uint32_t> blas_hit_base;         // per entry of `blas`: the table index of its first geometry
         VkDeviceSize blas_used=0;
         std::vector<VkAccelerationStructureKHR> blas;
         std::vector<VkDeviceAddress> blas_addresses;
         std::vector<uint32_t> blas_masks;   // the instance mask of each BLAS (kRtStatic or kRtSkinned)
-        struct StaticInstance { std::array<std::array<float,4>,3> matrix; VkDeviceAddress blas; };
+        struct StaticInstance { std::array<std::array<float,4>,3> matrix; VkDeviceAddress blas; uint32_t hit_base; };
         std::vector<StaticInstance> static_instances;   // this frame's instances of cached BLASes
         VkAccelerationStructureKHR tlas=VK_NULL_HANDLE;
         std::vector<Buffer> retired;   // replaced by a growth during the frame: earlier packets of the frame may still read them

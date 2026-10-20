@@ -99,7 +99,7 @@ void RtScene::begin_frame(uint32_t frame_slot) {
         if (frame_number_>=it->frame+frames_.size()+1) { destroy_as_(device_,it->blas.as,nullptr); destroy(it->blas.storage); it=retired_.erase(it); }
         else ++it;
     }
-    frame_->static_instances.clear();
+    frame_->static_instances.clear(); frame_->hit_geometries.clear(); frame_->blas_hit_base.clear();
     for (auto blas : frame_->blas) destroy_as_(device_,blas,nullptr);
     frame_->blas.clear(); frame_->blas_addresses.clear(); frame_->blas_masks.clear(); frame_->blas_used=0;
     for (auto& buffer : frame_->retired) destroy(buffer);
@@ -118,7 +118,8 @@ void RtScene::record_packet(VkCommandBuffer command, std::span<const RtGeometry>
         const auto action=policy_.request(key);
         if (action==RtMeshCachePolicy::Action::defer) { ++deferred_; continue; }
         if (action==RtMeshCachePolicy::Action::build) build_cached(command,geometry,key);
-        frame.static_instances.push_back({geometry.transform,cached_.at(key).address});
+        frame.static_instances.push_back({geometry.transform,cached_.at(key).address,uint32_t(frame.hit_geometries.size())});
+        frame.hit_geometries.push_back({geometry.vertices,geometry.indices+VkDeviceAddress(geometry.first_index)*4,geometry.record,27});   // the cached BLAS reads the mesh's own vertices: object space
         ++frame.stats.static_instances; ++frame.stats.instances;
     }
     if (items.empty()) return;
@@ -161,6 +162,8 @@ void RtScene::build_blas(VkCommandBuffer command, std::span<const RtGeometry> it
     create.buffer=frame.blas_storage.buffer; create.offset=offset; create.size=sizes.accelerationStructureSize; create.type=VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     VkAccelerationStructureKHR blas; check(create_as_(device_,&create,nullptr,&blas),"BLAS");
     frame.blas.push_back(blas); frame.blas_used=offset+sizes.accelerationStructureSize;
+    frame.blas_hit_base.push_back(uint32_t(frame.hit_geometries.size()));   // the geometry index inside the BLAS is the item's position
+    for (const auto& item : items) frame.hit_geometries.push_back({item.positions_out,item.indices+VkDeviceAddress(item.first_index)*4,item.record,3});
     VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR}; address.accelerationStructure=blas;
     frame.blas_addresses.push_back(as_address_(device_,&address)); frame.blas_masks.push_back(mask);
     build.dstAccelerationStructure=blas; build.scratchData.deviceAddress=align(frame.scratch.address,scratch_alignment_);
@@ -227,6 +230,13 @@ bool RtScene::build_tlas(VkCommandBuffer command) {
     const uint32_t count=uint32_t(frame.blas.size()+frame.static_instances.size());
     ensure(frame,frame.instances,VkDeviceSize(count)*sizeof(VkAccelerationStructureInstanceKHR),VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,true);
     auto* instances=static_cast<VkAccelerationStructureInstanceKHR*>(frame.instances.mapped);
+    ensure(frame,frame.bases,VkDeviceSize(count)*sizeof(uint32_t),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
+    ensure(frame,frame.hits,VkDeviceSize(std::max<size_t>(frame.hit_geometries.size(),1))*sizeof(RtHitGeometry),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
+    auto* bases=static_cast<uint32_t*>(frame.bases.mapped);
+    for (uint32_t i=0;i<count;++i) bases[i]=i<frame.blas.size() ? frame.blas_hit_base[i] : frame.static_instances[i-frame.blas.size()].hit_base;
+    if (!frame.hit_geometries.empty()) std::memcpy(frame.hits.mapped,frame.hit_geometries.data(),frame.hit_geometries.size()*sizeof(RtHitGeometry));
+    frame.stats.hit_geometries=uint32_t(frame.hit_geometries.size()); frame.stats.hit_records=0;
+    for (const auto& hit : frame.hit_geometries) frame.stats.hit_records+=hit.record!=~0u;
     for (uint32_t i=0;i<count;++i) {
         VkAccelerationStructureInstanceKHR instance{};
         instance.instanceCustomIndex=i;
