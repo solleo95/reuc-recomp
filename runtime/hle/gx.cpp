@@ -654,6 +654,7 @@ bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& des
     prompt->compact=compact;draws.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
 }
 void gx_enable_async_textures() { texture_cache.set_async(true); }
+void gx_set_texture_budget(size_t bytes) { texture_cache.set_budget(bytes); }
 void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) {
     prompt_batch=0;carried_prompts.clear();
     prompt_annotations=prompt_present=prompt_fallback=0;

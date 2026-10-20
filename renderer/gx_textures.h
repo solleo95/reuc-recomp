@@ -66,6 +66,7 @@ public:
     std::shared_ptr<const TexturePixels> snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette = {});
     // With async on, a cache miss returns at once and a small worker pool fills the pixels; the renderer calls TexturePixels::wait() before it reads them.
     void set_async(bool on) { async_ = on; }
+    void set_budget(size_t bytes) { budget_ = bytes; }
     size_t resident_bytes() const { return resident_; }
     uint64_t decodes() const { return decodes_; }
     void clear() { by_address_.clear(); entries_.clear(); resident_ = 0; decodes_ = 0; }

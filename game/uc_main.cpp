@@ -435,7 +435,10 @@ static int real_main(int argc, char** argv) {
     if (!options.headless) {
         uc::gx_enable_async_textures();
         // Replacement textures (BC7 .dds named like the dumped PNGs) sit next to the exe; nothing happens without the folder.
-        if (const auto count = gx::texture_replacements().load_index(exe_dir() / "textures")) std::fprintf(stderr, "texture replacements: %zu files\n", count);
+        if (const auto count = gx::texture_replacements().load_index(exe_dir() / "textures")) {
+            std::fprintf(stderr, "texture replacements: %zu files\n", count);
+            uc::gx_set_texture_budget(size_t(2) << 30);
+        }
     }
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     GuestRunner runner(sched, mt, packets);
