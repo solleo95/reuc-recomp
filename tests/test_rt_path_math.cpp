@@ -9,8 +9,18 @@ int main() {
     CHECK(settings.ao_rays>=1 && settings.ao_radius>0.f && settings.ao_radius<settings.reach && settings.ao_strength>0.f && settings.ao_strength<=1.f);
     CHECK(uc::rt_path_ao(0.f,0.7f)==1.f && std::fabs(uc::rt_path_ao(1.f,0.7f)-0.3f)<1e-6f && std::fabs(uc::rt_path_ao(0.5f,0.7f)-0.65f)<1e-6f && uc::rt_path_ao(2.f,1.f)==0.f && uc::rt_path_ao(-1.f,1.f)==1.f);
     const auto packed=uc::rt_path_pack(settings);
-    CHECK((packed.divisor_frame&255u)==settings.divisor && (packed.counts&255u)==settings.paths && ((packed.counts>>8)&255u)==settings.bounces && ((packed.counts>>16)&255u)==settings.ao_rays);
+    CHECK((packed.divisor_frame&255u)==settings.divisor && (packed.counts&255u)==settings.paths && ((packed.counts>>8)&255u)==settings.bounces && ((packed.counts>>16)&255u)==settings.ao_rays && (packed.counts>>24)==settings.light_count);
     CHECK(uc::rt_path_pack(settings,63).divisor_frame>>8==63u);
+    // Direct light from an emitter (next-event estimation): irradiance of an area light, over pi to match the cosine-weighted paths' mean radiance
+    CHECK(settings.light_count>=1 && settings.light_count<=uc::kRtPathMaxLights);
+    const float pixel=uc::rt_path_pixel_size(10.f,2.f,1280.f);   // 2 * 10 / (2 * 1280)
+    CHECK(std::fabs(pixel-10.f/1280.f)<1e-6f);
+    CHECK(std::fabs(uc::rt_path_emitter_area(100u,pixel)-100.f*uc::kRtPathGridStep*uc::kRtPathGridStep*pixel*pixel)<1e-5f);
+    const float near_light=uc::rt_path_nee(1.f,2.f,1.f,1.f,4.f,0.01f), far_light=uc::rt_path_nee(1.f,2.f,1.f,1.f,16.f,0.01f);
+    CHECK(std::fabs(near_light-2.f/(3.14159265f*4.f))<1e-5f && std::fabs(near_light/far_light-4.f)<1e-4f);   // inverse square
+    CHECK(uc::rt_path_nee(1.f,2.f,0.f,1.f,4.f,0.01f)==0.f && uc::rt_path_nee(1.f,2.f,1.f,-0.5f,4.f,0.01f)==0.f);   // a surface or a light facing away gets nothing
+    CHECK(uc::rt_path_nee(1.f,2.f,1.f,1.f,0.f,0.5f)==uc::rt_path_nee(1.f,2.f,1.f,1.f,0.5f,0.5f));   // the distance floor keeps a surface beside the emitter finite
+    CHECK(std::fabs(uc::rt_path_decode_position(int32_t(-160),10u)+1.f)<1e-6f && uc::rt_path_decode_position(0,0u)==0.f);   // the fixed-point sums of the view positions
     // The mean albedo: the sums of 8-bit channels over the pixel count, a grey fallback for a record that is not on screen
     const auto mean=uc::rt_path_mean_albedo({510,255,0},3);
     CHECK(std::fabs(mean[0]-2.f/3.f)<1e-6f && std::fabs(mean[1]-1.f/3.f)<1e-6f && mean[2]==0.f);

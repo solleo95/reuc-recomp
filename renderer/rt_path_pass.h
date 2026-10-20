@@ -43,8 +43,8 @@ private:
     void ensure_sums(uint32_t records);
     VkDevice device_=VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_{};
-    VkShaderModule modules_[3]{};   // accumulate, trace, composite
-    VkPipeline pipelines_[3]{};
+    VkShaderModule modules_[4]{};   // accumulate, list, trace, composite
+    VkPipeline pipelines_[4]{};
     VkDescriptorSetLayout set_layout_=VK_NULL_HANDLE;
     VkPipelineLayout layout_=VK_NULL_HANDLE;
     VkDescriptorPool pool_=VK_NULL_HANDLE;
@@ -52,7 +52,7 @@ private:
     uint32_t slots_=0;
     Image signal_;
     VkExtent2D signal_extent_{};
-    VkBuffer sums_=VK_NULL_HANDLE; VkDeviceMemory sums_memory_=VK_NULL_HANDLE; uint32_t sums_capacity_=0;   // 8 words per record: the albedo's sums, the pixel count, the shown colour's sums
+    VkBuffer sums_=VK_NULL_HANDLE; VkDeviceMemory sums_memory_=VK_NULL_HANDLE; uint32_t sums_capacity_=0;   // the emitter list, then 12 words per record (albedo, count, shown colour, view position sums)
     bool signal_initialized_=false;
     std::function<void()> idle_;
 };

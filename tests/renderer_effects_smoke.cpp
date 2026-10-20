@@ -1347,14 +1347,16 @@ int main(int argc, char** argv) {
                 CHECK(stats.hit_geometries==2 && stats.hit_records==2);   // the floor and the wall, each with a record
                 CHECK(std::abs(at(on,x,near_row,0)-at(off,x,near_row,0))+std::abs(at(on,x,near_row,1)-at(off,x,near_row,1))>=10);   // the path tracer replaced the lighting
                 // the wall's warm emission lights the floor beside it more than the far floor, and warmly: red well above blue
-                CHECK(at(on,x,near_row,0)>at(on,x,far_row,0)+20 && at(on,x,near_row,0)>2*at(on,x,near_row,2));
+                CHECK(at(on,x,near_row,0)>at(on,x,far_row,0)+12 && at(on,x,near_row,0)>2*at(on,x,near_row,2));
                 // the contact occlusion: the floor 0.5 units from the wall (inside the rays' radius) is darker with it than without; the open far floor beyond the radius is not
+                fixed.ambient=0.6f; fixed.emission=0.f; renderer.set_rt_path_settings(fixed);   // the occlusion darkens the fill (the dome, the bounces) and not the emitters' direct light: no emission here
+                const auto filled=settle(true,true);
                 fixed.ao_strength=0.7f; fixed.ao_rays=4; fixed.ao_radius=1.f;
                 renderer.set_rt_path_settings(fixed);
                 const auto occluded=settle(true,true);
-                std::fprintf(stderr,"rt-path: contact occlusion: near floor red %d -> %d, far floor red %d -> %d\n",at(on,x,near_row,0),at(occluded,x,near_row,0),at(on,x,far_row,0),at(occluded,x,far_row,0));
-                CHECK(at(occluded,x,near_row,0)<at(on,x,near_row,0)-5 && std::abs(at(occluded,x,far_row,0)-at(on,x,far_row,0))<=3);
-                fixed.ao_strength=0.f; renderer.set_rt_path_settings(fixed);
+                std::fprintf(stderr,"rt-path: contact occlusion: near floor red %d -> %d, far floor red %d -> %d\n",at(filled,x,near_row,0),at(occluded,x,near_row,0),at(filled,x,far_row,0),at(occluded,x,far_row,0));
+                CHECK(at(occluded,x,near_row,0)<at(filled,x,near_row,0)-5 && std::abs(at(occluded,x,far_row,0)-at(filled,x,far_row,0))<=3);
+                fixed.ao_strength=0.f; fixed.ambient=0.1f; fixed.emission=1.f; renderer.set_rt_path_settings(fixed);
                 const uint64_t runs=renderer.pass_runs(uc::GpuPass::rt_path);
                 CHECK(runs>0);
                 frame(false,false); frame(false,false);

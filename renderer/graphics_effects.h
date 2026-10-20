@@ -44,8 +44,8 @@ inline GraphicsEffects effective_effects(const GraphicsEffects& chosen, bool rt_
     effective.rt_shadows=rt_level(chosen,chosen.rt_shadows,rt_supported); effective.rt_local_shadows=rt_level(chosen,chosen.rt_local_shadows,rt_supported);
     effective.rt_ambient_occlusion=rt_level(chosen,chosen.rt_ambient_occlusion,rt_supported);
     effective.path_tracing=chosen.path_tracing && chosen.ray_tracing && rt_supported;
-    if(effective.path_tracing) {   // path tracing lights the scene itself: shadows, occlusion and diffuse bounce are part of it (the reflections stay their own pass)
-        effective.rt_shadows=effective.rt_local_shadows=effective.rt_ambient_occlusion=effective.rt_lighting=EffectLevel::off;
+    if(effective.path_tracing) {   // path tracing lights the scene itself: sun shadows, occlusion and diffuse bounce are part of it (the reflections and the local shadows of the characters' rig lights stay their own passes)
+        effective.rt_shadows=effective.rt_ambient_occlusion=effective.rt_lighting=EffectLevel::off;
         effective.shadows=EffectLevel::off; effective.contact_shadows=false; effective.ambient_occlusion=EffectLevel::off;
     }
     if(effective.rt_shadows!=EffectLevel::off) { effective.shadows=EffectLevel::off; effective.contact_shadows=false; }

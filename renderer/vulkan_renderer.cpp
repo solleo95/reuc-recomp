@@ -1084,7 +1084,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             shadow.command=command; shadow.tlas=rt_.tlas(); shadow.depth=scene_depth_view_; shadow.gbuffer=scene_gbuffer_view_; shadow.material=scene_material_view_; shadow.color=scene_color_view_;
             shadow.records=rt_records_[rt_record_slot_].buffer; shadow.lights=rt_lights_[rt_record_slot_].buffer;
             shadow.region=in.render_size; shadow.viewport=scene_viewport; shadow.view=view_params(*frame_projection_);
-            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.ao=effects_.rt_ambient_occlusion; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_; shadow.trace_lamps=rt_trace_lamps_; shadow.key_direction=rt_key_direction_;   // the test mode traces the lamps instead of the key light
+            shadow.sun=effects_.rt_shadows; shadow.local=effects_.rt_local_shadows; shadow.ao=effects_.rt_ambient_occlusion; shadow.slot=timer_slot; shadow.level_light=effects_.rt_local_shadows!=EffectLevel::off && !rt_trace_lamps_ && !effects_.path_tracing;   /* path tracing has its own key light: the local shadows are the rig lights of the characters only */ shadow.trace_lamps=rt_trace_lamps_; shadow.key_direction=rt_key_direction_;   // the test mode traces the lamps instead of the key light
             shadow.frame=uint32_t(upscale_frame_%8)+1;   // the noise pattern cycles on every path: the own denoiser's history (and a temporal upscaler's) averages it
             const VkImageView noisy=rt_shadow_.trace(shadow);
             {

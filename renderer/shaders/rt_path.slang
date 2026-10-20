@@ -31,7 +31,8 @@ struct Params {
 static uint pathsOf() { return params.counts & 255u; }
 static uint bouncesOf() { return (params.counts >> 8) & 255u; }
 static uint aoRaysOf() { return (params.counts >> 16) & 255u; }
-static uint divisorOf() { return params.divisorFrame & 255u; }
+static uint lightsOf() { return params.counts >> 24; }
+static uint divisorOf(){ return params.divisorFrame & 255u; }
 static uint frameOf() { return params.divisorFrame >> 8; }
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
 struct HitGeometry { uint* positions; uint* indices; uint record; uint strideWords; uint flags; uint padding; };           // renderer/rt_scene.h RtHitGeometry
@@ -46,7 +47,11 @@ struct HitGeometry { uint* positions; uint* indices; uint record; uint strideWor
 [[vk::binding(8, 0)]] Texture2D<float4> sceneAlbedo;
 [[vk::binding(9, 0)]] StructuredBuffer<HitGeometry> hitTable;
 [[vk::binding(10, 0)]] StructuredBuffer<uint> hitBases;
-[[vk::binding(11, 0)]] RWStructuredBuffer<uint> albedoSums;   // four words per record: the sums of the albedo's 8-bit channels and the pixel count
+[[vk::binding(11, 0)]] RWStructuredBuffer<uint> albedoSums;   // 12 words per record: the sums of the albedo's 8-bit channels (0-2), the sample count (3), the shown colour (4-6) and the view position x 16 (7-9, signed)
+[[vk::binding(12, 0)]] RWStructuredBuffer<uint> lightList;     // word 0: the number of emitters found; light i from word 4 + 8 i: position xyz, area, radiance rgb, weight (floats as bits)
+static const uint kStride = 12, kMaxLights = 32;
+static const float kKeyShadow = 0.65;   // rt_shadow_math.h kRtOverheadStrength
+static const float kLightCone = 1.0, kKeyCone = 0.06, kGridStep = 4.0, kPositionScale = 16.0;   // rt_path_math.h: the emitter's soft shadow, the overhead light's (rt_shadow_math.h), the accumulation grid
 
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
 float3 viewPositionAt(int2 pixel, float stored) {
@@ -69,13 +74,19 @@ float3 cosineDirection(float3 normal, float2 u) {   // rt_ao_math.h rt_ao_direct
     const float3 tangent = float3(1.0 + sgn * normal.x * normal.x * a, sgn * b, -sgn * normal.x), bitangent = float3(b, sgn + normal.y * normal.y * a, -normal.y);
     return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
 }
+float3 jitterDirection(float3 d, float radius, float2 u) {   // within a cone of the given half angle around d
+    const float3 helper = abs(d.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    const float3 t = normalize(cross(helper, d)), b = cross(d, t);
+    const float r = radius * sqrt(u.x), a = 6.2831853 * u.y;
+    return normalize(d + t * (r * cos(a)) + b * (r * sin(a)));
+}
 float3 meanAlbedo(uint record) {   // rt_path_math.h rt_path_mean_albedo
-    const uint count = albedoSums[record * 8 + 3];
-    return count > 0 ? float3(albedoSums[record * 8], albedoSums[record * 8 + 1], albedoSums[record * 8 + 2]) / (255.0 * float(count)) : float3(0.4, 0.4, 0.4);
+    const uint count = albedoSums[record * 12 + 3];
+    return count > 0 ? float3(albedoSums[record * 12], albedoSums[record * 12 + 1], albedoSums[record * 12 + 2]) / (255.0 * float(count)) : float3(0.4, 0.4, 0.4);
 }
 float3 meanColour(uint record) {   // the record's mean colour as the game drew it (lighting, fog and all)
-    const uint count = albedoSums[record * 8 + 3];
-    return count > 0 ? float3(albedoSums[record * 8 + 4], albedoSums[record * 8 + 5], albedoSums[record * 8 + 6]) / (255.0 * float(count)) : float3(0.0, 0.0, 0.0);
+    const uint count = albedoSums[record * 12 + 3];
+    return count > 0 ? float3(albedoSums[record * 12 + 4], albedoSums[record * 12 + 5], albedoSums[record * 12 + 6]) / (255.0 * float(count)) : float3(0.0, 0.0, 0.0);
 }
 bool emits(float3 colour) { return luminance(colour) > params.threshold; }   // rt_path_math.h rt_path_emits: a bright surface is a light source
 bool occluded(float3 origin, float3 direction, float reach) {
@@ -109,13 +120,39 @@ void accumulateMain(uint3 id : SV_DispatchThreadID) {   // a grid with a step of
     if (record == 0xFFFFFFFFu || record >= params.recordCount) return;
     const uint3 rgb = uint3(saturate(sceneAlbedo.Load(int3(pixel, 0)).rgb) * 255.0 + 0.5);
     const uint3 shown = uint3(saturate(sceneColor[uint2(pixel)].rgb) * 255.0 + 0.5);
-    InterlockedAdd(albedoSums[record * 8], rgb.x);
-    InterlockedAdd(albedoSums[record * 8 + 1], rgb.y);
-    InterlockedAdd(albedoSums[record * 8 + 2], rgb.z);
-    InterlockedAdd(albedoSums[record * 8 + 3], 1u);
-    InterlockedAdd(albedoSums[record * 8 + 4], shown.x);
-    InterlockedAdd(albedoSums[record * 8 + 5], shown.y);
-    InterlockedAdd(albedoSums[record * 8 + 6], shown.z);
+    InterlockedAdd(albedoSums[record * 12], rgb.x);
+    InterlockedAdd(albedoSums[record * 12 + 1], rgb.y);
+    InterlockedAdd(albedoSums[record * 12 + 2], rgb.z);
+    InterlockedAdd(albedoSums[record * 12 + 3], 1u);
+    InterlockedAdd(albedoSums[record * 12 + 4], shown.x);
+    InterlockedAdd(albedoSums[record * 12 + 5], shown.y);
+    InterlockedAdd(albedoSums[record * 12 + 6], shown.z);
+    const int3 position = int3(round(viewPositionAt(pixel, sceneDepth.Load(int3(pixel, 0))) * kPositionScale));   // signed, wrapping in the unsigned atomics
+    InterlockedAdd(albedoSums[record * 12 + 7], asuint(position.x));
+    InterlockedAdd(albedoSums[record * 12 + 8], asuint(position.y));
+    InterlockedAdd(albedoSums[record * 12 + 9], asuint(position.z));
+}
+
+// The emitters: every record whose mean shown colour is bright becomes a light at the mean of its view positions with the area its samples cover (rt_path_math.h
+// rt_path_emitter_area), radiance = shown colour x emission, weight = luminance x area. One group walks all records.
+[shader("compute")] [numthreads(64, 1, 1)]
+void listMain(uint3 id : SV_DispatchThreadID) {
+    for (uint record = id.x; record < params.recordCount; record += 64) {
+        const uint count = albedoSums[record * kStride + 3];
+        if (count < 2) continue;
+        const float3 colour = meanColour(record);
+        if (!emits(colour)) continue;
+        uint slot;
+        InterlockedAdd(lightList[0], 1u, slot);
+        if (slot >= kMaxLights) continue;
+        const float3 position = float3(asint(albedoSums[record * kStride + 7]), asint(albedoSums[record * kStride + 8]), asint(albedoSums[record * kStride + 9])) / (kPositionScale * float(count));
+        const float pixelSize = 2.0 * abs(position.z) / (params.viewA.x * params.viewport.z);
+        const float area = float(count) * kGridStep * kGridStep * pixelSize * pixelSize;
+        const float3 radiance = colour * params.emission;
+        const uint at = 4 + 8 * slot;
+        lightList[at] = asuint(position.x); lightList[at + 1] = asuint(position.y); lightList[at + 2] = asuint(position.z); lightList[at + 3] = asuint(area);
+        lightList[at + 4] = asuint(radiance.x); lightList[at + 5] = asuint(radiance.y); lightList[at + 6] = asuint(radiance.z); lightList[at + 7] = asuint(luminance(radiance) * area);
+    }
 }
 
 [shader("compute")] [numthreads(8, 8, 1)]
@@ -132,6 +169,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
         const float3 start = position + normal * eps;
         uint seed = pcg(uint(pixel.x) + 65536u * uint(pixel.y)) ^ pcg(frameOf() * 9781u + 17u);
         float3 sum = float3(0.0, 0.0, 0.0);
+        const uint lightCount = min(min(lightList[0], kMaxLights), lightsOf());
         for (uint p = 0; p < pathsOf(); ++p) {
             float3 origin = start, direction = cosineDirection(normal, float2(nextRandom(seed), nextRandom(seed)));
             float3 throughput = float3(1.0, 1.0, 1.0), radiance = float3(0.0, 0.0, 0.0);
@@ -144,7 +182,10 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 const HitGeometry geometry = hitTable[hitBases[query.CommittedInstanceID()] + query.CommittedGeometryIndex()];
                 float3 albedo = float3(0.4, 0.4, 0.4), shown = float3(0.0, 0.0, 0.0);
                 if (geometry.record != 0xFFFFFFFFu && geometry.record < params.recordCount) { albedo = meanAlbedo(geometry.record); shown = meanColour(geometry.record); }
-                if (emits(shown)) { radiance += throughput * shown * params.emission; break; }   // the surface shines with the colour the game shows
+                if (emits(shown)) {   // the surface shines with the colour the game shows
+                    if (b > 0 || lightCount == 0) radiance += throughput * shown * params.emission;   // the first hit is the direct light, sampled below with its shadow ray
+                    break;
+                }
                 throughput *= albedo;
                 if (b + 1 == bouncesOf()) { radiance += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
                 const float t = query.CommittedRayT();
@@ -164,9 +205,37 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 if (occluded(start, cosineDirection(normal, float2(nextRandom(seed), nextRandom(seed))), params.aoRadius)) ++blocked;
             light *= 1.0 - saturate(params.aoStrength) * float(blocked) / float(aoRaysOf());
         }
-        if (params.key > 0.0) {   // the synthetic overhead light: a short shadow ray, the surfaces that face it
+        if (lightCount > 0) {   // direct light from the emitters: one is picked by weight and its shadow ray aims within its radius (rt_path_math.h rt_path_nee)
+            float total = 0.0;
+            for (uint i = 0; i < lightCount; ++i) total += asfloat(lightList[4 + 8 * i + 7]);
+            float pick = nextRandom(seed) * total;
+            uint chosen = lightCount - 1;
+            for (uint j = 0; j < lightCount; ++j) { pick -= asfloat(lightList[4 + 8 * j + 7]); if (pick <= 0.0) { chosen = j; break; } }
+            const uint at = 4 + 8 * chosen;
+            const float3 centre = float3(asfloat(lightList[at]), asfloat(lightList[at + 1]), asfloat(lightList[at + 2]));
+            const float area = asfloat(lightList[at + 3]), weight = asfloat(lightList[at + 7]);
+            const float3 radiance = float3(asfloat(lightList[at + 4]), asfloat(lightList[at + 5]), asfloat(lightList[at + 6]));
+            const float radius = sqrt(area / 3.14159265);
+            float3 toLight = centre - start;
+            const float3 side = normalize(cross(toLight, abs(toLight.y) < 0.99 * length(toLight) ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+            const float3 up = cross(normalize(toLight), side);
+            const float2 disk = float2(nextRandom(seed), nextRandom(seed));
+            toLight += (side * cos(6.2831853 * disk.y) + up * sin(6.2831853 * disk.y)) * (radius * kLightCone * sqrt(disk.x));
+            const float d2 = dot(toLight, toLight), dist = sqrt(d2);
+            const float3 wi = toLight / max(dist, 1e-4);
+            const float cosSurface = dot(normal, wi);
+            if (cosSurface > 0.0 && weight > 0.0 && !occluded(start, wi, max(dist * 0.95 - 0.1, 0.05))) {
+                const float3 nee = radiance * area * cosSurface / (3.14159265 * max(d2, area / 3.14159265));   // cos at the light taken as 1
+                light += min(nee * (total / weight), params.clampRadiance * 2.0);   // divided by the pick's probability weight / total
+            }
+        }
+        if (params.key > 0.0) {   // the synthetic overhead light: a soft shadow ray, the surfaces that face it
             const float facing = saturate(dot(normal, params.overhead.xyz));
-            if (facing > 0.0 && !occluded(start, params.overhead.xyz, params.overhead.w)) light += params.key * facing * kWarm;
+            const float3 keyAim = jitterDirection(params.overhead.xyz, kKeyCone, float2(nextRandom(seed), nextRandom(seed)));
+            if (facing > 0.0) {
+                if (occluded(start, keyAim, params.overhead.w)) light *= 1.0 - kKeyShadow * smoothstep(0.05, 0.3, facing);   // rt_shadow_math.h rt_overhead_factor: the shadow darkens what faces the light, as the RT shadow pass does
+                else light += params.key * facing * kWarm;
+            }
         }
     }
     if (any(isnan(light)) || any(isinf(light))) light = float3(kReference, kReference, kReference);   // a NaN would stay in the denoiser's history for good

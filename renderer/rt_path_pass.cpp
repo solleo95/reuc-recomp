@@ -21,7 +21,9 @@ struct PushParams {
 };
 static_assert(sizeof(PushParams)==128 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor_frame)==64 && offsetof(PushParams,reach)==80 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,mix)==112);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr uint32_t kBindings=12, kPasses=3;
+constexpr uint32_t kBindings=13, kPasses=4;
+// The scratch buffer holds the emitter list first (word 0 the count, 8 words per light), then 12 words per record: the shader's albedoSums.
+constexpr VkDeviceSize kListBytes=2048, kRecordBytes=48;
 VkShaderModule load_module(VkDevice device, const std::filesystem::path& path) {
     std::ifstream file(path,std::ios::binary);
     std::vector<char> code((std::istreambuf_iterator<char>(file)),{});
@@ -47,11 +49,11 @@ void RtPathPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryPropert
     device_=device; memory_=memory; slots_=slots;
     idle_=idle ? std::move(idle) : [device] { vkDeviceWaitIdle(device); };
     try {
-        const char* names[kPasses]={"accumulate","trace","composite"};
+        const char* names[kPasses]={"accumulate","list","trace","composite"};
         for (uint32_t i=0;i<kPasses;++i) modules_[i]=load_module(device_,shaders/(std::string("rt_path.")+names[i]+".spv"));
         const VkDescriptorType types[kBindings]={VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
         VkDescriptorSetLayoutBinding bindings[kBindings]{};
         for (uint32_t i=0;i<kBindings;++i) bindings[i]={i,types[i],1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
         VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=kBindings; set.pBindings=bindings;
@@ -67,7 +69,7 @@ void RtPathPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryPropert
             check(vkCreateComputePipelines(device_,VK_NULL_HANDLE,1,&pipeline,nullptr,&pipelines_[i]),"pipeline");
         }
         const uint32_t sets=2*slots;
-        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,sets},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,5*sets},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,4*sets},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2*sets}};
+        const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,sets},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,5*sets},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,5*sets},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,2*sets}};
         VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=sets; pool.poolSizeCount=4; pool.pPoolSizes=sizes;
         check(vkCreateDescriptorPool(device_,&pool,nullptr,&pool_),"descriptor pool");
         const std::vector<VkDescriptorSetLayout> layouts(sets,set_layout_);
@@ -100,7 +102,7 @@ void RtPathPass::ensure_sums(uint32_t records) {
     if (sums_ && records<=sums_capacity_) return;
     if (sums_) { idle_(); vkDestroyBuffer(device_,sums_,nullptr); vkFreeMemory(device_,sums_memory_,nullptr); sums_=VK_NULL_HANDLE; sums_memory_=VK_NULL_HANDLE; }
     sums_capacity_=std::max<uint32_t>(4096,records*2);
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=VkDeviceSize(sums_capacity_)*32; info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT; info.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=kListBytes+VkDeviceSize(sums_capacity_)*kRecordBytes; info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT; info.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device_,&info,nullptr,&sums_),"sums buffer");
     VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device_,sums_,&requirements);
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size; allocate.memoryTypeIndex=memory_type(memory_,requirements.memoryTypeBits);
@@ -112,7 +114,7 @@ void RtPathPass::write_set(VkDescriptorSet set, const RtPathInputs& in, VkImageV
     const VkDescriptorImageInfo images[7]={{VK_NULL_HANDLE,in.depth,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.gbuffer,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.material,VK_IMAGE_LAYOUT_GENERAL},
         {VK_NULL_HANDLE,signal_.view,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,signal_in,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.color,VK_IMAGE_LAYOUT_GENERAL},
         {VK_NULL_HANDLE,in.albedo,VK_IMAGE_LAYOUT_GENERAL}};
-    const VkDescriptorBufferInfo buffers[4]={{in.records,0,VK_WHOLE_SIZE},{in.hit_table,0,VK_WHOLE_SIZE},{in.hit_bases,0,VK_WHOLE_SIZE},{sums_,0,VK_WHOLE_SIZE}};
+    const VkDescriptorBufferInfo buffers[5]={{in.records,0,VK_WHOLE_SIZE},{in.hit_table,0,VK_WHOLE_SIZE},{in.hit_bases,0,VK_WHOLE_SIZE},{sums_,kListBytes,VK_WHOLE_SIZE},{sums_,0,kListBytes}};
     VkWriteDescriptorSet writes[kBindings]{};
     for (uint32_t i=0;i<kBindings;++i) { writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet=set; writes[i].dstBinding=i; writes[i].descriptorCount=1; }
     writes[0].descriptorType=VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; writes[0].pNext=&tlas;
@@ -122,7 +124,7 @@ void RtPathPass::write_set(VkDescriptorSet set, const RtPathInputs& in, VkImageV
     writes[6].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[6].pImageInfo=&images[4];
     writes[7].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; writes[7].pImageInfo=&images[5];
     writes[8].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; writes[8].pImageInfo=&images[6];
-    for (uint32_t i=0;i<3;++i) { writes[9+i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[9+i].pBufferInfo=&buffers[1+i]; }
+    for (uint32_t i=0;i<4;++i) { writes[9+i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[9+i].pBufferInfo=&buffers[1+i]; }
     vkUpdateDescriptorSets(device_,kBindings,writes,0,nullptr);
 }
 namespace {
@@ -160,8 +162,9 @@ VkImageView RtPathPass::trace(const RtPathInputs& in) {
     }
     write_set(trace_sets_[in.slot],in,signal_.view);   // the slot's previous frame has completed, so its sets can be rewritten
     const PushParams params=make_params(in,signal_extent_);
-    // the mean albedo of the records: cleared, then accumulated on a grid with a step of 4 pixels
-    vkCmdFillBuffer(in.command,sums_,0,VkDeviceSize(in.record_count)*32,0);
+    // the mean albedo, colour and position of the records, accumulated on a grid with a step of 4 pixels, then the emitters among them listed
+    vkCmdFillBuffer(in.command,sums_,0,16,0);   // the emitter count
+    vkCmdFillBuffer(in.command,sums_,kListBytes,VkDeviceSize(in.record_count)*kRecordBytes,0);
     memory_barrier(in.command,VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
@@ -169,6 +172,9 @@ VkImageView RtPathPass::trace(const RtPathInputs& in) {
     vkCmdDispatch(in.command,((in.region.width+3)/4+7)/8,((in.region.height+3)/4+7)/8,1);
     memory_barrier(in.command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
+    vkCmdDispatch(in.command,1,1,1);
+    memory_barrier(in.command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[2]);
     vkCmdDispatch(in.command,(signal_extent_.width+7)/8,(signal_extent_.height+7)/8,1);
     memory_barrier(in.command,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT);
     return signal_.view;
@@ -177,7 +183,7 @@ void RtPathPass::composite(const RtPathInputs& in, VkImageView filtered) {
     if (in.slot>=slots_ || !signal_.image) throw std::logic_error("rt path: composite() before trace()");
     write_set(composite_sets_[in.slot],in,filtered);
     const PushParams params=make_params(in,signal_extent_);
-    vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[2]);
+    vkCmdBindPipeline(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[3]);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&composite_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
     vkCmdDispatch(in.command,(in.region.width+7)/8,(in.region.height+7)/8,1);

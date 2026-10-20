@@ -106,7 +106,7 @@ foreach(reflect_pass trace composite)
     DEPENDS shaders/rt_reflect.slang shaders/gbuffer.slang shaders/view_space.slang VERBATIM)
 endforeach()
 # Path tracing: the albedo accumulation, the trace (ray query through the hit table) and the composite.
-foreach(path_pass accumulate trace composite)
+foreach(path_pass accumulate list trace composite)
   add_custom_command(OUTPUT ${shader_dir}/rt_path.${path_pass}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rt_path.slang -entry ${path_pass}Main -stage compute -target spirv -profile spirv_1_5 -capability spvRayQueryKHR -fvk-use-entrypoint-name -o ${shader_dir}/rt_path.${path_pass}.spv
@@ -129,7 +129,7 @@ set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${
   ${shader_dir}/smoke.shadow.vert.spv ${shader_dir}/gtao.ao.spv ${shader_dir}/gtao.denoise.spv ${shader_dir}/gtao.contact.spv ${shader_dir}/gtao.composite.spv
   ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/rt_transform.spv
   ${shader_dir}/rt_denoise.temporal.spv ${shader_dir}/rt_denoise.atrous.spv ${shader_dir}/rt_shadow.trace.spv ${shader_dir}/rt_shadow.composite.spv
-  ${shader_dir}/rt_reflect.trace.spv ${shader_dir}/rt_reflect.composite.spv ${shader_dir}/rt_path.accumulate.spv ${shader_dir}/rt_path.trace.spv ${shader_dir}/rt_path.composite.spv ${shader_dir}/rr_inputs.spv CACHE INTERNAL "")
+  ${shader_dir}/rt_reflect.trace.spv ${shader_dir}/rt_reflect.composite.spv ${shader_dir}/rt_path.accumulate.spv ${shader_dir}/rt_path.list.spv ${shader_dir}/rt_path.trace.spv ${shader_dir}/rt_path.composite.spv ${shader_dir}/rr_inputs.spv CACHE INTERNAL "")
 add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
