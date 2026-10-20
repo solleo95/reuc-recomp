@@ -22,11 +22,15 @@ public:
     void focus_lost() { editor_.focus(false); }
     void upscaler_failed(UpscalerKind kind) { failed_.insert(kind); }   // could not start in this process: greyed out, changed in the launcher
     void frame_generation_failed(UpscalerKind kind) { failed_generation_.insert(kind); }
+    // This run's DLSS 5 state, asked while the tab is drawn: running now, and why the renderer keeps it off (empty: nothing wrong). The feature report only says what the GPU could do.
+    struct Dlss5Report { bool active=false; std::string reason; };
+    void set_dlss5_status(std::function<Dlss5Report()> status) { dlss5_report_=std::move(status); }
 private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
     void controls_tab(float unit);
     void effects_tab(float unit);
+    void dlss5_tab(float unit);
     const Options& current() const { return pending_ ? *pending_ : live_.options(); }
     LiveSettings& live_;
     std::optional<Options> pending_;   // picked by build(), applied by commit()
@@ -36,5 +40,6 @@ private:
     BindingEditor editor_;
     ui::Fonts fonts_;
     std::set<UpscalerKind> failed_, failed_generation_;
+    std::function<Dlss5Report()> dlss5_report_;
 };
 }

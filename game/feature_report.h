@@ -15,12 +15,15 @@ struct FeatureReport {
     uint32_t anisotropy_max=1;     // highest anisotropic filtering level (1 = unsupported), a power of two up to 16
     bool ray_tracing=false, ray_reconstruction=false;   // ray query + acceleration structures on the device; DLSS Ray Reconstruction through Streamline
     std::string ray_tracing_reason, ray_reconstruction_reason;
+    bool dlss5=false;              // DLSS 5 Neural Rendering (nvngx_dlssnr.dll through NGX): the feature could be created on this GPU
+    std::string dlss5_reason;      // why not: runtime missing, GPU too old for this DLL, driver, CreateFeature result
 };
 inline std::string to_json(const FeatureReport& r) {
     return nlohmann::json{{"dlss",r.dlss},{"dlss_g",r.dlss_g},{"fsr",r.fsr},{"fsr_fg",r.fsr_fg},{"dlss_g_max_multiplier",r.dlss_g_max_multiplier},
         {"dlss_reason",r.dlss_reason},{"dlss_g_reason",r.dlss_g_reason},{"fsr_reason",r.fsr_reason},{"fsr_fg_reason",r.fsr_fg_reason},
         {"effects",r.effects},{"effects_reason",r.effects_reason},{"anisotropy_max",r.anisotropy_max},
-        {"ray_tracing",r.ray_tracing},{"ray_tracing_reason",r.ray_tracing_reason},{"ray_reconstruction",r.ray_reconstruction},{"ray_reconstruction_reason",r.ray_reconstruction_reason}}.dump();
+        {"ray_tracing",r.ray_tracing},{"ray_tracing_reason",r.ray_tracing_reason},{"ray_reconstruction",r.ray_reconstruction},{"ray_reconstruction_reason",r.ray_reconstruction_reason},
+        {"dlss5",r.dlss5},{"dlss5_reason",r.dlss5_reason}}.dump();
 }
 inline FeatureReport feature_report_from_json(std::string_view text) {
     FeatureReport r;
@@ -36,6 +39,7 @@ inline FeatureReport feature_report_from_json(std::string_view text) {
         if(json.contains("anisotropy_max")) r.anisotropy_max=json["anisotropy_max"].get<uint32_t>();
         r.ray_tracing=flag("ray_tracing"); r.ray_tracing_reason=words("ray_tracing_reason");
         r.ray_reconstruction=flag("ray_reconstruction"); r.ray_reconstruction_reason=words("ray_reconstruction_reason");
+        r.dlss5=flag("dlss5"); r.dlss5_reason=words("dlss5_reason");
     } catch(const nlohmann::json::exception&) { return {}; }   // wrong types: offer nothing
     return r;
 }

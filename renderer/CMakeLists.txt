@@ -117,6 +117,14 @@ add_custom_command(OUTPUT ${shader_dir}/rr_inputs.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
   COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rr_inputs.slang -entry inputsMain -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/rr_inputs.spv
   DEPENDS shaders/rr_inputs.slang shaders/gbuffer.slang shaders/view_space.slang VERBATIM)
+# DLSS 5 Neural Rendering: the bridge between the RGBA8 picture and the network's RGBA16F signal, both directions from one source.
+foreach(bridge prepare resolve)
+  string(TOUPPER ${bridge} bridge_define)
+  add_custom_command(OUTPUT ${shader_dir}/dlss5.${bridge}.spv
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/dlss5_bridge.slang -D${bridge_define} -entry main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/dlss5.${bridge}.spv
+    DEPENDS shaders/dlss5_bridge.slang VERBATIM)
+endforeach()
 foreach(blur_pass tile blur)
   add_custom_command(OUTPUT ${shader_dir}/motion_blur.${blur_pass}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
@@ -129,14 +137,18 @@ set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${
   ${shader_dir}/smoke.shadow.vert.spv ${shader_dir}/gtao.ao.spv ${shader_dir}/gtao.denoise.spv ${shader_dir}/gtao.contact.spv ${shader_dir}/gtao.composite.spv
   ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/rt_transform.spv
   ${shader_dir}/rt_denoise.temporal.spv ${shader_dir}/rt_denoise.atrous.spv ${shader_dir}/rt_shadow.trace.spv ${shader_dir}/rt_shadow.composite.spv
-  ${shader_dir}/rt_reflect.trace.spv ${shader_dir}/rt_reflect.composite.spv ${shader_dir}/rt_path.accumulate.spv ${shader_dir}/rt_path.list.spv ${shader_dir}/rt_path.trace.spv ${shader_dir}/rt_path.composite.spv ${shader_dir}/rr_inputs.spv CACHE INTERNAL "")
+  ${shader_dir}/rt_reflect.trace.spv ${shader_dir}/rt_reflect.composite.spv ${shader_dir}/rt_path.accumulate.spv ${shader_dir}/rt_path.list.spv ${shader_dir}/rt_path.trace.spv ${shader_dir}/rt_path.composite.spv ${shader_dir}/rr_inputs.spv ${shader_dir}/dlss5.prepare.spv ${shader_dir}/dlss5.resolve.spv CACHE INTERNAL "")
 add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
+# DLSS 5 Neural Rendering: the support/failure/parameter logic above the NGX SDK (no SDK or GPU needed, tested with a fake backend).
+add_library(uc_dlss5 STATIC ngx_dlss5.cpp)
+target_include_directories(uc_dlss5 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_dlss5 PUBLIC Vulkan::Vulkan)
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp dlss5_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
 target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
-target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons PRIVATE uc_streamline_sdk uc_fidelityfx_sdk)
+target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons uc_dlss5 PRIVATE uc_streamline_sdk uc_fidelityfx_sdk uc_ngx_sdk)
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
@@ -152,6 +164,10 @@ target_link_libraries(renderer_upscale_smoke PRIVATE uc_vulkan)
 add_dependencies(renderer_upscale_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 add_custom_command(TARGET renderer_upscale_smoke POST_BUILD   # --dlss: Streamline and DLSS next to the test
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} $<TARGET_FILE_DIR:renderer_upscale_smoke> VERBATIM)
+add_executable(renderer_dlss5_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_dlss5_smoke.cpp)
+target_include_directories(renderer_dlss5_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(renderer_dlss5_smoke PRIVATE uc_vulkan)
+add_dependencies(renderer_dlss5_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 add_executable(renderer_effects_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_effects_smoke.cpp)
 target_include_directories(renderer_effects_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_effects_smoke PRIVATE uc_vulkan)

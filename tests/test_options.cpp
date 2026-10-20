@@ -153,4 +153,17 @@ int main() {
         CHECK(uc::valid_anisotropy(1) && uc::valid_anisotropy(16) && !uc::valid_anisotropy(0) && !uc::valid_anisotropy(32));
         CHECK(uc::clamp_anisotropy(16,true,8.f)==8 && uc::clamp_anisotropy(16,false,16.f)==1 && uc::clamp_anisotropy(4,true,16.f)==4 && uc::clamp_anisotropy(16,true,0.5f)==1);
     }
+    {   // DLSS 5: --dlss5 switches it on, --dlss5-option key=value sets one setting with the config's strict parser
+        CHECK(!std::get<uc::Options>(defaults).dlss5.enabled);
+        const auto on=std::get<uc::Options>(parse(std::array<std::string_view,5>{"--dlss5","--dlss5-option","preset=h","--dlss5-option","passes=2"}));
+        CHECK(on.dlss5.enabled && on.dlss5.preset==uc::Dlss5Preset::h && on.dlss5.passes==2);
+        const auto staged=std::get<uc::Options>(parse(std::array<std::string_view,2>{"--dlss5-option","stage=present"}));
+        CHECK(!staged.dlss5.enabled && staged.dlss5.stage==uc::Dlss5Stage::present);   // an option alone does not switch it on
+        for(const char* bad:{"passes=9","passes","=1","bogus=1","preset=H","enabled=1","processing_scale=0.2"}) {
+            const auto result=parse(std::array<std::string_view,2>{"--dlss5-option",bad});
+            CHECK(std::holds_alternative<std::string>(result));
+        }
+        const auto missing=parse(std::array<std::string_view,1>{"--dlss5-option"});
+        CHECK(std::holds_alternative<std::string>(missing) && std::get<std::string>(missing)=="missing value for --dlss5-option");
+    }
 }

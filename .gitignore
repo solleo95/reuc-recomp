@@ -9,6 +9,7 @@ project/hle.cfg
 build-trace.log
 __pycache__/
 project/pgo/
+project/dlss5/
 cpu-profile.json
 cpu-profile.json.calibrating
 cpu-profile.json.tmp-*

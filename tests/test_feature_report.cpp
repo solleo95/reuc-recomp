@@ -24,6 +24,16 @@ int main() {
         const auto old=uc::feature_report_from_json(R"({"dlss":true})");   // a report from an older uc.exe
         CHECK(!old.ray_tracing && !old.ray_reconstruction && old.ray_tracing_reason.empty() && old.ray_reconstruction_reason.empty());
     }
+    {   // DLSS 5 Neural Rendering support and the reason it is unavailable
+        uc::FeatureReport nr; nr.dlss5=false; nr.dlss5_reason="the NVIDIA GPU is older than this nvngx_dlssnr.dll supports";
+        auto round=uc::feature_report_from_json(uc::to_json(nr));
+        CHECK(!round.dlss5 && round.dlss5_reason==nr.dlss5_reason);
+        nr.dlss5=true; nr.dlss5_reason.clear();
+        round=uc::feature_report_from_json(uc::to_json(nr));
+        CHECK(round.dlss5 && round.dlss5_reason.empty());
+        const auto old=uc::feature_report_from_json(R"({"dlss":true})");   // a report from an older uc.exe
+        CHECK(!old.dlss5 && old.dlss5_reason.empty());
+    }
     const auto partial=uc::feature_report_from_json(R"({"dlss":true})");   // missing fields: unavailable
     CHECK(partial.dlss && !partial.dlss_g && !partial.fsr && partial.dlss_g_max_multiplier==0);
     for(auto text:{"","not json","[]",R"({"dlss":"yes"})",R"({"dlss_g_max_multiplier":-1})"}) {

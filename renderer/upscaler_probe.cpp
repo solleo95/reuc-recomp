@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "upscaler_probe.h"
+#include "ngx_dlss5.h"
 #include "streamline.h"
 #include "streamline_api.h"
 #include <ffx_api/ffx_api_loader.h>
@@ -10,6 +11,29 @@
 #include <vector>
 
 namespace uc {
+std::vector<std::string> dlss5_instance_extensions(const std::filesystem::path& directory) {
+    std::error_code ignored;
+    if (!std::filesystem::exists(directory / kDlss5Runtime, ignored)) return {};
+    return ngx_dlss5_instance_extensions(directory);
+}
+Dlss5DeviceNeeds dlss5_device_needs(VkInstance instance, VkPhysicalDevice physical, const std::filesystem::path& directory) {
+    Dlss5DeviceNeeds needs;
+    std::error_code ignored;
+    if (!std::filesystem::exists(directory / kDlss5Runtime, ignored)) { needs.gap = std::string(kDlss5Runtime) + " missing next to the game"; return needs; }
+    VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical, &properties);
+    if (properties.vendorID != 0x10DE) { needs.gap = "DLSS 5 needs an NVIDIA RTX GPU"; return needs; }
+    needs.extensions = ngx_dlss5_device_extensions(instance, physical, directory);
+    if (needs.extensions.empty()) { needs.gap = "NGX reports no DLSS 5 support (NVIDIA driver too old?)"; return needs; }
+    uint32_t n = 0; vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> extensions(n); vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, extensions.data());
+    for (const auto& name : needs.extensions)
+        if (std::none_of(extensions.begin(), extensions.end(), [&](const auto& extension) { return name == extension.extensionName; })) { needs.gap = "the GPU lacks " + name; return needs; }
+    VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext = &features12;
+    vkGetPhysicalDeviceFeatures2(physical, &features);
+    if (!features12.bufferDeviceAddress) needs.gap = "the GPU lacks buffer device addresses";
+    return needs;
+}
 const char* ray_tracing_gap(VkPhysicalDevice physical) {
     uint32_t n=0; vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, nullptr);
     std::vector<VkExtensionProperties> extensions(n); vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, extensions.data());
@@ -152,6 +176,83 @@ void probe_effects(UpscalerSupport& support) {
     }
     vkDestroyInstance(instance, nullptr);
 }
+// DLSS 5: the feature is created on a throwaway device exactly as the renderer will create it, so the reason shown to the player is NGX's own answer
+// (missing runtime, GPU older/newer than the DLL, driver, CreateFeature result). The NGX log of the probe is debug/ngx_dlss5_probe.log.
+void probe_dlss5(const std::filesystem::path& directory, UpscalerSupport& support) {
+    std::error_code ignored;
+    if (!std::filesystem::exists(directory / kDlss5Runtime, ignored)) { support.dlss5_reason = std::string(kDlss5Runtime) + " missing next to the game"; return; }
+    const auto wanted = dlss5_instance_extensions(directory);
+    if (wanted.empty()) { support.dlss5_reason = "NGX reports no DLSS 5 support (NVIDIA driver too old?)"; return; }
+    uint32_t n = 0; vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> available(n); vkEnumerateInstanceExtensionProperties(nullptr, &n, available.data());
+    std::vector<const char*> names;
+    for (const auto& name : wanted) {
+        if (std::none_of(available.begin(), available.end(), [&](const auto& extension) { return name == extension.extensionName; })) { support.dlss5_reason = "the Vulkan loader lacks " + name; return; }
+        names.push_back(name.c_str());
+    }
+    VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion = VK_API_VERSION_1_3;
+    VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo = &application;
+    instance_info.enabledExtensionCount = uint32_t(names.size()); instance_info.ppEnabledExtensionNames = names.data();
+    VkInstance instance = VK_NULL_HANDLE;
+    if (vkCreateInstance(&instance_info, nullptr, &instance) != VK_SUCCESS) { support.dlss5_reason = "no Vulkan 1.3 instance with the DLSS 5 extensions"; return; }
+    uint32_t count = 0; vkEnumeratePhysicalDevices(instance, &count, nullptr);
+    std::vector<VkPhysicalDevice> devices(count); vkEnumeratePhysicalDevices(instance, &count, devices.data());
+    VkPhysicalDevice chosen = VK_NULL_HANDLE; int score = -1;
+    for (auto device : devices) {   // the same pick as the game: NVIDIA/discrete first
+        VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(device, &properties);
+        const int value = (properties.vendorID == 0x10DE) * 2 + (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+        if (value > score) { score = value; chosen = device; }
+    }
+    VkDevice device = VK_NULL_HANDLE; VkCommandPool pool = VK_NULL_HANDLE;
+    if (!chosen) support.dlss5_reason = "no Vulkan GPU";
+    else if (const auto needs = dlss5_device_needs(instance, chosen, directory); !needs.gap.empty()) support.dlss5_reason = needs.gap;
+    else {
+        uint32_t families = 0; vkGetPhysicalDeviceQueueFamilyProperties(chosen, &families, nullptr);
+        std::vector<VkQueueFamilyProperties> properties(families); vkGetPhysicalDeviceQueueFamilyProperties(chosen, &families, properties.data());
+        uint32_t family = 0; while (family < families && !(properties[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+        float priority = 1;
+        VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; queue.queueFamilyIndex = family; queue.queueCount = 1; queue.pQueuePriorities = &priority;
+        VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; features12.bufferDeviceAddress = VK_TRUE;
+        VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; features13.pNext = &features12; features13.synchronization2 = VK_TRUE;
+        std::vector<const char*> extensions;
+        for (const auto& name : needs.extensions) extensions.push_back(name.c_str());
+        VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; device_info.pNext = &features13;
+        device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue; device_info.enabledExtensionCount = uint32_t(extensions.size()); device_info.ppEnabledExtensionNames = extensions.data();
+        if (family >= families || vkCreateDevice(chosen, &device_info, nullptr, &device) != VK_SUCCESS) support.dlss5_reason = "no Vulkan device with the DLSS 5 extensions";
+        else {
+            NgxInit init; init.instance = instance; init.physical = chosen; init.device = device;
+            init.instance_proc = vkGetInstanceProcAddr; init.device_proc = vkGetDeviceProcAddr;
+            init.runtime_directory = directory; init.log_file = directory / "debug" / "ngx_dlss5_probe.log";
+            std::string reason;
+            if (auto runtime = Dlss5Runtime::open(make_ngx_backend(), init, reason)) {
+                VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pool_info.queueFamilyIndex = family;
+                vkCreateCommandPool(device, &pool_info, nullptr, &pool);
+                VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; allocation.commandPool = pool; allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; allocation.commandBufferCount = 1;
+                VkCommandBuffer command = VK_NULL_HANDLE;
+                VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                if (!pool || vkAllocateCommandBuffers(device, &allocation, &command) != VK_SUCCESS || vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) reason = "no command buffer for the DLSS 5 test";
+                else {
+                    const bool created = runtime->prepare(command, Dlss5FeatureKey{1280, 720, Dlss5Preset::p1}, 1, [device] { vkDeviceWaitIdle(device); });
+                    vkEndCommandBuffer(command);
+                    VkQueue queue_handle = VK_NULL_HANDLE; vkGetDeviceQueue(device, family, 0, &queue_handle);
+                    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &command;
+                    if (created && (vkQueueSubmit(queue_handle, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(queue_handle) != VK_SUCCESS)) reason = "DLSS 5 test submission failed";
+                    else if (created) support.dlss5 = true;
+                    else reason = runtime->reason();
+                }
+                vkDeviceWaitIdle(device);
+                runtime.reset();   // releases the feature and closes the NGX session before the device goes
+            }
+            support.dlss5_reason = support.dlss5 ? std::string() : reason;
+        }
+    }
+    if (device) {
+        vkDeviceWaitIdle(device);
+        if (pool) vkDestroyCommandPool(device, pool, nullptr);
+        vkDestroyDevice(device, nullptr);
+    }
+    vkDestroyInstance(instance, nullptr);
+}
 void probe_fsr(const std::filesystem::path& directory, UpscalerSupport& support) {
     const auto path=directory / "amd_fidelityfx_vk.dll";
     HMODULE module=LoadLibraryW(path.c_str());
@@ -165,6 +266,7 @@ void probe_fsr(const std::filesystem::path& directory, UpscalerSupport& support)
 }
 UpscalerSupport probe_upscalers(const std::filesystem::path& directory) {
     UpscalerSupport support;
+    probe_dlss5(directory, support);   // before Streamline: its shutdown leaves NGX in a state our own session crashes on
     probe_dlss(directory, support);
     probe_fsr(directory, support);
     probe_effects(support);

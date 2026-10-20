@@ -19,6 +19,7 @@ int main() {
     targets.fps_limit=[&](std::optional<uint32_t>){ calls.push_back("fps_limit"); };
     targets.bloom=[&](bool){ calls.push_back("bloom"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
+    targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
@@ -50,6 +51,11 @@ int main() {
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.ambient_occlusion==uc::EffectLevel::high);
         calls.clear(); next=live.options(); next.effects.path_tracing=true; live.apply(next);
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.path_tracing);
+    }
+    {   // DLSS 5 settings reach their own target once and are saved
+        calls.clear(); auto next=live.options(); next.dlss5.enabled=true; next.dlss5.passes=2; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"dlss5"}) && saved().dlss5.enabled && saved().dlss5.passes==2 && !live.error());
+        calls.clear(); live.apply(live.options()); CHECK(calls.empty());
     }
     {   // frame rate limit, unlimited included
         calls.clear(); auto next=live.options(); next.fps_limit=144u; live.apply(next);

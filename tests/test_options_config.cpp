@@ -98,6 +98,31 @@ int main() {
         bool caught=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"anisotropy":5}})"));}catch(const std::invalid_argument& error){caught=std::string(error.what()).find("graphics.anisotropy must be 1, 2, 4, 8 or 16")!=std::string::npos;}
         CHECK(caught);
     }
+    {   // DLSS 5: the "dlss5" object holds every setting of the table; absent keys keep the defaults, a wrong type or range is refused, unknown keys of a newer file survive a save
+        auto document=uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":{"enabled":true,"preset":"b","passes":3,"intensity":0.5,"processing_scale":0.75,"stage":"present","future":9}})");
+        auto options=uc::options_from_config(document);
+        CHECK(options.dlss5.enabled && options.dlss5.preset==uc::Dlss5Preset::b && options.dlss5.passes==3 && options.dlss5.intensity==0.5 && options.dlss5.processing_scale==0.75 && options.dlss5.stage==uc::Dlss5Stage::present);
+        CHECK(options.dlss5.tone_global==1 && options.dlss5.auto_mask && options.dlss5.signal_encoding==uc::Dlss5Encoding::automatic);
+        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).dlss5.enabled);
+        options.dlss5.exposure_mode=uc::Dlss5ExposureMode::manual; options.dlss5.exposure=2; options.dlss5.signal_encoding=uc::Dlss5Encoding::gamma22; options.dlss5.diffuse_white_override=true; options.dlss5.diffuse_white_nits=100;
+        uc::store_options(document,options);
+        const auto written=uc::serialize_config(document);
+        CHECK(uc::options_from_config(uc::parse_config(written)).dlss5==options.dlss5);
+        CHECK(written.find("\"signal_encoding\": \"gamma22\"")!=std::string::npos && written.find("\"passes\": 3")!=std::string::npos && written.find("\"enabled\": true")!=std::string::npos);
+        CHECK(document.properties["dlss5"]["future"]==9);
+        for(const char* body:{R"("enabled":1)",R"("enabled":"true")",R"("preset":1)",R"("preset":"c")",R"("passes":0)",R"("passes":5)",R"("passes":2.5)",R"("passes":"2")",R"("intensity":1.5)",R"("intensity":"1")",
+            R"("processing_scale":0.4)",R"("stage":"hud")",R"("signal_encoding":null)",R"("exposure":100)",R"("diffuse_white_nits":10)",R"("block_hudless":null)"}) {
+            bool bad=false;try {uc::options_from_config(uc::parse_config(std::string(R"({"game":"S:/Games/Test/game","dlss5":{)")+body+"}}"));}catch(const std::invalid_argument&){bad=true;}
+            CHECK(bad);
+        }
+        bool not_object=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":true})"));}catch(const std::invalid_argument&){not_object=true;}
+        CHECK(not_object);
+        // an out-of-range value in the options is refused by the writer, and the document keeps its old content
+        auto bad_options=options; bad_options.dlss5.passes=9;
+        const auto before=uc::serialize_config(document); bool refused=false;
+        try {uc::store_options(document,bad_options);}catch(const std::invalid_argument&){refused=true;}
+        CHECK(refused && uc::serialize_config(document)==before);
+    }
     {   // a number that wraps to a valid level in 32 bits is still invalid
         bool wrapped=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"anisotropy":4294967312}})"));}catch(const std::invalid_argument&){wrapped=true;}
         CHECK(wrapped);

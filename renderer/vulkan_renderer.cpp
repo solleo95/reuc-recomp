@@ -84,6 +84,10 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     if (maintenance_khr) extensions.push_back("VK_KHR_surface_maintenance1");
     if (maintenance_ext) extensions.push_back("VK_EXT_surface_maintenance1");
+    std::vector<std::string> dlss5_instance_names;   // DLSS 5: what NGX asks of the instance (nothing without nvngx_dlssnr.dll next to the exe)
+    for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
+        if (has(name.c_str()) && std::none_of(extensions.begin(), extensions.end(), [&](const char* have) { return name == have; })) dlss5_instance_names.push_back(name);
+    for (const auto& name : dlss5_instance_names) extensions.push_back(name.c_str());
     const char* layer = "VK_LAYER_KHRONOS_validation";
     if (validation) {
         uint32_t n = 0; vk_check(vkEnumerateInstanceLayerProperties(&n, nullptr), "layer count");
@@ -207,7 +211,8 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.timelineSemaphore = queue_count == 3;   // the interpolation swapchain's queue sync
     features12.shaderFloat16=supported12.shaderFloat16;
-    if (features12.timelineSemaphore || features12.shaderFloat16) { features12.pNext = features13.pNext; features13.pNext = &features12; }
+    bool features12_chained = features12.timelineSemaphore || features12.shaderFloat16;
+    if (features12_chained) { features12.pNext = features13.pNext; features13.pNext = &features12; }
     std::vector<const char*> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME, chosen_maintenance};
     {   // FidelityFX resolves these entry points by their extension names, including after a live switch.
         uint32_t n = 0; vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, nullptr);
@@ -232,9 +237,23 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     ray_tracing_ = motion_outputs_ && !ray_tracing_gap(physical_);
     if (ray_tracing_) {
         for (const char* name : {VK_KHR_RAY_QUERY_EXTENSION_NAME, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME}) device_extensions.push_back(name);
-        if (!features12.timelineSemaphore && !features12.shaderFloat16) { features12.pNext = features13.pNext; features13.pNext = &features12; }
+        if (!features12_chained) { features12.pNext = features13.pNext; features13.pNext = &features12; features12_chained = true; }
         features12.bufferDeviceAddress = features12.descriptorIndexing = features12.runtimeDescriptorArray = features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
         acceleration.pNext = &ray_query; ray_query.pNext = features13.pNext; features13.pNext = &acceleration;
+    }
+    // DLSS 5 Neural Rendering: the extensions NGX asks of the device (the same on every NVIDIA RTX generation), only when the effects path exists and nvngx_dlssnr.dll is there.
+    std::vector<std::string> dlss5_device_names;
+    {
+        const auto needs = dlss5_device_needs(instance_, physical_, shaders.parent_path().parent_path());
+        dlss5_gap_ = motion_outputs_ || !needs.gap.empty() ? needs.gap : "the effects path is unavailable on this GPU";
+        if (dlss5_gap_.empty()) {
+            dlss5_device_ = true;
+            for (const auto& name : needs.extensions)
+                if (std::none_of(device_extensions.begin(), device_extensions.end(), [&](const char* have) { return name == have; })) dlss5_device_names.push_back(name);
+            for (const auto& name : dlss5_device_names) device_extensions.push_back(name.c_str());
+            if (!features12_chained) { features12.pNext = features13.pNext; features13.pNext = &features12; features12_chained = true; }
+            features12.bufferDeviceAddress = VK_TRUE;
+        }
     }
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; device_info.pNext = &features13;
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
@@ -250,6 +269,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         dlss_presentation_=true; present_=base_present_;
     }
     vkGetDeviceQueue(device, family_, 0, &queue_); vkGetPhysicalDeviceMemoryProperties(physical_, &memory_);
+    dlss5_context_={instance_, physical_, device, vkGetInstanceProcAddr, vkGetDeviceProcAddr, memory_, shaders, shaders.parent_path().parent_path(),
+        [this] { vk_check(present_.wait_idle(device), "DLSS 5 idle"); }, {}};
+    if (dlss5_device_) dlss5_pass_.configure(dlss5_context_);
     if (queue_count == 3 && motion_outputs_) {
         vkGetDeviceQueue(device, family_, 1, &fg_present_queue_); vkGetDeviceQueue(device, family_, 2, &fg_acquire_queue_);
         try {
@@ -566,6 +588,37 @@ void VulkanRenderer::set_effects(const GraphicsEffects& effects) {
         vk_check(present_.wait_idle(device),"RT material targets");
         sync_rt_material_targets();
     }
+}
+void VulkanRenderer::set_dlss5(const Dlss5Settings& settings) {
+    owner();
+    const bool path_before=scene_path_wanted();
+    dlss5_settings_=settings; dlss5_pass_.settings_changed();
+    apply_scene_path(false,path_before);
+}
+void VulkanRenderer::use_dlss5_backend(std::function<std::unique_ptr<NgxBackend>()> backend, const std::filesystem::path& directory) {
+    owner();
+    if(!layout_) throw std::logic_error("use_dlss5_backend needs an initialized renderer");
+    const bool path_before=scene_path_wanted();
+    vk_check(present_.wait_idle(device),"DLSS 5 backend");
+    dlss5_pass_.shutdown();
+    dlss5_context_.backend=std::move(backend); dlss5_context_.directory=directory;
+    dlss5_pass_.configure(dlss5_context_);
+    dlss5_device_=motion_outputs_; dlss5_gap_.clear();
+    apply_scene_path(false,path_before);
+}
+// One DLSS 5 run on `picture` at the stage the setting names; false when it does not run now (another stage, off, a black frame, or the pass refused).
+bool VulkanRenderer::record_dlss5(VkCommandBuffer command, Dlss5Stage stage, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output) {
+    if(!dlss5_requested() || dlss5_settings_.stage!=stage || !dlss5_scene_.ready || size.width<8 || size.height<8) return false;
+    if(dlss5_settings_.block_hudless && black_output) return false;
+    const auto timer_slot=uint32_t(next_slot_);
+    pass_timer_.begin(command,timer_slot,GpuPass::dlss5);
+    Dlss5Frame frame;
+    frame.command=command; frame.picture=picture; frame.origin=origin; frame.size=size;
+    frame.depth=dlss5_scene_.depth; frame.motion=dlss5_scene_.motion; frame.scene_size=dlss5_scene_.size;
+    frame.jitter=jitter; frame.reset=dlss5_scene_.reset; frame.targets_generation=targets_generation_; frame.settings=dlss5_settings_;
+    const bool ran=dlss5_pass_.record(frame);
+    pass_timer_.end(command,timer_slot,GpuPass::dlss5);
+    return ran;
 }
 void VulkanRenderer::force_scene_targets(bool on) {
     owner();
@@ -1047,6 +1100,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     in.frame_ms=last_upscale_==std::chrono::steady_clock::time_point{} ? 16.7f : std::clamp(std::chrono::duration<float,std::milli>(now-last_upscale_).count(),0.1f,100.f);
     in.frame=upscale_frame_;
     in.projection=scene_projection_; in.clip_to_prev_clip=tracker_.clip_to_prev_clip();
+    dlss5_scene_={in.depth,in.motion,in.render_size,in.reset,true};   // the present stage reads the same scene targets (valid until then)
     const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     barrier(command,scene_depth_,scene_depth_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1189,6 +1243,8 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         in.specular_albedo=rr_inputs_.specular_albedo(); in.normal_roughness=rr_inputs_.normal_roughness();
     }
     rr_frame_=rr_frame;
+    dlss5_scene_.reset=in.reset;
+    record_dlss5(command,Dlss5Stage::render,in.color,{0,0},in.render_size,jitter_,black_output);   // DLSS 5 before the upscaler: on the jittered scene colour
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -1204,6 +1260,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         motion_blur_.record(blur);
         pass_timer_.end(command,timer_slot,GpuPass::motion_blur);
     }
+    record_dlss5(command,Dlss5Stage::upscaled,in.output,{0,0},in.output_size,{0,0},black_output);   // DLSS 5 after the upscaler, before the HUD
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -2161,6 +2218,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
         if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
         if(menu)menu_overlay_.initialize(window_,instance_,physical_,device,queue_,family_,uint32_t(slots_.size()),menu_setup_);
+        if(!packet.black_output && dlss5_scene_.ready && dlss5_requested() && dlss5_settings_.stage==Dlss5Stage::present) {   // DLSS 5 on the finished frame, HUD included
+            const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+            const VkOffset2D origin{int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480)};
+            const VkExtent2D size{uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)-origin.x)),uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)-origin.y))};
+            const VkImageUsageFlags usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT;
+            barrier(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
+            record_dlss5(slot.command,Dlss5Stage::present,{efb_,efb_view_,VK_FORMAT_R8G8B8A8_UNORM,efb_extent_,usage},origin,size,{0,0},packet.black_output);
+            barrier(slot.command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
+        }
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 slot.initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE,slot.initialized ? VK_ACCESS_2_TRANSFER_READ_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
@@ -2248,7 +2314,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) copy_target->initialized=true;
     for (auto& texture : slot.textures) texture.initialized=true;
-    if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); }
+    if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); dlss5_scene_.ready=false; }
     slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
     if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
@@ -2299,7 +2365,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
+        dlss5_pass_.shutdown(); rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

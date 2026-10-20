@@ -63,6 +63,7 @@ void SettingsMenu::build() {
     if(ImGui::BeginTabBar("tabs")) {
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
@@ -246,6 +247,61 @@ void SettingsMenu::effects_tab(float unit) {
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
+    ImGui::PopItemWidth();
+    ImGui::EndChild();
+    pending_=options;
+}
+// The DLSS 5 tab: a status line, the switch and one control per field of the settings table (dlss5_settings.h); everything but the switch follows the switch.
+void SettingsMenu::dlss5_tab(float unit) {
+    auto options=current();
+    const auto* features=features_();
+    const auto runtime=dlss5_report_ ? dlss5_report_() : Dlss5Report{};
+    const auto status=dlss5_status(features!=nullptr,features && features->dlss5,features ? features->dlss5_reason : std::string(),runtime.reason);
+    const auto ui=dlss5_ui(options.dlss5,status.state!=Dlss5State::checking,status.state==Dlss5State::available);
+    ImGui::Dummy({0,8*unit});
+    ImGui::BeginChild("dlss5",{0,0});
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    if(status.state==Dlss5State::unavailable) {
+        const std::string text=std::string(tr("dlss5_status_unavailable"))+(status.reason.empty() ? "" : ": "+status.reason);
+        ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1}); ImGui::TextWrapped("%s",text.c_str()); ImGui::PopStyleColor();
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",text.c_str());
+    } else if(status.state==Dlss5State::checking) ImGui::TextDisabled("%s",tr("checking"));
+    else ImGui::TextUnformatted(tr(runtime.active ? "dlss5_status_active" : "dlss5_status_available"));
+    ImGui::Dummy({0,6*unit});
+    auto& settings=options.dlss5;
+    const auto choice_text=[&](const Dlss5Choice& choice) -> std::string { return choice.label.empty() ? std::string(tr("dlss5_"+std::string(choice.name))) : std::string(choice.label); };
+    for(const auto& field:dlss5_fields()) {
+        const std::string key(field.key), id="##d5-"+key;
+        const bool master=field.key=="enabled";
+        // a value is greyed while the setting it depends on is off
+        bool locked=(field.key=="exposure" && settings.exposure_mode!=Dlss5ExposureMode::manual) || (field.key=="diffuse_white_nits" && !settings.diffuse_white_override);
+        ImGui::BeginDisabled(master ? !ui.switch_enabled : (!ui.settings_enabled || locked));
+        if(field.kind==Dlss5Kind::boolean) {
+            bool value=field.get(settings)!=0;
+            if(compact_checkbox(id.c_str(),tr("dlss5_"+key),value,unit)) field.set(settings,value ? 1 : 0);
+        } else {
+            ImGui::TextUnformatted(tr("dlss5_"+key));
+            if(field.kind==Dlss5Kind::choice) {
+                const size_t current=size_t(field.get(settings));
+                if(ImGui::BeginCombo(id.c_str(),choice_text(field.choices[current]).c_str())) {
+                    for(size_t i=0;i<field.choices.size();++i) if(ImGui::Selectable(choice_text(field.choices[i]).c_str(),i==current)) field.set(settings,double(i));
+                    ImGui::EndCombo();
+                }
+            } else if(field.kind==Dlss5Kind::integer) {
+                int value=int(field.get(settings));
+                if(ImGui::SliderInt(id.c_str(),&value,int(field.min),int(field.max))) field.set(settings,double(value));
+            } else {
+                float value=float(field.get(settings));
+                const char* format=field.step>=1 ? "%.0f" : "%.2f";
+                if(ImGui::SliderFloat(id.c_str(),&value,float(field.min),float(field.max),format)) {
+                    const double snapped=std::clamp(std::round(double(value)/field.step)*field.step,field.min,field.max);
+                    field.set(settings,std::round(snapped*1e6)/1e6);
+                }
+            }
+        }
+        ImGui::EndDisabled();
+        if(master) ImGui::Dummy({0,4*unit}); else ImGui::Dummy({0,6*unit});
+    }
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;

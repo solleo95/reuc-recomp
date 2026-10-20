@@ -20,8 +20,8 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     CHECK(context.TabBars.GetAliveCount()==1);
     auto* tabs=context.TabBars.GetByIndex(0);
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
-    CHECK(tabs->Tabs.Size==3);
-    CHECK(tabs->Tabs[2].Offset+tabs->Tabs[2].Width<=tabs->BarRect.GetWidth());
+    CHECK(tabs->Tabs.Size==4);   // Main, Effects, DLSS 5, Controls
+    CHECK(tabs->Tabs[3].Offset+tabs->Tabs[3].Width<=tabs->BarRect.GetWidth());
     // Open the first combo through ImGui input, then inspect the actual popup geometry.
     ImGuiWindow* graphics=nullptr;
     for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow)) graphics=candidate;
@@ -73,8 +73,8 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     CHECK(popup->Active && popup->DrawList->VtxBuffer.Size>50 && popup->ContentSize.y<500);
     io.AddKeyEvent(ImGuiKey_Escape,true); frame();
     io.AddKeyEvent(ImGuiKey_Escape,false); frame(); frame();
-    click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});
-    CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
+    click({tabs->BarRect.Min.x+tabs->Tabs[3].Offset+tabs->Tabs[3].Width*.5f,tabs->BarRect.GetCenter().y});
+    CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);
     capture("controls");
     {   // the Effects tab: pick 4x anisotropic filtering through the combo
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
@@ -116,8 +116,29 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
             click(io.MousePos);
             menu.commit(); CHECK(live.options().effects.contact_shadows && !live.error());
         }
-        click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
-        CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
+        {   // the DLSS 5 tab: the switch is the first control, then one control per setting; it saves through the dlss5 target
+            click({tabs->BarRect.Min.x+tabs->Tabs[2].Offset+tabs->Tabs[2].Width*.5f,tabs->BarRect.GetCenter().y});
+            CHECK(tabs->SelectedTabId==tabs->Tabs[2].ID);
+            ImGuiWindow* dlss5=nullptr;
+            for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow) && std::string_view(candidate->Name).find("dlss5")!=std::string_view::npos) dlss5=candidate;
+            CHECK(dlss5);
+            capture("dlss5");
+            CHECK(!live.options().dlss5.enabled);
+            io.AddMousePosEvent(dlss5->Pos.x+small_height*.5f,dlss5->Pos.y+text+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
+            CHECK(context.HoveredId==dlss5->GetID("##d5-enabled"));
+            click(io.MousePos);
+            menu.commit(); CHECK(live.options().dlss5.enabled && !live.error());
+            capture("dlss5-on");
+            // this run's refusal (the renderer's reason) greys the settings but leaves the switch usable to turn it off again
+            menu.set_dlss5_status([] { return uc::SettingsMenu::Dlss5Report{false,"nvngx_dlssnr.dll missing next to the game"}; });
+            for(int i=0;i<3;++i) frame();
+            capture("dlss5-unavailable");
+            click(io.MousePos);
+            menu.commit(); CHECK(!live.options().dlss5.enabled && !live.error());
+            menu.set_dlss5_status({});
+        }
+        click({tabs->BarRect.Min.x+tabs->Tabs[3].Offset+tabs->Tabs[3].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
+        CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);
     }
     const ImVec2 before=window->Pos;
     io.AddMousePosEvent(before.x+60,before.y+35); frame();
@@ -138,9 +159,9 @@ int main(int argc,char** argv) {
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
     targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](bool){}; targets.effects=[](const uc::GraphicsEffects&){};
-    targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){};
+    targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
-    uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16;
+    uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;
     uc::SettingsMenu menu(live,"ru",[&]{return &features;},2560,1440);
     if(gpu) {
         std::filesystem::create_directories(argv[3]);

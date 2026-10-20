@@ -1,4 +1,5 @@
 #pragma once
+#include "dlss5_pass.h"
 #include "graphics_effects.h"
 #include "gx_packets.h"
 #include "pipeline_keys.h"
@@ -71,6 +72,13 @@ public:
     // Graphics effects (graphics_effects.h): callable before or after initialize(); a change of the anisotropy level swaps the samplers at once.
     void set_effects(const GraphicsEffects& effects);
     uint32_t effective_anisotropy() const;   // the level the device runs (requested, clamped to its limit)
+    // DLSS 5 Neural Rendering (dlss5_settings.h): callable before or after initialize(). The pass needs the device created with the NGX extensions (dlss5_device())
+    // and the nvngx_dlssnr.dll NGX accepts; when either fails it stays off and dlss5_status() says why.
+    void set_dlss5(const Dlss5Settings& settings);
+    bool dlss5_device() const { return dlss5_device_; }
+    void use_dlss5_backend(std::function<std::unique_ptr<NgxBackend>()> backend, const std::filesystem::path& directory);   // tests: run the pass against a stand-in for NGX (a directory holding a nvngx_dlssnr.dll placeholder), whatever this GPU can do
+    bool dlss5_active() const { return dlss5_pass_.ran(); }   // the latest frame went through the network
+    std::string dlss5_status() const { return !dlss5_gap_.empty() ? dlss5_gap_ : dlss5_pass_.status(); }   // empty while it works or has not been tried
     // In-game menu: build() lays out the ImGui widgets of each presented frame (empty = closed, no ImGui work at all); setup() loads fonts and
     // style once into the menu's ImGui context.
     void set_menu(std::function<void()> build, std::function<void()> setup = {});
@@ -81,7 +89,7 @@ public:
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // SMAA works on the finished frame at the output size, whatever the quality setting says.
     UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
-    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_)); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
+    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || dlss5_requested()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
@@ -228,6 +236,15 @@ private:
     void create_samplers();
     void apply_scene_path(bool anisotropy_changed, bool path_before);
     void destroy_samplers();
+    // DLSS 5: the settings, the pass, whether the device carries the NGX extensions (else dlss5_gap_ says why not) and the frame's scene inputs kept for the present stage.
+    bool dlss5_requested() const { return dlss5_device_ && dlss5_settings_.enabled && !dlss5_pass_.failed(); }
+    bool record_dlss5(VkCommandBuffer command, Dlss5Stage stage, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output);
+    Dlss5Settings dlss5_settings_;
+    Dlss5Pass dlss5_pass_;
+    Dlss5Context dlss5_context_;
+    bool dlss5_device_=false;
+    std::string dlss5_gap_;
+    struct Dlss5Scene { UpscaleImage depth, motion; VkExtent2D size{}; bool reset=false, ready=false; } dlss5_scene_;   // ready: this frame's scene was reconstructed (the present stage may run)
     UpscalerKind upscaler_kind_=UpscalerKind::off;
     bool dlss_available_=false, dlss_g_available_=false;
     UpscaleMode upscale_mode_=UpscaleMode::quality;

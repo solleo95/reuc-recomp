@@ -104,6 +104,34 @@ Options options_from_config(const ConfigDocument& document) {
             else invalid("unknown window_mode");
         }
     }
+    if(root.contains("dlss5")) {
+        const auto& dlss5=root["dlss5"];if(!dlss5.is_object())invalid("dlss5 must be an object");
+        for(const auto& field:dlss5_fields()) {
+            const std::string key(field.key);
+            if(!dlss5.contains(key))continue;
+            const auto& json=dlss5[key];double value=0;
+            switch(field.kind) {
+            case Dlss5Kind::boolean:
+                if(!json.is_boolean())invalid("dlss5."+key+" must be true or false");
+                value=json.get<bool>();break;
+            case Dlss5Kind::integer:
+                if(!json.is_number_unsigned() || json.get<uint64_t>()>INT32_MAX)invalid("dlss5."+key+" must be a whole number");
+                value=double(json.get<uint64_t>());break;
+            case Dlss5Kind::real:
+                if(!json.is_number())invalid("dlss5."+key+" must be a number");
+                value=json.get<double>();break;
+            case Dlss5Kind::choice: {
+                if(!json.is_string())invalid("dlss5."+key+" must be a string");
+                const auto name=json.get<std::string>();bool found=false;
+                for(size_t i=0;i<field.choices.size() && !found;++i)if(field.choices[i].name==name) {value=double(i);found=true;}
+                if(!found)invalid("dlss5."+key+" has an unknown value");
+                break;
+            }
+            }
+            if(const auto problem=dlss5_value_error(field,value);!problem.empty())invalid("dlss5."+problem);
+            field.set(options.dlss5,value);
+        }
+    }
     return options;
 }
 void store_options(ConfigDocument& document,const Options& options) {
@@ -143,6 +171,20 @@ void store_options(ConfigDocument& document,const Options& options) {
     if(effect_level_name(options.effects.rt_quality).empty() || options.effects.rt_quality==EffectLevel::off)invalid("unknown rt_quality");
     graphics["rt_quality"]=std::string(effect_level_name(options.effects.rt_quality));
     for(const char* old_key:{"rt_reflections","rt_lighting","rt_shadows","rt_local_shadows","rt_ambient_occlusion","ray_reconstruction","path_tracing"})graphics.erase(old_key);   // the keys of the old ray tracing
+    auto& dlss5=replacement.properties["dlss5"];   // after the last use of `graphics`: a new top-level key may move the ordered object's entries
+    if(dlss5.is_null())dlss5=nlohmann::ordered_json::object();
+    if(!dlss5.is_object())invalid("dlss5 must be an object");
+    for(const auto& field:dlss5_fields()) {
+        const double value=field.get(options.dlss5);
+        if(const auto problem=dlss5_value_error(field,value);!problem.empty())invalid("dlss5."+problem);
+        const std::string key(field.key);
+        switch(field.kind) {
+        case Dlss5Kind::boolean:dlss5[key]=value!=0;break;
+        case Dlss5Kind::integer:dlss5[key]=uint32_t(value);break;
+        case Dlss5Kind::real:dlss5[key]=value;break;
+        case Dlss5Kind::choice:dlss5[key]=std::string(field.choices[size_t(value)].name);break;
+        }
+    }
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

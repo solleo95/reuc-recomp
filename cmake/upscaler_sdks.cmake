@@ -21,6 +21,26 @@ uc_sdk(fidelityfx FidelityFX-SDK-v1.1.4.zip
 add_library(uc_streamline_sdk INTERFACE)
 target_include_directories(uc_streamline_sdk INTERFACE ${streamline_SOURCE_DIR}/include)
 target_link_libraries(uc_streamline_sdk INTERFACE wintrust crypt32)
+# NGX SDK of the Streamline archive: DLSS 5 Neural Rendering is an NGX feature with no Streamline plugin (renderer/ngx_dlss5.h).
+add_library(uc_ngx_sdk INTERFACE)
+target_include_directories(uc_ngx_sdk INTERFACE ${streamline_SOURCE_DIR}/external/ngx-sdk/include)
+target_link_libraries(uc_ngx_sdk INTERFACE ${streamline_SOURCE_DIR}/external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib)
+# The DLSS 5 runtime (nvngx_dlssnr.dll, ~250 MB, NVIDIA-signed) is not in git: drop it into project/dlss5/ or point UC_DLSS5_RUNTIME (cache variable or
+# environment variable) at it. When found it is copied next to uc.exe and into dist; without it the game reports "nvngx_dlssnr.dll missing" for the feature.
+set(UC_DLSS5_RUNTIME "" CACHE FILEPATH "path of nvngx_dlssnr.dll (DLSS 5 Neural Rendering runtime)")
+if(NOT UC_DLSS5_RUNTIME AND DEFINED ENV{UC_DLSS5_RUNTIME})
+  set(UC_DLSS5_RUNTIME "$ENV{UC_DLSS5_RUNTIME}")
+endif()
+if(NOT UC_DLSS5_RUNTIME AND EXISTS "${CMAKE_SOURCE_DIR}/project/dlss5/nvngx_dlssnr.dll")
+  set(UC_DLSS5_RUNTIME "${CMAKE_SOURCE_DIR}/project/dlss5/nvngx_dlssnr.dll")
+endif()
+if(UC_DLSS5_RUNTIME AND EXISTS "${UC_DLSS5_RUNTIME}")
+  message(STATUS "DLSS 5 runtime: ${UC_DLSS5_RUNTIME}")
+  set(UC_DLSS5_RUNTIME_FILES "${UC_DLSS5_RUNTIME}" CACHE INTERNAL "")
+else()
+  message(STATUS "DLSS 5 runtime: not found (project/dlss5/nvngx_dlssnr.dll or UC_DLSS5_RUNTIME); the feature will report it missing")
+  set(UC_DLSS5_RUNTIME_FILES "" CACHE INTERNAL "")
+endif()
 add_library(uc_fidelityfx_sdk INTERFACE)
 target_include_directories(uc_fidelityfx_sdk INTERFACE ${fidelityfx_SOURCE_DIR}/ffx-api/include)
 

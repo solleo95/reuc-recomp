@@ -72,6 +72,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level || *level == EffectLevel::off) return "invalid value for --rt-quality";   // the switch is the off state
             options.effects.rt_quality = *level;
         }
+        else if (arg == "--dlss5") options.dlss5.enabled = true;
+        else if (arg == "--dlss5-option") {   // key=value, the config's strict parser
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --dlss5-option";
+            const auto separator = arguments[i].find('=');
+            std::string error;
+            if (separator == std::string_view::npos || !set_dlss5_field(options.dlss5, arguments[i].substr(0, separator), arguments[i].substr(separator + 1), error)) return error.empty() ? "invalid value for --dlss5-option" : error;
+        }
         else if (arg == "--anisotropy") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";
             uint32_t level = 0; const auto value = arguments[i];

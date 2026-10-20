@@ -12,6 +12,7 @@ struct SettingsTargets {
     std::function<void(std::optional<uint32_t>)> fps_limit;
     std::function<void(bool)> bloom;
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects
+    std::function<void(const Dlss5Settings&)> dlss5;           // DLSS 5 Neural Rendering
     std::function<void(PromptStyle)> prompt_style;
     std::function<void(const Bindings&)> bindings;
 };

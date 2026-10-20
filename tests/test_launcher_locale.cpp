@@ -1,6 +1,8 @@
 #include "check.h"
 #include "localization.h"
+#include "dlss5_settings.h"
 #include <set>
+#include <string>
 #include <cstdio>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -26,6 +28,15 @@ int main() {
         CHECK(config_language(uc::parse_config(uc::serialize_config(document)))==language.code);
         for(auto key:translation_keys())CHECK(!text(language.code,key).empty());
     }
+    // Every DLSS 5 control has its label (and every named choice its text) in all 13 languages: the tab composes the keys from the settings table
+    for(const auto& language:languages()) {
+        CHECK(!text(language.code,"dlss5").empty() && !text(language.code,"dlss5_hint").empty() && !text(language.code,"dlss5_status_available").empty() && !text(language.code,"dlss5_status_active").empty() && !text(language.code,"dlss5_status_unavailable").empty());
+        for(const auto& field:uc::dlss5_fields()) {
+            CHECK(!text(language.code,"dlss5_"+std::string(field.key)).empty());
+            for(const auto& choice:field.choices) if(choice.label.empty()) CHECK(!text(language.code,"dlss5_"+std::string(choice.name)).empty());
+        }
+    }
+    CHECK(text("ru","dlss5_enabled")=="Включить DLSS 5 Neural Rendering" && text("en","dlss5_stage")=="Where it runs");
     CHECK(text("ru","play")=="ИГРАТЬ");
     CHECK(text("ja","play")=="プレイ");
     // Checked = no glow (the option disables bloom), in the launcher and the in-game menu.

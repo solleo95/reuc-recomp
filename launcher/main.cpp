@@ -119,7 +119,7 @@ std::string binding_name(const uc::Binding& binding) {
 bool same_options(const uc::Options& a,const uc::Options& b) {
     return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -158,7 +158,7 @@ int run(int argc,wchar_t** argv) {
     // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
-    if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
+    if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features.dlss5=true;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
     if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
         query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
         query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path] {promise->set_value(uc::query_features(exe,config));});
@@ -201,7 +201,8 @@ int run(int argc,wchar_t** argv) {
                 {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
                 {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"framegen"},{430,"framegen-dlss"},
                 {434,"framegen"},{438,"framegen-off"},{442,"framegen"},{446,"framegen-fsr"},{450,"framegen"},{454,"framegen-off"},
-                {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"}};
+                {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"},
+                {496,"dlss5"},{504,"##d5-enabled"},{508,"##d5-preset"},{512,"##d5-preset-h"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
                 unsigned first=114+unsigned(i)*18;
@@ -269,20 +270,20 @@ int run(int argc,wchar_t** argv) {
         auto* draw=ImGui::GetWindowDrawList();
         if(ui.banner)ui.art(*draw,{0,0},{sidebar,std::round(446*unit)},{17,75},{359,521});
         else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
-        const char* sections[]={"game","graphics","controls","audio"};
+        const char* sections[]={"game","graphics","controls","audio","dlss5"};
         ImGui::SetCursorPos({6*unit,455*unit});
-        for(int i=0;i<4;++i) {
+        for(int i=0;i<5;++i) {
             ImGui::SetCursorPosX(std::round(6*unit));
             ImGui::PushID(i);auto p=ImGui::GetCursorScreenPos();
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
             ImGui::PushStyleColor(ImGuiCol_Button,page==i ? ImVec4{.34f,.055f,.075f,1} : ImVec4{0,0,0,0});
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.30f,.07f,.09f,1});
-            if(button("##navigation",i==1 ? "general" : sections[i],{sidebar-12*unit,60*unit}))page=i;
+            if(button("##navigation",i==1 ? "general" : sections[i],{sidebar-12*unit,54*unit}))page=i;
             ImGui::PopStyleColor(2);ImGui::PopStyleVar();
             const auto color=page==i ? IM_COL32(246,243,237,255) : IM_COL32(161,164,164,255);
-            if(page==i)draw->AddRectFilled(p,{p.x+5*unit,p.y+60*unit},IM_COL32(200,33,47,255),2*unit);
-            uc::launcher::draw_navigation_icon(*draw,i,{std::round(p.x+32*unit),std::round(p.y+15*unit)},30*unit,color);
-            draw->AddText(ui.sans,std::round(24*unit),{std::round(p.x+89*unit),std::round(p.y+16*unit)},color,tr(sections[i]));
+            if(page==i)draw->AddRectFilled(p,{p.x+5*unit,p.y+54*unit},IM_COL32(200,33,47,255),2*unit);
+            uc::launcher::draw_navigation_icon(*draw,i,{std::round(p.x+32*unit),std::round(p.y+12*unit)},30*unit,color);
+            draw->AddText(ui.sans,std::round(24*unit),{std::round(p.x+89*unit),std::round(p.y+13*unit)},color,tr(sections[i]));
             ImGui::PopID();
         }
         ImGui::SetCursorPos({38*unit,std::max(ImGui::GetCursorPosY()+16*unit,available.y-150*unit)});
@@ -322,7 +323,7 @@ int run(int argc,wchar_t** argv) {
         ImGui::BeginChild("body",{main_size.x-104*unit,main_size.y-hero_height-32*unit},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         push_font(ui.serif,36);ImGui::TextUnformatted(tr(page==1 ? "graphics_title" : sections[page]));ImGui::PopFont();
         ImGui::PushFont(ui.sans,std::round(22*unit));
-        const char* hints[]={"game_hint","graphics_hint","controls_hint","audio_hint"};
+        const char* hints[]={"game_hint","graphics_hint","controls_hint","audio_hint","dlss5_hint"};
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
         ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
         auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false,const char* why=nullptr) {
@@ -604,6 +605,66 @@ int run(int argc,wchar_t** argv) {
             }
             ImGui::PopStyleColor();ImGui::PopStyleVar();
             ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
+        } else if(page==4) {
+            // DLSS 5 Neural Rendering: a status line, the switch and one control per field of the settings table, two per row; everything but the switch follows the switch.
+            const auto status=uc::dlss5_status(features_ready,features.dlss5,features.dlss5_reason,{});
+            const auto d5=uc::dlss5_ui(options.dlss5,status.state!=uc::Dlss5State::checking,status.state==uc::Dlss5State::available);
+            push_font(ui.sans,22);
+            if(status.state==uc::Dlss5State::unavailable) {
+                const std::string text=std::string(tr("dlss5_status_unavailable"))+(status.reason.empty() ? "" : ": "+status.reason);
+                ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1});ImGui::TextWrapped("%s",text.c_str());ImGui::PopStyleColor();
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",text.c_str());
+            } else if(status.state==uc::Dlss5State::checking)ImGui::TextDisabled("%s",tr("checking"));
+            else ImGui::TextUnformatted(tr("dlss5_status_available"));
+            ImGui::PopFont();
+            ImGui::Dummy({0,8*unit});
+            const auto choice_text=[&](const uc::Dlss5Choice& choice) -> std::string {return choice.label.empty() ? std::string(tr("dlss5_"+std::string(choice.name))) : std::string(choice.label);};
+            auto& d5s=options.dlss5;
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            if(ImGui::BeginTable("dlss5",2,ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchSame,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
+                for(const auto& field:uc::dlss5_fields()) {
+                    ImGui::TableNextColumn();
+                    const std::string key(field.key),id="##d5-"+key;
+                    const bool locked=(field.key=="exposure" && d5s.exposure_mode!=uc::Dlss5ExposureMode::manual) || (field.key=="diffuse_white_nits" && !d5s.diffuse_white_override);
+                    const bool master=field.key=="enabled",disabled=master ? !d5.switch_enabled : (!d5.settings_enabled || locked);
+                    if(field.kind==uc::Dlss5Kind::boolean) {
+                        bool value=field.get(d5s)!=0;
+                        toggle(id.c_str(),tr("dlss5_"+key),value,disabled,status.reason.empty() ? nullptr : status.reason.c_str());
+                        field.set(d5s,value ? 1 : 0);
+                    } else {
+                        ImGui::TextUnformatted(tr("dlss5_"+key));
+                        ImGui::BeginDisabled(disabled);push_font(ui.sans,22);ImGui::PushItemWidth(-1);
+                        if(field.kind==uc::Dlss5Kind::choice) {
+                            const size_t current=size_t(field.get(d5s));
+                            const auto current_text=choice_text(field.choices[current]);
+                            if(combo(id.c_str(),current_text.c_str())) {
+                                for(size_t i=0;i<field.choices.size();++i) {
+                                    if(ImGui::Selectable(choice_text(field.choices[i]).c_str(),i==current))field.set(d5s,double(i));
+                                    track(id+"-"+std::string(field.choices[i].name));
+                                }
+                                ImGui::EndCombo();
+                            }
+                            track(id);
+                        } else if(field.kind==uc::Dlss5Kind::integer) {
+                            int value=int(field.get(d5s));
+                            if(ImGui::SliderInt(id.c_str(),&value,int(field.min),int(field.max)))field.set(d5s,double(value));
+                            track(id);
+                        } else {
+                            float value=float(field.get(d5s));
+                            if(ImGui::SliderFloat(id.c_str(),&value,float(field.min),float(field.max),field.step>=1 ? "%.0f" : "%.2f")) {
+                                const double snapped=std::clamp(std::round(double(value)/field.step)*field.step,field.min,field.max);
+                                field.set(d5s,std::round(snapped*1e6)/1e6);
+                            }
+                            track(id);
+                        }
+                        ImGui::PopItemWidth();ImGui::PopFont();ImGui::EndDisabled();
+                    }
+                    ImGui::Dummy({0,8*unit});
+                }
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleColor();ImGui::PopStyleVar();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
         if(!error.empty()) {
@@ -721,7 +782,15 @@ int run(int argc,wchar_t** argv) {
                 ui.capture(smoke/L"grid-replaced.bmp");
             }
             if(frame==466)ui.capture(smoke/L"graphics-bottom.bmp");
-            if(frame>=492) {
+            if(frame==500)ui.capture(smoke/L"dlss5-tab.bmp");
+            if(frame==507) {
+                if(!options.dlss5.enabled || !uc::options_from_config(uc::load_config(config_path)).dlss5.enabled)throw std::runtime_error("DLSS 5 switch select/save UI failed");
+            }
+            if(frame==516) {
+                if(options.dlss5.preset!=uc::Dlss5Preset::h || uc::options_from_config(uc::load_config(config_path)).dlss5.preset!=uc::Dlss5Preset::h)throw std::runtime_error("DLSS 5 preset select/save UI failed");
+                ui.capture(smoke/L"dlss5-set.bmp");
+            }
+            if(frame>=524) {
                 if(smoke_exe.empty())done=true;
                 else {
                     if(!process && !launch_requested)throw std::runtime_error("launch button failed: "+error);
