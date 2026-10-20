@@ -17,14 +17,21 @@ int main() {
     const std::array<float,3> spike{40.f,1.f,-2.f};
     const auto clamped=uc::rt_path_clamp(spike,settings.max_radiance);
     CHECK(clamped[0]==settings.max_radiance && clamped[1]==1.f && clamped[2]==0.f && settings.max_radiance>1.f);
-    // The composition: albedo x light replaces the game's colour by `mix`, never exceeds 1, and the fog keeps the game's colour
-    const std::array<float,3> game{0.2f,0.2f,0.2f}, albedo{0.5f,0.5f,0.5f}, light{1.f,2.f,4.f};
-    const auto full=uc::rt_path_compose(game,albedo,light,1.f,0.f);
-    CHECK(std::fabs(full[0]-0.5f)<1e-6f && std::fabs(full[1]-1.f)<1e-6f && std::fabs(full[2]-1.f)<1e-6f);   // 0.5, 1.0, and 2.0 clamped to 1
-    CHECK(uc::rt_path_compose(game,albedo,light,0.f,0.f)==game && uc::rt_path_compose(game,albedo,light,1.f,1.f)==game);
-    const auto half=uc::rt_path_compose(game,albedo,light,0.5f,0.f);
-    CHECK(std::fabs(half[0]-0.35f)<1e-6f);
-    const std::array<float,3> negative{-1.f,-1.f,-1.f};
-    CHECK(uc::rt_path_compose(game,albedo,negative,1.f,0.f)[0]==0.f);   // negative light (a noisy signal) is clipped
+    // The composition scales the game's own colour (its textures survive) by the gathered light relative to a reference white, within [kRtPathMinScale, kRtPathMaxScale];
+    // `mix` blends the scale toward 1 and the fog keeps the game's colour
+    CHECK(uc::kRtPathMinScale>0.f && uc::kRtPathMinScale<1.f && uc::kRtPathMaxScale>1.f && uc::kRtPathReference>0.f);
+    const std::array<float,3> game{0.2f,0.4f,0.8f};
+    const float ref=uc::kRtPathReference;
+    const std::array<float,3> reference_light{ref,ref,ref};
+    CHECK(uc::rt_path_compose(game,reference_light,1.f,0.f)==game);   // the reference light changes nothing
+    const std::array<float,3> mixed_light{100.f,ref*0.5f,-1.f};
+    const auto full=uc::rt_path_compose(game,mixed_light,1.f,0.f);
+    CHECK(std::fabs(full[0]-game[0]*uc::kRtPathMaxScale)<1e-6f && std::fabs(full[1]-game[1]*0.5f)<1e-6f && std::fabs(full[2]-game[2]*uc::kRtPathMinScale)<1e-6f);   // clamped above, proportional, clamped below
+    CHECK(uc::rt_path_compose(game,mixed_light,0.f,0.f)==game && uc::rt_path_compose(game,mixed_light,1.f,1.f)==game);
+    const auto half=uc::rt_path_compose(game,mixed_light,0.5f,0.f);
+    CHECK(std::fabs(half[0]-game[0]*(1.f+0.5f*(uc::kRtPathMaxScale-1.f)))<1e-6f);
+    // the texture detail survives: two game colours keep their ratio under the same light
+    const auto a=uc::rt_path_compose({0.2f,0.2f,0.2f},mixed_light,1.f,0.f), b=uc::rt_path_compose({0.4f,0.4f,0.4f},mixed_light,1.f,0.f);
+    CHECK(std::fabs(b[1]/a[1]-2.f)<1e-5f);
     return 0;
 }

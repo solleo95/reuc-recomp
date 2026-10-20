@@ -13,8 +13,8 @@ struct RtPathSettings {
     uint32_t bounces=3;      // surface hits a path may follow
     float reach=80.f;        // a ray's length in view units
     float emission=8.f;      // an emitter's radiance relative to the colour the game shows for it
-    float max_radiance=4.f;  // the most one path may add per channel: a path that reaches an emitter in one lucky ray would show as a firefly
-    float ambient=0.35f;     // what a ray that leaves the scene (or a path out of bounces) sees: the dome (warm, kRtPathWarm)
+    float max_radiance=2.f; // the most one path may add per channel: a path that reaches an emitter in one lucky ray would show as a firefly
+    float ambient=1.2f;      // what a ray that leaves the scene (or a path out of bounces) sees: the dome (warm, kRtPathWarm); in a closed car most paths end here after bounces, hence the strength
     float key=0.5f;          // the synthetic overhead light (rt_shadow_math.h kRtOverheadDirection), a short shadow ray (warm as well)
     float key_reach=8.f;     // the overhead light's rays are blocked only within this many view units (as the shadow pass)
     float mix=0.65f;         // 1: the path-traced lighting replaces the game's on lit surfaces; 0: nothing changes (the rest keeps the game's mood)
@@ -35,11 +35,16 @@ inline bool rt_path_emits(const std::array<float,3>& shown, float threshold) { r
 inline std::array<float,3> rt_path_clamp(const std::array<float,3>& radiance, float limit) {
     return {std::clamp(radiance[0],0.f,limit),std::clamp(radiance[1],0.f,limit),std::clamp(radiance[2],0.f,limit)};
 }
-// The lit surface's colour after the path tracer: its albedo times the gathered light, blended with the game's own colour by `mix`, and left to the game's fog (fog 1: unchanged).
-inline std::array<float,3> rt_path_compose(const std::array<float,3>& game, const std::array<float,3>& albedo, const std::array<float,3>& light, float mix, float fog) {
+// The lit surface's colour after the path tracer: the game's own colour (its textures, which the albedo target does not always carry) scaled by the gathered light relative
+// to a reference white, within [kRtPathMinScale, kRtPathMaxScale]; `mix` blends the scale toward 1 and the game's fog keeps its colour (fog 1: unchanged). The shader has the same constants.
+constexpr float kRtPathReference=0.45f, kRtPathMinScale=0.25f, kRtPathMaxScale=1.8f;
+inline std::array<float,3> rt_path_compose(const std::array<float,3>& game, const std::array<float,3>& light, float mix, float fog) {
     const float weight=std::clamp(mix,0.f,1.f)*(1.f-std::clamp(fog,0.f,1.f));
     std::array<float,3> out{};
-    for (int i=0;i<3;++i) out[i]=game[i]+(std::min(albedo[i]*std::max(light[i],0.f),1.f)-game[i])*weight;
+    for (int i=0;i<3;++i) {
+        const float scale=std::clamp(light[i]/kRtPathReference,kRtPathMinScale,kRtPathMaxScale);
+        out[i]=game[i]*(1.f+(scale-1.f)*weight);
+    }
     return out;
 }
 }

@@ -3,7 +3,7 @@
 // surface; the game's textures are not reachable from a ray). traceMain: per signal pixel of a lit surface the light gathered by cosine-weighted paths of several bounces
 // through the hit table: a surface the game shows bright (a lamp, a lit panel, a window) is an emitter with that colour, a bounce multiplies by the hit's mean albedo, a ray
 // that leaves the scene (or the last bounce) adds the dome; plus the synthetic overhead light with a short shadow ray. compositeMain: the denoised light times the pixel's
-// albedo replaces the game's lit colour (blended by `mix`, kept under fog; the light sources themselves keep their colour).
+// scales the game's own lit colour (blended by `mix`, kept under fog; the light sources themselves keep their colour).
 #include "gbuffer.slang"
 #include "view_space.slang"
 struct Params {
@@ -52,6 +52,7 @@ bool litSurface(float4 texel) {
     const uint flags = uint(round(texel.w * 65535.0));
     return (flags & kGBufferHasNormal) != 0 && (flags & kGBufferCutout) == 0 && (flags & kGBufferLit) != 0;
 }
+static const float kReference = 0.45, kMinScale = 0.25, kMaxScale = 1.8;   // rt_path_math.h: the light that changes nothing, and the range of the scale
 static const float3 kWarm = float3(1.0, 0.86, 0.66);   // rt_path_math.h kRtPathWarm: the colour of the dome and of the overhead light
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 uint pcg(uint v) { const uint state = v * 747796405u + 2891336453u; const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u; return (word >> 22u) ^ word; }
@@ -89,7 +90,9 @@ float3 hitNormal(HitGeometry geometry, uint primitive, float3x4 toView) {
         const uint at = triangle[i];
         corner[i] = mul(toView, float4(asfloat(positions[at]), asfloat(positions[at + 1]), asfloat(positions[at + 2]), 1.0));
     }
-    return normalize(cross(corner[1] - corner[0], corner[2] - corner[0]));
+    const float3 normal = cross(corner[1] - corner[0], corner[2] - corner[0]);
+    const float length2 = dot(normal, normal);
+    return length2 > 1e-20 ? normal * rsqrt(length2) : float3(0.0, 0.0, 0.0);   // a degenerate triangle has no normal: the caller turns back
 }
 
 [shader("compute")] [numthreads(8, 8, 1)]
@@ -141,6 +144,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 if (b + 1 == params.bounces) { radiance += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
                 const float t = query.CommittedRayT();
                 float3 hitNormalView = hitNormal(geometry, query.CommittedPrimitiveIndex(), query.CommittedObjectToWorld3x4());
+                if (dot(hitNormalView, hitNormalView) == 0.0) hitNormalView = -direction;   // a degenerate triangle would send NaN rays: bounce straight back instead
                 if (dot(hitNormalView, direction) > 0.0) hitNormalView = -hitNormalView;
                 const float3 hit = origin + direction * t;
                 origin = hit + hitNormalView * min(6e-3 * length(hit) + 6e-3, 0.1);
@@ -154,6 +158,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             if (facing > 0.0 && !occluded(start, params.overhead.xyz, params.overhead.w)) light += params.key * facing * kWarm;
         }
     }
+    if (any(isnan(light)) || any(isinf(light))) light = float3(kReference, kReference, kReference);   // a NaN would stay in the denoiser's history for good
     signalOut[id.xy] = float4(light, 1.0);
 }
 
@@ -181,9 +186,10 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
         const float w = (x == 0 ? 1.0 - f.x : f.x) * (y == 0 ? 1.0 - f.y : f.y) / (1.0 + 50.0 * abs(tapDepth - centreDepth) / centreDepth);
         sum += signalIn.Load(int3(tap, 0)).rgb * w; weights += w;
     }
-    const float3 light = weights > 0.0 ? max(sum / weights, 0.0) : float3(0.0, 0.0, 0.0);
+    float3 light = weights > 0.0 ? max(sum / weights, 0.0) : float3(kReference, kReference, kReference);
+    if (any(isnan(light)) || any(isinf(light))) light = float3(kReference, kReference, kReference);   // a bad sample leaves the pixel as the game drew it
     float4 color = sceneColor[id.xy];
-    const float3 traced = min(sceneAlbedo.Load(int3(pixel, 0)).rgb * light, 1.0);   // rt_path_math.h rt_path_compose
-    color.rgb = lerp(color.rgb, traced, saturate(params.mixAmount) * (1.0 - texel.z));
+    const float3 scale = clamp(light / kReference, kMinScale, kMaxScale);   // rt_path_math.h rt_path_compose: the game's colour keeps its textures
+    color.rgb = saturate(color.rgb * lerp(float3(1.0, 1.0, 1.0), scale, saturate(params.mixAmount) * (1.0 - texel.z)));
     sceneColor[id.xy] = color;
 }
