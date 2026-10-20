@@ -23,6 +23,10 @@ RR is heavier than Super Resolution plus the own denoiser at 1440p (the effects'
 
 `renderer_effects_smoke --rt-rr` (DLAA through DLSS, the lighting fixture): the frame goes through RR (`ray_reconstruction_active`), the floor beside the red wall gets the wall's red (87 to 140 through RR, 138 through the own denoiser), the wall stays red, validation clean. `test_rr_math` (roughness, specular albedo, the decision), `test_options*` (the option, its flag and its config key).
 
+## Review (fresh opus, 0 Critical, 3 Important, fixed)
+
+The history resets on a frame that switches between Super Resolution and Ray Reconstruction (separate NGX histories: a one-frame ghost on every switch otherwise); RR runs only on frames that build the RT structures (a raster frame no longer pays 1.3 ms and loses its glow for nothing); the smoke renders the RR frames right after plain ones, so an RR that wrote nothing would fail it; `rr_available_` is cleared together with DLSS. Deferred: the RR checkbox stays enabled when the selected upscaler is not DLSS (it simply has no effect), exceptions from the RR evaluate have no fallback to the noisy picture, DLSS-G together with RR was not exercised.
+
 ## Not covered
 
 * Specular hit distance / specular motion vectors (RR's input for reflections in motion), the transparency guides, DLSS-G together with RR (frame generation was not exercised with RR frames), RR at modes other than Quality in the live game.
