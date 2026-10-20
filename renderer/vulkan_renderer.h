@@ -162,6 +162,7 @@ private:
         VkExtent2D extent{};
         uint32_t mip_levels=1;
         gx::TextureChannels channels=gx::TextureChannels::rgba;
+        bool bc7=false;   // a texture replacement: BC7 blocks, not RGBA8
         VkDeviceSize allocation_size=0;
         std::shared_ptr<const gx::TexturePixels> source;
         bool initialized=false;

@@ -15,7 +15,8 @@ inline bool reticle_texture(const TexturePixels& texture) {
     if (texture.job && !texture.job->done.load(std::memory_order_acquire)) return false;   // not decoded yet: decide on a later frame
     if (texture.levels.empty()) return false;
     const auto& level = texture.levels[0];
-    return level.width == level.height && (level.width == 100 || level.width == 120 || level.width == 154);
+    const uint32_t width = texture.guest_width ? texture.guest_width : level.width, height = texture.guest_height ? texture.guest_height : level.height;
+    return width == height && (width == 100 || width == 120 || width == 154);
 }
 // Centre of the draw's screen-space bounding box in NDC (x right, y up), like the harness's draw summary.
 inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw) {

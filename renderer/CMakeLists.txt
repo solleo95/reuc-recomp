@@ -1,4 +1,4 @@
-add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp gx_transforms.cpp gx_materials.cpp prompt_draw.cpp scene_boundary.cpp motion_tracker.cpp scene_lights.cpp)
+add_library(uc_gx STATIC gx_vertices.cpp gx_packets.cpp gx_textures.cpp texture_replacement.cpp gx_transforms.cpp gx_materials.cpp prompt_draw.cpp scene_boundary.cpp motion_tracker.cpp scene_lights.cpp)
 target_include_directories(uc_gx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gx PUBLIC uc_input_prompts)
 

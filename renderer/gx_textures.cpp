@@ -1,5 +1,7 @@
 #include "gx_textures.h"
+#include "texture_replacement.h"
 #include "../runtime/gx_write_watch.h"
+#include <cstdio>
 #include <algorithm>
 #include <array>
 #include <deque>
@@ -188,18 +190,34 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
     }
     std::shared_ptr<const TexturePixels> result;
     size_t bytes = pixels.size() + palette.bytes.size();
+    const auto replacement = texture_replacements().find(desc, pixels, palette);
+    // A replacement that fails to load falls back to the original pixels.
+    const auto build = [desc, replacement](std::span<const std::byte> encoded, PaletteView colors) {
+        if (replacement) {
+            try {
+                auto loaded = load_dds(replacement->path);
+                loaded.guest_width = desc.width; loaded.guest_height = desc.height;
+                return loaded;
+            } catch (const std::exception& error) { std::fprintf(stderr, "texture replacement %s skipped: %s\n", replacement->path.string().c_str(), error.what()); }
+        }
+        return decode_texture(desc, encoded, colors);
+    };
     if (async_) {
         auto pending = std::make_shared<TexturePixels>();
         pending->job = std::make_shared<TextureJob>();
-        bytes += decoded_bytes(desc);
-        DecodePool::instance().submit([pending, desc, format = palette.format, encoded = std::vector<std::byte>(pixels.begin(), pixels.end()), colors = std::vector<std::byte>(palette.bytes.begin(), palette.bytes.end())] {
+        bytes += replacement ? replacement->bytes : decoded_bytes(desc);
+        DecodePool::instance().submit([pending, build, format = palette.format, encoded = std::vector<std::byte>(pixels.begin(), pixels.end()), colors = std::vector<std::byte>(palette.bytes.begin(), palette.bytes.end())] {
             std::exception_ptr failure;
-            try { pending->levels = decode_texture(desc, encoded, PaletteView{format, colors}).levels; } catch (...) { failure = std::current_exception(); }
+            try {
+                auto built = build(encoded, PaletteView{format, colors});
+                pending->bc7 = built.bc7; pending->guest_width = built.guest_width; pending->guest_height = built.guest_height;
+                pending->levels = std::move(built.levels);
+            } catch (...) { failure = std::current_exception(); }
             pending->job->finish(std::move(failure));
         });
         result = pending;
     } else {
-        result = std::make_shared<const TexturePixels>(decode_texture(desc, pixels, palette));
+        result = std::make_shared<const TexturePixels>(build(pixels, palette));
         for (const auto& level : result->levels) bytes += level.rgba.size();
     }
     ++decodes_;

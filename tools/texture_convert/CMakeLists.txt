@@ -1,0 +1,4 @@
+add_executable(uc_texture_convert convert.cpp)
+target_compile_definitions(uc_texture_convert PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(uc_texture_convert PRIVATE windowscodecs ole32 uuid)
+install(TARGETS uc_texture_convert RUNTIME DESTINATION tools)

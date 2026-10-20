@@ -1,4 +1,5 @@
 #include "late_aim.h"
+#include "texture_replacement.h"
 #include "post_effects.h"
 #include "vulkan_renderer.h"
 #include "render_scale.h"
@@ -259,7 +260,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
     logic_ops_=core.logicOp;
     VkPhysicalDeviceFeatures enabled{}; enabled.logicOp=logic_ops_; enabled.independentBlend=motion_outputs_; enabled.shaderInt16=core.shaderInt16; device_info.pEnabledFeatures=&enabled;
-    enabled.samplerAnisotropy=core.samplerAnisotropy; anisotropy_supported_=core.samplerAnisotropy;
+    enabled.samplerAnisotropy=core.samplerAnisotropy; anisotropy_supported_=core.samplerAnisotropy; enabled.textureCompressionBC=core.textureCompressionBC;
     { VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_,&properties); anisotropy_limit_=properties.limits.maxSamplerAnisotropy; }
     device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;   // queue_info.queueCount: 3 with the interpolation swapchain
     device_info.enabledExtensionCount = uint32_t(device_extensions.size()); device_info.ppEnabledExtensionNames = device_extensions.data();
@@ -358,15 +359,18 @@ static size_t validate_texture_chain(const gx::TexturePixels* pixels) {
     const bool gpu_only=pixels && pixels->gpu_only;
     if(pixels && (unsigned(pixels->channels)>unsigned(gx::TextureChannels::rgb565) ||
         (pixels->channels!=gx::TextureChannels::rgba && !gpu_only)))throw std::invalid_argument("invalid owned texture channels");
-    if(pixels && (pixels->levels.empty() || pixels->levels.size()>11)) throw std::invalid_argument("invalid owned mip chain count");
+    if(pixels && (pixels->levels.empty() || pixels->levels.size()>15)) throw std::invalid_argument("invalid owned mip chain count");
     const auto& level=pixels ? pixels->levels[0] : white;
-    if (!level.width || !level.height || level.width>1024 || level.height>1024 || (gpu_only ? !level.rgba.empty() : level.rgba.size()!=size_t(level.width)*level.height*4))
+    const bool bc7=pixels && pixels->bc7;
+    const auto level_bytes=[bc7](const gx::TextureLevel& mip) { return bc7 ? gx::bc7_level_size(mip.width,mip.height) : size_t(mip.width)*mip.height*4; };
+    // The device image limit is checked in make_texture; GX textures stay <=1024, replacements may be larger.
+    if (!level.width || !level.height || level.width>16384 || level.height>16384 || (gpu_only ? !level.rgba.empty() : level.rgba.size()!=level_bytes(level)))
         throw std::invalid_argument("invalid owned RGBA texture");
     const auto mip_levels=pixels ? uint32_t(pixels->levels.size()) : 1;
     size_t upload_size=0; uint32_t width=level.width,height=level.height;
     for(uint32_t i=0;i<mip_levels;++i) {
         const auto& mip=pixels ? pixels->levels[i] : white;
-        if(mip.width!=width || mip.height!=height || (gpu_only ? !mip.rgba.empty() : mip.rgba.size()!=size_t(width)*height*4) || (i && pixels->levels[i-1].width==1 && pixels->levels[i-1].height==1)) throw std::invalid_argument("invalid owned mip chain dimensions");
+        if(mip.width!=width || mip.height!=height || (gpu_only ? !mip.rgba.empty() : mip.rgba.size()!=level_bytes(mip)) || (i &&pixels->levels[i-1].width==1 && pixels->levels[i-1].height==1)) throw std::invalid_argument("invalid owned mip chain dimensions");
         upload_size+=mip.rgba.size(); width=std::max(1u,width/2); height=std::max(1u,height/2);
     }
     return upload_size;
@@ -378,8 +382,10 @@ VulkanRenderer::Texture VulkanRenderer::make_texture(const gx::TexturePixels* pi
     const auto& level=pixels ? pixels->levels[0] : white;
     Texture texture; texture.extent=physical_extent.width ? physical_extent : VkExtent2D{level.width,level.height};
     texture.channels=pixels ? pixels->channels : gx::TextureChannels::rgba;
+    texture.bc7=pixels && pixels->bc7;
     // shortcut: RGB565 uses Vulkan UNORM rounding; verify exact GX copy rounding before pixel-parity acceptance (TD-045).
-    const VkFormat format=texture.channels==gx::TextureChannels::rgb565 ? VK_FORMAT_R5G6B5_UNORM_PACK16 : VK_FORMAT_R8G8B8A8_UNORM;
+    // shortcut: textureCompressionBC is enabled when the GPU has it and assumed for replacements; every desktop GPU does.
+    const VkFormat format=texture.bc7 ? VK_FORMAT_BC7_UNORM_BLOCK : texture.channels==gx::TextureChannels::rgb565 ? VK_FORMAT_R5G6B5_UNORM_PACK16 : VK_FORMAT_R8G8B8A8_UNORM;
     if(texture.channels==gx::TextureChannels::rgb565) {
         VkFormatProperties properties; vkGetPhysicalDeviceFormatProperties(physical_,format,&properties);
         const VkFormatFeatureFlags required=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_BLIT_SRC_BIT|VK_FORMAT_FEATURE_BLIT_DST_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
@@ -1969,7 +1975,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         std::vector<VkBufferImageCopy> copies(texture.mip_levels); VkDeviceSize at=0;
         for(uint32_t i=0;i<texture.mip_levels;++i) {
             const auto width=std::max(1u,texture.extent.width>>i),height=std::max(1u,texture.extent.height>>i);
-            copies[i].bufferOffset=at; copies[i].imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i,0,1}; copies[i].imageExtent={width,height,1}; at+=VkDeviceSize(width)*height*4;
+            copies[i].bufferOffset=at; copies[i].imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i,0,1}; copies[i].imageExtent={width,height,1}; at+=texture.bc7 ? gx::bc7_level_size(width,height) : VkDeviceSize(width)*height*4;
         }
         vkCmdCopyBufferToImage(slot.command,texture.upload.buffer,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(copies.size()),copies.data());
         barrier(slot.command,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,texture.mip_levels);
