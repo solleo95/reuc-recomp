@@ -1116,7 +1116,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         RtReflectInputs inputs;
         inputs.mode=mode; inputs.command=command; inputs.tlas=rt_.tlas(); inputs.depth=scene_depth_view_; inputs.gbuffer=scene_gbuffer_view_; inputs.material=scene_material_view_; inputs.color=scene_color_view_; inputs.albedo=scene_albedo_view_;
         inputs.records=rt_records_[rt_record_slot_].buffer; inputs.region=in.render_size; inputs.viewport=scene_viewport; inputs.view=view_params(*frame_projection_);
-        inputs.level=level; inputs.slot=timer_slot; inputs.frame=uint32_t(upscale_frame_%8)+1;
+        inputs.level=level; inputs.slot=timer_slot; inputs.frame=uint32_t(upscale_frame_%64)+1;   // more directions than the shadows' 8: one ray per pixel would otherwise average eight fixed samples
         const VkImageView noisy=pass.trace(inputs);
         denoiser.resize(pass.signal_extent());
         if (in.reset || !ran_last) denoiser.reset();

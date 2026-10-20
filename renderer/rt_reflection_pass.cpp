@@ -93,7 +93,7 @@ void RtReflectionPass::write_set(VkDescriptorSet set, const RtReflectInputs& in,
     VkWriteDescriptorSetAccelerationStructureKHR tlas{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR}; tlas.accelerationStructureCount=1; tlas.pAccelerationStructures=&in.tlas;
     const VkDescriptorImageInfo images[7]={{VK_NULL_HANDLE,in.depth,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.gbuffer,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.material,VK_IMAGE_LAYOUT_GENERAL},
         {VK_NULL_HANDLE,signal_.view,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,signal_in,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,in.color,VK_IMAGE_LAYOUT_GENERAL},
-        {VK_NULL_HANDLE,in.albedo ? in.albedo : in.material,VK_IMAGE_LAYOUT_GENERAL}};   // the reflections never read it: the material view stands in
+        {VK_NULL_HANDLE,in.albedo,VK_IMAGE_LAYOUT_GENERAL}};
     const VkDescriptorBufferInfo records{in.records,0,VK_WHOLE_SIZE};
     VkWriteDescriptorSet writes[kBindings]{};
     for (uint32_t i=0;i<kBindings;++i) { writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet=set; writes[i].dstBinding=i; writes[i].descriptorCount=1; }
@@ -108,6 +108,7 @@ void RtReflectionPass::write_set(VkDescriptorSet set, const RtReflectInputs& in,
 }
 VkImageView RtReflectionPass::trace(const RtReflectInputs& in) {
     if (in.slot>=slots_) throw std::invalid_argument("rt reflections: frame slot out of range");
+    if (!in.albedo) throw std::invalid_argument("rt reflections: no albedo view");   // the composite binds it statically in both modes
     RtReflectPreset preset=rt_reflect_preset(in.level); float strength=kRtReflectStrength;
     if (in.mode==RtRadianceMode::lighting) { const RtLightPreset light=rt_light_preset(in.level); preset={light.divisor,light.rays,0.f,light.reach}; strength=light.strength; }   // cone 0: lighting draws its own directions
     if (!preset.divisor || !in.region.width || !in.region.height) throw std::logic_error("rt reflections: trace() with the effect off");
