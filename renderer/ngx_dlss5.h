@@ -8,8 +8,8 @@
 #include <string_view>
 #include <vector>
 namespace uc {
-// DLSS 5 Neural Rendering through the standard NGX route (docs/superpowers/specs/2026-10-20-dlss5-neural-rendering-design.md). The runtime nvngx_dlssnr.dll is
-// loaded by the driver's NGX core from the exe directory; nothing here touches it. NgxBackend is the thin seam to the NGX SDK (ngx_vulkan.cpp); the logic
+// DLSS 5 Neural Rendering loads nvngx_dlssnr.dll directly from the exe directory, including custom unsigned runtimes (ngx_vulkan.cpp).
+// NgxBackend is the thin seam to the snippet and NGX parameter allocator; the logic
 // above it (support check, failure reasons, parameter names, feature lifetime) is tested with a fake.
 constexpr uint32_t kNgxFeatureDlss5 = 18;         // NVSDK_NGX_Feature_Reserved18
 constexpr uint32_t kNgxSuccess = 1;               // NVSDK_NGX_Result_Success; failures are 0xBADxxxxx

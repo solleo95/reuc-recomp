@@ -28,7 +28,7 @@ class Target:
 
 _MODE = {1: 4}
 SCREENS = {s.name: s for s in (
-    Screen("game_over", {4: 7}),                                  # "You died - Continue? Yes/No"
+    Screen("game_over", {4: "set"}),                              # "You died - Continue? Yes/No"; slot 4 holds a counter that grows by 3 per death (7, 10, 13; slot 2 is 5, 8, 11 in the mission), never 7 only (2026-10-19 autoplay runs)
     Screen("mission", {2: 5, 3: 5, 6: 6}),                        # mission loading, tutorial pages and gameplay HUD
     Screen("title", {0: 2}),                                      # "press A" screen after the opening movies
     Screen("save_select", {5: 3}),
@@ -65,6 +65,8 @@ def _matches(frame: dict, key, value) -> bool:
         have = words[index] if index < len(words) else None
     if have is None:
         return False
+    if value == "set":   # -1 is an empty slot
+        return have >= 0
     return have != 0 if value == "nz" else have == value
 
 

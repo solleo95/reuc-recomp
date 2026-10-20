@@ -126,6 +126,21 @@ class AutoplayTest(unittest.TestCase):
             bot = Autoplay(g, Path(d) / "a.jsonl"); bot.step()
             self.assertEqual(bot.deaths, 1)
         self.assertTrue(any(i[0] == "press" and i[1] == "A" for i in g.inputs))
+    def test_game_over_page_is_recognised_on_a_later_death(self):
+        from uctest.menus import screen_of
+        for slot in (7, 10, 13):   # slot 4 counts up by 3 per death (the bot pressed A at the screen centre on every death but the first)
+            self.assertEqual(screen_of(frame(1, ui=[-1, -1, slot - 2, slot - 2, slot] + [-1] * 7)), "game_over")
+        self.assertIsNone(screen_of(frame(1, ui=[-1, -1, 8, 8, -1] + [-1] * 7)))   # the mission pages leave slot 4 empty
+    def test_repeated_continue_presses_are_one_death(self):
+        over = [-1, -1, -1, -1, 7, -1, -1, -1, -1, -1, -1, 0]
+        g = FakeGame([frame(n, context="menu", ui=over, retraces=n * 60) for n in range(1, 12)])
+        with tempfile.TemporaryDirectory() as d:
+            bot = Autoplay(g, Path(d) / "a.jsonl", max_failures=5)
+            for _ in range(8): self.assertIsNone(bot.step())   # eight retries on one page: no "stuck"
+            self.assertEqual((bot.deaths, bot.deaths_without_progress), (1, 1))
+            g.frames = [frame(100, enemies=[E(1, 0.0, 0.0)])]; g.i = 0; bot.step()   # back in gameplay: the next game over is a new death
+            g.frames = [frame(200, context="menu", ui=over, retraces=20000)]; g.i = 0; bot.step()
+            self.assertEqual(bot.deaths, 2)
     def test_stuck_stops_with_reason(self):
         frames = [frame(n, enemies=[]) for n in range(0, 20000, 600)]
         g = FakeGame(frames)

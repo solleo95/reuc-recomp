@@ -786,6 +786,12 @@ static int real_main(int argc, char** argv) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
                 if(controlled) continue;
+                // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
+                if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
+                if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && event.key.scancode==SDL_SCANCODE_TAB && !settings_menu->capturing()) {
+                    if(!event.key.repeat) uc::set_clock_speed(event.type==SDL_EVENT_KEY_DOWN && !host_keys.menu_open ? 8 : 1);
+                    continue;
+                }
                 if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && host_key_pressed(event.key.scancode)) continue;
                 if(event.type==SDL_EVENT_KEY_UP && (event.key.scancode==SDL_SCANCODE_INSERT || event.key.scancode==SDL_SCANCODE_P) && !settings_menu->capturing()) continue;   // the releases of host keys
                 if(host_keys.menu_open) {

@@ -83,8 +83,9 @@ struct StandBackend final : uc::NgxBackend {
 };
 
 int main(int argc, char** argv) {
-    bool validation=false; fs::path runtime_directory;
-    for(int i=1;i<argc;++i) { const std::string arg=argv[i]; if(arg=="--validation") validation=true; else runtime_directory=arg; }
+    bool validation=false, require_runtime=false; fs::path runtime_directory;
+    for(int i=1;i<argc;++i) { const std::string arg=argv[i]; if(arg=="--validation") validation=true; else if(arg=="--require-runtime") require_runtime=true; else runtime_directory=arg; }
+    CHECK(!require_runtime || !runtime_directory.empty());
     // 1. The probe. No runtime in the folder: unavailable, and the reason names the file. Nothing of NGX is started.
     const auto empty=fs::temp_directory_path()/("uc-dlss5-smoke-"+std::to_string(GetCurrentProcessId()));
     fs::create_directories(empty);
@@ -96,12 +97,19 @@ int main(int argc, char** argv) {
         std::printf("DLSS 5 on this GPU: %s%s%s\n",support.dlss5 ? "available" : "unavailable",support.dlss5 ? "" : " - ",support.dlss5_reason.c_str());
         CHECK(support.dlss5 || !support.dlss5_reason.empty());   // either it works or the player is told why
         CHECK(!support.dlss5 || support.dlss5_reason.empty());
+        CHECK(!require_runtime || support.dlss5);
         const auto instance_extensions=uc::dlss5_instance_extensions(runtime_directory);
         std::printf("NGX instance extensions:"); for(const auto& name:instance_extensions) std::printf(" %s",name.c_str()); std::printf("\n");
         CHECK(!instance_extensions.empty());
     }
     // 2. The pass on the GPU.
     { std::ofstream(empty/uc::kDlss5Runtime,std::ios::binary) << "x"; }   // the placeholder the runtime check looks for; the stand-in replaces NGX
+    {   // A damaged local DLL must fail before Vulkan init, with a useful loader error.
+        auto backend=uc::make_ngx_backend(); uc::NgxInit init; init.runtime_directory=empty;
+        CHECK((backend->init(init)&0xFFF00000u)==0xBAD00000u);
+        CHECK(backend->diagnostic().find("Windows error")!=std::string::npos);
+        backend->shutdown(); backend->shutdown();
+    }
     SDL_Window* window=nullptr;
     CHECK(SDL_Init(SDL_INIT_VIDEO));
     window=SDL_CreateWindow("Umbrella Chronicles - DLSS 5 smoke",1280,720,SDL_WINDOW_VULKAN|SDL_WINDOW_HIDDEN); CHECK(window);
@@ -173,6 +181,18 @@ int main(int argc, char** argv) {
         };
         const auto baseline=picture();
         CHECK(baseline.width==1280 && baseline.height==720 && at(baseline,400,360)[0]==255 && at(baseline,900,360)[1]==255 && at(baseline,900,360)[0]==0);
+        if(require_runtime) {   // Creation alone misses ABI, parameter lifetime and Vulkan dispatch errors during evaluation.
+            CHECK(renderer.dlss5_device());
+            renderer.use_dlss5_backend(uc::make_ngx_backend,runtime_directory);
+            uc::Dlss5Settings real; real.hook=uc::Dlss5Hook::present;
+            renderer.set_dlss5(real);
+            const auto before=renderer.pass_runs(uc::GpuPass::dlss5);
+            for(int i=0;i<3;++i) picture();
+            CHECK(renderer.dlss5_active() && renderer.dlss5_status().empty());
+            CHECK(renderer.pass_runs(uc::GpuPass::dlss5)>before);
+            renderer.set_dlss5(uc::Dlss5Settings{});
+            std::printf("real DLSS 5 evaluation passed\n");
+        }
         // Without the NGX runtime next to the exe the device has no DLSS 5; the stand-in is then installed by the test
         if(!renderer.dlss5_device()) std::printf("(no NGX extensions on this device: the stand-in drives the pass)\n");
         renderer.use_dlss5_backend([]{ return std::unique_ptr<uc::NgxBackend>(new StandBackend); },empty);

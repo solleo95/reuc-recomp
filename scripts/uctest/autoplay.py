@@ -53,6 +53,7 @@ class Autoplay:
         self.rate, self.rate_from = 30.0, None   # KPAD samples per game second (the game step rate), measured
         self.ignore_until = {}   # enemy id -> tick until which it is skipped (unreachable or already down)
         self.last_shot_n = self.last_tutorial_n = -10**9
+        self.dead = False   # the game over page is up and its death was counted
 
     # logging ---------------------------------------------------------
     def event(self, kind, **fields):
@@ -94,6 +95,7 @@ class Autoplay:
             self.projection = self._fetch_projection()
         f = vision.enrich(f, self.projection)
         context = f.get("context")
+        self.dead &= screen == "game_over"
         if f.get("tutorial_loaded") and f.get("tutorial") not in (0, 0x100000):   # a tutorial page is up (the context may still read gameplay)
             if f["n"] - self.last_tutorial_n >= 8:
                 self.last_tutorial_n = f["n"]
@@ -177,9 +179,11 @@ class Autoplay:
         if tick - self.last_menu_tick < 60:
             return
         self.last_menu_tick = tick
-        self.deaths += 1
-        self.deaths_without_progress += 1
-        self.event("death", deaths=self.deaths)
+        if not self.dead:   # one death per visit of the page; the repeated presses below are retries (the prompt appears seconds after the page)
+            self.dead = True
+            self.deaths += 1
+            self.deaths_without_progress += 1
+            self.event("death", deaths=self.deaths)
         t = TARGETS["game_over_continue"]
         self.g.aim(t.x, t.y, wait=False)
         self.g.press("A", PRESS_FRAMES, t.x, t.y, wait=False)
