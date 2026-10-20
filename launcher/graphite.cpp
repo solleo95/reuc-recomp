@@ -71,9 +71,6 @@ void draw_navigation_icon(ImDrawList& draw,int icon,ImVec2 at,float size,unsigne
     } else if(icon==2) {
         draw.AddCircle(p(15,15),9*s,color,24,stroke);draw.AddCircle(p(15,15),3*s,color,16,stroke);
         for(int i=0;i<8;++i) {const float angle=i*0.7853981634f;line(15+9*std::cos(angle),15+9*std::sin(angle),15+13*std::cos(angle),15+13*std::sin(angle));}
-    } else if(icon==4) {   // a chip: DLSS 5
-        draw.AddRect(p(8,8),p(22,22),color,1*s,0,stroke);draw.AddRect(p(12,12),p(18,18),color,0,0,stroke);
-        for(const float t:{11.f,15.f,19.f}) {line(t,3,t,8);line(t,22,t,27);line(3,t,8,t);line(22,t,27,t);}
     } else {
         ImVec2 speaker[]={p(2,11),p(8,11),p(15,5),p(15,25),p(8,19),p(2,19)};
         draw.AddPolyline(speaker,6,color,ImDrawFlags_Closed,stroke);

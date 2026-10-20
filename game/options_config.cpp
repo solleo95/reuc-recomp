@@ -104,7 +104,9 @@ Options options_from_config(const ConfigDocument& document) {
             else invalid("unknown window_mode");
         }
     }
-    if(root.contains("dlss5")) {
+    // A section written by the first DLSS 5 build (an "enabled" switch and a "stage") has other keys and values than the table: it is dropped (defaults) and rewritten on the next save.
+    const bool legacy_dlss5=root.contains("dlss5") && root["dlss5"].is_object() && (root["dlss5"].contains("enabled") || root["dlss5"].contains("stage"));
+    if(root.contains("dlss5") && !legacy_dlss5) {
         const auto& dlss5=root["dlss5"];if(!dlss5.is_object())invalid("dlss5 must be an object");
         for(const auto& field:dlss5_fields()) {
             const std::string key(field.key);
@@ -172,7 +174,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["rt_quality"]=std::string(effect_level_name(options.effects.rt_quality));
     for(const char* old_key:{"rt_reflections","rt_lighting","rt_shadows","rt_local_shadows","rt_ambient_occlusion","ray_reconstruction","path_tracing"})graphics.erase(old_key);   // the keys of the old ray tracing
     auto& dlss5=replacement.properties["dlss5"];   // after the last use of `graphics`: a new top-level key may move the ordered object's entries
-    if(dlss5.is_null())dlss5=nlohmann::ordered_json::object();
+    if(dlss5.is_null() || (dlss5.is_object() && (dlss5.contains("enabled") || dlss5.contains("stage"))))dlss5=nlohmann::ordered_json::object();   // also drops the first build's section
     if(!dlss5.is_object())invalid("dlss5 must be an object");
     for(const auto& field:dlss5_fields()) {
         const double value=field.get(options.dlss5);

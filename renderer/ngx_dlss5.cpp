@@ -49,6 +49,7 @@ std::string dlss5_failure_reason(const char* step, uint32_t result, std::string_
     std::string text=std::string("DLSS 5 ")+step+" failed: "+ngx_result_name(result);
     const auto detail=without_log_prefix(log_line);
     if(contains_any(detail,{"newer gpu arch","unsupported gpu architecture"})) text+=" (this "+std::string(kDlss5Runtime)+" is built for a newer GPU generation)";
+    else if(contains_any(detail,{"ngxloadfrompath","nvloadsignedlibrary"})) text+=" (the NVIDIA driver loads only NVIDIA-signed snippets: this "+std::string(kDlss5Runtime)+" is unsigned or damaged)";
     else if(contains_any(detail,{"not supported on this device"})) text+=" (usually this "+std::string(kDlss5Runtime)+" targets a newer GPU generation than this one)";   // the core refused the snippet while loading it; the cause is in debug/ngx_dlss5.log when NGX logged it
     return append_log(std::move(text),detail);
 }

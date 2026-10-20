@@ -115,6 +115,15 @@ int main() {
             bool bad=false;try {uc::options_from_config(uc::parse_config(std::string(R"({"game":"S:/Games/Test/game","dlss5":{)")+body+"}}"));}catch(const std::invalid_argument&){bad=true;}
             CHECK(bad);
         }
+        {   // a section of the first DLSS 5 build ("enabled", "stage", other values) loads as defaults and is replaced by the next save
+            auto old=uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":{"enabled":true,"preset":"b","scaling_domain":"encoded","stage":"upscaled"}})");
+            auto loaded=uc::options_from_config(old);
+            CHECK(loaded.dlss5==uc::Dlss5Settings{});
+            uc::store_options(old,loaded);
+            const auto text=uc::serialize_config(old);
+            CHECK(text.find("\"enabled\"")==std::string::npos && text.find("\"stage\"")==std::string::npos && text.find("\"hook\": \"off\"")!=std::string::npos);
+            CHECK(uc::options_from_config(uc::parse_config(text)).dlss5==uc::Dlss5Settings{});
+        }
         bool not_object=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":true})"));}catch(const std::invalid_argument&){not_object=true;}
         CHECK(not_object);
         // an out-of-range value in the options is refused by the writer, and the document keeps its old content

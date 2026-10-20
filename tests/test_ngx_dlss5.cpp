@@ -86,6 +86,7 @@ int main() {
         CHECK(text.find("FAIL_NotImplemented")!=std::string::npos && text.find("error: snippet is using newer GPU arch 1B0 > 190")!=std::string::npos && text.find("[NGXValidate")==std::string::npos && text.find("newer GPU generation")!=std::string::npos);
     }
     { const auto text=dlss5_failure_reason("create",0xBAD0000B,"[t] [NVSDK_NGX_CreateFeature_Validate:724] error: feature is not supported on this device"); CHECK(text.find("targets a newer GPU generation")!=std::string::npos && text.find("error: feature is not supported on this device")!=std::string::npos); }
+    { const auto text=dlss5_failure_reason("create",0xBAD0000B,"[t] [x:720] Error: NGXLoadFromPath failed for S:\\Games: 0xBAD00000"); CHECK(text.find("unsigned or damaged")!=std::string::npos); }
     // Feature creation fails on a GPU older than the DLL: the reason carries NGX's own words, and the same key is not tried again
     {
         reset(); config.create_result=0xBAD0000B; config.log="DLSSNR: snippet is using newer GPU arch 0x1b0 than 0x190";
