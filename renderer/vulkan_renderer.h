@@ -372,7 +372,7 @@ private:
     VkImage depth_=VK_NULL_HANDLE;
     VkDeviceMemory depth_memory_=VK_NULL_HANDLE;
     VkImageView depth_view_=VK_NULL_HANDLE;
-    static constexpr size_t kFrameSlots = 6;   // GPU submissions in flight; the guest's queue window is larger (gx::kMaxOutstandingPackets)
+    static constexpr size_t kFrameSlots = 16;   // GPU submissions in flight (6 stalled the render thread behind the first heavy packet of a ~23-packet frame; 16 ends that stall, 48 gains ~5% more for much more host-visible memory); the guest's queue window is larger (gx::kMaxOutstandingPackets)
     std::array<Slot, kFrameSlots> slots_{};
     // RT albedo/material targets (scene extent, created and destroyed with rt_material_active()) and the records of the frame: per frame-in-flight
     // buffers, grow-only, filled per scene packet from rt_record_count_ on. Read by RT passes at the scene boundary.
@@ -383,7 +383,8 @@ private:
     bool rt_material_initialized_=false, rt_material_cleared_=false;   // cleared (and bound) by a scene pass of this frame
     // RtMaterialRecord / 8 gx::LightUniform per record. A growth destroys the replaced buffer mid-frame: a consumer binds them only after the frame's
     // last scene packet (the boundary).
-    std::array<Buffer,kFrameSlots> rt_records_{}, rt_lights_{};
+    static constexpr size_t kRtFrames = 5;   // frames of per-frame RT state (acceleration structures, records): a frame starts once the frame before the previous one is complete (Packets seals a presenting packet only with fewer than two unfinished), so four would do
+    std::array<Buffer,kRtFrames> rt_records_{}, rt_lights_{};
     uint32_t rt_record_slot_=0, rt_record_count_=0;
     void sync_rt_material_targets();   // the GPU is idle or the targets are unused
     void destroy_rt_material_targets();

@@ -48,7 +48,7 @@ private:
     VkDescriptorSetLayout set_layout_=VK_NULL_HANDLE;
     VkPipelineLayout layout_=VK_NULL_HANDLE;
     VkDescriptorPool pool_=VK_NULL_HANDLE;
-    std::array<VkDescriptorSet,16> trace_sets_{}, composite_sets_{};
+    std::array<VkDescriptorSet,64> trace_sets_{}, composite_sets_{};
     uint32_t slots_=0;
     Image signal_;
     VkExtent2D signal_extent_{};

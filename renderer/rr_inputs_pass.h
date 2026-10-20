@@ -38,7 +38,7 @@ private:
     VkDescriptorSetLayout set_layout_=VK_NULL_HANDLE;
     VkPipelineLayout layout_=VK_NULL_HANDLE;
     VkDescriptorPool pool_=VK_NULL_HANDLE;
-    std::array<VkDescriptorSet,16> sets_{};
+    std::array<VkDescriptorSet,64> sets_{};
     uint32_t slots_=0;
     Image normal_, specular_;
     VkExtent2D extent_{};

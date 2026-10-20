@@ -482,6 +482,11 @@ static int real_main(int argc, char** argv) {
             render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6; frame_busy_ns+=uint64_t(render_elapsed);
             if (rendered) {
             progressed = true;
+            // The guest's GXWaitDrawDone ends when the packet is submitted: the packet owns everything the GPU reads, so nothing the guest does next can reach it, and waiting for the
+            // GPU serialised the guest with it (the frame took guest + GPU time instead of the longer of the two). The frames in flight stay bounded by the real completion (Packets), and
+            // the deterministic mode keeps the real one. The fence path below completes the serial again, which is harmless. UC_FINISH_AT_GPU=1 restores the old wait.
+            static const bool finish_at_submit=!deterministic && !std::getenv("UC_FINISH_AT_GPU");
+            if (finish_at_submit) uc::gx_completed(pending->serial);
             packet_dump.packet(*pending);
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {

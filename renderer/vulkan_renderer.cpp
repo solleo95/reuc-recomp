@@ -1625,10 +1625,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (scene!=scene_mode_) reset_next_=true;
             scene_mode_=scene_phase_=scene; frame_start_=false; motion_cleared_=gbuffer_cleared_=false; hudless_taken_=false;
             scene_lights_.clear(); frame_projection_.reset(); shadow_fit_.reset(); shadow_cleared_=false;
-            rt_material_cleared_=false; rt_record_slot_=frame_index_%kFrameSlots; rt_record_count_=0;   // the slot's previous frame has completed (see rt_ below)
+            rt_material_cleared_=false; rt_record_slot_=frame_index_%kRtFrames; rt_record_count_=0;   // the slot's previous frame has completed (see rt_ below)
             rt_frame_=rt_scene_active();
             if (rt_frame_) {   // frame index modulo the in-flight slots: a frame has at least one submission, so the slot's previous frame has completed
-                rt_.initialize(device,physical_,memory_,shaders_,uint32_t(kFrameSlots));
+                rt_.initialize(device,physical_,memory_,shaders_,uint32_t(kRtFrames));
                 rt_.begin_frame(frame_index_);
             }
             if (upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) {
