@@ -168,7 +168,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         dlss_available_=streamline_->dlss_supported(physical_, reason);
         if (!dlss_available_) {
             std::fprintf(stderr, "DLSS unavailable: %s\n", reason.c_str());
-            streamline_->shutdown();
+            streamline_->shutdown(); rr_available_=false;
             if (upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
         } else {
             dlss_g_available_=streamline_->dlss_g_supported(physical_,reason);
@@ -185,7 +185,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         private_data = supported13.privateData;
         if (!private_data) {
             std::fprintf(stderr,"DLSS unavailable: Streamline presentation requires Vulkan privateData\n");
-            streamline_->shutdown(); through_streamline=false; dlss_available_=dlss_g_available_=false;
+            streamline_->shutdown(); through_streamline=false; dlss_available_=dlss_g_available_=rr_available_=false;
             if(upscaler_kind_==UpscalerKind::dlss) { upscaler_kind_=UpscalerKind::off; frame_generation_=false; }
         }
     }
@@ -1066,7 +1066,9 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     // it needs the guides, hence the same preconditions as the RT effects themselves
     static const bool rr_disabled=std::getenv("UC_NO_RR")!=nullptr;   // debug: A/B against the own denoiser with DLSS Super Resolution
     const bool rr_frame=!rr_disabled && effects_.ray_reconstruction && rr_use(upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active(),rr_available_,rt_scene_active()) &&
+        rt_frame_ && (rt_as_open_ || rt_.stats().instances) &&   // the frame has the structures the RT effects trace (the same entry condition as their block below)
         gbuffer_cleared_ && rt_material_cleared_ && frame_projection_ && rt_record_count_ && scene_material_ && scene_albedo_;
+    if (rr_frame!=rr_frame_) in.reset=true;   // Super Resolution and Ray Reconstruction keep separate histories: the first frame of either after the other starts a new one
     if (rt_frame_ && (rt_as_open_ || rt_.stats().instances)) {   // the TLAS over this frame's BLASes (once: nothing after the boundary builds), then the ray-traced shadows
         if (!rt_as_open_) pass_timer_.begin(command,timer_slot,GpuPass::rt_as);
         rt_as_open_=false; rt_frame_=false;

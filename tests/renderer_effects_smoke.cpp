@@ -1336,10 +1336,10 @@ int main(int argc, char** argv) {
                 const auto settle=[&](bool rt,bool rr) { for(int i=0;i<60;++i) frame(rt,rr); return frame(rt,rr); };
                 const int x=640, near_row=int((-1.f/4.5f+1.f)/2.f*720.f);
                 const auto off=settle(false,true);
+                const auto reconstructed=settle(true,true);   // right after the plain frames: if RR wrote nothing the output would still show them (no bounce)
+                CHECK(renderer.ray_reconstruction_active());   // the frame went through Ray Reconstruction
                 const auto own=settle(true,false);
                 CHECK(!renderer.ray_reconstruction_active());
-                const auto reconstructed=settle(true,true);
-                CHECK(renderer.ray_reconstruction_active());   // the frame went through Ray Reconstruction
                 std::fprintf(stderr,"rt-rr: floor beside the wall, red: off %d, own denoiser %d, Ray Reconstruction %d; wall red %d, wall green %d\n",at(off,x,near_row,0),at(own,x,near_row,0),at(reconstructed,x,near_row,0),at(reconstructed,x,int((-1.f/5.f+1.f)/2.f*720.f)+40,0),at(reconstructed,x,int((-1.f/5.f+1.f)/2.f*720.f)+40,1));
                 CHECK(at(own,x,near_row,0)>at(off,x,near_row,0)+5);
                 CHECK(at(reconstructed,x,near_row,0)>at(off,x,near_row,0)+5);   // RR keeps the bounced red
