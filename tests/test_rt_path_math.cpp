@@ -5,6 +5,12 @@ int main() {
     const auto settings=uc::rt_path_settings();
     CHECK(settings.divisor>=1 && settings.paths>=1 && settings.bounces>=1 && settings.reach>0.f && settings.mix>=0.f && settings.mix<=1.f);
     for (const float channel : uc::kRtPathWarm) CHECK(channel>0.f && channel<=1.f);
+    // Contact occlusion: short rays around the surface; the fraction that is blocked darkens by `ao_strength`, and the push constants pack the small counts
+    CHECK(settings.ao_rays>=1 && settings.ao_radius>0.f && settings.ao_radius<settings.reach && settings.ao_strength>0.f && settings.ao_strength<=1.f);
+    CHECK(uc::rt_path_ao(0.f,0.7f)==1.f && std::fabs(uc::rt_path_ao(1.f,0.7f)-0.3f)<1e-6f && std::fabs(uc::rt_path_ao(0.5f,0.7f)-0.65f)<1e-6f && uc::rt_path_ao(2.f,1.f)==0.f && uc::rt_path_ao(-1.f,1.f)==1.f);
+    const auto packed=uc::rt_path_pack(settings);
+    CHECK((packed.divisor_frame&255u)==settings.divisor && (packed.counts&255u)==settings.paths && ((packed.counts>>8)&255u)==settings.bounces && ((packed.counts>>16)&255u)==settings.ao_rays);
+    CHECK(uc::rt_path_pack(settings,63).divisor_frame>>8==63u);
     // The mean albedo: the sums of 8-bit channels over the pixel count, a grey fallback for a record that is not on screen
     const auto mean=uc::rt_path_mean_albedo({510,255,0},3);
     CHECK(std::fabs(mean[0]-2.f/3.f)<1e-6f && std::fabs(mean[1]-1.f/3.f)<1e-6f && mean[2]==0.f);

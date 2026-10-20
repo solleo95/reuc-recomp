@@ -1150,7 +1150,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             RtPathSettings s;
             const auto env=[](const char* name, auto& value) { if (const char* text=std::getenv(name)) value=static_cast<std::remove_reference_t<decltype(value)>>(std::strtod(text,nullptr)); };
             env("UC_PT_DIVISOR",s.divisor); env("UC_PT_PATHS",s.paths); env("UC_PT_BOUNCES",s.bounces); env("UC_PT_REACH",s.reach); env("UC_PT_EMISSION",s.emission); env("UC_PT_AMBIENT",s.ambient);
-            env("UC_PT_MAX_RADIANCE",s.max_radiance); env("UC_PT_KEY",s.key); env("UC_PT_KEY_REACH",s.key_reach); env("UC_PT_MIX",s.mix); env("UC_PT_THRESHOLD",s.threshold);
+            env("UC_PT_MAX_RADIANCE",s.max_radiance); env("UC_PT_AO_RAYS",s.ao_rays); env("UC_PT_AO_RADIUS",s.ao_radius); env("UC_PT_AO_STRENGTH",s.ao_strength); env("UC_PT_KEY",s.key); env("UC_PT_KEY_REACH",s.key_reach); env("UC_PT_MIX",s.mix); env("UC_PT_THRESHOLD",s.threshold);
             return s;
         }();
         const auto idle=[this] { vk_check(present_.wait_idle(device),"rt path idle"); };

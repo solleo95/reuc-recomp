@@ -13,11 +13,11 @@ struct Params {
     float2 depthRange;    // the viewport's near and far depth
     uint2 region;         // scene region size in pixels
     uint2 signalSize;     // size of the signal image
-    uint divisor;         // the signal pixel covers divisor x divisor scene pixels
-    uint frame;           // noise frame
-    uint paths;           // paths per signal pixel
-    uint bounces;         // surface hits a path follows
-    float reach;          // a ray's length in view units
+    uint divisorFrame;    // divisor | noise frame << 8 (the signal pixel covers divisor x divisor scene pixels)
+    uint counts;          // paths per signal pixel | bounces << 8 (surface hits a path follows) | ao rays << 16; renderer/rt_path_math.h rt_path_pack
+    float aoRadius;       // the contact occlusion's rays: their length in view units
+    float aoStrength;     // and how dark a fully blocked surface gets
+    float reach;         // a ray's length in view units
     float emission;       // an emitter's radiance relative to its albedo
     float ambient;        // the dome
     float key;            // the overhead light's strength (0: none)
@@ -28,6 +28,11 @@ struct Params {
     float clampRadiance;  // the most one path may add per channel
 };
 [[vk::push_constant]] ConstantBuffer<Params> params;
+static uint pathsOf() { return params.counts & 255u; }
+static uint bouncesOf() { return (params.counts >> 8) & 255u; }
+static uint aoRaysOf() { return (params.counts >> 16) & 255u; }
+static uint divisorOf() { return params.divisorFrame & 255u; }
+static uint frameOf() { return params.divisorFrame >> 8; }
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
 struct HitGeometry { uint* positions; uint* indices; uint record; uint strideWords; uint flags; uint padding; };           // renderer/rt_scene.h RtHitGeometry
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
@@ -116,7 +121,7 @@ void accumulateMain(uint3 id : SV_DispatchThreadID) {   // a grid with a step of
 [shader("compute")] [numthreads(8, 8, 1)]
 void traceMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.signalSize)) return;
-    const int2 pixel = int2(min(id.xy * params.divisor + params.divisor / 2, params.region - 1));
+    const int2 pixel = int2(min(id.xy * divisorOf() + divisorOf() / 2, params.region - 1));
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
     float3 light = float3(0.0, 0.0, 0.0);
@@ -125,12 +130,12 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
         const float3 normal = decodeGBufferNormal(texel.xy);
         const float eps = min(6e-3 * length(position) + 6e-3, 0.1);
         const float3 start = position + normal * eps;
-        uint seed = pcg(uint(pixel.x) + 65536u * uint(pixel.y)) ^ pcg(params.frame * 9781u + 17u);
+        uint seed = pcg(uint(pixel.x) + 65536u * uint(pixel.y)) ^ pcg(frameOf() * 9781u + 17u);
         float3 sum = float3(0.0, 0.0, 0.0);
-        for (uint p = 0; p < params.paths; ++p) {
+        for (uint p = 0; p < pathsOf(); ++p) {
             float3 origin = start, direction = cosineDirection(normal, float2(nextRandom(seed), nextRandom(seed)));
             float3 throughput = float3(1.0, 1.0, 1.0), radiance = float3(0.0, 0.0, 0.0);
-            for (uint b = 0; b < params.bounces; ++b) {
+            for (uint b = 0; b < bouncesOf(); ++b) {
                 RayDesc ray; ray.Origin = origin; ray.Direction = direction; ray.TMin = 1e-3 * length(origin) + 1e-3; ray.TMax = params.reach;
                 RayQuery<RAY_FLAG_CULL_NON_OPAQUE> query;
                 query.TraceRayInline(scene, 0, 3u, ray);
@@ -141,7 +146,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 if (geometry.record != 0xFFFFFFFFu && geometry.record < params.recordCount) { albedo = meanAlbedo(geometry.record); shown = meanColour(geometry.record); }
                 if (emits(shown)) { radiance += throughput * shown * params.emission; break; }   // the surface shines with the colour the game shows
                 throughput *= albedo;
-                if (b + 1 == params.bounces) { radiance += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
+                if (b + 1 == bouncesOf()) { radiance += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
                 const float t = query.CommittedRayT();
                 float3 hitNormalView = hitNormal(geometry, query.CommittedPrimitiveIndex(), query.CommittedObjectToWorld3x4());
                 if (dot(hitNormalView, hitNormalView) == 0.0) hitNormalView = -direction;   // a degenerate triangle would send NaN rays: bounce straight back instead
@@ -152,7 +157,13 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
             }
             sum += min(radiance, params.clampRadiance);   // a path that reaches an emitter in one lucky ray would show as a firefly
         }
-        light = sum / float(max(params.paths, 1u));
+        light = sum / float(max(pathsOf(), 1u));
+        if (aoRaysOf() > 0 && params.aoStrength > 0.0) {   // contact occlusion: short cosine rays around the surface darken the fill (rt_path_math.h rt_path_ao); the overhead light below has its own shadow ray
+            uint blocked = 0;
+            for (uint r = 0; r < aoRaysOf(); ++r)
+                if (occluded(start, cosineDirection(normal, float2(nextRandom(seed), nextRandom(seed))), params.aoRadius)) ++blocked;
+            light *= 1.0 - saturate(params.aoStrength) * float(blocked) / float(aoRaysOf());
+        }
         if (params.key > 0.0) {   // the synthetic overhead light: a short shadow ray, the surfaces that face it
             const float facing = saturate(dot(normal, params.overhead.xyz));
             if (facing > 0.0 && !occluded(start, params.overhead.xyz, params.overhead.w)) light += params.key * facing * kWarm;
@@ -173,14 +184,14 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (record != 0xFFFFFFFFu && record < params.recordCount && emits(meanColour(record))) return;   // a light source keeps the colour the game draws
     const float centreDepth = abs(viewPositionAt(pixel, stored).z);
     // a depth-aware bilinear upsample of the denoised light (as rt_reflect.slang)
-    const float d = float(params.divisor);
-    const float2 at = (float2(pixel) + 0.5 - float(params.divisor / 2) - 0.5) / d;
+    const float d = float(divisorOf());
+    const float2 at = (float2(pixel) + 0.5 - float(divisorOf() / 2) - 0.5) / d;
     const int2 base = int2(floor(at));
     const float2 f = at - float2(base);
     float3 sum = 0.0; float weights = 0.0;
     for (int y = 0; y < 2; ++y) for (int x = 0; x < 2; ++x) {
         const int2 tap = clamp(base + int2(x, y), int2(0, 0), int2(params.signalSize) - 1);
-        const int2 source = int2(min(uint2(tap) * params.divisor + params.divisor / 2, params.region - 1));
+        const int2 source = int2(min(uint2(tap) * divisorOf() + divisorOf() / 2, params.region - 1));
         const float tapStored = sceneDepth.Load(int3(source, 0));
         const float tapDepth = tapStored < 1.0 ? abs(viewPositionAt(source, tapStored).z) : 1e6;
         const float w = (x == 0 ? 1.0 - f.x : f.x) * (y == 0 ? 1.0 - f.y : f.y) / (1.0 + 50.0 * abs(tapDepth - centreDepth) / centreDepth);

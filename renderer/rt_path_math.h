@@ -17,7 +17,10 @@ struct RtPathSettings {
     float ambient=1.2f;      // what a ray that leaves the scene (or a path out of bounces) sees: the dome (warm, kRtPathWarm); in a closed car most paths end here after bounces, hence the strength
     float key=0.5f;          // the synthetic overhead light (rt_shadow_math.h kRtOverheadDirection), a short shadow ray (warm as well)
     float key_reach=8.f;     // the overhead light's rays are blocked only within this many view units (as the shadow pass)
-    float mix=0.65f;         // 1: the path-traced lighting replaces the game's on lit surfaces; 0: nothing changes (the rest keeps the game's mood)
+    uint32_t ao_rays=2;      // short rays per signal pixel for the contact occlusion
+    float ao_radius=3.5f;    // their length in view units (the game's scale: a seat is about 4 tall; rt_ao_math.h High)
+    float ao_strength=0.7f;  // how dark a fully blocked surface gets
+    float mix=0.65f;        // 1: the path-traced lighting replaces the game's on lit surfaces; 0: nothing changes (the rest keeps the game's mood)
     float threshold=0.55f;   // a surface shines when the mean colour the game shows for it is brighter than this
 };
 inline RtPathSettings rt_path_settings() { return {}; }
@@ -34,6 +37,13 @@ inline std::array<float,3> rt_path_mean_albedo(const std::array<uint32_t,3>& sum
 inline bool rt_path_emits(const std::array<float,3>& shown, float threshold) { return rt_path_luminance(shown)>threshold; }
 inline std::array<float,3> rt_path_clamp(const std::array<float,3>& radiance, float limit) {
     return {std::clamp(radiance[0],0.f,limit),std::clamp(radiance[1],0.f,limit),std::clamp(radiance[2],0.f,limit)};
+}
+// The contact occlusion factor from the blocked fraction of the short rays: 1 open, 1 - strength fully blocked.
+inline float rt_path_ao(float blocked_fraction, float strength) { return 1.f-std::clamp(strength,0.f,1.f)*std::clamp(blocked_fraction,0.f,1.f); }
+// The small integers of the shader's push constants share words (the block is full at 128 bytes): divisor | frame << 8, and paths | bounces << 8 | ao rays << 16.
+struct RtPathPacked { uint32_t divisor_frame, counts; };
+inline RtPathPacked rt_path_pack(const RtPathSettings& settings, uint32_t frame=0) {
+    return {(settings.divisor&255u)|((frame&255u)<<8),(settings.paths&255u)|((settings.bounces&255u)<<8)|((settings.ao_rays&255u)<<16)};
 }
 // The lit surface's colour after the path tracer: the game's own colour (its textures, which the albedo target does not always carry) scaled by the gathered light relative
 // to a reference white, within [kRtPathMinScale, kRtPathMaxScale]; `mix` blends the scale toward 1 and the game's fog keeps its colour (fog 1: unchanged). The shader has the same constants.

@@ -13,13 +13,13 @@ void check(VkResult result, const char* what) { if (result != VK_SUCCESS) throw 
 struct PushParams {
     float viewport[4], view_a[4], view_b[2], depth_range[2];
     uint32_t region[2], signal_size[2];
-    uint32_t divisor, frame, paths, bounces;
+    uint32_t divisor_frame, counts; float ao_radius, ao_strength;   // rt_path_math.h rt_path_pack
     float reach, emission, ambient, key;
     float overhead[4];
     float mix, threshold;
     uint32_t record_count; float clamp_radiance;
 };
-static_assert(sizeof(PushParams)==128 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,reach)==80 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,mix)==112);
+static_assert(sizeof(PushParams)==128 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor_frame)==64 && offsetof(PushParams,reach)==80 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,mix)==112);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr uint32_t kBindings=12, kPasses=3;
 VkShaderModule load_module(VkDevice device, const std::filesystem::path& path) {
@@ -134,7 +134,8 @@ PushParams make_params(const RtPathInputs& in, VkExtent2D signal) {
     params.depth_range[0]=in.viewport[4]; params.depth_range[1]=in.viewport[5];
     params.region[0]=in.region.width; params.region[1]=in.region.height; params.signal_size[0]=signal.width; params.signal_size[1]=signal.height;
     const auto& s=in.settings;
-    params.divisor=s.divisor; params.frame=in.frame; params.paths=s.paths; params.bounces=s.bounces;
+    const auto packed=rt_path_pack(s,in.frame);
+    params.divisor_frame=packed.divisor_frame; params.counts=packed.counts; params.ao_radius=s.ao_radius; params.ao_strength=s.ao_strength;
     params.reach=s.reach; params.emission=s.emission; params.ambient=s.ambient; params.key=s.key;
     params.overhead[0]=in.overhead[0]; params.overhead[1]=in.overhead[1]; params.overhead[2]=in.overhead[2]; params.overhead[3]=s.key_reach;
     params.mix=s.mix; params.threshold=s.threshold; params.record_count=in.record_count; params.clamp_radiance=s.max_radiance;
