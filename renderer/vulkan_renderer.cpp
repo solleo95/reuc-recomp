@@ -1061,7 +1061,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     const auto timer_slot=uint32_t(next_slot_);
     if (shadow_cleared_) barrier(command,shadow_map_.image(),VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);   // drawn this frame: readable by the composite
     const std::array<float,6> scene_viewport{viewport[0]*scene_extent_.width/640,viewport[1]*scene_extent_.height/480,viewport[2]*scene_extent_.width/640,viewport[3]*scene_extent_.height/480,viewport[4],viewport[5]};
-    bool rt_shadow_ran=false, rt_reflect_go=false, rt_light_go=false;
+    bool rt_shadow_ran=false, rt_reflect_go=false, rt_light_go=false, rt_path_go=false;
     // DLSS Ray Reconstruction (plan p7): when an RT effect is active on a DLSS frame RR upscales the picture instead of Super Resolution. The effects keep their own denoisers:
     // RR fed the raw one-ray signals streaked textures and smeared characters in dark scenes (owner video 2026-10-20). It needs the guides, hence the same preconditions as the RT effects
     static const bool rr_disabled=std::getenv("UC_NO_RR")!=nullptr;   // debug: A/B against the own denoiser with DLSS Super Resolution
@@ -1101,7 +1101,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
             pass_timer_.end(command,timer_slot,GpuPass::rt_shadows);
             rt_shadow_traced_=true; rt_shadow_ran=true;
         }
-        rt_reflect_go=rt_ready && rt_reflect_active(); rt_light_go=rt_ready && rt_light_active();   // they run after the raster occlusion below: they read the colour all the shading finished
+        rt_reflect_go=rt_ready && rt_reflect_active(); rt_light_go=rt_ready && rt_light_active(); rt_path_go=rt_ready && rt_path_active() && rt_record_count_ && rt_.hit_table() && scene_albedo_;   // they run after the raster occlusion below: they read the colour all the shading finished
     }
     rt_shadow_ran_last_=rt_shadow_ran;
     if ((effects_.ambient_occlusion!=EffectLevel::off || effects_.contact_shadows || (effects_.shadows!=EffectLevel::off && shadow_cleared_)) && gbuffer_cleared_ && frame_projection_) {   // the occlusion darkens the scene colour before it is reconstructed
@@ -1145,6 +1145,34 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         }
         pass_timer_.end(command,timer_slot,timed);
     };
+    if (rt_path_go) {   // path tracing: the lit surfaces' lighting from emitters over several bounces, denoised like the radiance effects (docs/superpowers/plans/2026-10-20-path-tracing-spike.md)
+        static const RtPathSettings path_settings=[] {   // debug: UC_PT_<NAME> overrides one setting while tuning
+            RtPathSettings s;
+            const auto env=[](const char* name, auto& value) { if (const char* text=std::getenv(name)) value=static_cast<std::remove_reference_t<decltype(value)>>(std::strtod(text,nullptr)); };
+            env("UC_PT_DIVISOR",s.divisor); env("UC_PT_PATHS",s.paths); env("UC_PT_BOUNCES",s.bounces); env("UC_PT_REACH",s.reach); env("UC_PT_EMISSION",s.emission); env("UC_PT_AMBIENT",s.ambient);
+            env("UC_PT_KEY",s.key); env("UC_PT_KEY_REACH",s.key_reach); env("UC_PT_MIX",s.mix); env("UC_PT_THRESHOLD",s.threshold);
+            return s;
+        }();
+        const auto idle=[this] { vk_check(present_.wait_idle(device),"rt path idle"); };
+        rt_path_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
+        rt_path_denoiser_.initialize(device,memory_,shaders_,idle);
+        rt_path_denoiser_.set_max_history(kRtLightHistory);
+        pass_timer_.begin(command,timer_slot,GpuPass::rt_path);
+        RtPathInputs path;
+        path.command=command; path.tlas=rt_.tlas(); path.depth=scene_depth_view_; path.gbuffer=scene_gbuffer_view_; path.material=scene_material_view_; path.color=scene_color_view_; path.albedo=scene_albedo_view_;
+        path.records=rt_records_[rt_record_slot_].buffer; path.hit_table=rt_.hit_table(); path.hit_bases=rt_.hit_bases(); path.record_count=rt_record_count_;
+        path.region=in.render_size; path.viewport=scene_viewport; path.view=view_params(*frame_projection_); path.overhead=rt_key_direction_; path.settings=rt_path_override_ ? *rt_path_override_ : path_settings;
+        path.frame=uint32_t(upscale_frame_%64)+1; path.slot=timer_slot;
+        const VkImageView noisy=rt_path_.trace(path);
+        rt_path_denoiser_.resize(rt_path_.signal_extent());
+        if (in.reset || !rt_path_ran_last_) rt_path_denoiser_.reset();
+        DenoiseInputs denoise;
+        denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
+        denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
+        rt_path_.composite(path,rt_path_denoiser_.denoise(command,RtSignal::radiance,noisy,denoise,3));
+        pass_timer_.end(command,timer_slot,GpuPass::rt_path);
+    }
+    rt_path_ran_last_=rt_path_go;
     if (rt_light_go) radiance_pass(rt_lighting_,rt_lighting_denoiser_,RtRadianceMode::lighting,effects_.rt_lighting,kRtLightHistory,rt_light_ran_last_,GpuPass::rt_lighting);
     if (rt_reflect_go) radiance_pass(rt_reflection_,rt_reflection_denoiser_,RtRadianceMode::reflections,effects_.rt_reflections,kRtReflectHistory,rt_reflect_ran_last_,GpuPass::rt_reflections);
     rt_light_ran_last_=rt_light_go; rt_reflect_ran_last_=rt_reflect_go;
@@ -2269,7 +2297,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
+        rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

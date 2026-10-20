@@ -81,5 +81,7 @@ int main() {
     CHECK((flags&uc::kRtModelValid) && ((flags>>8)&3)==3 && ((flags>>10)&3)==2);
     CHECK(!(uc::rt_record_flags(channel,false)&uc::kRtModelValid) && ((uc::rt_record_flags(channel,false)>>8)&3)==3);
     CHECK(((uc::rt_record_flags(gx::channel_lighting(2|(1<<2)),false)>>8)&15)==0);   // no attenuation, no diffuse
+    // An unlit channel-0 draw is an emitter for the path tracer (a lamp panel, a window, the sky); a lit one is not
+    CHECK((uc::rt_record_flags(unlit,false)&uc::kRtEmissive) && !(flags&uc::kRtEmissive));
     return 0;
 }

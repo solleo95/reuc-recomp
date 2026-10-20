@@ -1290,6 +1290,72 @@ int main(int argc, char** argv) {
                 CHECK(std::abs(at(unmastered,x,near_row,0)-at(off,x,near_row,0))<=1);   // the master switch off with the level kept
             }
         }
+        if (wanted("rt-path")) {
+            // Path tracing (plan path-tracing spike): an unlit bright wall is an emitter; a lit floor in front of it takes the wall's warm colour near it and less of it far away, and
+            // the effect off and the master off change nothing.
+            if (!renderer.ray_tracing_supported()) std::fprintf(stderr,"rt-path: skipped, the device has no ray tracing\n");
+            else {
+                CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+                using Vec=std::array<float,3>;
+                const gx::Projection projection{{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}};
+                const auto make_mesh=[&](const std::array<Vec,4>& corners,std::array<uint8_t,4> color,Vec normal) {
+                    auto draw=quad(0x1000,-1,-1,1,1,color,true);
+                    for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={normal[0],normal[1],normal[2],0,0,0,0,0,0}; draw.vertices[i].color[0]=color; }
+                    return std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{draw.vertices,draw.indices});
+                };
+                const auto floor_mesh=make_mesh({{{-12,-1,-2},{12,-1,-2},{12,-1,-8},{-12,-1,-8}}},{180,180,180,255},{0,1,0});
+                const auto wall_mesh=make_mesh({{{-12,-1,-5},{12,-1,-5},{12,3,-5},{-12,3,-5}}},{255,200,100,255},{0,0,1});   // luminance 0.8: above the emitter threshold
+                const auto draw_of=[&](const std::shared_ptr<const gx::MeshBuffers>& mesh,bool floor) {
+                    auto draw=quad(0x1000,-1,-1,1,1,{180,180,180,255},true);
+                    draw.transforms.edit().projection=projection;
+                    auto& uniforms=draw.uniforms.edit();
+                    uniforms.pixel[1]=1u|(3u<<1)|(1u<<4);
+                    if(floor) {   // lit; the wall keeps channel 0 unlit: an emitter
+                        uniforms.channels[0]=2|(1<<2)|(2<<7)|(3<<9);
+                        uniforms.materials[0]={0.8f,0.6f,0.4f,1.f}; uniforms.ambient[0]={0.3f,0.3f,0.3f,1.f};
+                        uniforms.lights[0].color={80,80,80,255}; uniforms.lights[0].position={0,5,0,0}; uniforms.lights[0].distance={1,0,0,0}; uniforms.lights[0].cosine={1,0,0,0};
+                    }
+                    draw.mesh=mesh; draw.vertices.clear(); draw.indices.clear();
+                    return draw;
+                };
+                auto frame=[&](bool rt,bool pt) {
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.path_tracing=pt; renderer.set_effects(effects);
+                    gx::FramePacket scene; scene.present=false;
+                    scene.draws.push_back(draw_of(floor_mesh,true)); scene.draws.push_back(draw_of(wall_mesh,false));
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                    gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                    hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                    return renderer.capture(submit(std::move(hud)));
+                };
+                const auto at=[&](const uc::RenderPixels& pixels,int x,int y,int channel) { return int(pixels.rgba[(size_t(y)*pixels.width+size_t(x))*4+size_t(channel)]); };
+                const auto settle=[&](bool rt,bool pt) { for(int i=0;i<40;++i) frame(rt,pt); return frame(rt,pt); };
+                const auto pixel_row=[&](float z) { return int((-1.f/-z+1.f)/2.f*720.f); };   // the row of the floor point (0, -1, z)
+                const int x=640, near_row=pixel_row(-4.5f), far_row=pixel_row(-2.6f);
+                uc::RtPathSettings fixed; fixed.emission=1.f; fixed.key=0.f; fixed.ambient=0.1f;   // an emission that does not saturate, no overhead light: the wall is the light
+                renderer.set_rt_path_settings(fixed);
+                const auto off=settle(false,false), on=settle(true,true);
+                const auto stats=renderer.rt_stats();
+                std::fprintf(stderr,"rt-path: near floor rgb off %d %d %d on %d %d %d; far floor off %d %d %d on %d %d %d; hit table %u geometries, %u with a record\n",
+                    at(off,x,near_row,0),at(off,x,near_row,1),at(off,x,near_row,2),at(on,x,near_row,0),at(on,x,near_row,1),at(on,x,near_row,2),
+                    at(off,x,far_row,0),at(off,x,far_row,1),at(off,x,far_row,2),at(on,x,far_row,0),at(on,x,far_row,1),at(on,x,far_row,2),stats.hit_geometries,stats.hit_records);
+                CHECK(stats.hit_geometries==2 && stats.hit_records==2);   // the floor and the wall, each with a record
+                CHECK(std::abs(at(on,x,near_row,0)-at(off,x,near_row,0))+std::abs(at(on,x,near_row,1)-at(off,x,near_row,1))>=10);   // the path tracer replaced the lighting
+                // the wall's warm emission lights the floor beside it more than the far floor, and warmly: red well above blue
+                CHECK(at(on,x,near_row,0)>at(on,x,far_row,0)+20 && at(on,x,near_row,0)>2*at(on,x,near_row,2));
+                const uint64_t runs=renderer.pass_runs(uc::GpuPass::rt_path);
+                CHECK(runs>0);
+                frame(false,false); frame(false,false);
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_path)==runs);   // off: nothing runs
+                const auto unmastered=settle(false,true);
+                CHECK(std::abs(at(unmastered,x,near_row,0)-at(off,x,near_row,0))<=1 && renderer.pass_runs(uc::GpuPass::rt_path)==runs);   // the master switch off with the option kept
+            }
+        }
         if (wanted("rt-rr")) {
             // DLSS Ray Reconstruction (plan p7): with DLSS and an RT effect the frame goes through it instead of the own denoiser and Super Resolution. The lighting fixture (a floor in
             // front of a bright red wall) is rendered through RR and through the own denoiser: both add the wall's red to the floor beside it, the picture is not black or broken.

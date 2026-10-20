@@ -6,7 +6,7 @@
 
 namespace uc {
 // GPU passes of the graphics effects that get their own timing (frame log columns, --profile). Later effects append to the list.
-enum class GpuPass : uint32_t { upscale, smaa, occlusion, shadow, motion_blur, rt_as, rt_denoise, rt_shadows, rt_reflections, rt_lighting, count };   // rt_as: a packet's BLAS (and the TLAS in the boundary packet); rt_denoise: the own denoiser (rt_denoiser.h), every signal
+enum class GpuPass : uint32_t { upscale, smaa, occlusion, shadow, motion_blur, rt_as, rt_denoise, rt_shadows, rt_reflections, rt_lighting, rt_path, count };   // rt_as: a packet's BLAS (and the TLAS in the boundary packet); rt_denoise: the own denoiser (rt_denoiser.h), every signal
 constexpr size_t kGpuPassCount=size_t(GpuPass::count);
 // Per-submission timestamps around passes: reset(slot) at the start of a slot's command buffer, begin()/end() around a pass, collect(slot) once
 // that slot's fence has completed. last_ms() keeps the latest measurement of each pass (0 until it ran).

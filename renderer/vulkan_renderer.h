@@ -15,6 +15,7 @@
 #include "rr_inputs_pass.h"
 #include "rr_math.h"
 #include "rt_reflection_pass.h"
+#include "rt_path_pass.h"
 #include "rt_shadow_pass.h"
 #include "streamline.h"
 #include "dlss_frame_generation.h"
@@ -109,7 +110,9 @@ public:
     bool rt_trace_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off || effects_.rt_ambient_occlusion!=EffectLevel::off); }   // the visibility pass (shadows and ambient occlusion)
     bool rt_reflect_active() const { return motion_outputs_ && ray_tracing_ && effects_.rt_reflections!=EffectLevel::off; }
     bool rt_light_active() const { return motion_outputs_ && ray_tracing_ && effects_.rt_lighting!=EffectLevel::off; }
-    bool rt_scene_active() const { return rt_trace_active() || rt_reflect_active() || rt_light_active(); }
+    void set_rt_path_settings(const RtPathSettings& settings) { rt_path_override_=settings; }   // tests
+    bool rt_path_active() const { return motion_outputs_ && ray_tracing_ && effects_.path_tracing; }   // path tracing replaces the RT shadows, AO and lighting (effective_effects)
+    bool rt_scene_active() const { return rt_trace_active() || rt_reflect_active() || rt_light_active() || rt_path_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
     void set_rt_trace_lamps(bool on) { rt_trace_lamps_=on; }   // tests: trace the game's point lights instead of the synthetic key light (the lights are camera-relative in the game, so off in play)
     RtShadowPixels capture_rt_shadow_filtered();   // tests/tools: the denoiser's output for the same frame (what the composite multiplies by)
@@ -245,6 +248,10 @@ private:
     RtReflectionPass rt_lighting_;   // the same pass in its lighting mode
     RtDenoiser rt_lighting_denoiser_;
     bool rt_light_ran_last_=false;
+    std::optional<RtPathSettings> rt_path_override_;   // tests: fixed settings instead of the defaults (and the UC_PT_* debug variables)
+    RtPathPass rt_path_;
+    RtDenoiser rt_path_denoiser_;
+    bool rt_path_ran_last_=false;
     bool rt_trace_lamps_=false;
     std::array<EffectLevel,3> rt_signal_levels_{};   // the levels (shadows, local shadows, ambient occlusion) the denoiser's history was accumulated under
     std::array<float,3> rt_key_direction_=kRtOverheadDirection;   // the synthetic key light's view-space direction, turned with the camera so that it stands still in the world
