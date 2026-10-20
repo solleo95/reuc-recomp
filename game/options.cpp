@@ -72,7 +72,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level || *level == EffectLevel::off) return "invalid value for --rt-quality";   // the switch is the off state
             options.effects.rt_quality = *level;
         }
-        else if (arg == "--dlss5") options.dlss5.enabled = true;
+        else if (arg == "--dlss5") { if (!options.dlss5.enabled()) options.dlss5.hook = Dlss5Hook::upscaled; }   // after the upscaler, before the HUD; a hook chosen by --dlss5-option stays
         else if (arg == "--dlss5-option") {   // key=value, the config's strict parser
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --dlss5-option";
             const auto separator = arguments[i].find('=');

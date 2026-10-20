@@ -237,8 +237,8 @@ private:
     void apply_scene_path(bool anisotropy_changed, bool path_before);
     void destroy_samplers();
     // DLSS 5: the settings, the pass, whether the device carries the NGX extensions (else dlss5_gap_ says why not) and the frame's scene inputs kept for the present stage.
-    bool dlss5_requested() const { return dlss5_device_ && dlss5_settings_.enabled && !dlss5_pass_.failed(); }
-    bool record_dlss5(VkCommandBuffer command, Dlss5Stage stage, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output);
+    bool dlss5_requested() const { return dlss5_device_ && dlss5_settings_.enabled() && !dlss5_pass_.failed(); }
+    bool record_dlss5(VkCommandBuffer command, Dlss5Hook hook, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output);
     Dlss5Settings dlss5_settings_;
     Dlss5Pass dlss5_pass_;
     Dlss5Context dlss5_context_;

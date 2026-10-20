@@ -61,7 +61,7 @@ private:
     VkPipeline prepare_=VK_NULL_HANDLE, resolve_=VK_NULL_HANDLE;
     VkDescriptorPool pool_=VK_NULL_HANDLE;
     VkDescriptorSet prepare_set_=VK_NULL_HANDLE, resolve_from_[2]{};   // picture -> A, A -> picture, B -> picture
-    Image bridge_[2]{};
+    Image bridge_[3]{};   // A and B ping-pong through the network, C holds a copy of its input (residual reconstruction)
     VkExtent2D bridge_extent_{};
     VkImageView bound_picture_=VK_NULL_HANDLE;
     uint64_t bound_generation_=0, frames_=0;

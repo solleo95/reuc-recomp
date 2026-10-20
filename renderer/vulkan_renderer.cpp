@@ -607,8 +607,8 @@ void VulkanRenderer::use_dlss5_backend(std::function<std::unique_ptr<NgxBackend>
     apply_scene_path(false,path_before);
 }
 // One DLSS 5 run on `picture` at the stage the setting names; false when it does not run now (another stage, off, a black frame, or the pass refused).
-bool VulkanRenderer::record_dlss5(VkCommandBuffer command, Dlss5Stage stage, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output) {
-    if(!dlss5_requested() || dlss5_settings_.stage!=stage || !dlss5_scene_.ready || size.width<8 || size.height<8) return false;
+bool VulkanRenderer::record_dlss5(VkCommandBuffer command, Dlss5Hook hook, const UpscaleImage& picture, VkOffset2D origin, VkExtent2D size, std::array<float,2> jitter, bool black_output) {
+    if(!dlss5_requested() || dlss5_settings_.hook!=hook || !dlss5_scene_.ready || size.width<8 || size.height<8) return false;
     if(dlss5_settings_.block_hudless && black_output) return false;
     const auto timer_slot=uint32_t(next_slot_);
     pass_timer_.begin(command,timer_slot,GpuPass::dlss5);
@@ -1244,7 +1244,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     }
     rr_frame_=rr_frame;
     dlss5_scene_.reset=in.reset;
-    record_dlss5(command,Dlss5Stage::render,in.color,{0,0},in.render_size,jitter_,black_output);   // DLSS 5 before the upscaler: on the jittered scene colour
+    record_dlss5(command,Dlss5Hook::render,in.color,{0,0},in.render_size,jitter_,black_output);   // DLSS 5 before the upscaler: on the jittered scene colour
     const auto timed_pass=upscaler_kind_==UpscalerKind::smaa ? GpuPass::smaa : GpuPass::upscale;
     pass_timer_.begin(command,timer_slot,timed_pass);
     upscaler_->evaluate(in);
@@ -1260,7 +1260,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         motion_blur_.record(blur);
         pass_timer_.end(command,timer_slot,GpuPass::motion_blur);
     }
-    record_dlss5(command,Dlss5Stage::upscaled,in.output,{0,0},in.output_size,{0,0},black_output);   // DLSS 5 after the upscaler, before the HUD
+    record_dlss5(command,Dlss5Hook::upscaled,in.output,{0,0},in.output_size,{0,0},black_output);   // DLSS 5 after the upscaler, before the HUD
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -2218,13 +2218,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
         if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
         if(menu)menu_overlay_.initialize(window_,instance_,physical_,device,queue_,family_,uint32_t(slots_.size()),menu_setup_);
-        if(!packet.black_output && dlss5_scene_.ready && dlss5_requested() && dlss5_settings_.stage==Dlss5Stage::present) {   // DLSS 5 on the finished frame, HUD included
+        if(!packet.black_output && dlss5_scene_.ready && dlss5_requested() && dlss5_settings_.hook==Dlss5Hook::present) {   // DLSS 5 on the finished frame, HUD included
             const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
             const VkOffset2D origin{int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480)};
             const VkExtent2D size{uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)-origin.x)),uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)-origin.y))};
             const VkImageUsageFlags usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT;
             barrier(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
-            record_dlss5(slot.command,Dlss5Stage::present,{efb_,efb_view_,VK_FORMAT_R8G8B8A8_UNORM,efb_extent_,usage},origin,size,{0,0},packet.black_output);
+            record_dlss5(slot.command,Dlss5Hook::present,{efb_,efb_view_,VK_FORMAT_R8G8B8A8_UNORM,efb_extent_,usage},origin,size,{0,0},packet.black_output);
             barrier(slot.command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
         }
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

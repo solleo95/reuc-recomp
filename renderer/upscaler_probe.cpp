@@ -232,7 +232,7 @@ void probe_dlss5(const std::filesystem::path& directory, UpscalerSupport& suppor
                 VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                 if (!pool || vkAllocateCommandBuffers(device, &allocation, &command) != VK_SUCCESS || vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) reason = "no command buffer for the DLSS 5 test";
                 else {
-                    const bool created = runtime->prepare(command, Dlss5FeatureKey{1280, 720, Dlss5Preset::p1}, 1, [device] { vkDeviceWaitIdle(device); });
+                    const bool created = runtime->prepare(command, Dlss5FeatureKey{1280, 720, dlss5_preset_hint(Dlss5Settings{})}, 1, [device] { vkDeviceWaitIdle(device); });
                     vkEndCommandBuffer(command);
                     VkQueue queue_handle = VK_NULL_HANDLE; vkGetDeviceQueue(device, family, 0, &queue_handle);
                     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &command;

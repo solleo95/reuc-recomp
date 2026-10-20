@@ -5,6 +5,7 @@
 #include "feature_report.h"
 #include "render_scale.h"
 #include "rt_ui.h"
+#include "dlss5_panel.h"
 #include "prompt_icons.h"
 #include "localization.h"
 #include "graphite.h"
@@ -202,7 +203,7 @@ int run(int argc,wchar_t** argv) {
                 {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"framegen"},{430,"framegen-dlss"},
                 {434,"framegen"},{438,"framegen-off"},{442,"framegen"},{446,"framegen-fsr"},{450,"framegen"},{454,"framegen-off"},
                 {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"},
-                {496,"dlss5"},{504,"##d5-enabled"},{508,"##d5-preset"},{512,"##d5-preset-h"}};
+                {496,"dlss5"},{504,"##d5-hook-upscaled"},{508,"##d5-preset"},{512,"##d5-preset-h"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
                 unsigned first=114+unsigned(i)*18;
@@ -606,7 +607,7 @@ int run(int argc,wchar_t** argv) {
             ImGui::PopStyleColor();ImGui::PopStyleVar();
             ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
         } else if(page==4) {
-            // DLSS 5 Neural Rendering: a status line, the switch and one control per field of the settings table, two per row; everything but the switch follows the switch.
+            // DLSS 5 Neural Rendering: a status line, then the rows of the settings table (the same panel as the in-game tab); the rows follow the GPU, the Hook Method bar is the switch.
             const auto status=uc::dlss5_status(features_ready,features.dlss5,features.dlss5_reason,{});
             const auto d5=uc::dlss5_ui(options.dlss5,status.state!=uc::Dlss5State::checking,status.state==uc::Dlss5State::available);
             push_font(ui.sans,22);
@@ -616,55 +617,18 @@ int run(int argc,wchar_t** argv) {
                 if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",text.c_str());
             } else if(status.state==uc::Dlss5State::checking)ImGui::TextDisabled("%s",tr("checking"));
             else ImGui::TextUnformatted(tr("dlss5_status_available"));
-            ImGui::PopFont();
             ImGui::Dummy({0,8*unit});
-            const auto choice_text=[&](const uc::Dlss5Choice& choice) -> std::string {return choice.label.empty() ? std::string(tr("dlss5_"+std::string(choice.name))) : std::string(choice.label);};
-            auto& d5s=options.dlss5;
             ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            if(ImGui::BeginTable("dlss5",2,ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchSame,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
-                for(const auto& field:uc::dlss5_fields()) {
-                    ImGui::TableNextColumn();
-                    const std::string key(field.key),id="##d5-"+key;
-                    const bool locked=(field.key=="exposure" && d5s.exposure_mode!=uc::Dlss5ExposureMode::manual) || (field.key=="diffuse_white_nits" && !d5s.diffuse_white_override);
-                    const bool master=field.key=="enabled",disabled=master ? !d5.switch_enabled : (!d5.settings_enabled || locked);
-                    if(field.kind==uc::Dlss5Kind::boolean) {
-                        bool value=field.get(d5s)!=0;
-                        toggle(id.c_str(),tr("dlss5_"+key),value,disabled,status.reason.empty() ? nullptr : status.reason.c_str());
-                        field.set(d5s,value ? 1 : 0);
-                    } else {
-                        ImGui::TextUnformatted(tr("dlss5_"+key));
-                        ImGui::BeginDisabled(disabled);push_font(ui.sans,22);ImGui::PushItemWidth(-1);
-                        if(field.kind==uc::Dlss5Kind::choice) {
-                            const size_t current=size_t(field.get(d5s));
-                            const auto current_text=choice_text(field.choices[current]);
-                            if(combo(id.c_str(),current_text.c_str())) {
-                                for(size_t i=0;i<field.choices.size();++i) {
-                                    if(ImGui::Selectable(choice_text(field.choices[i]).c_str(),i==current))field.set(d5s,double(i));
-                                    track(id+"-"+std::string(field.choices[i].name));
-                                }
-                                ImGui::EndCombo();
-                            }
-                            track(id);
-                        } else if(field.kind==uc::Dlss5Kind::integer) {
-                            int value=int(field.get(d5s));
-                            if(ImGui::SliderInt(id.c_str(),&value,int(field.min),int(field.max)))field.set(d5s,double(value));
-                            track(id);
-                        } else {
-                            float value=float(field.get(d5s));
-                            if(ImGui::SliderFloat(id.c_str(),&value,float(field.min),float(field.max),field.step>=1 ? "%.0f" : "%.2f")) {
-                                const double snapped=std::clamp(std::round(double(value)/field.step)*field.step,field.min,field.max);
-                                field.set(d5s,std::round(snapped*1e6)/1e6);
-                            }
-                            track(id);
-                        }
-                        ImGui::PopItemWidth();ImGui::PopFont();ImGui::EndDisabled();
-                    }
-                    ImGui::Dummy({0,8*unit});
-                }
-                ImGui::EndTable();
-            }
+            ImGui::BeginChild("dlss5-rows",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)},ImGuiChildFlags_None);
+            uc::ui::Dlss5PanelHooks panel;
+            panel.tr=[](std::string_view key) {return tr(key);};
+            panel.track=[&](const std::string& name) {track(name);};
+            panel.open_debug=[&] {const auto folder=directory/L"debug";std::error_code ignored;fs::create_directories(folder,ignored);ShellExecuteW(nullptr,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);};
+            uc::ui::dlss5_panel(options.dlss5,d5,panel);
+            ImGui::EndChild();
             ImGui::PopStyleColor();ImGui::PopStyleVar();
+            ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
         if(!error.empty()) {
@@ -784,7 +748,7 @@ int run(int argc,wchar_t** argv) {
             if(frame==466)ui.capture(smoke/L"graphics-bottom.bmp");
             if(frame==500)ui.capture(smoke/L"dlss5-tab.bmp");
             if(frame==507) {
-                if(!options.dlss5.enabled || !uc::options_from_config(uc::load_config(config_path)).dlss5.enabled)throw std::runtime_error("DLSS 5 switch select/save UI failed");
+                if(options.dlss5.hook!=uc::Dlss5Hook::upscaled || uc::options_from_config(uc::load_config(config_path)).dlss5.hook!=uc::Dlss5Hook::upscaled)throw std::runtime_error("DLSS 5 hook method select/save UI failed");
             }
             if(frame==516) {
                 if(options.dlss5.preset!=uc::Dlss5Preset::h || uc::options_from_config(uc::load_config(config_path)).dlss5.preset!=uc::Dlss5Preset::h)throw std::runtime_error("DLSS 5 preset select/save UI failed");

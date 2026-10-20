@@ -90,33 +90,33 @@ int main() {
     {
         reset(); config.create_result=0xBAD0000B; config.log="DLSSNR: snippet is using newer GPU arch 0x1b0 than 0x190";
         auto runtime=open(directory,reason); CHECK(runtime && reason.empty());
-        const Dlss5FeatureKey key{1280,720,Dlss5Preset::p2};
+        const Dlss5FeatureKey key{1280,720,2};
         CHECK(!runtime->prepare(nullptr,key,1,[]{}));
         CHECK(runtime->reason().find("UnableToInitializeFeature")!=std::string::npos && runtime->reason().find("newer GPU")!=std::string::npos && stats.creates==1);
         CHECK(!runtime->prepare(nullptr,key,1,[]{}) && stats.creates==1);
         CHECK(!runtime->evaluate(nullptr,0,Dlss5Run{}) && stats.evaluates==0);   // no feature: nothing is evaluated
         config.create_result=kNgxSuccess;
-        CHECK(runtime->prepare(nullptr,Dlss5FeatureKey{1280,720,Dlss5Preset::p3},1,[]{}) && stats.creates==2);   // another key tries again
+        CHECK(runtime->prepare(nullptr,Dlss5FeatureKey{1280,720,3},1,[]{}) && stats.creates==2);   // another key tries again
     }
     // Creation: one feature per pass, the create parameters
     {
         reset(); auto runtime=open(directory,reason); CHECK(runtime); int idles=0;
-        const Dlss5FeatureKey key{960,540,Dlss5Preset::h};
+        const Dlss5FeatureKey key{960,540,4};
         CHECK(runtime->prepare(nullptr,key,2,[&]{ ++idles; }) && runtime->passes()==2 && stats.creates==2 && idles==0);
         const auto& created=stats.created[0];
         CHECK(created.u("DLSSNR.Width")==960 && created.u("DLSSNR.Height")==540 && created.u("Width")==960 && created.u("Height")==540);
-        CHECK(created.u("DLSSNR.Hint.Render.Preset")==uint32_t(dlss5_preset_hint(Dlss5Preset::h)) && created.u("CreationNodeMask")==1 && created.u("VisibilityNodeMask")==1);
+        CHECK(created.u("DLSSNR.Hint.Render.Preset")==4 && created.u("CreationNodeMask")==1 && created.u("VisibilityNodeMask")==1);
         CHECK(runtime->prepare(nullptr,key,2,[&]{ ++idles; }) && stats.creates==2);   // unchanged: kept
         // another size: the device is idled, the old features released, new ones made
-        CHECK(runtime->prepare(nullptr,Dlss5FeatureKey{640,360,Dlss5Preset::h},1,[&]{ ++idles; }) && idles==1 && stats.releases==2 && stats.creates==3 && runtime->passes()==1);
+        CHECK(runtime->prepare(nullptr,Dlss5FeatureKey{640,360,4},1,[&]{ ++idles; }) && idles==1 && stats.releases==2 && stats.creates==3 && runtime->passes()==1);
         // Evaluate: the parameter names the DLL reads
         Dlss5Run run;
         run.color={VK_NULL_HANDLE,VK_NULL_HANDLE,VK_FORMAT_R16G16B16A16_SFLOAT,{640,360},false}; run.output={VK_NULL_HANDLE,VK_NULL_HANDLE,VK_FORMAT_R16G16B16A16_SFLOAT,{640,360},true};
         run.depth={VK_NULL_HANDLE,VK_NULL_HANDLE,VK_FORMAT_D32_SFLOAT,{1280,720},false}; run.motion={VK_NULL_HANDLE,VK_NULL_HANDLE,VK_FORMAT_R16G16_SFLOAT,{1280,720},false};
         run.color_region=run.output_region={640,360}; run.depth_region=run.motion_region={1280,720};
         run.jitter[0]=.25f; run.jitter[1]=-.5f; run.motion_scale[0]=.5f; run.motion_scale[1]=.5f; run.reset=true;
-        run.settings.intensity=.5; run.settings.tone_global=.25; run.settings.tone_local=.75; run.settings.structure_local=.1; run.settings.structure_skin=.9;
-        run.settings.auto_mask=true; run.settings.style=2; run.settings.ui_correction=Dlss5UiCorrection::on;
+        run.settings.intensity=.5; run.settings.tone=.25; run.settings.structure=.1; run.settings.character_intensity=.9;
+        run.settings.character_mask=true; run.settings.model=Dlss5Model::c; run.settings.ui_correction=Dlss5UiCorrection::on; run.settings.hook=Dlss5Hook::present;
         CHECK(runtime->evaluate(nullptr,0,run) && stats.evaluates==1 && stats.evaluated_handles[0]==stats.created_handles[2]);
         const auto& p=stats.evaluated[0];
         CHECK(p.s("DLSSNR.Color")=="640x360 ro" && p.s("DLSSNR.Output")=="640x360 rw" && p.s("DLSSNR.Depth")=="1280x720 ro" && p.s("DLSSNR.MVec")=="1280x720 ro");
@@ -125,9 +125,9 @@ int main() {
         CHECK(p.u("DLSSNR.DepthSubrectWidth")==1280 && p.u("DLSSNR.DepthSubrectHeight")==720 && p.u("DLSSNR.MVecSubrectWidth")==1280 && p.u("DLSSNR.MVecSubrectHeight")==720);
         CHECK(p.f("DLSSNR.JitterOffsetX")==.25f && p.f("DLSSNR.JitterOffsetY")==-.5f && p.f("DLSSNR.MVecScaleX")==.5f && p.f("DLSSNR.MVecScaleY")==.5f);
         CHECK(p.i("DLSSNR.Reset")==1 && p.i("DLSSNR.DepthInverted")==0 && p.i("DLSSNR.Enabled")==1);
-        CHECK(p.f("DLSSNR.Intensity")==.5f && p.f("DLSSNR.GlobalToneStrength")==.25f && p.f("DLSSNR.LocalToneStrength")==.75f && p.f("DLSSNR.LocalStructureStrength")==.1f && p.f("DLSSNR.SkinStructureStrength")==.9f);
+        CHECK(p.f("DLSSNR.Intensity")==.5f && p.f("DLSSNR.GlobalToneStrength")==.25f && p.f("DLSSNR.LocalToneStrength")==.25f && p.f("DLSSNR.LocalStructureStrength")==.1f && p.f("DLSSNR.SkinStructureStrength")==.9f);
         CHECK(p.i("DLSSNR.UseAutoMask")==1 && p.i("DLSSNR.MaskBlendMode")==0 && p.u("DLSSNR.Style")==2 && p.i("DLSSNR.UICorrection")==1 && p.f("DLSSNR.ScalingRatio")==1.f);
-        run.settings.ui_correction=Dlss5UiCorrection::automatic; run.settings.auto_mask=false; run.reset=false;
+        run.settings.ui_correction=Dlss5UiCorrection::automatic; run.settings.character_mask=false; run.reset=false;
         CHECK(runtime->evaluate(nullptr,0,run));
         const auto& q=stats.evaluated[1];
         CHECK(q.i("DLSSNR.UICorrection")==0 && q.i("DLSSNR.UseAutoMask")==0 && q.i("DLSSNR.Reset")==0);

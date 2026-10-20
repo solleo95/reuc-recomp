@@ -75,6 +75,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <timeapi.h>
 
 extern const uc::FnEntry uc_functions[];
@@ -651,6 +652,10 @@ static int real_main(int argc, char** argv) {
             if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
             return features ? &*features : nullptr;
         },monitor_width,monitor_height);
+        settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
+            const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
+            ShellExecuteW(nullptr,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        });
         settings_menu->set_dlss5_status([&renderer]() { return uc::SettingsMenu::Dlss5Report{renderer.dlss5_active(),renderer.dlss5_status()}; });   // why the pass is off in this run (the report only says what the GPU could do)
     }
     // Menu / pause state → renderer, mouse, game input, audio. Called after every host key and after a renderer restart.

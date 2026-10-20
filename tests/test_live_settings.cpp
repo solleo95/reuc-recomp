@@ -53,8 +53,8 @@ int main() {
         CHECK((calls==std::vector<std::string>{"effects"}) && saved().effects.path_tracing);
     }
     {   // DLSS 5 settings reach their own target once and are saved
-        calls.clear(); auto next=live.options(); next.dlss5.enabled=true; next.dlss5.passes=2; live.apply(next);
-        CHECK((calls==std::vector<std::string>{"dlss5"}) && saved().dlss5.enabled && saved().dlss5.passes==2 && !live.error());
+        calls.clear(); auto next=live.options(); next.dlss5.hook=uc::Dlss5Hook::render; next.dlss5.passes=2; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"dlss5"}) && saved().dlss5.hook==uc::Dlss5Hook::render && saved().dlss5.passes==2 && !live.error());
         calls.clear(); live.apply(live.options()); CHECK(calls.empty());
     }
     {   // frame rate limit, unlimited included

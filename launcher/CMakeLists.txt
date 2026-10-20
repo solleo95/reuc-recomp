@@ -34,8 +34,8 @@ add_library(uc_imgui_vulkan STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_vulka
 find_package(Vulkan 1.3 REQUIRED)
 target_link_libraries(uc_imgui_vulkan PUBLIC uc_imgui Vulkan::Vulkan)
 # The launcher's look and fonts, shared with the in-game settings menu (uc.exe).
-add_library(uc_ui_style STATIC graphite_style.cpp ui_fonts.cpp)
-target_include_directories(uc_ui_style PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_ui_style STATIC graphite_style.cpp ui_fonts.cpp dlss5_panel.cpp)
+target_include_directories(uc_ui_style PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)   # dlss5_panel draws the table of renderer/dlss5_settings.h
 target_link_libraries(uc_ui_style PUBLIC uc_imgui)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
   target_compile_options(uc_ui_style PRIVATE /FIintrin.h)

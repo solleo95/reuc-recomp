@@ -55,7 +55,7 @@ std::string dlss5_failure_reason(const char* step, uint32_t result, std::string_
 std::string ngx_informative_line(const std::vector<std::string>& recent);                    // the line that explains a failure best
 // The parameters of one feature creation and one run, with the names nvngx_dlssnr.dll reads.
 struct Dlss5FeatureKey {
-    uint32_t width=0, height=0; Dlss5Preset preset=Dlss5Preset::p1;
+    uint32_t width=0, height=0; int preset_hint=1;   // DLSSNR.Hint.Render.Preset (dlss5_preset_hint)
     bool operator==(const Dlss5FeatureKey&) const=default;
 };
 struct Dlss5Run {

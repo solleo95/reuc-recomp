@@ -25,6 +25,7 @@ public:
     // This run's DLSS 5 state, asked while the tab is drawn: running now, and why the renderer keeps it off (empty: nothing wrong). The feature report only says what the GPU could do.
     struct Dlss5Report { bool active=false; std::string reason; };
     void set_dlss5_status(std::function<Dlss5Report()> status) { dlss5_report_=std::move(status); }
+    void set_open_debug(std::function<void()> open) { open_debug_=std::move(open); }   // the DLSS 5 tab's Open Debug button
 private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
@@ -41,5 +42,6 @@ private:
     ui::Fonts fonts_;
     std::set<UpscalerKind> failed_, failed_generation_;
     std::function<Dlss5Report()> dlss5_report_;
+    std::function<void()> open_debug_;
 };
 }

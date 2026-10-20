@@ -10,8 +10,8 @@ namespace uc {
 namespace {
 void check(VkResult result, const char* what) { if (result != VK_SUCCESS) throw std::runtime_error(std::string("DLSS 5: ") + what + " failed: VkResult " + std::to_string(result)); }
 // shaders/dlss5_bridge.slang Constants (push constants)
-struct Constants { int32_t source_size[2], target_size[2], source_origin[2], target_origin[2]; float gain; int32_t encoding, filter, domain; };
-static_assert(sizeof(Constants)==48);
+struct Constants { int32_t source_size[2], target_size[2], source_origin[2], target_origin[2]; float gain, white; int32_t encoding, nr_encoding, domain, filter, residual, unused; };
+static_assert(sizeof(Constants)==64);
 constexpr VkFormat kBridgeFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 void image_barrier(VkCommandBuffer command, VkImage image, VkImageLayout before, VkImageLayout after) {
     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -51,8 +51,9 @@ void Dlss5Pass::ensure_pipelines() {
     if (prepare_) return;
     const auto device=context_.device;
     prepare_module_=load_shader(device,context_.shaders/"dlss5.prepare.spv"); resolve_module_=load_shader(device,context_.shaders/"dlss5.resolve.spv");
-    const VkDescriptorSetLayoutBinding bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr}};
-    VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=2; set.pBindings=bindings;
+    const VkDescriptorSetLayoutBinding bindings[]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},
+        {2,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr}};   // 2: the network's input (resolve, residual mode)
+    VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; set.bindingCount=3; set.pBindings=bindings;
     check(vkCreateDescriptorSetLayout(device,&set,nullptr,&set_layout_),"descriptor layout");
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(Constants)};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; layout.setLayoutCount=1; layout.pSetLayouts=&set_layout_; layout.pushConstantRangeCount=1; layout.pPushConstantRanges=&push;
@@ -62,7 +63,7 @@ void Dlss5Pass::ensure_pipelines() {
         pipeline.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,module,"main",nullptr}; pipeline.layout=layout_;
         check(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pipeline,nullptr,target),"pipeline");
     }
-    const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,3},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,3}};
+    const VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,6},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,3}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets=3; pool.poolSizeCount=2; pool.pPoolSizes=sizes;
     check(vkCreateDescriptorPool(device,&pool,nullptr,&pool_),"descriptor pool");
     const VkDescriptorSetLayout layouts[3]={set_layout_,set_layout_,set_layout_};
@@ -99,22 +100,24 @@ void Dlss5Pass::ensure_images(VkExtent2D extent) {
     if (bridge_[0].image && bridge_extent_.width==extent.width && bridge_extent_.height==extent.height) return;
     if (bridge_[0].image && context_.idle) context_.idle();   // a frame in flight may still use the old ones
     for (auto& image:bridge_) destroy(image);
-    for (auto& image:bridge_) image=make_image(extent);
+    for (auto& image:bridge_) image=make_image(extent);   // A, B (the network's ping-pong) and C (a copy of its input for the residual)
     bridge_extent_=extent; bound_picture_=VK_NULL_HANDLE; bridge_ready_=false;   // the sets point at the old views
 }
 // The three descriptor sets: picture -> A, A -> picture, B -> picture. They are rewritten only when the picture or the bridge images changed (frames may still use them: idle first).
 void Dlss5Pass::bind(VkImageView picture, uint64_t generation) {
     if (bound_picture_==picture && bound_generation_==generation) return;
     if (bound_picture_ && context_.idle) context_.idle();
-    const VkDescriptorImageInfo picture_in{VK_NULL_HANDLE,picture,VK_IMAGE_LAYOUT_GENERAL}, a{VK_NULL_HANDLE,bridge_[0].view,VK_IMAGE_LAYOUT_GENERAL}, b{VK_NULL_HANDLE,bridge_[1].view,VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo picture_in{VK_NULL_HANDLE,picture,VK_IMAGE_LAYOUT_GENERAL}, a{VK_NULL_HANDLE,bridge_[0].view,VK_IMAGE_LAYOUT_GENERAL},
+        b{VK_NULL_HANDLE,bridge_[1].view,VK_IMAGE_LAYOUT_GENERAL}, c{VK_NULL_HANDLE,bridge_[2].view,VK_IMAGE_LAYOUT_GENERAL};
     struct Use { VkDescriptorSet set; const VkDescriptorImageInfo *read, *write; };
     const Use uses[]={{prepare_set_,&picture_in,&a},{resolve_from_[0],&a,&picture_in},{resolve_from_[1],&b,&picture_in}};
-    VkWriteDescriptorSet writes[6]{};
+    VkWriteDescriptorSet writes[9]{};
     for (size_t i=0;i<3;++i) {
-        writes[i*2]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,uses[i].set,0,0,1,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,uses[i].read};
-        writes[i*2+1]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,uses[i].set,1,0,1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,uses[i].write};
+        writes[i*3]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,uses[i].set,0,0,1,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,uses[i].read};
+        writes[i*3+1]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,uses[i].set,1,0,1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,uses[i].write};
+        writes[i*3+2]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,uses[i].set,2,0,1,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,&c};
     }
-    vkUpdateDescriptorSets(context_.device,6,writes,0,nullptr);
+    vkUpdateDescriptorSets(context_.device,9,writes,0,nullptr);
     bound_picture_=picture; bound_generation_=generation;
 }
 bool Dlss5Pass::record(const Dlss5Frame& frame) {
@@ -124,7 +127,7 @@ bool Dlss5Pass::record(const Dlss5Frame& frame) {
         if (!runtime_) {
             NgxInit init; init.instance=context_.instance; init.physical=context_.physical; init.device=context_.device;
             init.instance_proc=context_.instance_proc; init.device_proc=context_.device_proc;
-            init.runtime_directory=context_.directory; init.log_file=context_.directory/"debug"/"ngx_dlss5.log"; init.verbose=frame.settings.debug;
+            init.runtime_directory=context_.directory; init.log_file=context_.directory/"debug"/"ngx_dlss5.log";
             std::string reason;
             runtime_=Dlss5Runtime::open(context_.backend ? context_.backend() : make_ngx_backend(),init,reason);
             if (!runtime_) { open_failed_=true; fail(reason); return false; }
@@ -132,25 +135,33 @@ bool Dlss5Pass::record(const Dlss5Frame& frame) {
         }
         if (failed_) return false;
         const auto& s=frame.settings;
-        const auto processing=dlss5_processing_extent(frame.size.width,frame.size.height,s.processing_scale);
-        if (!runtime_->prepare(frame.command,Dlss5FeatureKey{processing.width,processing.height,s.preset},s.passes,context_.idle)) { fail(runtime_->reason()); return false; }
+        const auto processing=dlss5_processing_extent(frame.size.width,frame.size.height,s.resolution_scale);
+        if (!runtime_->prepare(frame.command,Dlss5FeatureKey{processing.width,processing.height,dlss5_preset_hint(s)},s.passes,context_.idle)) { fail(runtime_->reason()); return false; }
         ensure_pipelines();
         ensure_images({processing.width,processing.height});
         bind(frame.picture.view,frame.targets_generation);
         if (!bridge_ready_) { for (auto& image:bridge_) image_barrier(frame.command,image.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL); bridge_ready_=true; }   // new images start undefined, then stay in GENERAL
         Constants constants{};
-        constants.gain=float(dlss5_gain(s)); constants.encoding=s.signal_encoding==Dlss5Encoding::automatic ? 0 : int(s.signal_encoding)-1;
-        constants.domain=int(s.scaling_domain);
+        constants.gain=float(dlss5_pre_gain(s)); constants.white=float(s.diffuse_white_nits);
+        constants.encoding=int(s.encoding); constants.nr_encoding=int(s.nr_encoding); constants.domain=int(s.scaling_domain);
+        static constexpr int kDownFilter[]={3,1,0}, kUpFilter[]={1,2,0};   // area, bilinear, nearest / bilinear, bicubic, nearest -> the shader's filter numbers
+        const bool scaled=processing.width!=frame.size.width || processing.height!=frame.size.height;
+        const bool residual=scaled && s.scale_reconstruction==Dlss5Reconstruction::rgb_residual;   // at the full size the residual is the output itself
         // prepare: picture region -> A
         constants.source_size[0]=int32_t(frame.size.width); constants.source_size[1]=int32_t(frame.size.height);
         constants.target_size[0]=int32_t(processing.width); constants.target_size[1]=int32_t(processing.height);
         constants.source_origin[0]=frame.origin.x; constants.source_origin[1]=frame.origin.y;
-        constants.filter=int(s.downsample_filter);
+        constants.filter=kDownFilter[int(s.downsample_filter)];
         vkCmdBindPipeline(frame.command,VK_PIPELINE_BIND_POINT_COMPUTE,prepare_);
         vkCmdBindDescriptorSets(frame.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&prepare_set_,0,nullptr);
         vkCmdPushConstants(frame.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof constants,&constants);
         vkCmdDispatch(frame.command,(processing.width+7)/8,(processing.height+7)/8,1);
         memory_barrier(frame.command);
+        if (residual) {   // the network's input stays in C: the network's change is its output minus this
+            VkImageCopy copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.extent={processing.width,processing.height,1};
+            vkCmdCopyImage(frame.command,bridge_[0].image,VK_IMAGE_LAYOUT_GENERAL,bridge_[2].image,VK_IMAGE_LAYOUT_GENERAL,1,&copy);
+            memory_barrier(frame.command);
+        }
         // the network: A -> B -> A ... one feature (and history) per pass
         Dlss5Run run;
         run.depth=ngx_image(frame.depth,frame.depth.extent,false,VK_IMAGE_ASPECT_DEPTH_BIT); run.motion=ngx_image(frame.motion,frame.motion.extent,false);
@@ -171,7 +182,7 @@ bool Dlss5Pass::record(const Dlss5Frame& frame) {
         constants.source_size[0]=int32_t(processing.width); constants.source_size[1]=int32_t(processing.height);
         constants.target_size[0]=int32_t(frame.size.width); constants.target_size[1]=int32_t(frame.size.height);
         constants.source_origin[0]=constants.source_origin[1]=0; constants.target_origin[0]=frame.origin.x; constants.target_origin[1]=frame.origin.y;
-        constants.filter=int(s.upsample_filter);
+        constants.filter=kUpFilter[int(s.upsample_filter)]; constants.residual=residual ? 1 : 0;
         const size_t last=passes&1;   // after an odd number of passes the result is in B
         vkCmdBindPipeline(frame.command,VK_PIPELINE_BIND_POINT_COMPUTE,resolve_);
         vkCmdBindDescriptorSets(frame.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&resolve_from_[last],0,nullptr);
@@ -179,7 +190,6 @@ bool Dlss5Pass::record(const Dlss5Frame& frame) {
         vkCmdDispatch(frame.command,(frame.size.width+7)/8,(frame.size.height+7)/8,1);
         memory_barrier(frame.command);
         status_.clear(); ran_=true;
-        if (s.debug && frames_%240==0) std::fprintf(stderr,"DLSS 5: %ux%u -> %ux%u, %u pass(es), stage %u, filters %u/%u\n",frame.size.width,frame.size.height,processing.width,processing.height,passes,unsigned(s.stage),unsigned(s.downsample_filter),unsigned(s.upsample_filter));
         ++frames_;
         return true;
     } catch (const std::exception& error) {

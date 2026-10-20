@@ -123,19 +123,33 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
             for(auto* candidate:context.Windows) if(candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow) && std::string_view(candidate->Name).find("dlss5")!=std::string_view::npos) dlss5=candidate;
             CHECK(dlss5);
             capture("dlss5");
-            CHECK(!live.options().dlss5.enabled);
-            io.AddMousePosEvent(dlss5->Pos.x+small_height*.5f,dlss5->Pos.y+text+2*style.ItemSpacing.y+std::floor(6*unit)+small_height*.5f); frame();
-            CHECK(context.HoveredId==dlss5->GetID("##d5-enabled"));
-            click(io.MousePos);
-            menu.commit(); CHECK(live.options().dlss5.enabled && !live.error());
+            CHECK(!live.options().dlss5.enabled());
+            // the Hook Method bar is the second row (under the Preset selector): its last button is Present, its first Off
+            const float control=std::floor(dlss5->WorkRect.GetWidth()*.56f);
+            const auto button=[&](int index,const char* label) {   // the id of a bar button: row "hook", button index, label
+                dlss5->IDStack.push_back(dlss5->GetID("hook")); dlss5->IDStack.push_back(dlss5->GetID(index));
+                const ImGuiID id=dlss5->GetID(label); dlss5->IDStack.pop_back(); dlss5->IDStack.pop_back(); return id;
+            };
+            const auto find_row=[&](float x,ImGuiID id) {   // the y at which the mouse hovers that button
+                for(float y=dlss5->Pos.y+4;y<dlss5->Pos.y+dlss5->Size.y;y+=3) { io.AddMousePosEvent(x,y); frame(); if(context.HoveredId==id) return y; }
+                return -1.f;
+            };
+            const float bar_y=find_row(dlss5->Pos.x+control-12,button(3,"Present")); CHECK(bar_y>0);
+            click({dlss5->Pos.x+control-12,bar_y});
+            menu.commit(); CHECK(live.options().dlss5.hook==uc::Dlss5Hook::present && !live.error());
             capture("dlss5-on");
-            // this run's refusal (the renderer's reason) greys the settings but leaves the switch usable to turn it off again
+            // this run's refusal (the renderer's reason) greys the rows but leaves the Hook Method bar usable to turn it off again
             menu.set_dlss5_status([] { return uc::SettingsMenu::Dlss5Report{false,"nvngx_dlssnr.dll missing next to the game"}; });
             for(int i=0;i<3;++i) frame();
             capture("dlss5-unavailable");
-            click(io.MousePos);
-            menu.commit(); CHECK(!live.options().dlss5.enabled && !live.error());
+            click({dlss5->Pos.x+12,bar_y});
+            menu.commit(); CHECK(live.options().dlss5.hook==uc::Dlss5Hook::off && !live.error());
             menu.set_dlss5_status({});
+            // an Intensity slider reset: a changed value is restored by its reset button (the arrow beside the label), and the button is greyed at the default
+            { menu.commit(); uc::Options changed=live.options(); changed.dlss5.intensity=1.5; live.apply(changed); for(int i=0;i<3;++i) frame(); CHECK(live.options().dlss5.intensity==1.5);
+              dlss5->IDStack.push_back(dlss5->GetID("intensity")); const ImGuiID reset=dlss5->GetID("##reset-intensity"); dlss5->IDStack.pop_back();
+              const float reset_x=dlss5->Pos.x+control+2*style.ItemInnerSpacing.x+height*.5f, reset_y=find_row(reset_x,reset); CHECK(reset_y>0);
+              click({reset_x,reset_y}); menu.commit(); CHECK(live.options().dlss5.intensity==1 && !live.error()); }
         }
         click({tabs->BarRect.Min.x+tabs->Tabs[3].Offset+tabs->Tabs[3].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
         CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);

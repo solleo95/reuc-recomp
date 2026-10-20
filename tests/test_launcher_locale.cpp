@@ -31,12 +31,14 @@ int main() {
     // Every DLSS 5 control has its label (and every named choice its text) in all 13 languages: the tab composes the keys from the settings table
     for(const auto& language:languages()) {
         CHECK(!text(language.code,"dlss5").empty() && !text(language.code,"dlss5_hint").empty() && !text(language.code,"dlss5_status_available").empty() && !text(language.code,"dlss5_status_active").empty() && !text(language.code,"dlss5_status_unavailable").empty());
+        for(const auto& key:{"dlss5_section_scaling","dlss5_section_advanced","dlss5_section_debug","dlss5_open_debug","dlss5_reset","dlss5_off","dlss5_on"}) CHECK(!text(language.code,key).empty());
         for(const auto& field:uc::dlss5_fields()) {
             CHECK(!text(language.code,"dlss5_"+std::string(field.key)).empty());
-            for(const auto& choice:field.choices) if(choice.label.empty()) CHECK(!text(language.code,"dlss5_"+std::string(choice.name)).empty());
+            if(field.kind!=uc::Dlss5Kind::boolean) for(const auto& choice:field.choices) if(choice.label.empty()) CHECK(!text(language.code,"dlss5_"+std::string(choice.name)).empty());
         }
+        for(const auto& choice:uc::dlss5_field("hook")->choices) CHECK(!text(language.code,"dlss5_hook_desc_"+std::string(choice.name)).empty());
     }
-    CHECK(text("ru","dlss5_enabled")=="Включить DLSS 5 Neural Rendering" && text("en","dlss5_stage")=="Where it runs");
+    CHECK(text("ru","dlss5_hook")=="Метод подключения" && text("en","dlss5_hook_desc_off")=="Off: Disabled");
     CHECK(text("ru","play")=="ИГРАТЬ");
     CHECK(text("ja","play")=="プレイ");
     // Checked = no glow (the option disables bloom), in the launcher and the in-game menu.

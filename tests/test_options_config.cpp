@@ -99,19 +99,19 @@ int main() {
         CHECK(caught);
     }
     {   // DLSS 5: the "dlss5" object holds every setting of the table; absent keys keep the defaults, a wrong type or range is refused, unknown keys of a newer file survive a save
-        auto document=uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":{"enabled":true,"preset":"b","passes":3,"intensity":0.5,"processing_scale":0.75,"stage":"present","future":9}})");
+        auto document=uc::parse_config(R"({"game":"S:/Games/Test/game","dlss5":{"hook":"present","preset":"h","passes":3,"intensity":0.5,"resolution_scale":0.75,"character_mask":true,"future":9}})");
         auto options=uc::options_from_config(document);
-        CHECK(options.dlss5.enabled && options.dlss5.preset==uc::Dlss5Preset::b && options.dlss5.passes==3 && options.dlss5.intensity==0.5 && options.dlss5.processing_scale==0.75 && options.dlss5.stage==uc::Dlss5Stage::present);
-        CHECK(options.dlss5.tone_global==1 && options.dlss5.auto_mask && options.dlss5.signal_encoding==uc::Dlss5Encoding::automatic);
-        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).dlss5.enabled);
-        options.dlss5.exposure_mode=uc::Dlss5ExposureMode::manual; options.dlss5.exposure=2; options.dlss5.signal_encoding=uc::Dlss5Encoding::gamma22; options.dlss5.diffuse_white_override=true; options.dlss5.diffuse_white_nits=100;
+        CHECK(options.dlss5.enabled() && options.dlss5.hook==uc::Dlss5Hook::present && options.dlss5.preset==uc::Dlss5Preset::h && options.dlss5.passes==3 && options.dlss5.intensity==0.5 && options.dlss5.resolution_scale==0.75 && options.dlss5.character_mask);
+        CHECK(options.dlss5.tone==1 && options.dlss5.model==uc::Dlss5Model::a && options.dlss5.encoding==uc::Dlss5Encoding::automatic);
+        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).dlss5.enabled());
+        options.dlss5.exposure_value=uc::Dlss5ExposureValue::inverse; options.dlss5.exposure=2; options.dlss5.encoding=uc::Dlss5Encoding::hdr10; options.dlss5.diffuse_white_nits=1000; options.dlss5.scaling_domain=uc::Dlss5Domain::signed_pq;
         uc::store_options(document,options);
         const auto written=uc::serialize_config(document);
         CHECK(uc::options_from_config(uc::parse_config(written)).dlss5==options.dlss5);
-        CHECK(written.find("\"signal_encoding\": \"gamma22\"")!=std::string::npos && written.find("\"passes\": 3")!=std::string::npos && written.find("\"enabled\": true")!=std::string::npos);
+        CHECK(written.find("\"encoding\": \"hdr10\"")!=std::string::npos && written.find("\"passes\": 3")!=std::string::npos && written.find("\"hook\": \"present\"")!=std::string::npos && written.find("\"character_mask\": true")!=std::string::npos);
         CHECK(document.properties["dlss5"]["future"]==9);
-        for(const char* body:{R"("enabled":1)",R"("enabled":"true")",R"("preset":1)",R"("preset":"c")",R"("passes":0)",R"("passes":5)",R"("passes":2.5)",R"("passes":"2")",R"("intensity":1.5)",R"("intensity":"1")",
-            R"("processing_scale":0.4)",R"("stage":"hud")",R"("signal_encoding":null)",R"("exposure":100)",R"("diffuse_white_nits":10)",R"("block_hudless":null)"}) {
+        for(const char* body:{R"("hook":1)",R"("hook":"hud")",R"("character_mask":1)",R"("character_mask":"true")",R"("preset":1)",R"("preset":"a")",R"("passes":0)",R"("passes":5)",R"("passes":2.5)",R"("passes":"2")",R"("intensity":2.5)",R"("intensity":"1")",
+            R"("resolution_scale":0.4)",R"("encoding":null)",R"("exposure":100)",R"("diffuse_white_nits":10)",R"("block_hudless":null)"}) {
             bool bad=false;try {uc::options_from_config(uc::parse_config(std::string(R"({"game":"S:/Games/Test/game","dlss5":{)")+body+"}}"));}catch(const std::invalid_argument&){bad=true;}
             CHECK(bad);
         }

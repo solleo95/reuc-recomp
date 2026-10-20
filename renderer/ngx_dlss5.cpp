@@ -63,7 +63,7 @@ void dlss5_create_parameters(NgxParameters& p, const Dlss5FeatureKey& key) {
     p.set_uint("CreationNodeMask",1); p.set_uint("VisibilityNodeMask",1);
     p.set_uint("Width",key.width); p.set_uint("Height",key.height);
     p.set_uint("DLSSNR.Width",key.width); p.set_uint("DLSSNR.Height",key.height);
-    p.set_uint("DLSSNR.Hint.Render.Preset",uint32_t(dlss5_preset_hint(key.preset)));
+    p.set_uint("DLSSNR.Hint.Render.Preset",uint32_t(key.preset_hint));
 }
 void dlss5_run_parameters(NgxParameters& p, const Dlss5Run& run) {
     p.set_uint("CreationNodeMask",1); p.set_uint("VisibilityNodeMask",1);
@@ -79,11 +79,11 @@ void dlss5_run_parameters(NgxParameters& p, const Dlss5Run& run) {
     p.set_float("DLSSNR.MVecScaleX",run.motion_scale[0]); p.set_float("DLSSNR.MVecScaleY",run.motion_scale[1]);
     p.set_int("DLSSNR.DepthInverted",0); p.set_int("DLSSNR.Reset",run.reset ? 1 : 0); p.set_int("DLSSNR.Enabled",1);
     const auto& s=run.settings;
-    p.set_float("DLSSNR.Intensity",float(s.intensity)); p.set_float("DLSSNR.GlobalToneStrength",float(s.tone_global)); p.set_float("DLSSNR.LocalToneStrength",float(s.tone_local));
-    p.set_float("DLSSNR.LocalStructureStrength",float(s.structure_local)); p.set_float("DLSSNR.SkinStructureStrength",float(s.structure_skin));
-    p.set_int("DLSSNR.UseAutoMask",s.auto_mask ? 1 : 0); p.set_int("DLSSNR.MaskBlendMode",0);
-    p.set_uint("DLSSNR.Style",s.style);
-    p.set_int("DLSSNR.UICorrection",s.ui_correction==Dlss5UiCorrection::on ? 1 : 0);   // auto and off leave it disabled
+    p.set_float("DLSSNR.Intensity",float(s.intensity)); p.set_float("DLSSNR.GlobalToneStrength",float(s.tone)); p.set_float("DLSSNR.LocalToneStrength",float(s.tone));   // one Tone Intensity drives both
+    p.set_float("DLSSNR.LocalStructureStrength",float(s.structure)); p.set_float("DLSSNR.SkinStructureStrength",float(s.character_intensity));
+    p.set_int("DLSSNR.UseAutoMask",s.character_mask ? 1 : 0); p.set_int("DLSSNR.MaskBlendMode",0);
+    p.set_uint("DLSSNR.Style",uint32_t(s.model));
+    p.set_int("DLSSNR.UICorrection",s.ui_correction==Dlss5UiCorrection::on && s.hook==Dlss5Hook::present ? 1 : 0);   // auto and off leave it disabled; only a frame that contains the HUD has a UI to correct
     p.set_float("DLSSNR.ScalingRatio",1.f);   // the bridge already brought the picture to the network's size
 }
 std::unique_ptr<Dlss5Runtime> Dlss5Runtime::open(std::unique_ptr<NgxBackend> backend, const NgxInit& init, std::string& reason) {

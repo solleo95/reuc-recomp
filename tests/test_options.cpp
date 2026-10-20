@@ -154,12 +154,14 @@ int main() {
         CHECK(uc::clamp_anisotropy(16,true,8.f)==8 && uc::clamp_anisotropy(16,false,16.f)==1 && uc::clamp_anisotropy(4,true,16.f)==4 && uc::clamp_anisotropy(16,true,0.5f)==1);
     }
     {   // DLSS 5: --dlss5 switches it on, --dlss5-option key=value sets one setting with the config's strict parser
-        CHECK(!std::get<uc::Options>(defaults).dlss5.enabled);
+        CHECK(!std::get<uc::Options>(defaults).dlss5.enabled());
         const auto on=std::get<uc::Options>(parse(std::array<std::string_view,5>{"--dlss5","--dlss5-option","preset=h","--dlss5-option","passes=2"}));
-        CHECK(on.dlss5.enabled && on.dlss5.preset==uc::Dlss5Preset::h && on.dlss5.passes==2);
-        const auto staged=std::get<uc::Options>(parse(std::array<std::string_view,2>{"--dlss5-option","stage=present"}));
-        CHECK(!staged.dlss5.enabled && staged.dlss5.stage==uc::Dlss5Stage::present);   // an option alone does not switch it on
-        for(const char* bad:{"passes=9","passes","=1","bogus=1","preset=H","enabled=1","processing_scale=0.2"}) {
+        CHECK(on.dlss5.enabled() && on.dlss5.hook==uc::Dlss5Hook::upscaled && on.dlss5.preset==uc::Dlss5Preset::h && on.dlss5.passes==2);   // --dlss5 picks the hook after the upscaler
+        const auto hooked=std::get<uc::Options>(parse(std::array<std::string_view,2>{"--dlss5-option","hook=present"}));
+        CHECK(hooked.dlss5.enabled() && hooked.dlss5.hook==uc::Dlss5Hook::present);
+        const auto kept=std::get<uc::Options>(parse(std::array<std::string_view,3>{"--dlss5-option","hook=render","--dlss5"}));
+        CHECK(kept.dlss5.hook==uc::Dlss5Hook::render);   // --dlss5 does not override a hook that was chosen
+        for(const char* bad:{"passes=9","passes","=1","bogus=1","preset=a","enabled=1","stage=present","resolution_scale=0.2"}) {
             const auto result=parse(std::array<std::string_view,2>{"--dlss5-option",bad});
             CHECK(std::holds_alternative<std::string>(result));
         }

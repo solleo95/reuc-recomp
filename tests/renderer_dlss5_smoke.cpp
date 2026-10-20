@@ -144,9 +144,31 @@ int main(int argc, char** argv) {
         };
         const auto picture=[&] { frame(); return renderer.capture(frame()); };
         const auto at=[](const uc::RenderPixels& pixels, uint32_t x, uint32_t y) { return &pixels.rgba[(size_t(y)*pixels.width+x)*4]; };
-        const auto same=[&](const uc::RenderPixels& a, const uc::RenderPixels& b, int tolerance) {   // every pixel within the tolerance
+        // Every pixel away from an edge of `b` within the tolerance. The scene is drawn with the upscaler's jitter, which moves edges by a pixel on some frames (also with
+        // DLSS 5 off), so the 6 pixels around an edge of the reference and of the picture border are not compared.
+        std::vector<uint8_t> near_edge;
+        const auto same=[&](const uc::RenderPixels& a, const uc::RenderPixels& b, int tolerance) {
             if(a.width!=b.width || a.height!=b.height) return false;
-            for(size_t i=0;i<a.rgba.size();++i) if(i%4!=3 && std::abs(int(a.rgba[i])-int(b.rgba[i]))>tolerance) return false;
+            const size_t w=b.width, h=b.height;
+            if(near_edge.size()!=w*h) {
+                std::vector<uint8_t> edge(w*h,0), spread(w*h,0);
+                for(size_t y=0;y<h;++y) for(size_t x=0;x<w;++x) {
+                    bool e=x==0 || y==0 || x+1==w || y+1==h;
+                    for(int dy=-1;dy<=1 && !e;++dy) for(int dx=-1;dx<=1 && !e;++dx) for(int c=0;c<3 && !e;++c)
+                        e=std::abs(int(b.rgba[((y+dy)*w+x+dx)*4+c])-int(b.rgba[(y*w+x)*4+c]))>8;
+                    edge[y*w+x]=e;
+                }
+                constexpr int radius=6;
+                for(size_t y=0;y<h;++y) for(size_t x=0;x<w;++x) if(edge[y*w+x]) for(int dy=-radius;dy<=radius;++dy) for(int dx=-radius;dx<=radius;++dx) {
+                    const long nx=long(x)+dx, ny=long(y)+dy;
+                    if(nx>=0 && ny>=0 && nx<long(w) && ny<long(h)) spread[size_t(ny)*w+size_t(nx)]=1;
+                }
+                near_edge=std::move(spread);
+            }
+            for(size_t i=0;i<a.rgba.size();++i) if(i%4!=3 && !near_edge[i/4] && std::abs(int(a.rgba[i])-int(b.rgba[i]))>tolerance) {
+                std::fprintf(stderr,"pictures differ at (%zu,%zu) channel %zu: %d vs %d\n",i/4%a.width,i/4/a.width,i%4,int(a.rgba[i]),int(b.rgba[i]));
+                return false;
+            }
             return true;
         };
         const auto baseline=picture();
@@ -155,12 +177,12 @@ int main(int argc, char** argv) {
         if(!renderer.dlss5_device()) std::printf("(no NGX extensions on this device: the stand-in drives the pass)\n");
         renderer.use_dlss5_backend([]{ return std::unique_ptr<uc::NgxBackend>(new StandBackend); },empty);
         CHECK(renderer.dlss5_device());
-        uc::Dlss5Settings settings; settings.enabled=true;
-        // Off: nothing changes and the pass never runs
+        uc::Dlss5Settings settings;   // the defaults of the tab, with a hook chosen below
+        // Hook Method Off: nothing changes and the pass never runs
         { uc::Dlss5Settings off; renderer.set_dlss5(off); const auto before=renderer.pass_runs(uc::GpuPass::dlss5); CHECK(same(picture(),baseline,0) && renderer.pass_runs(uc::GpuPass::dlss5)==before && !renderer.dlss5_active()); }
-        for(const auto stage:{uc::Dlss5Stage::render,uc::Dlss5Stage::upscaled,uc::Dlss5Stage::present}) {
-            std::printf("stage %u\n",unsigned(stage));
-            settings.stage=stage;
+        for(const auto stage:{uc::Dlss5Hook::render,uc::Dlss5Hook::upscaled,uc::Dlss5Hook::present}) {
+            std::printf("hook %u\n",unsigned(stage));
+            settings.hook=stage;
             // The "network" returns its input: the picture survives the bridge (decode, gain, filters, encode) within the 8-bit rounding
             stand=Stand{}; stand.mode=Stand::copy;
             renderer.set_dlss5(settings);
@@ -168,22 +190,29 @@ int main(int argc, char** argv) {
             const auto copy=picture();
             CHECK(renderer.dlss5_active() && renderer.dlss5_status().empty() && renderer.pass_runs(uc::GpuPass::dlss5)>before);
             CHECK(same(copy,baseline,2));
-            // Another processing size and two passes: the flat areas still come back (ping-pong parity: an unread bridge image would be black)
-            uc::Dlss5Settings scaled=settings; scaled.processing_scale=.5; scaled.passes=2; scaled.downsample_filter=uc::Dlss5Filter::bicubic; scaled.upsample_filter=uc::Dlss5Filter::bicubic; scaled.scaling_domain=uc::Dlss5Domain::linear;
+            // Half the resolution, two passes, RGB residual (the default reconstruction): the network's input comes back exactly, edges included, because the residual is zero
+            uc::Dlss5Settings scaled=settings; scaled.resolution_scale=.5; scaled.passes=2; scaled.upsample_filter=uc::Dlss5UpFilter::bicubic;
             renderer.set_dlss5(scaled);
             const auto half=picture();
             CHECK(renderer.dlss5_active());
-            for(const auto& [x,y]:{std::pair{200u,100u},std::pair{400u,360u},std::pair{600u,600u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(half,x,y)[c])-int(at(baseline,x,y)[c]))<=3);
-            scaled.passes=3; scaled.processing_scale=.75; scaled.signal_encoding=uc::Dlss5Encoding::gamma22; scaled.exposure_mode=uc::Dlss5ExposureMode::manual; scaled.exposure=2; scaled.diffuse_white_override=true; scaled.diffuse_white_nits=406;
+            CHECK(same(half,baseline,3));   // ping-pong parity too: an unread bridge image would be black
+            // The processed image instead: only the flat areas match (the edges went through the filters)
+            scaled.scale_reconstruction=uc::Dlss5Reconstruction::processed; scaled.downsample_filter=uc::Dlss5DownFilter::bilinear; scaled.scaling_domain=uc::Dlss5Domain::linear;
+            renderer.set_dlss5(scaled);
+            const auto processed=picture();
+            for(const auto& [x,y]:{std::pair{200u,100u},std::pair{400u,360u},std::pair{600u,600u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(processed,x,y)[c])-int(at(baseline,x,y)[c]))<=3);
+            // Three passes, another size, filters and domain, the scRGB / PQ SDR encodings and an exposure value: all of it is undone on the way back
+            scaled.passes=3; scaled.resolution_scale=.75; scaled.encoding=uc::Dlss5Encoding::scrgb; scaled.nr_encoding=uc::Dlss5NrEncoding::pq_sdr; scaled.scaling_domain=uc::Dlss5Domain::signed_pq;
+            scaled.downsample_filter=uc::Dlss5DownFilter::nearest; scaled.upsample_filter=uc::Dlss5UpFilter::nearest; scaled.exposure_value=uc::Dlss5ExposureValue::on; scaled.exposure=2; scaled.diffuse_white_nits=500;
             renderer.set_dlss5(scaled);
             const auto three=picture();
-            for(const auto& [x,y]:{std::pair{200u,100u},std::pair{400u,360u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(three,x,y)[c])-int(at(baseline,x,y)[c]))<=3);   // the gain and the encoding are undone on the way back
-            // The "network" paints linear 0.5: sRGB 188 where it ran. The HUD is inside its picture only at the present stage.
+            for(const auto& [x,y]:{std::pair{200u,100u},std::pair{400u,360u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(three,x,y)[c])-int(at(baseline,x,y)[c]))<=3);
+            // The "network" paints 0.5 in the sRGB signal encoding: stored 128 (sRGB) where it ran. The HUD is inside its picture only at the present hook.
             stand.mode=Stand::fill;
             renderer.set_dlss5(settings);
             const auto fill=picture();
-            for(const auto& [x,y]:{std::pair{100u,100u},std::pair{400u,360u},std::pair{600u,650u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(fill,x,y)[c])-188)<=2);
-            if(stage==uc::Dlss5Stage::present) { for(int c=0;c<3;++c) CHECK(std::abs(int(at(fill,900,360)[c])-188)<=2); }
+            for(const auto& [x,y]:{std::pair{100u,100u},std::pair{400u,360u},std::pair{600u,650u}}) for(int c=0;c<3;++c) CHECK(std::abs(int(at(fill,x,y)[c])-128)<=2);
+            if(stage==uc::Dlss5Hook::present) { for(int c=0;c<3;++c) CHECK(std::abs(int(at(fill,900,360)[c])-128)<=2); }
             else { CHECK(at(fill,900,360)[1]==255 && at(fill,900,360)[0]==0); }   // the HUD is drawn after the network
             // Switched off again: the original picture
             renderer.set_dlss5(uc::Dlss5Settings{});
@@ -192,7 +221,7 @@ int main(int argc, char** argv) {
         // The feature is refused (a GPU older than the DLL): the frame is untouched, the reason is kept, nothing is retried every frame
         stand=Stand{}; stand.mode=Stand::refuse;
         renderer.use_dlss5_backend([]{ return std::unique_ptr<uc::NgxBackend>(new StandBackend); },empty);
-        settings.stage=uc::Dlss5Stage::upscaled;
+        settings.hook=uc::Dlss5Hook::upscaled;
         renderer.set_dlss5(settings);
         const auto refused=picture();
         CHECK(same(refused,baseline,0) && !renderer.dlss5_active());
