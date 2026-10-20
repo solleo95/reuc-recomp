@@ -52,7 +52,7 @@ private:
     uint32_t slots_=0;
     Image signal_;
     VkExtent2D signal_extent_{};
-    VkBuffer sums_=VK_NULL_HANDLE; VkDeviceMemory sums_memory_=VK_NULL_HANDLE; uint32_t sums_capacity_=0;   // 4 words per record
+    VkBuffer sums_=VK_NULL_HANDLE; VkDeviceMemory sums_memory_=VK_NULL_HANDLE; uint32_t sums_capacity_=0;   // 8 words per record: the albedo's sums, the pixel count, the shown colour's sums
     bool signal_initialized_=false;
     std::function<void()> idle_;
 };

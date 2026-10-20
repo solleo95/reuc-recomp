@@ -17,7 +17,7 @@ struct PushParams {
     float reach, emission, ambient, key;
     float overhead[4];
     float mix, threshold;
-    uint32_t record_count, padding;
+    uint32_t record_count; float clamp_radiance;
 };
 static_assert(sizeof(PushParams)==128 && offsetof(PushParams,region)==48 && offsetof(PushParams,divisor)==64 && offsetof(PushParams,reach)==80 && offsetof(PushParams,overhead)==96 && offsetof(PushParams,mix)==112);
 constexpr VkFormat kSignalFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -100,7 +100,7 @@ void RtPathPass::ensure_sums(uint32_t records) {
     if (sums_ && records<=sums_capacity_) return;
     if (sums_) { idle_(); vkDestroyBuffer(device_,sums_,nullptr); vkFreeMemory(device_,sums_memory_,nullptr); sums_=VK_NULL_HANDLE; sums_memory_=VK_NULL_HANDLE; }
     sums_capacity_=std::max<uint32_t>(4096,records*2);
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=VkDeviceSize(sums_capacity_)*16; info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT; info.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=VkDeviceSize(sums_capacity_)*32; info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT; info.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device_,&info,nullptr,&sums_),"sums buffer");
     VkMemoryRequirements requirements; vkGetBufferMemoryRequirements(device_,sums_,&requirements);
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.allocationSize=requirements.size; allocate.memoryTypeIndex=memory_type(memory_,requirements.memoryTypeBits);
@@ -137,7 +137,7 @@ PushParams make_params(const RtPathInputs& in, VkExtent2D signal) {
     params.divisor=s.divisor; params.frame=in.frame; params.paths=s.paths; params.bounces=s.bounces;
     params.reach=s.reach; params.emission=s.emission; params.ambient=s.ambient; params.key=s.key;
     params.overhead[0]=in.overhead[0]; params.overhead[1]=in.overhead[1]; params.overhead[2]=in.overhead[2]; params.overhead[3]=s.key_reach;
-    params.mix=s.mix; params.threshold=s.threshold; params.record_count=in.record_count;
+    params.mix=s.mix; params.threshold=s.threshold; params.record_count=in.record_count; params.clamp_radiance=s.max_radiance;
     return params;
 }
 }
@@ -160,7 +160,7 @@ VkImageView RtPathPass::trace(const RtPathInputs& in) {
     write_set(trace_sets_[in.slot],in,signal_.view);   // the slot's previous frame has completed, so its sets can be rewritten
     const PushParams params=make_params(in,signal_extent_);
     // the mean albedo of the records: cleared, then accumulated on a grid with a step of 4 pixels
-    vkCmdFillBuffer(in.command,sums_,0,VkDeviceSize(in.record_count)*16,0);
+    vkCmdFillBuffer(in.command,sums_,0,VkDeviceSize(in.record_count)*32,0);
     memory_barrier(in.command,VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     vkCmdBindDescriptorSets(in.command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&trace_sets_[in.slot],0,nullptr);
     vkCmdPushConstants(in.command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);

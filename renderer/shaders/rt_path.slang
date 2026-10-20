@@ -1,8 +1,9 @@
 // Path tracing of the scene's lighting (docs/superpowers/plans/2026-10-20-path-tracing-spike.md; renderer/rt_path_math.h is the CPU side of the rules).
-// accumulateMain: the mean albedo of every material record from a sparse grid of the albedo target (what a hit sees of a surface; the game's textures are not reachable
-// from a ray). traceMain: per signal pixel of a lit surface the light gathered by cosine-weighted paths of several bounces through the hit table: an unlit bright surface
-// is an emitter, a bounce multiplies by the hit's mean albedo, a ray that leaves the scene (or the last bounce) adds the dome; plus the synthetic overhead light with a
-// short shadow ray. compositeMain: the denoised light times the pixel's albedo replaces the game's lit colour (blended by `mix`, kept under fog).
+// accumulateMain: the mean albedo and the mean shown colour of every material record from a sparse grid of the albedo target and the scene colour (what a hit sees of a
+// surface; the game's textures are not reachable from a ray). traceMain: per signal pixel of a lit surface the light gathered by cosine-weighted paths of several bounces
+// through the hit table: a surface the game shows bright (a lamp, a lit panel, a window) is an emitter with that colour, a bounce multiplies by the hit's mean albedo, a ray
+// that leaves the scene (or the last bounce) adds the dome; plus the synthetic overhead light with a short shadow ray. compositeMain: the denoised light times the pixel's
+// albedo replaces the game's lit colour (blended by `mix`, kept under fog; the light sources themselves keep their colour).
 #include "gbuffer.slang"
 #include "view_space.slang"
 struct Params {
@@ -22,9 +23,9 @@ struct Params {
     float key;            // the overhead light's strength (0: none)
     float4 overhead;      // xyz: unit direction toward the overhead light (view space); w: the reach of its shadow rays
     float mixAmount;      // 1: the path-traced lighting replaces the game's
-    float threshold;      // an unlit surface shines above this mean albedo luminance
+    float threshold;      // a surface whose mean shown colour is brighter than this shines
     uint recordCount;     // records of the frame
-    uint padding;
+    float clampRadiance;  // the most one path may add per channel
 };
 [[vk::push_constant]] ConstantBuffer<Params> params;
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
@@ -63,9 +64,14 @@ float3 cosineDirection(float3 normal, float2 u) {   // rt_ao_math.h rt_ao_direct
     return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
 }
 float3 meanAlbedo(uint record) {   // rt_path_math.h rt_path_mean_albedo
-    const uint count = albedoSums[record * 4 + 3];
-    return count > 0 ? float3(albedoSums[record * 4], albedoSums[record * 4 + 1], albedoSums[record * 4 + 2]) / (255.0 * float(count)) : float3(0.4, 0.4, 0.4);
+    const uint count = albedoSums[record * 8 + 3];
+    return count > 0 ? float3(albedoSums[record * 8], albedoSums[record * 8 + 1], albedoSums[record * 8 + 2]) / (255.0 * float(count)) : float3(0.4, 0.4, 0.4);
 }
+float3 meanColour(uint record) {   // the record's mean colour as the game drew it (lighting, fog and all)
+    const uint count = albedoSums[record * 8 + 3];
+    return count > 0 ? float3(albedoSums[record * 8 + 4], albedoSums[record * 8 + 5], albedoSums[record * 8 + 6]) / (255.0 * float(count)) : float3(0.0, 0.0, 0.0);
+}
+bool emits(float3 colour) { return luminance(colour) > params.threshold; }   // rt_path_math.h rt_path_emits: a bright surface is a light source
 bool occluded(float3 origin, float3 direction, float reach) {
     RayDesc ray; ray.Origin = origin; ray.Direction = direction; ray.TMin = 1e-3 * length(origin) + 1e-3; ray.TMax = reach;
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
@@ -94,10 +100,14 @@ void accumulateMain(uint3 id : SV_DispatchThreadID) {   // a grid with a step of
     const uint record = sceneMaterial.Load(int3(pixel, 0));
     if (record == 0xFFFFFFFFu || record >= params.recordCount) return;
     const uint3 rgb = uint3(saturate(sceneAlbedo.Load(int3(pixel, 0)).rgb) * 255.0 + 0.5);
-    InterlockedAdd(albedoSums[record * 4], rgb.x);
-    InterlockedAdd(albedoSums[record * 4 + 1], rgb.y);
-    InterlockedAdd(albedoSums[record * 4 + 2], rgb.z);
-    InterlockedAdd(albedoSums[record * 4 + 3], 1u);
+    const uint3 shown = uint3(saturate(sceneColor[uint2(pixel)].rgb) * 255.0 + 0.5);
+    InterlockedAdd(albedoSums[record * 8], rgb.x);
+    InterlockedAdd(albedoSums[record * 8 + 1], rgb.y);
+    InterlockedAdd(albedoSums[record * 8 + 2], rgb.z);
+    InterlockedAdd(albedoSums[record * 8 + 3], 1u);
+    InterlockedAdd(albedoSums[record * 8 + 4], shown.x);
+    InterlockedAdd(albedoSums[record * 8 + 5], shown.y);
+    InterlockedAdd(albedoSums[record * 8 + 6], shown.z);
 }
 
 [shader("compute")] [numthreads(8, 8, 1)]
@@ -116,23 +126,19 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
         float3 sum = float3(0.0, 0.0, 0.0);
         for (uint p = 0; p < params.paths; ++p) {
             float3 origin = start, direction = cosineDirection(normal, float2(nextRandom(seed), nextRandom(seed)));
-            float3 throughput = float3(1.0, 1.0, 1.0);
+            float3 throughput = float3(1.0, 1.0, 1.0), radiance = float3(0.0, 0.0, 0.0);
             for (uint b = 0; b < params.bounces; ++b) {
                 RayDesc ray; ray.Origin = origin; ray.Direction = direction; ray.TMin = 1e-3 * length(origin) + 1e-3; ray.TMax = params.reach;
                 RayQuery<RAY_FLAG_CULL_NON_OPAQUE> query;
                 query.TraceRayInline(scene, 0, 3u, ray);
                 query.Proceed();
-                if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { sum += throughput * params.ambient * kWarm; break; }   // the dome
+                if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { radiance += throughput * params.ambient * kWarm; break; }   // the dome
                 const HitGeometry geometry = hitTable[hitBases[query.CommittedInstanceID()] + query.CommittedGeometryIndex()];
-                float3 albedo = float3(0.4, 0.4, 0.4);
-                bool emitter = false;
-                if (geometry.record != 0xFFFFFFFFu && geometry.record < params.recordCount) {
-                    albedo = meanAlbedo(geometry.record);
-                    emitter = (records[geometry.record].flags & 4u) != 0 && luminance(albedo) > params.threshold;   // rt_material.h kRtEmissive
-                }
-                if (emitter) { sum += throughput * albedo * params.emission; break; }
+                float3 albedo = float3(0.4, 0.4, 0.4), shown = float3(0.0, 0.0, 0.0);
+                if (geometry.record != 0xFFFFFFFFu && geometry.record < params.recordCount) { albedo = meanAlbedo(geometry.record); shown = meanColour(geometry.record); }
+                if (emits(shown)) { radiance += throughput * shown * params.emission; break; }   // the surface shines with the colour the game shows
                 throughput *= albedo;
-                if (b + 1 == params.bounces) { sum += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
+                if (b + 1 == params.bounces) { radiance += throughput * params.ambient * kWarm; break; }   // out of bounces: the dome stands for the rest
                 const float t = query.CommittedRayT();
                 float3 hitNormalView = hitNormal(geometry, query.CommittedPrimitiveIndex(), query.CommittedObjectToWorld3x4());
                 if (dot(hitNormalView, direction) > 0.0) hitNormalView = -hitNormalView;
@@ -140,6 +146,7 @@ void traceMain(uint3 id : SV_DispatchThreadID) {
                 origin = hit + hitNormalView * min(6e-3 * length(hit) + 6e-3, 0.1);
                 direction = cosineDirection(hitNormalView, float2(nextRandom(seed), nextRandom(seed)));
             }
+            sum += min(radiance, params.clampRadiance);   // a path that reaches an emitter in one lucky ray would show as a firefly
         }
         light = sum / float(max(params.paths, 1u));
         if (params.key > 0.0) {   // the synthetic overhead light: a short shadow ray, the surfaces that face it
@@ -157,6 +164,8 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
     if (!litSurface(texel) || stored >= 1.0) return;
+    const uint record = sceneMaterial.Load(int3(pixel, 0));
+    if (record != 0xFFFFFFFFu && record < params.recordCount && emits(meanColour(record))) return;   // a light source keeps the colour the game draws
     const float centreDepth = abs(viewPositionAt(pixel, stored).z);
     // a depth-aware bilinear upsample of the denoised light (as rt_reflect.slang)
     const float d = float(params.divisor);

@@ -12,7 +12,11 @@ int main() {
     CHECK(uc::rt_path_mean_albedo({9,9,9},0)==grey);
     // An emitter: an unlit draw (kRtEmissive) with a bright mean albedo; a lit draw or a dark unlit one is not
     const std::array<float,3> bright{0.9f,0.8f,0.6f}, dark{0.1f,0.1f,0.1f};
-    CHECK(uc::rt_path_emits(uc::kRtEmissive,bright,settings.threshold) && !uc::rt_path_emits(uc::kRtEmissive,dark,settings.threshold) && !uc::rt_path_emits(0,bright,settings.threshold));
+    CHECK(uc::rt_path_emits(bright,settings.threshold) && !uc::rt_path_emits(dark,settings.threshold));   // lit or unlit: what counts is the colour the game shows
+    // The clamp of one path's radiance (a firefly guard): per channel, never negative
+    const std::array<float,3> spike{40.f,1.f,-2.f};
+    const auto clamped=uc::rt_path_clamp(spike,settings.max_radiance);
+    CHECK(clamped[0]==settings.max_radiance && clamped[1]==1.f && clamped[2]==0.f && settings.max_radiance>1.f);
     // The composition: albedo x light replaces the game's colour by `mix`, never exceeds 1, and the fog keeps the game's colour
     const std::array<float,3> game{0.2f,0.2f,0.2f}, albedo{0.5f,0.5f,0.5f}, light{1.f,2.f,4.f};
     const auto full=uc::rt_path_compose(game,albedo,light,1.f,0.f);
