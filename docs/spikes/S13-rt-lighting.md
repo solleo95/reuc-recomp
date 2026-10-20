@@ -26,6 +26,10 @@ All five at High: about 115 FPS in the heavy fight (target about 100). Ultra (fu
 
 `renderer_effects_smoke --rt-lighting`: a lit floor in front of a bright red wall: 0.5 units from the wall the red channel rises from 87 to 139 against 142 computed from the cosine-weighted rays (green and blue unchanged); 2.4 units from it the rise is smaller and also matches; the effect off and the master off change nothing; validation clean. `test_rt_light_math`: presets, the additive composite, the hit weight.
 
+## Review (fresh opus, 0 Critical, 0 Important)
+
+Fixed: the lighting and reflection noise now cycles 64 patterns instead of 8 (one ray per pixel averaged eight fixed directions); the pass requires an albedo view instead of a stand-in; the usage text lists the new flags. Deferred: logic-op draws write the lit flag but not the albedo (a stale albedo under such a draw); fog and blended glow colours enter the bounce as hit colour (the fade is applied only at the receiver); the smoke has no hidden-hit or lighting-plus-reflections check and its CPU estimate ignores that part of the wall is off screen at 2.4 units (the tolerance hides it); the game's ambient stacks with the bounce in brighter scenes.
+
 ## Not covered
 
 * The effect is subtle in the dark first scene; brighter places should show more. A strength constant per preset was set by eye.
