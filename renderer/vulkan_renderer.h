@@ -110,7 +110,7 @@ public:
     bool rt_trace_active() const { return motion_outputs_ && ray_tracing_ && (effects_.rt_shadows!=EffectLevel::off || effects_.rt_local_shadows!=EffectLevel::off || effects_.rt_ambient_occlusion!=EffectLevel::off); }   // the visibility pass (shadows and ambient occlusion)
     bool rt_reflect_active() const { return motion_outputs_ && ray_tracing_ && effects_.rt_reflections!=EffectLevel::off; }
     bool rt_light_active() const { return motion_outputs_ && ray_tracing_ && effects_.rt_lighting!=EffectLevel::off; }
-    void set_rt_path_settings(const RtPathSettings& settings) { rt_path_override_=settings; }   // tests
+    void set_rt_path_settings(std::optional<RtPathSettings> settings) { rt_path_override_=settings; }   // tests: fixed settings instead of the quality preset (nullopt: the preset)
     bool rt_path_active() const { return motion_outputs_ && ray_tracing_ && effects_.path_tracing; }   // path tracing replaces the RT shadows, AO and lighting (effective_effects)
     bool rt_scene_active() const { return rt_trace_active() || rt_reflect_active() || rt_light_active() || rt_path_active(); }
     struct RtShadowPixels { uint32_t width=0, height=0; std::vector<float> factor; };   // one visibility factor per signal pixel
@@ -252,6 +252,7 @@ private:
     RtPathPass rt_path_;
     RtDenoiser rt_path_denoiser_;
     bool rt_path_ran_last_=false;
+    RtPathSettings rt_path_last_settings_;
     bool rt_trace_lamps_=false;
     std::array<EffectLevel,3> rt_signal_levels_{};   // the levels (shadows, local shadows, ambient occlusion) the denoiser's history was accumulated under
     std::array<float,3> rt_key_direction_=kRtOverheadDirection;   // the synthetic key light's view-space direction, turned with the camera so that it stands still in the world

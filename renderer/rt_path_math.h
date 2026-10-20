@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics_effects.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -23,8 +24,23 @@ struct RtPathSettings {
     float ao_strength=0.7f;  // how dark a fully blocked surface gets
     float mix=0.65f;        // 1: the path-traced lighting replaces the game's on lit surfaces; 0: nothing changes (the rest keeps the game's mood)
     float threshold=0.55f;   // a surface shines when the mean colour the game shows for it is brighter than this
+    bool operator==(const RtPathSettings&) const=default;
 };
 inline RtPathSettings rt_path_settings() { return {}; }
+// The quality levels of the player's "ray tracing" option: high is the defaults above; low and medium trace fewer bounces, occlusion rays and emitters; ultra traces at full
+// resolution with a longer path and more occlusion rays. The level also sets the characters' local shadows (graphics_effects.h effective_effects). off counts as high.
+inline RtPathSettings rt_path_preset(EffectLevel level) {
+    RtPathSettings settings;
+    switch (level) {
+    case EffectLevel::low: settings.bounces=2; settings.ao_rays=1; settings.light_count=8; break;
+    case EffectLevel::medium: settings.bounces=3; settings.ao_rays=1; settings.light_count=16; break;
+    case EffectLevel::ultra: settings.divisor=1; settings.bounces=4; settings.ao_rays=3; break;
+    default: break;
+    }
+    return settings;
+}
+// Rays per scene pixel (the signal is traced at 1/divisor^2 of the pixels): the paths' bounces, the occlusion rays, the emitter's shadow ray and the overhead light's.
+inline double rt_path_rays_per_pixel(const RtPathSettings& settings) { return (double(settings.paths)*settings.bounces+settings.ao_rays+(settings.light_count?1.0:0.0)+(settings.key>0.f?1.0:0.0))/(double(settings.divisor)*settings.divisor); }
 // The colour of the dome and of the overhead light: the game's lamp-lit warmth (a neutral dome greyed the picture); the shader has the same constant.
 constexpr std::array<float,3> kRtPathWarm{1.0f,0.86f,0.66f};
 inline float rt_path_luminance(const std::array<float,3>& colour) { return 0.2126f*colour[0]+0.7152f*colour[1]+0.0722f*colour[2]; }

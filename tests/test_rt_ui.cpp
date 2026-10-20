@@ -1,42 +1,29 @@
 #include "check.h"
 #include "rt_ui.h"
 int main() {
-    using uc::EffectLevel;
     uc::GraphicsEffects effects;
-    // The report has not arrived yet: nothing is blocked, the master checkbox is usable, the levels wait for it
+    // The report has not arrived yet: nothing is blocked, the checkbox is usable, the quality waits for it
     auto ui=uc::rt_ui(effects,false,false);
-    CHECK(ui.master_enabled && !ui.levels_enabled && !ui.contact_replaced && !ui.shadows_replaced);
-    // A GPU without ray tracing: the group is greyed; a saved "on" stays visible and can be switched off, the levels cannot be changed
+    CHECK(ui.master_enabled && !ui.quality_enabled && !ui.raster_replaced);
+    // A GPU without ray tracing: the group is greyed; a saved "on" stays visible and can be switched off, the quality cannot be changed and nothing is replaced (the renderer masks it off)
     ui=uc::rt_ui(effects,true,false);
-    CHECK(!ui.master_enabled && !ui.levels_enabled);
-    effects.ray_tracing=true; effects.rt_shadows=EffectLevel::high;
+    CHECK(!ui.master_enabled && !ui.quality_enabled && !ui.raster_replaced);
+    effects.path_tracing=true;
     ui=uc::rt_ui(effects,true,false);
-    CHECK(ui.master_enabled && !ui.levels_enabled && !ui.contact_replaced && !ui.shadows_replaced);   // nothing is replaced: the renderer masks RT off on this GPU
-    // A supported GPU: the master enables the levels; RT shadows replace the shadow map and contact shadows, the other levels replace nothing
+    CHECK(ui.master_enabled && !ui.quality_enabled && !ui.raster_replaced);
+    // A supported GPU: the checkbox enables the quality; path tracing lights the scene, so the shadow map, the contact shadows and GTAO are greyed
     effects=uc::GraphicsEffects{};
     ui=uc::rt_ui(effects,true,true);
-    CHECK(ui.master_enabled && !ui.levels_enabled && !ui.contact_replaced);
-    effects.ray_tracing=true;
+    CHECK(ui.master_enabled && !ui.quality_enabled && !ui.raster_replaced);
+    effects.path_tracing=true;
     ui=uc::rt_ui(effects,true,true);
-    CHECK(ui.master_enabled && ui.levels_enabled && !ui.contact_replaced && !ui.shadows_replaced);   // on, every level off: nothing active
-    effects.rt_local_shadows=EffectLevel::low;
+    CHECK(ui.master_enabled && ui.quality_enabled && ui.raster_replaced);
+    effects.path_tracing=false;   // off with the quality kept: the raster options are back
     ui=uc::rt_ui(effects,true,true);
-    CHECK(!ui.contact_replaced && !ui.shadows_replaced);   // local shadows have no raster counterpart
-    effects.rt_shadows=EffectLevel::medium;
+    CHECK(ui.master_enabled && !ui.quality_enabled && !ui.raster_replaced);
+    // the legacy master switch and levels are not the player's options: they change nothing here
+    effects=uc::GraphicsEffects{}; effects.ray_tracing=true; effects.rt_shadows=uc::EffectLevel::high; effects.rt_ambient_occlusion=uc::EffectLevel::high;
     ui=uc::rt_ui(effects,true,true);
-    CHECK(ui.contact_replaced && ui.shadows_replaced);
-    effects.ray_tracing=false;   // the master off with the levels kept: the raster options are back
-    ui=uc::rt_ui(effects,true,true);
-    CHECK(!ui.contact_replaced && !ui.shadows_replaced && !ui.levels_enabled && ui.master_enabled);
-    // RT ambient occlusion replaces GTAO (and only while the master is on on a GPU that can trace)
-    effects=uc::GraphicsEffects{}; effects.ray_tracing=true; effects.rt_ambient_occlusion=EffectLevel::low;
-    ui=uc::rt_ui(effects,true,true);
-    CHECK(ui.ao_replaced && !ui.contact_replaced && !ui.shadows_replaced);
-    effects.rt_ambient_occlusion=EffectLevel::off;
-    CHECK(!uc::rt_ui(effects,true,true).ao_replaced);
-    effects.rt_ambient_occlusion=EffectLevel::high; effects.ray_tracing=false;
-    CHECK(!uc::rt_ui(effects,true,true).ao_replaced);
-    effects.ray_tracing=true;
-    CHECK(!uc::rt_ui(effects,true,false).ao_replaced);   // a GPU that cannot trace: the raster AO stays
+    CHECK(!ui.quality_enabled && !ui.raster_replaced);
     return 0;
 }

@@ -222,39 +222,29 @@ void SettingsMenu::effects_tab(float unit) {
         ImGui::EndDisabled();
         if((!path || replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(replaced ? "replaced_by_rt" : "effects_unavailable"));
     };
-    level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion,rt.ao_replaced);
+    level_combo("##ao","ambient_occlusion",options.effects.ambient_occlusion,rt.raster_replaced);
     level_combo("##blur","motion_blur",options.effects.motion_blur);
     ImGui::Dummy({0,6*unit});
-    ImGui::BeginDisabled((!path && !options.effects.contact_shadows) || rt.contact_replaced);
+    ImGui::BeginDisabled((!path && !options.effects.contact_shadows) || rt.raster_replaced);
     compact_checkbox("##contact",tr("contact_shadows"),options.effects.contact_shadows,unit);
     ImGui::EndDisabled();
-    if((!path || rt.contact_replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(rt.contact_replaced ? "replaced_by_rt" : "effects_unavailable"));
-    // Ray tracing: the master checkbox, then the levels of the effects that work (RT shadows replace the shadow map and the contact shadows above).
+    if((!path || rt.raster_replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(rt.raster_replaced ? "replaced_by_rt" : "effects_unavailable"));
+    // Ray tracing (path tracing): the checkbox and its quality; it lights the scene instead of the shadow map, the contact shadows and GTAO above.
     ImGui::Dummy({0,6*unit});
     ImGui::BeginDisabled(!rt.master_enabled);
-    compact_checkbox("##rt",tr("ray_tracing"),options.effects.ray_tracing,unit);
+    compact_checkbox("##rt",tr("ray_tracing"),options.effects.path_tracing,unit);
     ImGui::EndDisabled();
     if(!rt.master_enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         const std::string why=std::string(tr("rt_unavailable"))+(features && !features->ray_tracing_reason.empty() ? " ("+features->ray_tracing_reason+")" : "");
         ImGui::SetTooltip("%s",why.c_str());
     }
-    for(const auto& [id,title,value]:{std::tuple<const char*,const char*,EffectLevel*>{"##rt-shadows","rt_shadows",&options.effects.rt_shadows},{"##rt-local-shadows","rt_local_shadows",&options.effects.rt_local_shadows},{"##rt-ao","rt_ambient_occlusion",&options.effects.rt_ambient_occlusion},{"##rt-reflections","rt_reflections",&options.effects.rt_reflections},{"##rt-lighting","rt_lighting",&options.effects.rt_lighting}}) {
-        ImGui::Dummy({0,6*unit});
-        ImGui::TextUnformatted(tr(title));
-        ImGui::BeginDisabled(!rt.levels_enabled);
-        if(ImGui::BeginCombo(id,preset_label(*value).c_str())) {
-            for(const auto level:{EffectLevel::off,EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) if(ImGui::Selectable(preset_label(level).c_str(),*value==level)) *value=level;
-            ImGui::EndCombo();
-        }
-        ImGui::EndDisabled();
-    }
-    ImGui::Dummy({0,6*unit});   // DLSS Ray Reconstruction: only with DLSS and a supporting GPU
-    ImGui::BeginDisabled(!rt.levels_enabled || (features && !features->ray_reconstruction));
-    compact_checkbox("##rr",tr("ray_reconstruction"),options.effects.ray_reconstruction,unit);
-    ImGui::EndDisabled();
     ImGui::Dummy({0,6*unit});
-    ImGui::BeginDisabled(!rt.levels_enabled);
-    compact_checkbox("##pt",tr("path_tracing"),options.effects.path_tracing,unit);
+    ImGui::TextUnformatted(tr("rt_quality"));
+    ImGui::BeginDisabled(!rt.quality_enabled);
+    if(ImGui::BeginCombo("##rt-quality",preset_label(options.effects.rt_quality).c_str())) {
+        for(const auto level:{EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) if(ImGui::Selectable(preset_label(level).c_str(),options.effects.rt_quality==level)) options.effects.rt_quality=level;
+        ImGui::EndCombo();
+    }
     ImGui::EndDisabled();
     ImGui::PopItemWidth();
     ImGui::EndChild();

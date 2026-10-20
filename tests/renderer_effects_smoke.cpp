@@ -1318,8 +1318,9 @@ int main(int argc, char** argv) {
                     draw.mesh=mesh; draw.vertices.clear(); draw.indices.clear();
                     return draw;
                 };
+                uc::EffectLevel quality=uc::EffectLevel::high;
                 auto frame=[&](bool rt,bool pt) {
-                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.ray_tracing=rt; effects.path_tracing=pt; renderer.set_effects(effects);
+                    uc::GraphicsEffects effects; effects.anisotropy=1; effects.path_tracing=rt && pt; effects.rt_quality=quality; renderer.set_effects(effects);
                     gx::FramePacket scene; scene.present=false;
                     scene.draws.push_back(draw_of(floor_mesh,true)); scene.draws.push_back(draw_of(wall_mesh,false));
                     submit(std::move(scene));
@@ -1361,8 +1362,15 @@ int main(int argc, char** argv) {
                 CHECK(runs>0);
                 frame(false,false); frame(false,false);
                 CHECK(renderer.pass_runs(uc::GpuPass::rt_path)==runs);   // off: nothing runs
-                const auto unmastered=settle(false,true);
-                CHECK(std::abs(at(unmastered,x,near_row,0)-at(off,x,near_row,0))<=1 && renderer.pass_runs(uc::GpuPass::rt_path)==runs);   // the master switch off with the option kept
+                // the quality levels (the presets, not the fixed settings): every one runs and changes the picture
+                renderer.set_rt_path_settings(std::nullopt);
+                for (const auto level:{uc::EffectLevel::low,uc::EffectLevel::medium,uc::EffectLevel::high,uc::EffectLevel::ultra}) {
+                    quality=level;
+                    const auto lit=settle(true,true);
+                    std::fprintf(stderr,"rt-path: quality %s: near floor red %d, far floor red %d\n",std::string(uc::effect_level_name(level)).c_str(),at(lit,x,near_row,0),at(lit,x,far_row,0));
+                    CHECK(std::abs(at(lit,x,near_row,0)-at(off,x,near_row,0))+std::abs(at(lit,x,far_row,0)-at(off,x,far_row,0))>=8);   // every level lights the scene (the presets' dome saturates this small room, so no near/far contrast here)
+                }
+                CHECK(renderer.pass_runs(uc::GpuPass::rt_path)>runs);
             }
         }
         if (wanted("rt-rr")) {

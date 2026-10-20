@@ -65,16 +65,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level) return "invalid value for --motion-blur";
             options.effects.motion_blur = *level;
         }
-        else if (arg == "--ray-tracing") options.effects.ray_tracing = true;
-        else if (arg == "--ray-reconstruction") options.effects.ray_reconstruction = true;
-        else if (arg == "--path-tracing") options.effects.path_tracing = true;
-        else if (arg == "--rt-reflections" || arg == "--rt-lighting" || arg == "--rt-shadows" || arg == "--rt-local-shadows" || arg == "--rt-ambient-occlusion") {
-            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
+        else if (arg == "--ray-tracing") options.effects.path_tracing = true;   // the player's ray tracing is path tracing (graphics_effects.h)
+        else if (arg == "--rt-quality") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --rt-quality";
             const auto level = effect_level_from_name(arguments[i]);
-            if (!level) return "invalid value for " + std::string(arg);
-            auto& effects = options.effects;
-            (arg == "--rt-reflections" ? effects.rt_reflections : arg == "--rt-lighting" ? effects.rt_lighting : arg == "--rt-shadows" ? effects.rt_shadows
-                : arg == "--rt-local-shadows" ? effects.rt_local_shadows : effects.rt_ambient_occlusion) = *level;
+            if (!level || *level == EffectLevel::off) return "invalid value for --rt-quality";   // the switch is the off state
+            options.effects.rt_quality = *level;
         }
         else if (arg == "--anisotropy") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --anisotropy";

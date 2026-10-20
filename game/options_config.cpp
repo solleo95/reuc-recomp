@@ -5,9 +5,6 @@
 namespace uc {
 namespace {
 [[noreturn]] void invalid(const std::string& message) {throw std::invalid_argument("config: "+message);}
-std::array<std::pair<const char*,EffectLevel*>,5> rt_level_fields(GraphicsEffects& effects) {   // the graphics.* keys of the ray tracing levels
-    return {{{"rt_reflections",&effects.rt_reflections},{"rt_lighting",&effects.rt_lighting},{"rt_shadows",&effects.rt_shadows},{"rt_local_shadows",&effects.rt_local_shadows},{"rt_ambient_occlusion",&effects.rt_ambient_occlusion}}};
-}
 bool boolean(const nlohmann::ordered_json& value) {if(!value.is_boolean())invalid("expected boolean setting");return value.get<bool>();}
 uint32_t extent(const nlohmann::ordered_json& value) {
     if(!value.is_number_unsigned() || value.get<uint64_t>()>INT32_MAX)invalid("invalid output extent");
@@ -92,14 +89,11 @@ Options options_from_config(const ConfigDocument& document) {
             if(!level)invalid("graphics.motion_blur must be off, low, medium, high or ultra");
             options.effects.motion_blur=*level;
         }
-        if(graphics.contains("ray_tracing"))options.effects.ray_tracing=boolean(graphics["ray_tracing"]);
-        if(graphics.contains("ray_reconstruction"))options.effects.ray_reconstruction=boolean(graphics["ray_reconstruction"]);
-        if(graphics.contains("path_tracing"))options.effects.path_tracing=boolean(graphics["path_tracing"]);
-        for(const auto& [key,field]:rt_level_fields(options.effects)) {
-            if(!graphics.contains(key))continue;
-            const auto level=graphics[key].is_string() ? effect_level_from_name(graphics[key].get<std::string>()) : std::nullopt;
-            if(!level)invalid(std::string("graphics.")+key+" must be off, low, medium, high or ultra");
-            *field=*level;
+        if(graphics.contains("ray_tracing"))options.effects.path_tracing=boolean(graphics["ray_tracing"]);   // the player's ray tracing is path tracing
+        if(graphics.contains("rt_quality")) {
+            const auto level=graphics["rt_quality"].is_string() ? effect_level_from_name(graphics["rt_quality"].get<std::string>()) : std::nullopt;
+            if(!level || *level==EffectLevel::off)invalid("graphics.rt_quality must be low, medium, high or ultra");
+            options.effects.rt_quality=*level;
         }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
@@ -145,14 +139,10 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["ambient_occlusion"]=std::string(effect_level_name(options.effects.ambient_occlusion));
     if(effect_level_name(options.effects.motion_blur).empty())invalid("unknown motion_blur");
     graphics["motion_blur"]=std::string(effect_level_name(options.effects.motion_blur));
-    graphics["ray_tracing"]=options.effects.ray_tracing;
-    graphics["ray_reconstruction"]=options.effects.ray_reconstruction;
-    graphics["path_tracing"]=options.effects.path_tracing;
-    auto effects=options.effects;
-    for(const auto& [key,field]:rt_level_fields(effects)) {
-        if(effect_level_name(*field).empty())invalid(std::string("unknown ")+key);
-        graphics[key]=std::string(effect_level_name(*field));
-    }
+    graphics["ray_tracing"]=options.effects.path_tracing;
+    if(effect_level_name(options.effects.rt_quality).empty() || options.effects.rt_quality==EffectLevel::off)invalid("unknown rt_quality");
+    graphics["rt_quality"]=std::string(effect_level_name(options.effects.rt_quality));
+    for(const char* old_key:{"rt_reflections","rt_lighting","rt_shadows","rt_local_shadows","rt_ambient_occlusion","ray_reconstruction","path_tracing"})graphics.erase(old_key);   // the keys of the old ray tracing
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

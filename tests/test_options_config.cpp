@@ -74,16 +74,19 @@ int main() {
         CHECK(uc::options_from_config(blur_doc).effects.motion_blur==uc::EffectLevel::low && uc::serialize_config(blur_doc).find("\"motion_blur\": \"low\"")!=std::string::npos);
         bool bad_blur=false;try {uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"motion_blur":"extreme"}})"));}catch(const std::invalid_argument&){bad_blur=true;}
         CHECK(bad_blur);
-        {   // ray tracing keys
+        {   // ray tracing keys: the player's option is path tracing, "ray_tracing" (a switch) and "rt_quality" (low, medium, high, ultra); the per-effect keys of the old ray tracing are dropped
             const auto defaults=uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).effects;
-            CHECK(!defaults.ray_tracing && defaults.rt_reflections==uc::EffectLevel::off && defaults.rt_lighting==uc::EffectLevel::off && defaults.rt_shadows==uc::EffectLevel::off
-                && defaults.rt_local_shadows==uc::EffectLevel::off && defaults.rt_ambient_occlusion==uc::EffectLevel::off);
-            auto rt_doc=uc::parse_config(R"({"game":"S:/Games/Test/game"})");auto rt_options=uc::options_from_config(rt_doc);
-            CHECK(!defaults.ray_reconstruction && !defaults.path_tracing);   // off by default
-            auto& e=rt_options.effects;e.ray_reconstruction=true;e.path_tracing=true;e.ray_tracing=true;e.rt_reflections=uc::EffectLevel::low;e.rt_lighting=uc::EffectLevel::medium;e.rt_shadows=uc::EffectLevel::high;e.rt_local_shadows=uc::EffectLevel::ultra;e.rt_ambient_occlusion=uc::EffectLevel::low;
+            CHECK(!defaults.path_tracing && defaults.rt_quality==uc::EffectLevel::high && !defaults.ray_tracing && defaults.rt_reflections==uc::EffectLevel::off && !defaults.ray_reconstruction);
+            auto rt_doc=uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"rt_shadows":"high","ray_reconstruction":true,"path_tracing":true,"rt_lighting":"ultra"}})");   // a config written by an older build
+            const auto migrated=uc::options_from_config(rt_doc);
+            CHECK(!migrated.effects.path_tracing && migrated.effects.rt_shadows==uc::EffectLevel::off && !migrated.effects.ray_reconstruction);   // its old keys mean nothing now
+            auto rt_options=migrated;
+            rt_options.effects.path_tracing=true; rt_options.effects.rt_quality=uc::EffectLevel::ultra;
             uc::store_options(rt_doc,rt_options);
-            CHECK(uc::options_from_config(rt_doc).effects==e && uc::serialize_config(rt_doc).find("\"rt_local_shadows\": \"ultra\"")!=std::string::npos && uc::serialize_config(rt_doc).find("\"ray_reconstruction\": true")!=std::string::npos && uc::serialize_config(rt_doc).find("\"path_tracing\": true")!=std::string::npos);
-            for(const char* text:{R"({"game":"S:/Games/Test/game","graphics":{"rt_shadows":"extreme"}})",R"({"game":"S:/Games/Test/game","graphics":{"rt_reflections":1}})",R"({"game":"S:/Games/Test/game","graphics":{"ray_tracing":"on"}})"}) {
+            const auto written=uc::serialize_config(rt_doc);
+            CHECK(uc::options_from_config(rt_doc).effects==rt_options.effects && written.find("\"ray_tracing\": true")!=std::string::npos && written.find("\"rt_quality\": \"ultra\"")!=std::string::npos);
+            for(const char* old_key:{"rt_shadows","rt_lighting","ray_reconstruction","path_tracing","rt_local_shadows","rt_reflections","rt_ambient_occlusion"}) CHECK(written.find(std::string("\"")+old_key+"\"")==std::string::npos);   // and are removed from the file
+            for(const char* text:{R"({"game":"S:/Games/Test/game","graphics":{"rt_quality":"extreme"}})",R"({"game":"S:/Games/Test/game","graphics":{"rt_quality":"off"}})",R"({"game":"S:/Games/Test/game","graphics":{"rt_quality":1}})",R"({"game":"S:/Games/Test/game","graphics":{"ray_tracing":"on"}})"}) {
                 bool bad=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){bad=true;}
                 CHECK(bad);
             }

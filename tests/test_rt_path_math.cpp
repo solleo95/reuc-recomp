@@ -11,6 +11,17 @@ int main() {
     const auto packed=uc::rt_path_pack(settings);
     CHECK((packed.divisor_frame&255u)==settings.divisor && (packed.counts&255u)==settings.paths && ((packed.counts>>8)&255u)==settings.bounces && ((packed.counts>>16)&255u)==settings.ao_rays && (packed.counts>>24)==settings.light_count);
     CHECK(uc::rt_path_pack(settings,63).divisor_frame>>8==63u);
+    // The quality presets: high is the default settings; every level up costs more rays per signal pixel than the one below (ultra also traces at full resolution); "off" is high
+    using uc::EffectLevel;
+    CHECK(uc::rt_path_preset(EffectLevel::high)==settings && uc::rt_path_preset(EffectLevel::off)==settings);
+    double previous=0;
+    for (const auto level:{EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) {
+        const auto preset=uc::rt_path_preset(level);
+        const double cost=uc::rt_path_rays_per_pixel(preset);
+        CHECK(cost>previous && preset.divisor>=1 && preset.paths>=1 && preset.bounces>=1 && preset.light_count>=1 && preset.light_count<=uc::kRtPathMaxLights && preset.ao_rays>=1);
+        previous=cost;
+    }
+    CHECK(uc::rt_path_preset(EffectLevel::ultra).divisor==1 && uc::rt_path_preset(EffectLevel::low).bounces<uc::rt_path_preset(EffectLevel::ultra).bounces);
     // Direct light from an emitter (next-event estimation): irradiance of an area light, over pi to match the cosine-weighted paths' mean radiance
     CHECK(settings.light_count>=1 && settings.light_count<=uc::kRtPathMaxLights);
     const float pixel=uc::rt_path_pixel_size(10.f,2.f,1280.f);   // 2 * 10 / (2 * 1280)

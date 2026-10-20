@@ -28,18 +28,18 @@ int main() {
         const auto effective=uc::effective_effects(only,true);
         CHECK(effective.shadows==EffectLevel::medium && effective.contact_shadows && effective.ambient_occlusion==EffectLevel::low);
     }
-    {   // path tracing lights the scene itself: it replaces the RT sun shadows, AO and lighting and every raster counterpart, keeps the reflections and the local shadows (the rig lights of
-        // the characters; the renderer drops the level's key light from them), and is an RT effect of its own
-        uc::GraphicsEffects pt; pt.path_tracing=true; pt.shadows=EffectLevel::medium; pt.contact_shadows=true; pt.ambient_occlusion=EffectLevel::low;
-        pt.rt_shadows=pt.rt_local_shadows=pt.rt_ambient_occlusion=pt.rt_lighting=pt.rt_reflections=EffectLevel::high;
-        CHECK(!uc::any_rt_active(pt,true) && !uc::effective_effects(pt,true).path_tracing);   // the master is off
-        pt.ray_tracing=true;
+    {   // path tracing is the player's "ray tracing" option: it needs no master switch, lights the scene itself and replaces the RT sun shadows, AO and lighting and every raster
+        // counterpart; its quality is the level of the local shadows (the rig lights of the characters; the renderer drops the level's key light from them)
+        uc::GraphicsEffects pt; pt.path_tracing=true; pt.shadows=EffectLevel::medium; pt.contact_shadows=true; pt.ambient_occlusion=EffectLevel::low; pt.rt_quality=EffectLevel::ultra;
+        pt.rt_shadows=pt.rt_local_shadows=pt.rt_ambient_occlusion=pt.rt_lighting=pt.rt_reflections=EffectLevel::high;   // legacy levels, only with their own master switch
         CHECK(uc::any_rt_active(pt,true) && !uc::any_rt_active(pt,false) && !uc::effective_effects(pt,false).path_tracing);
         const auto effective=uc::effective_effects(pt,true);
-        CHECK(effective.path_tracing && effective.rt_shadows==EffectLevel::off && effective.rt_local_shadows==EffectLevel::high && effective.rt_ambient_occlusion==EffectLevel::off && effective.rt_lighting==EffectLevel::off);
-        CHECK(effective.rt_reflections==EffectLevel::high && effective.shadows==EffectLevel::off && !effective.contact_shadows && effective.ambient_occlusion==EffectLevel::off);
-        uc::GraphicsEffects only; only.ray_tracing=only.path_tracing=true; only.anisotropy=1;
-        CHECK(uc::any_rt_active(only,true) && uc::needs_scene_targets(uc::effective_effects(only,true)));   // no RT level chosen, still an RT frame
+        CHECK(effective.path_tracing && effective.rt_shadows==EffectLevel::off && effective.rt_local_shadows==EffectLevel::ultra && effective.rt_ambient_occlusion==EffectLevel::off && effective.rt_lighting==EffectLevel::off);
+        CHECK(effective.rt_reflections==EffectLevel::off && effective.shadows==EffectLevel::off && !effective.contact_shadows && effective.ambient_occlusion==EffectLevel::off);
+        pt.rt_quality=EffectLevel::off; CHECK(uc::effective_effects(pt,true).rt_local_shadows==EffectLevel::high);   // "off" is no quality: the default level
+        for(const auto level:{EffectLevel::low,EffectLevel::medium,EffectLevel::high,EffectLevel::ultra}) { pt.rt_quality=level; CHECK(uc::effective_effects(pt,true).rt_local_shadows==level); }
+        uc::GraphicsEffects only; only.path_tracing=true; only.anisotropy=1;
+        CHECK(uc::any_rt_active(only,true) && uc::needs_scene_targets(uc::effective_effects(only,true)));   // no legacy level chosen, still an RT frame
     }
     {   // scene targets
         uc::GraphicsEffects on; on.ray_tracing=true; on.anisotropy=1;

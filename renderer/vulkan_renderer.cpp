@@ -1146,13 +1146,14 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         pass_timer_.end(command,timer_slot,timed);
     };
     if (rt_path_go) {   // path tracing: the lit surfaces' lighting from emitters over several bounces, denoised like the radiance effects (docs/superpowers/plans/2026-10-20-path-tracing-spike.md)
-        static const RtPathSettings path_settings=[] {   // debug: UC_PT_<NAME> overrides one setting while tuning
-            RtPathSettings s;
+        RtPathSettings path_settings=rt_path_override_ ? *rt_path_override_ : rt_path_preset(effects_.rt_quality);
+        static const bool env_tuning=[] { for (const char* name:{"UC_PT_DIVISOR","UC_PT_PATHS","UC_PT_BOUNCES","UC_PT_REACH","UC_PT_EMISSION","UC_PT_AMBIENT","UC_PT_MAX_RADIANCE","UC_PT_AO_RAYS","UC_PT_AO_RADIUS","UC_PT_AO_STRENGTH","UC_PT_KEY","UC_PT_KEY_REACH","UC_PT_MIX","UC_PT_THRESHOLD"}) if (std::getenv(name)) return true; return false; }();
+        if (env_tuning) {   // debug: UC_PT_<NAME> overrides one setting of the quality preset while tuning
             const auto env=[](const char* name, auto& value) { if (const char* text=std::getenv(name)) value=static_cast<std::remove_reference_t<decltype(value)>>(std::strtod(text,nullptr)); };
+            auto& s=path_settings;
             env("UC_PT_DIVISOR",s.divisor); env("UC_PT_PATHS",s.paths); env("UC_PT_BOUNCES",s.bounces); env("UC_PT_REACH",s.reach); env("UC_PT_EMISSION",s.emission); env("UC_PT_AMBIENT",s.ambient);
             env("UC_PT_MAX_RADIANCE",s.max_radiance); env("UC_PT_AO_RAYS",s.ao_rays); env("UC_PT_AO_RADIUS",s.ao_radius); env("UC_PT_AO_STRENGTH",s.ao_strength); env("UC_PT_KEY",s.key); env("UC_PT_KEY_REACH",s.key_reach); env("UC_PT_MIX",s.mix); env("UC_PT_THRESHOLD",s.threshold);
-            return s;
-        }();
+        }
         const auto idle=[this] { vk_check(present_.wait_idle(device),"rt path idle"); };
         rt_path_.initialize(device,memory_,shaders_,uint32_t(kFrameSlots),idle);
         rt_path_denoiser_.initialize(device,memory_,shaders_,idle);
@@ -1161,11 +1162,12 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         RtPathInputs path;
         path.command=command; path.tlas=rt_.tlas(); path.depth=scene_depth_view_; path.gbuffer=scene_gbuffer_view_; path.material=scene_material_view_; path.color=scene_color_view_; path.albedo=scene_albedo_view_;
         path.records=rt_records_[rt_record_slot_].buffer; path.hit_table=rt_.hit_table(); path.hit_bases=rt_.hit_bases(); path.record_count=rt_record_count_;
-        path.region=in.render_size; path.viewport=scene_viewport; path.view=view_params(*frame_projection_); path.overhead=rt_key_direction_; path.settings=rt_path_override_ ? *rt_path_override_ : path_settings;
+        path.region=in.render_size; path.viewport=scene_viewport; path.view=view_params(*frame_projection_); path.overhead=rt_key_direction_; path.settings=path_settings;
         path.frame=uint32_t(upscale_frame_%64)+1; path.slot=timer_slot;
         const VkImageView noisy=rt_path_.trace(path);
         rt_path_denoiser_.resize(rt_path_.signal_extent());
-        if (in.reset || !rt_path_ran_last_) rt_path_denoiser_.reset();
+        if (in.reset || !rt_path_ran_last_ || path_settings!=rt_path_last_settings_) rt_path_denoiser_.reset();   // a cut, a frame without it, or another quality: the history is stale
+        rt_path_last_settings_=path_settings;
         DenoiseInputs denoise;
         denoise.depth=scene_depth_view_; denoise.motion=scene_motion_view_; denoise.gbuffer=scene_gbuffer_view_; denoise.region=in.render_size;
         denoise.view=view_params(*frame_projection_); denoise.depth_range={scene_viewport[4],scene_viewport[5]}; denoise.targets_generation=targets_generation_;
