@@ -18,7 +18,7 @@ All effects live in the renderer (GPU passes recorded on the render thread); the
 | Ray-traced ambient occlusion | `rt_ambient_occlusion` | `--rt-ambient-occlusion` | off, low, medium, high, ultra (off) | the master switch on; replaces GTAO |
 | Ray-traced reflections | `rt_reflections` | `--rt-reflections` | off, low, medium, high, ultra (off) | the master switch on |
 | Ray-traced lighting | `rt_lighting` | `--rt-lighting` | off, low, medium, high, ultra (off) | the master switch on |
-| DLSS Ray Reconstruction | `ray_reconstruction` | `--no-ray-reconstruction` | on/off (on) | DLSS, an RT effect, a GPU with Ray Reconstruction (`uc.exe --features`: `ray_reconstruction`) |
+| DLSS Ray Reconstruction | `ray_reconstruction` | `--ray-reconstruction` | on/off (off) | DLSS, an RT effect, a GPU with Ray Reconstruction (`uc.exe --features`: `ray_reconstruction`) |
 
 "The effects path" = `VK_EXT_dynamic_rendering_unused_attachments` + `independentBlend` (the same the upscalers need); without it those options are greyed out with a reason (`uc.exe --features` reports `effects`, `effects_reason`, `anisotropy_max`).
 
