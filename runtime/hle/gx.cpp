@@ -51,6 +51,8 @@ using TextureMatrix=std::array<std::array<float,4>,3>;
 using TextureMatrices=std::array<std::optional<TextureMatrix>,126>;
 using TextureSelectors=std::array<uint32_t,8>;
 TextureMatrices texture_matrices;
+using MatrixIndices=std::array<std::optional<uint32_t>,2>;
+MatrixIndices matrix_indices;
 uint32_t known_sdk=0;   // SDK block address last seen by a snapshot; raw display list calls write the texgen words there
 std::array<uint32_t,16> indirect_stages{};
 // Versions of the host-side inputs of snapshot() / material_snapshot() (the rest of their input is the SDK block in guest memory, compared by bytes).
@@ -133,6 +135,7 @@ struct Resource {
     struct IndexedNormal { uint16_t index; uint32_t row; };
     struct BpRegister { uint32_t reg, value; };
     struct Current { uint32_t row; };
+    struct MatrixIndex { uint32_t reg,value; };
     struct CopyClear { CopyState state; };
     struct TextureCopy { std::array<uint32_t,4> source; uint32_t address,width,height; bool clear; uint32_t format=6; };
     struct TextureBinding { uint32_t map; TextureSource source; };
@@ -143,9 +146,9 @@ struct Resource {
     struct Normal { uint32_t row; gx::NormalMatrix value; };
     struct NumChannels { uint32_t count; };
     struct ChannelControl { uint32_t index,control; };
-    struct TextureTransform { uint32_t id; TextureMatrix matrix; };
+    struct TextureTransform { uint32_t id; TextureMatrix matrix; uint32_t rows; };
     // A RecordedDraw is ~5 KB: held by pointer so growing the vector moves 8 bytes, not the draw.
-    using Item=std::variant<std::unique_ptr<RecordedDraw>,ArrayBinding,Child,Projection,Position,IndexedPosition,IndexedNormal,BpRegister,Current,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl,TextureTransform>;
+    using Item=std::variant<std::unique_ptr<RecordedDraw>,ArrayBinding,Child,Projection,Position,IndexedPosition,IndexedNormal,BpRegister,Current,MatrixIndex,CopyClear,TextureCopy,TextureBinding,PaletteLoad,Blend,TevColor,Light,Normal,NumChannels,ChannelControl,TextureTransform>;
     std::vector<Item> geometry;
 };
 RecordedDraw* recorded_draw(Resource::Item& item) { auto* held=std::get_if<std::unique_ptr<RecordedDraw>>(&item); return held ? held->get() : nullptr; }
@@ -160,6 +163,7 @@ struct ListRecording {
     uint32_t texture_copy_width_shadow=0,texture_copy_height_shadow=0;
     uint32_t texture_copy_format_shadow=6;
     TextureMatrices texture_shadow;
+    MatrixIndices indices_shadow;
     std::vector<std::byte> bytes;
     Resource native;
     gx::State input_state;
@@ -208,9 +212,15 @@ uint32_t read32(uint32_t address) {
 }
 TextureSelectors texture_selectors(uint32_t sdk) {
     TextureSelectors result{};
-    const auto low=read32(sdk+0x80),high=read32(sdk+0x84);
+    const auto low=matrix_indices[0].value_or(read32(sdk+0x80)),high=matrix_indices[1].value_or(read32(sdk+0x84));
     for(uint32_t i=0;i<8;++i) result[i]=((i<4 ? low : high)>>(i<4 ? 6+i*6 : (i-4)*6))&63;
     return result;
+}
+// NW4R writes XF selectors without changing the SDK cache; a later SDK flush can replace them.
+void set_matrix_index(uint32_t reg,uint32_t value) {
+    matrix_indices[reg]=value; dirty_material();
+    if(recording) { if(!recording->overflow) recording->native.geometry.push_back(Resource::MatrixIndex{reg,value}); }
+    else if(reg==0) transforms.current=value&63;
 }
 // Texture matrix ids follow GX: 0..61 (GX_IDENTITY 60), post matrices at 64+row (XF 0x500+row*4).
 void resolve_texture_matrices(gx::DrawUniform& uniforms,const TextureSelectors& selectors,const TextureMatrices& matrices) {
@@ -304,6 +314,19 @@ uint32_t texture_mask(const gx::TevMaterial& material,const gx::DrawUniform& uni
     return mask;
 }
 uint32_t producer() { return scheduler->in_irq() ? UINT32_MAX : uint32_t(scheduler->current()->id); }
+// Position and texture loads share XF rows; selectors may start inside another loaded matrix.
+void matrix_rows(TextureMatrices& matrices,gx::Transforms* positions,uint32_t id,const TextureMatrix& matrix,uint32_t rows) {
+    constexpr TextureMatrix identity{{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};
+    const uint32_t first=id>=64 ? 64 : 0,last=id>=64 ? 125 : 63;
+    for(uint32_t base=std::max(first,id>1 ? id-2 : 0u);base<=std::min(last,id+rows-1);++base) {
+        auto& target=matrices[base];
+        if(!target) target=identity;
+        for(uint32_t row=std::max(base,id);row<std::min(base+3,id+rows);++row) (*target)[row-base]=matrix[row-id];
+    }
+    if(positions && id<64) for(uint32_t row=id;row<std::min(64u,id+rows);++row) {
+        positions->position_rows[row]=matrix[row-id]; positions->loaded_rows.set(row);
+    }
+}
 gx::PositionMatrix position_matrix(uint32_t address) {
     memory.read(address,48);
     gx::PositionMatrix result{};
@@ -314,11 +337,13 @@ gx::PositionMatrix position_matrix(uint32_t address) {
     }
     return result;
 }
-void indexed_position(gx::Transforms& target,const gx::State& bindings,uint16_t index,uint32_t row) {
+void indexed_position(gx::Transforms& target,TextureMatrices& matrices,const gx::State& bindings,uint16_t index,uint32_t row) {
     const auto& array=bindings.arrays[12];
     const uint64_t address=uint64_t(array.address)+uint64_t(index)*array.stride;
     if (!array.address || !array.stride || address>UINT32_MAX) throw gx::Error(gx::ErrorCode::array_bounds,array.address,48,array.stride);
-    gx::set_position_matrix(target,row,position_matrix(uint32_t(address)));
+    const auto matrix=position_matrix(uint32_t(address));
+    gx::set_position_matrix(target,row,matrix);
+    matrix_rows(matrices,nullptr,row,matrix,3);
 }
 // GX_NRM_MTX_ARRAY entry: nine consecutive floats, as the hardware's indexed XF load reads them.
 void indexed_normal(gx::Transforms& target,const gx::State& bindings,uint16_t index,uint32_t row) {
@@ -331,14 +356,14 @@ void indexed_normal(gx::Transforms& target,const gx::State& bindings,uint16_t in
     gx::set_normal_matrix(target,row,matrix);
 }
 // GX_TEXMTX_ARRAY entry (arrays[14]): a 3x4 or 2x4 matrix of consecutive floats, as the hardware's indexed XF load reads it.
-void indexed_texture(TextureMatrices& target,const gx::State& bindings,uint16_t index,uint32_t id,uint32_t words) {
+void indexed_texture(TextureMatrices& target,gx::Transforms& positions,const gx::State& bindings,uint16_t index,uint32_t id,uint32_t words) {
     const auto& array=bindings.arrays[14];
     const uint64_t source=uint64_t(array.address)+uint64_t(index)*array.stride;
     if(!array.address || !array.stride || source>UINT32_MAX) throw gx::Error(gx::ErrorCode::array_bounds,array.address,words*4,array.stride);
     memory.read(uint32_t(source),words*4);
     TextureMatrix matrix{{{},{},{0,0,1,0}}};
     for(uint32_t i=0;i<words;++i) matrix[i/4][i%4]=std::bit_cast<float>(read32(uint32_t(source)+i*4));
-    target[id]=matrix;
+    matrix_rows(target,&positions,id,matrix,words/4);
 }
 bool apply_bp(gx::DrawUniform& target,uint32_t reg,uint32_t data) {
     if(reg>=0xEE && reg<=0xF2) target.fog[reg-0xEE]=data;
@@ -495,7 +520,7 @@ std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<Te
     texture_decodes=texture_cache.decodes();
     return result;
 }
-void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,gx::DrawUniform& colors,TextureMatrices& matrices,Imported& imported,CopiedTextures& versions,std::vector<uint32_t>& path) {
+void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,gx::DrawUniform& colors,TextureMatrices& matrices,MatrixIndices& indices,Imported& imported,CopiedTextures& versions,std::vector<uint32_t>& path) {
     const uint32_t physical=address & 0x3FFFFFFF;
     // shortcut: nesting capped at64; replace traversal if a verified deeper native asset appears (TD-032).
     if (path.size()==64 || std::find(path.begin(),path.end(),physical)!=path.end())
@@ -522,7 +547,10 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             uniforms.lights=colors.lights; uniforms.materials=colors.materials;
             uniforms.ambient=colors.ambient; uniforms.channels=colors.channels;
             uniforms.pixel[3]=colors.pixel[3];
-            resolve_texture_matrices(uniforms,source->texture_selectors,matrices);
+            auto selectors=source->texture_selectors;
+            for(uint32_t i=0;i<8;++i) if(indices[i/4])
+                selectors[i]=(*indices[i/4]>>(i<4 ? 6+i*6 : (i-4)*6))&63;
+            resolve_texture_matrices(uniforms,selectors,matrices);
             draw.uniforms=gx::share(import_uniforms,uniforms);
             draw.texture_bank=texture_bank(*draw.state,matrices);
             draw.texture_wrap=wraps(textures);
@@ -534,11 +562,12 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
             imported.push_back(std::move(draw));
         } else if (const auto* array=std::get_if<Resource::ArrayBinding>(&item)) bindings.arrays[array->attribute]=array->array;
         else if (const auto* projection=std::get_if<Resource::Projection>(&item)) transform_state.projection=projection->matrix;
-        else if (const auto* matrix=std::get_if<Resource::Position>(&item)) gx::set_position_matrix(transform_state,matrix->row,matrix->matrix);
-        else if (const auto* matrix=std::get_if<Resource::IndexedPosition>(&item)) indexed_position(transform_state,bindings,matrix->index,matrix->row);
+        else if (const auto* matrix=std::get_if<Resource::Position>(&item)) matrix_rows(matrices,&transform_state,matrix->row,matrix->matrix,3);
+        else if (const auto* matrix=std::get_if<Resource::IndexedPosition>(&item)) indexed_position(transform_state,matrices,bindings,matrix->index,matrix->row);
         else if (const auto* matrix=std::get_if<Resource::IndexedNormal>(&item)) indexed_normal(transform_state,bindings,matrix->index,matrix->row);
         else if (const auto* bp=std::get_if<Resource::BpRegister>(&item)) apply_bp(colors,bp->reg,bp->value);
         else if (const auto* current=std::get_if<Resource::Current>(&item)) transform_state.current=current->row;
+        else if (const auto* index=std::get_if<Resource::MatrixIndex>(&item)) { indices[index->reg]=index->value; if(index->reg==0) transform_state.current=index->value&63; }
         else if (const auto* clear=std::get_if<Resource::CopyClear>(&item)) copy=clear->state;
         else if (const auto* command=std::get_if<Resource::TextureCopy>(&item)) {
             auto target=make_copy_texture(command->address,command->width,command->height,command->format);
@@ -556,10 +585,10 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
         else if (const auto* value=std::get_if<Resource::Normal>(&item)) gx::set_normal_matrix(transform_state,value->row,value->value);
         else if (const auto* value=std::get_if<Resource::NumChannels>(&item)) colors.pixel[3]=value->count;
         else if (const auto* value=std::get_if<Resource::ChannelControl>(&item)) colors.channels[value->index]=value->control;
-        else if (const auto* value=std::get_if<Resource::TextureTransform>(&item)) matrices[value->id]=value->matrix;
+        else if (const auto* value=std::get_if<Resource::TextureTransform>(&item)) matrix_rows(matrices,&transform_state,value->id,value->matrix,value->rows);
         else {
             const auto& child=std::get<Resource::Child>(item);
-            import_resource(child.address,child.length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,imported,versions,path);
+            import_resource(child.address,child.length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,indices,imported,versions,path);
         }
     }
     path.pop_back();
@@ -671,7 +700,7 @@ void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) 
     texture_copy_source={}; texture_copy_width=texture_copy_height=0; texture_copy_format=6; copied_textures.clear();
     texture_cache.clear(); texture_decodes=0;
     mesh_index.clear(); mesh_cache.clear(); mesh_cache_bytes=0; geometry_hits=0; geometry_misses=0;
-    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms=gx::DrawUniform{}; live_material={}; texture_matrices={}; indirect_stages={};
+    blend_state={}; live_blend={}; color_uniforms={}; live_uniforms=gx::DrawUniform{}; live_material={}; texture_matrices={}; matrix_indices={}; indirect_stages={};
     bound_textures={}; palettes.clear(); live_texture.reset(); live_texture_maps={};
     draw_count = 0; vertex_count = 0; submitted = 0; completed = 0; outside_bytes = 0;
 }
@@ -701,6 +730,7 @@ static void raw_display_list(uint32_t address,uint32_t length) {
                 const uint32_t r=reg+i;
                 if(r>=0x1040 && r<=0x1047) store_guest_word(known_sdk+0xC8+(r-0x1040)*4,word(at));
                 else if(r>=0x1050 && r<=0x1057) store_guest_word(known_sdk+0xE8+(r-0x1050)*4,word(at));
+                else if(r==0x1018 || r==0x1019) set_matrix_index(r-0x1018,word(at));
             }
             continue;
         }
@@ -800,6 +830,11 @@ void hle_GXBegin(ppc::Ctx& c) {
         }
         return;
     }
+    const uint32_t sdk=read32(c.r[2]-8968),dirty=read32(sdk+0x5FC);
+    if(dirty&0x04000000) {
+        for(uint32_t reg=0;reg<2;++reg) set_matrix_index(reg,read32(sdk+0x80+reg*4));
+        ppc::wr32(c,sdk+0x5FC,dirty&~0x04000000u);
+    }
     auto texture=snapshot_texture(bound_textures[0],palettes);
     capture->begin(gx::share(live_state,snapshot(c)), uint8_t(c.r[3]), uint8_t(c.r[4]), uint16_t(c.r[5]), producer(), c.lr ? c.lr - 4 : 0x80284FD0);
     live_texture=std::move(texture);
@@ -853,6 +888,7 @@ void hle_GXBeginDisplayList(ppc::Ctx& c) {
         auto shadow=memory.read(sdk,0x600);
         std::copy(shadow.begin(),shadow.end(),list->shadow.begin());
         list->color_shadow=color_uniforms; list->texture_shadow=texture_matrices;
+        list->indices_shadow=matrix_indices;
         list->texture_copy_source_shadow=texture_copy_source;
         list->texture_copy_width_shadow=texture_copy_width; list->texture_copy_height_shadow=texture_copy_height;
         list->texture_copy_format_shadow=texture_copy_format;
@@ -888,6 +924,7 @@ void hle_GXEndDisplayList(ppc::Ctx& c) {
         std::memcpy(c.mem+(list->sdk & 0x3FFFFFFF),list->shadow.data(),list->shadow.size()); gx::note_write_range(list->sdk,list->shadow.size());
         ppc::wr32(c,list->sdk+8,kept);
         color_uniforms=list->color_shadow; texture_matrices=std::move(list->texture_shadow); dirty_material();
+        matrix_indices=list->indices_shadow;
         texture_copy_source=list->texture_copy_source_shadow;
         texture_copy_width=list->texture_copy_width_shadow; texture_copy_height=list->texture_copy_height_shadow;
         texture_copy_format=list->texture_copy_format_shadow;
@@ -920,9 +957,10 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     auto blend=blend_state;
     auto colors=material_snapshot(c).uniforms;
     auto matrices=texture_matrices;
+    auto indices=matrix_indices;
     auto versions=copied_textures;
     std::vector<uint32_t> path;
-    import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,imported,versions,path);
+    import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,indices,imported,versions,path);
     for (auto& item : imported) {
         if(auto* draw=std::get_if<gx::DrawPacket>(&item)) { add_guest_stat(vertex_count,draw->vertices.size()); add_guest_stat(draw_count,1); draws.push_back(std::move(*draw)); }
         else {
@@ -940,6 +978,7 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     color_uniforms.registers=colors.registers; color_uniforms.konst=colors.konst;
     color_uniforms.lights=colors.lights; color_uniforms.fog=colors.fog; color_uniforms.indirect=colors.indirect;
     texture_matrices=std::move(matrices);
+    matrix_indices=indices;
     ppc::wr32(c,sdk+0x254,(read32(sdk+0x254)&~0x70u)|(colors.pixel[3]<<4));
     for(uint32_t i=0;i<4;++i) ppc::wr32(c,sdk+0xB8+i*4,colors.channels[i]);
 }
@@ -984,7 +1023,7 @@ void hle_GXLoadPosMtxImm(ppc::Ctx& c) {
         uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,0x000B0000|row*4);
         for (const auto& values : matrix) for (float value : values) uc::gx_fifo_write(4,std::bit_cast<uint32_t>(value));
         if (!recording->overflow) recording->native.geometry.push_back(Resource::Position{row,matrix});
-    } else transforms=checked;
+    } else { transforms=checked; matrix_rows(texture_matrices,nullptr,row,matrix,3); dirty_material(); }
 }
 void hle_GXLoadPosMtxIndx(ppc::Ctx& c) {
     uc::gx_audit_enter(0x8028887C,c); matrix_boundary(0x8028887C);
@@ -993,7 +1032,7 @@ void hle_GXLoadPosMtxIndx(ppc::Ctx& c) {
     if (recording) {
         uc::gx_fifo_write(1,0x20); uc::gx_fifo_write(4,uint32_t(index)<<16|0xB000|row*4);
         if (!recording->overflow) recording->native.geometry.push_back(Resource::IndexedPosition{index,row});
-    } else indexed_position(transforms,state,index,row);
+    } else { indexed_position(transforms,texture_matrices,state,index,row); dirty_material(); }
 }
 void hle_GXLoadNrmMtxIndx3x3(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80288900,c); matrix_boundary(0x80288900);
@@ -1011,6 +1050,27 @@ void hle_GXSetCurrentMtx(ppc::Ctx& c) {
     ppc::wr32(c,sdk+0x5FC,read32(sdk+0x5FC)|0x04000000);
     if (recording) { if (!recording->overflow) recording->native.geometry.push_back(Resource::Current{row}); }
     else transforms.current=row;
+}
+void hle_GXSetMatrixIndex(ppc::Ctx& c) {
+    matrix_boundary(0x80288BFC);
+    const auto reg=int32_t(c.r[3])<5 ? 0u : 1u,sdk=read32(c.r[2]-8968),value=read32(sdk+0x80+reg*4);
+    uc::gx_fifo_write(1,8); uc::gx_fifo_write(1,0x30+reg*0x10); uc::gx_fifo_write(4,value);
+    uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,0x1018+reg); uc::gx_fifo_write(4,value);
+    set_matrix_index(reg,value); ppc::wr16(c,sdk+2,1);
+}
+void hle_ResResetMatrixIndices(ppc::Ctx&) {
+    matrix_boundary(0x803740B8);
+    constexpr uint32_t values[]={0x3CF3CF00,0x00F3CF3C};
+    for(uint32_t reg=0;reg<2;++reg) { uc::gx_fifo_write(1,8); uc::gx_fifo_write(1,0x30+reg*0x10); uc::gx_fifo_write(4,values[reg]); }
+    uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,0x00011018);
+    for(uint32_t reg=0;reg<2;++reg) { uc::gx_fifo_write(4,values[reg]); set_matrix_index(reg,values[reg]); }
+}
+void hle_ResTexMatrixIndices(ppc::Ctx& c) {
+    matrix_boundary(0x80374114); memory.read(c.r[3],32);
+    uint32_t values[2]={};
+    for(uint32_t i=0;i<8;++i) values[i/4]|=read32(c.r[3]+i*4)<<(i<4 ? 6+i*6 : (i-4)*6);
+    uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,0x00011018);
+    for(uint32_t reg=0;reg<2;++reg) { uc::gx_fifo_write(4,values[reg]); set_matrix_index(reg,values[reg]); }
 }
 
 void hle_GXLoadTexObjPreLoaded(ppc::Ctx& c) {
@@ -1446,13 +1506,15 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     try {
         for(const auto& operation:cached->operations) {
             if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
-                indexed_texture(texture_matrices,layout,texture->index,texture->id,texture->words); dirty_material();
+                indexed_texture(texture_matrices,transforms,layout,texture->index,texture->id,texture->words); dirty_material();
                 resolve_texture_matrices(uniforms,selectors,texture_matrices);
                 uniforms_dirty=true;
                 continue;
             }
             if(const auto* position=std::get_if<MeshPosition>(&operation)) {
-                indexed_position(transforms,layout,position->index,position->row);
+                indexed_position(transforms,texture_matrices,layout,position->index,position->row); dirty_material();
+                resolve_texture_matrices(uniforms,selectors,texture_matrices);
+                uniforms_dirty=true;
             } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
                 indexed_normal(transforms,layout,normal->index,normal->row);
             } else {
@@ -1732,11 +1794,11 @@ void hle_GXLoadTexMtxImm(ppc::Ctx& c) {
     if(type>1 || id>125) throw gx::Error(gx::ErrorCode::layout,pointer,125,id);
     const auto count=type ? 8u : 12u;
     memory.read(pointer,count*4);
-    TextureMatrix matrix{{{},{},{0,0,1,0}}}; // a 2x4 load leaves Q to the identity row
+    TextureMatrix matrix{};
     for(size_t i=0;i<count;++i) matrix[i/4][i%4]=std::bit_cast<float>(read32(pointer+uint32_t(i*4)));   // non-finite words are guest data, loaded as the hardware does
-    texture_matrices[id]=matrix; dirty_material();
+    matrix_rows(texture_matrices,recording ? nullptr : &transforms,id,matrix,count/4); dirty_material();
     const auto address=id>=64 ? 0x500+(id-64)*4 : id*4;
     uc::gx_fifo_write(1,0x10); uc::gx_fifo_write(4,(count-1)<<16|address);
     for(uint32_t i=0;i<count;++i) uc::gx_fifo_write(4,read32(pointer+i*4));
-    if(recording && !recording->overflow) recording->native.geometry.push_back(Resource::TextureTransform{id,matrix});
+    if(recording && !recording->overflow) recording->native.geometry.push_back(Resource::TextureTransform{id,matrix,count/4});
 }

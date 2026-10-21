@@ -58,6 +58,7 @@ int main() {
         CHECK(packet->draws[0].vertex_view().size()==3 && packet->draws[0].vertex_view()[0].position[0]==1 && packet->draws[0].vertex_view()[2].position[0]==3);
         CHECK((indices_of(packet->draws[0])==std::vector<uint32_t>{0,1,2}));
         CHECK(packet->draws[0].transforms->position_rows[0][3]==5);
+        CHECK(packet->draws[0].uniforms->tex_rows[0][3]==5);
         CHECK(packet->draws[0].state->viewport && (*packet->draws[0].state->viewport)[2]==320);
         CHECK(packet->draws[0].state->scissor && (*packet->draws[0].state->scissor==std::array<int32_t,4>{0,0,160,240}));
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
@@ -71,6 +72,7 @@ int main() {
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
         CHECK(uc::gx_stats().geometry_hits==hits_before+1);
         CHECK(packet->draws[0].transforms->position_rows[0][3]==25);
+        CHECK(packet->draws[0].uniforms->tex_rows[0][3]==25);
         CHECK((*packet->draws[0].state->viewport)[2]==640);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         ppc::wrf32(c,0x8000350C,5);
@@ -172,6 +174,7 @@ int main() {
         CHECK((indices_of(packet->draws[0])==std::vector<uint32_t>{0,1,2,3,4,5,5,4,6}));
         CHECK(packet->draws[0].transforms->position_rows[0][3]==5);
         CHECK(packet->draws[1].vertex_view().size()==3 && packet->draws[1].transforms->position_rows[0][3]==15);
+        CHECK(packet->draws[0].uniforms->tex_rows[0][3]==5 && packet->draws[1].uniforms->tex_rows[0][3]==15);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
 
         // Indexed texture matrix load (GX_LOAD_INDX_C, texmtx 30 at XF 0x78) applies to the draws after it.
@@ -186,6 +189,7 @@ int main() {
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==3);
         CHECK(packet->draws[1].uniforms->tex_rows[0][3]==0 && packet->draws[2].uniforms->tex_rows[0][3]==0.25f);
+        CHECK(packet->draws[1].transforms->position_rows[30][3]==0 && packet->draws[2].transforms->position_rows[30][3]==0.25f);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
     sched.run(thread); CHECK(uc::gx_stats().draws==16);

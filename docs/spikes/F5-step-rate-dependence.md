@@ -213,3 +213,47 @@ Post-fix live checks: roof leeches approach and attack at 120/240 Hz (`live-120-
 The unblocked zombie #162 covers about 22.7 world units over six game seconds in the 30 FPS reference (`live-30-20-1792561731127962200`) and 22.5 at 480 Hz, about 3.8 units/s in both. Zombie #163 moves from the seat row (z=10.14) into the aisle (z=-0.16) in the 480 Hz check. These checks do not cover every enemy type or every navigation state; the reported dog-against-wall case still needs a dedicated scene check.
 
 Additional progression smoke: `live-120-600-1792562171777636200` reached the first train chapter's results and `chapter_done` at retrace 32718. The diagnostic script exits with `route stopped: chapter_done` because its requested 600-second capture lies after the chapter ends; this is not a game crash. This route used speed 8 (50 ms effective game steps), so it proves chapter progression only; the targeted high-frequency checks above switch to speed 1. The dog-against-wall scene was not identified by this route or by the preceding Claude session notes.
+
+## 2026-10-21: monkey landing probe and church water
+
+The owner's five videos exposed a live monkey stuck after its roof jump, suspect jump timing, broken church-water reflections, and accelerated small/giant bats. The raised-arm monkey is alive; the earlier dead-monkey interpretation was rejected by the targeted replay.
+
+Monkey handler `80200A80`, action `actor+8560 == 10`, casts from world position plus `(0,2,0)` to that point plus `(0,-120*dt,0)` (`80044D14`, return address `80200DFC`). At 480 Hz this ray is only 0.25 units long and remains above the floor even after normal actor collision has grounded the monkey. The action never reaches its landing transition. `WorldRaycast` retains the nominal `120 * 2 / clock.rate` probe reach for this caller when the timestep shrinks; actual gravity displacement remains time-based. Other raycasts, pause and original 30 Hz keep their supplied geometry.
+
+Before: `episode0-480--2-1792567473892560400`, actor 368, action 10 at `(277.272,170.01,247.093)` throughout the 20-second observation. After: `episode0-480--2-1792568712909734200`, actor 370, lands within 0.8 game seconds and continues walking in action 0 throughout the same observation. Reference: `episode0-30--2-1792567634751651900`, actor 367, also lands within 0.8 seconds. Captures switch from accelerated routing to speed 1 before measurement. Animation playback advances at approximately 30 animation ticks per game second at both rates. Post-landing walking speeds are not directly comparable: the runs select different locomotion substates and actual animations. Even matching script pointers does not establish a matching animation: the one-second dumps contain `L_dash` (animation 12, slot 2) at 30 Hz and `evasion_right` (animation 11, slot 0) at 480 Hz. An isolated call to the root-motion sampler `80169B7C` on the latter dump gives forward deltas 0.11285845, 0.02821463 and 0.00705364 for steps 1, 1/4 and 1/16. There is no second timestep multiplier in that sampler. A separate reduction of jump distance has not been reproduced with a matched animation/trajectory.
+
+The church water was a separate GX state error. Projected texgen `0x5006` needs the model/view matrix from shared XF position/texture rows, followed by its projection post-matrix. The port maintained separate banks and read texture selectors only from the SDK cache. NW4R `80374114` writes XF selectors directly, without updating that cache, so the water used identity as its primary matrix and produced stretched gray bands.
+
+Position and texture loads now update overlapping XF rows, including indexed and recorded loads; a 2x4 load preserves its third row. Native hooks for `80374114`, `803740B8` and SDK `80288BFC` track actual selectors. Immediate draws consume pending SDK selector writes, and display-list replay uses the current replay selectors, including nested lists, with transactional rollback. Regressions cover row aliases, partial loads, cached mesh draws, SDK/NW4R ordering, nested selectors and failed replay.
+
+Visual evidence: `episode0-120-0-1792566938297067700` still had broken water after the row-alias fix alone; `episode0-120-0-1792568257592775300` has the correct view matrix in texgen 0 and removes the bands across the six-second bridge/camera-pan capture. Temporary packet diagnostics were removed.
+
+The final selector-ordering fixes retain that result in `episode0-120-0-1792569126546786100`, including the camera pan across the water.
+
+## 2026-10-21: both bat displacement paths require frame normalization
+
+`801C4438` scales its pointed-to displacement by `clock.rate * 0.5 * dt` only in modes 16..20. Nine callers use it for direct flight, pursuit and retreat. `FlightStep` preserves those modes and applies `game_step_scale()` to the remaining modes. Chapter 2 uses mode 5.
+
+This alone was insufficient: `801C44B8` duplicates the same conditional normalization inline, then advances its route position at +44 by the supplied distance. Its eight callsites include small-bat movement (`801C2C00`, `801C2F3C`, `801C3198`), common route flight (`801C5DBC`) and giant-bat paths (`801D2260`, `801D2C94`). `FlightPathStep` normalizes the unscaled modes before the original body, preserving the original mode-16..20 normalization, route steering and waypoint logic.
+
+The partial-fix 120 Hz run `episode0-120--1-1792567772590410200` exposed the second path: some boss segments still ran at 240/300 world units per game second and small bats at 120/140. The original-rate reference `episode0-30--1-1792568808694567500` instead has boss travel near 60/75 and small-bat travel near 30/40. These are live captures with different random routes, so distributions identify the remaining multiplier rather than identical trajectories. Speed ramps in `801C61E0` and `801C6FC8` already read `804D331C` (current dt); they were inspected and left unchanged.
+
+`test_game_pacing` covers both displacement paths at 120/240/480 Hz across modes 0,5,15,16,20,21, original-mode distance, and pause. The path test failed before the second normalization and passes afterward. Full build `build/flight-path-build.log`: 134/134 tests passed.
+
+Final 480 Hz validation: `episode0-480--1-1792569627917345700`, 30 game seconds at speed 1, 601 samples, clean shutdown. Boss travel segments now run near 60/75 units/s (maximum sampled speed 78.13); small-bat median/p75/p90 are 30.00/40.04/41.79, compared with 30.03/40.18/42.08 in the 30 Hz reference. The nearest sampled boss root is 34.32 units from the camera, versus 17.36 in the reference; the reported runaway approach was not reproduced. Random routes differ, and this capture does not exhaust every boss attack or geometry intersection.
+
+## 2026-10-21: offline audit follow-up
+
+Three further frame dependencies were confirmed from caller/dataflow inspection:
+falling-bat position addition (`801C3878`), bat flight-phase progress in states
+32/34 (`801C57B8`), and the monkey jump's repeated residual interpolation
+(`80200B88..BDC`). Targeted hooks normalize these to the nominal frame; already
+timed gravity and other callers retain their original calculations. Details and
+false-positive triage are in [the timing audit](../testing/timing-audit.md).
+
+The full build passed 135 tests. Added pacing regressions cover 30–480 Hz and
+pause. An offline probe on existing RAM ran the actual flight-phase AOT body:
+both states crossed the same threshold after 0.8 seconds at every tested rate.
+The actual smootherstep AOT tail also passed subdivision checks. No game was
+launched for this follow-up; complete jump/collision trajectories remain a live
+validation gap. The time-varying jump blend retains numerical integration error.

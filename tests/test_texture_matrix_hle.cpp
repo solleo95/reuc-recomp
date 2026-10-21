@@ -7,6 +7,8 @@
 void hle_GXBegin(ppc::Ctx&); void hle_GXCopyDisp(ppc::Ctx&);
 void hle_GXBeginDisplayList(ppc::Ctx&); void hle_GXEndDisplayList(ppc::Ctx&);
 void hle_GXCallDisplayList(ppc::Ctx&); void hle_GXLoadTexMtxImm(ppc::Ctx&);
+void hle_GXLoadPosMtxImm(ppc::Ctx&); void hle_GXLoadPosMtxIndx(ppc::Ctx&); void hle_GXSetArray(ppc::Ctx&);
+void hle_GXSetMatrixIndex(ppc::Ctx&); void hle_ResResetMatrixIndices(ppc::Ctx&); void hle_ResTexMatrixIndices(ppc::Ctx&);
 static void flush(ppc::Ctx&) { for(int i=0;i<8;++i) uc::gx_fifo_write(4,0); }
 int main() {
     Fix f;
@@ -75,6 +77,64 @@ int main() {
         auto raw_packet=packets.try_take(); CHECK(raw_packet && raw_packet->draws.size()==1);
         CHECK(raw_packet->draws[0].uniforms->tex_gens[1]==0x5086 && raw_packet->draws[0].uniforms->tex_posts[1]==0x103 && raw_packet->draws[0].uniforms->tex_gens[0]==6);
         CHECK(packets.complete(raw_packet->serial)); uc::gx_completed(raw_packet->serial);
+        // Reflection texgen and per-vertex selectors read the same XF rows as position matrices.
+        auto position=[&](float offset) {
+            for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80002000+i*4,float(i)+offset);
+            c.r[3]=0x80002000; c.r[4]=9; hle_GXLoadPosMtxImm(c);
+        };
+        auto check_alias=[&](float offset) {
+            ppc::wr32(c,0x80001080,9u<<6); ppc::wr32(c,0x80001014,(1<<9)|2);
+            c.r[3]=0x90; c.r[4]=0; c.r[5]=3; hle_GXBegin(c);
+            for(int i=0;i<3;++i) { uc::gx_fifo_write(1,10); for(int j=0;j<3;++j) uc::gx_fifo_write(4,0); }
+            c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+            auto p=packets.try_take(); CHECK(p && p->draws.size()==1);
+            const auto& d=p->draws[0];
+            CHECK(d.uniforms->tex_rows[0][3]==offset+3);
+            CHECK(d.texture_bank && d.texture_bank->rows[10*3][3]==offset+7);
+            CHECK(d.transforms->position_rows[9][3]==offset+3);
+            CHECK(packets.complete(p->serial)); uc::gx_completed(p->serial);
+            ppc::wr32(c,0x80001014,1<<9);
+        };
+        position(10); check_alias(10);
+        begin(0x8000A000); position(20); const auto position_list=end();
+        check_alias(10); play(0x8000A000,position_list); check_alias(20);
+        // Indexed loads, including recorded loads, read their source at execution time.
+        c.r[3]=21; c.r[4]=0x80002000; c.r[5]=48; hle_GXSetArray(c);
+        begin(0x8000B000); c.r[3]=0; c.r[4]=9; hle_GXLoadPosMtxIndx(c); const auto indexed_list=end();
+        for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80002000+i*4,float(i)+30);
+        play(0x8000B000,indexed_list); check_alias(30);
+        position(10); for(uint32_t i=0;i<12;++i) ppc::wrf32(c,0x80002000+i*4,float(i)+30);
+        c.r[3]=0; c.r[4]=9; hle_GXLoadPosMtxIndx(c); check_alias(30);
+        // A 2x4 texture load overwrites two shared rows, preserving the third.
+        for(uint32_t i=0;i<8;++i) ppc::wrf32(c,0x80002000+i*4,float(i)+40);
+        c.r[3]=0x80002000; c.r[4]=9; c.r[5]=1; hle_GXLoadTexMtxImm(c); check_alias(40);
+        draw(); c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto partial=packets.try_take(); CHECK(partial && partial->draws[0].uniforms->tex_rows[2][3]==41);
+        CHECK(partial->draws[0].transforms->position_rows[11][3]==41);
+        CHECK(packets.complete(partial->serial)); uc::gx_completed(partial->serial);
+        // NW4R bypasses the SDK cache; SDK flushes and reset still replace the actual XF selectors.
+        ppc::wr32(c,0x80001080,60u<<6);
+        for(uint32_t i=0;i<8;++i) ppc::wr32(c,0x80002100+i*4,i==0 ? 9 : 60);
+        c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw(); take(43);
+        CHECK(ppc::rd32(c,0x80001080)==60u<<6);
+        c.r[3]=0; hle_GXSetMatrixIndex(c); draw(); take(0);
+        begin(0x8000C000); c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw(); const auto selectors_list=end();
+        draw(); take(0); play(0x8000C000,selectors_list); draw(); take(43,2);
+        hle_ResResetMatrixIndices(c); draw(); take(0);
+        // GXSetTexCoordGen2 defers its SDK matrix-index write until the next GXBegin.
+        ppc::wr32(c,0x80001080,9u<<6); ppc::wr32(c,0x800015FC,0x04000002);
+        draw(); take(43);
+        CHECK(ppc::rd32(c,0x800015FC)==2);
+        hle_ResResetMatrixIndices(c); draw(); take(0); // The old pending SDK write must not override a newer NW4R command.
+        ppc::wr32(c,0x800015FC,0);
+        begin(0x8000D000); c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); const auto child_selectors=end();
+        begin(0x8000E000); play(0x8000D000,child_selectors); draw(); const auto parent_selectors=end();
+        play(0x8000E000,parent_selectors); draw(); take(43,2);
+        hle_ResResetMatrixIndices(c);
+        const auto child_byte=ppc::rd8(c,0x8000D000); ppc::wr8(c,0x8000D000,child_byte^1);
+        rejected=false; try { play(0x8000E000,parent_selectors); } catch(const gx::Error&) { rejected=true; }
+        CHECK(rejected); draw(); take(0);
+        ppc::wr8(c,0x8000D000,child_byte);
     });
     sched.run(thread);
 }

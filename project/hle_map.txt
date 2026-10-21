@@ -156,6 +156,9 @@ GXSetProjectionv
 GXLoadPosMtxImm
 GXLoadPosMtxIndx
 GXSetCurrentMtx
+@80288BFC GXSetMatrixIndex
+@803740B8 ResResetMatrixIndices
+@80374114 ResTexMatrixIndices
 GXSetCopyClear
 GXCopyDisp
 @80285334 GXSetTexCopySrc
@@ -197,6 +200,18 @@ GXLoadNrmMtxImm
 @80210278 PropStep
 @801172A4 PhysicsStep
 @80117464 PhysicsHit
+@800F1D08 PhysicsAutoDisable
+@800EA9B0 PhysicsBodyDestroy
+@801C4438 FlightStep
+@801C44B8 FlightPathStep
+@801C56F0 FlightPhaseStep
+@801B0AAC CameraHistoryStep
+@801A5130 DeferredActorStep
+@80136EEC RumbleStep
+@80162A68 TrailHistoryStep
+@80123D14 JumpBlendStep
+@80165610 CrossfadeStep
+@80044D14 WorldRaycast
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop
@@ -215,7 +230,7 @@ KPADEnableMotor Nop
 
 # --- Dolphin SDK matrix/vector library (mtx.a, runtime/hle/sdk_math.cpp): bit-exact native versions of the translated paired-single code.
 # Mapped by address because identified_sdk.txt lists other, unrelated functions under the same names.
-@80264680 PSMTXIdentity
+@80264680 ModelHistoryIdentity
 @802646AC PSMTXCopy
 @802646E0 PSMTXConcat
 @80264DE0 PSMTXTransApply
@@ -256,7 +271,16 @@ KPADEnableMotor Nop
 @8037B388 Leaf_8037B388
 @8029C4AC Leaf_8029C4AC
 @80367660 Leaf_80367660
-@80064C34 Leaf_80064C34
+@80064C34 VectorAddStep
+@802447D8 UiPhysicsStep
+@80211734 TimelineStep
+@8006DB34 WeaponTrailStep
+@801B916C EffectRetireStep
+@8012AEE8 TargetRefreshStep
+@803AA7B0 SoundFrameStep
+@8004C91C SoundRetryStep
+@80049000 SoundWaitStep
+@803C1BF8 HomeMenuStep
 @80394914 Leaf_80394914
 @803948C0 Leaf_803948C0
 @803942AC Leaf_803942AC

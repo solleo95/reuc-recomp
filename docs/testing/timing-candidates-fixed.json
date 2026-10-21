@@ -1,0 +1,2373 @@
+{
+  "schema": 1,
+  "snapshot_date": "2026-10-21",
+  "scope": "Fixed store-PC subset, including earlier corrections; source fix does not imply live verification or installation.",
+  "count": 54,
+  "source_sha256": {
+    "game/game_pacing.cpp": "a9bb5ca9443c49197d7c48903c1d96618762067937d147e03c0a2e889887d645",
+    "game/game_pacing.h": "4c2ae7310925bbf8c6c2922edafb9da7bdeaa5d7bddf73f17f7e13db41e66c63",
+    "project/hle_map.txt": "322bbe2d23f3744e52096cc4b5f6eaec907152c242635603ebd0d2df75b404bc",
+    "project/uc.cfg": "57b24e5e1b6379569bebe617b58009db282ec1e3a3315a978ba11bb3dd737e26",
+    "tests/test_game_pacing.cpp": "82460b8db0c22f7da0045c7160a9d6493cc102ae50daa956a6802887561109cb",
+    "tools/timing_audit.py": "d25b4015add505fb073aa84d576e033d74bd4ee3de48179ad6d1830eba28b9e5",
+    "tests/test_timing_audit.py": "ad180b7788cc459bbd22d7c64fc312e4fbfece66257a63844d11fcc5dc4fba21"
+  },
+  "build_state": {
+    "last_full_build": "build/claude-build2.log",
+    "full_tests": "135/135 passed",
+    "dist_generation": "generation_2a48cf24324130e2",
+    "dist_contains_sound_wait": true,
+    "latest_scanner_tests": "16/16 passed",
+    "rescan": "build/timing_audit_86e9/report.json: 3564 store PCs on generation_86e9249dfeaf5139, no store PC outside this registry",
+    "game_folder_updated": true,
+    "dist_contains_crossfade_step": true,
+    "monkey_ab_after_fix": "episode0-30--2-1792593794386597400 vs episode0-480--2-1792593860762565700: min/median distance 7.7/28.8 vs 9.3/28.8",
+    "installed_path": "S:/Games/Umbrella Chronicles",
+    "installed_at_moscow": "2026-10-21 17:51:13",
+    "installed_files_sha256_verified": 102,
+    "deployment_manifest": "docs/testing/timing-latest-deployment.json"
+  },
+  "findings": [
+    {
+      "store": "8004A6D8",
+      "function": "8004A3CC",
+      "status": "fixed",
+      "reason": "Six-frame sound retry window previously expired after six render updates. SoundRetryStep compensates the caller decrement atLR8004A6FC, preserves pending retries on fractional/paused frames, and consumes nominal elapsed ticks before a retry. Initial sound requests retain their original behavior.",
+      "evidence": [
+        "8003A680",
+        "8004A6C8-8004A704",
+        "8004CAFC-8004CB0C",
+        "game/game_pacing.cpp:hle_SoundRetryStep",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "field": "r31@block81+0x128",
+      "kind": "float-add",
+      "operations": [
+        "fsubs"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_006.cpp",
+        "line": 6442
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003D380",
+        "8003D798",
+        "80041174",
+        "80049100",
+        "8004FBE8",
+        "800503A4",
+        "80061A4C",
+        "80062764",
+        "80066EFC",
+        "80067E3C",
+        "800F2B00",
+        "800F3920",
+        "800F3C68",
+        "800F3E28",
+        "800F4838",
+        "800F4FE8",
+        "800F51F4",
+        "800F5260",
+        "800F5268",
+        "80130260",
+        "801490FC",
+        "80151424",
+        "80158270",
+        "801582A4",
+        "801582C8",
+        "80159BC0",
+        "8016C330",
+        "801AEE20",
+        "801BC280",
+        "801BCF68",
+        "801BD014",
+        "801C77E8",
+        "801CC1E0",
+        "801F80F4",
+        "801F81D4",
+        "80215CBC",
+        "80255AC4",
+        "80289DF8",
+        "80289E44"
+      ],
+      "store": "800667C0",
+      "function": "8006648C",
+      "status": "fixed",
+      "reason": "Clock channel-1 slowdown ramp subtracts 0.12 each update; scale sole-reader literal by nominal elapsed frames.",
+      "evidence": [
+        "game_006.cpp:6219; investigator source review; 800667C0/820/890 clock reads; field/cadence unresolved",
+        "800667B0/B8/C0 decrement actor+296; 8006686C/8DC pass it to clock channel 1 via 80158270; 801582C8 multiplies raw delta by channels. Literal 806C4EA8 read only at 800667B0. Regression equal ramp at 30–480 Hz, pause and nominal restoration."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r30@block58+0x49C",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_007.cpp",
+        "line": 7152
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8006D2BC",
+        "8006E1A0",
+        "8006E3B4",
+        "8006E400",
+        "8006E40C",
+        "8006E44C",
+        "8025007C",
+        "802500A0",
+        "80289E40",
+        "80344550",
+        "80394248",
+        "803946F0"
+      ],
+      "store": "8006E140",
+      "function": "8006DB34",
+      "status": "fixed",
+      "reason": "Eight-sample weapon trail advanced each update; native wrapper keeps fade elapsed-time based and samples original geometry at nominal cadence.",
+      "evidence": [
+        "game_007.cpp:6799; investigator source review; clock reads; three field stores; timing semantics unresolved",
+        "8006DB94..F4 fade dt;8006DC00..60 samples pointer;8006E134..174 ringadvance;WeaponTrailStep entry8006DBF8 tests30..480/pause/catchup"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r4@block9+0x15C",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_8f5c8a9f29ed8c00/game_020.cpp",
+        "line": 7469
+      },
+      "direct_callers": [
+        "800F215C"
+      ],
+      "direct_callees": [],
+      "store": "800F1D8C",
+      "function": "800F1D08",
+      "status": "fixed",
+      "reason": "Quiet-step counter normalized using game_step_scale with fractional carry; seconds timer already consumes solver dt.",
+      "evidence": [
+        "12 captured bodies: configured +336=0, +340=10; original sleep after11calls",
+        "game/game_pacing.cpp hle_PhysicsAutoDisable; tests/test_game_pacing.cpp 30..480Hz and lifetime/reset cases",
+        "build/sleep_probe.exe:9600 comparisons of body bytes with original AOT at nominal rate"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r30@block171+0x1C",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_028.cpp",
+        "line": 1246
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003DA30",
+        "8003ECFC",
+        "8003ED58",
+        "8003ED68",
+        "8003ED7C",
+        "8003F1D4",
+        "80061A4C",
+        "80062ABC",
+        "8006399C",
+        "80064C58",
+        "80064C74",
+        "80064CFC",
+        "800AB510",
+        "800F65B8",
+        "8010492C",
+        "80128CE4",
+        "80128E08",
+        "80128F38",
+        "801299A0",
+        "80129A98",
+        "80129AAC",
+        "8012AF90",
+        "8012B0AC",
+        "8012CF88",
+        "8012CF8C",
+        "8012D21C",
+        "801AF03C",
+        "80289DF0",
+        "80289E3C",
+        "80293554"
+      ],
+      "store": "801297BC",
+      "function": "80129004",
+      "status": "fixed",
+      "reason": "90-call target refresh countdown now advances with nominal30Hz ticks; original state helper remains every update.",
+      "evidence": [
+        "game_028.cpp:1336 /*801297B4*/ { ppc::op_addi(c, 3, 30, 56); } | /*801297B8*/ { ppc::op_addi(c, 0, 4, -1); } | /*801297BC*/ { ppc::op_stw(c, 0, 30, 28); } | /*801297C0*/ { c.lr = 0x801297C4u; fn_8003F1D4(c); }",
+        "80129968..70 reset90;801297B0..BC decrement;TargetRefreshStep after8012AEE8 adjusts next subtraction;30..480FPS andpause tests"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r30@block6+0xC",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_029.cpp",
+        "line": 4891
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "802A679C",
+        "802E1ACC",
+        "803B5028"
+      ],
+      "store": "80136F3C",
+      "function": "80136EEC",
+      "status": "fixed",
+      "reason": "Rumble pattern index advanced once per render/update call; RumbleStep now executes original pattern body once per nominal 30 Hz tick.",
+      "evidence": [
+        "game_029.cpp:4937 /*80136F34*/ { ppc::op_lwz(c, 3, 30, 12); } | /*80136F38*/ { ppc::op_addi(c, 4, 3, 1); } | /*80136F3C*/ { ppc::op_stw(c, 4, 30, 12); } | /*80136F40*/ { ppc::op_lwz(c, 0, 30, 8); } callers=80250A44",
+        "80136F34..80136F94 index/sample/end;80137020/60 motor transitions;caller80250A64;30..480 Hz/pause/catchup regression"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r26@block92+0x1C",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_030.cpp",
+        "line": 7472
+      },
+      "direct_callers": [
+        "80142230",
+        "801423E0",
+        "801B2050"
+      ],
+      "direct_callees": [
+        "8004FBE8",
+        "800516A4",
+        "80061A4C",
+        "8011F468",
+        "8011FB6C",
+        "8011FBA4",
+        "801217B4",
+        "801219E4",
+        "801237C0",
+        "801404A8",
+        "8014126C",
+        "80289CCC",
+        "80289DE0",
+        "80289E2C",
+        "80388394",
+        "80388514",
+        "80388900",
+        "80394980"
+      ],
+      "store": "80140C84",
+      "function": "8014061C",
+      "status": "fixed",
+      "reason": "Lighting residual retention now pow(.92, nominal step) at frame boundary.",
+      "evidence": [
+        "game_030.cpp:7315 /*801409AC*/ { ppc::op_psq_l(c, 0, 29, 0, 0, 0); } | /*801409B0*/ { ppc::op_ps_muls0(c, 0, 0, 1, false); } | /*801409B4*/ { ppc::op_psq_st(c, 0, 29, 0, 0, 0); } | /*801409B8*/ { ppc::op_psq_l(c, 0, 29, 8, 1, 0); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7318 /*801409B8*/ { ppc::op_psq_l(c, 0, 29, 8, 1, 0); } | /*801409BC*/ { ppc::op_ps_muls0(c, 0, 0, 1, false); } | /*801409C0*/ { ppc::op_psq_st(c, 0, 29, 8, 1, 0); } | /*801409C4*/ { /* cr0 compare is folded into the next branch */ } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7437 /*80140B50*/ { ppc::op_lfs(c, 2, 3, 0); } | /*80140B54*/ { ppc::op_fmuls(c, 6, 2, 5, false); } | /*80140B58*/ { ppc::op_stfs(c, 6, 3, 0); } | /*80140B5C*/ { ppc::op_fcmpo(c, 0, 6, 1); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7441 /*80140B60*/ { ppc::op_lfs(c, 2, 3, 4); } | /*80140B64*/ { ppc::op_fmuls(c, 2, 2, 4, false); } | /*80140B68*/ { ppc::op_stfs(c, 2, 3, 4); } | /*80140B6C*/ { ppc::op_lfs(c, 2, 3, 8); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7444 /*80140B6C*/ { ppc::op_lfs(c, 2, 3, 8); } | /*80140B70*/ { ppc::op_fmuls(c, 2, 2, 3, false); } | /*80140B74*/ { ppc::op_stfs(c, 2, 3, 8); } | /*80140B78*/ { { if (ppc::crbit(c, 1) == false) { goto L_80140B84; } } } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7519 /*80140C7C*/ { ppc::op_fmadds(c, 0, 1, 2, 0, false); } | /*80140C80*/ { ppc::op_stfs(c, 0, 1, 280); } | /*80140C84*/ { ppc::op_stfs(c, 4, 26, 28); } | /*80140C88*/ { ppc::op_lfs(c, 2, 26, 40); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7554 /*80140D08*/ { ppc::op_fmadds(c, 0, 1, 4, 0, false); } | /*80140D0C*/ { ppc::op_stfs(c, 0, 1, 308); } | /*80140D10*/ { ppc::op_stfs(c, 7, 26, 40); } | /*80140D14*/ { ppc::op_lfs(c, 0, 1, 292); } callers=80142230,801423E0,801B2050",
+        "80140C4C sole reader of806C6158; original old-target blend for9channels; test_game_pacing 30..480/pause/mode restore."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r26@block92+0x28",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_030.cpp",
+        "line": 7507
+      },
+      "direct_callers": [
+        "80142230",
+        "801423E0",
+        "801B2050"
+      ],
+      "direct_callees": [
+        "8004FBE8",
+        "800516A4",
+        "80061A4C",
+        "8011F468",
+        "8011FB6C",
+        "8011FBA4",
+        "801217B4",
+        "801219E4",
+        "801237C0",
+        "801404A8",
+        "8014126C",
+        "80289CCC",
+        "80289DE0",
+        "80289E2C",
+        "80388394",
+        "80388514",
+        "80388900",
+        "80394980"
+      ],
+      "store": "80140D10",
+      "function": "8014061C",
+      "status": "fixed",
+      "reason": "Lighting residual retention now pow(.92, nominal step) at frame boundary.",
+      "evidence": [
+        "game_030.cpp:7315 /*801409AC*/ { ppc::op_psq_l(c, 0, 29, 0, 0, 0); } | /*801409B0*/ { ppc::op_ps_muls0(c, 0, 0, 1, false); } | /*801409B4*/ { ppc::op_psq_st(c, 0, 29, 0, 0, 0); } | /*801409B8*/ { ppc::op_psq_l(c, 0, 29, 8, 1, 0); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7318 /*801409B8*/ { ppc::op_psq_l(c, 0, 29, 8, 1, 0); } | /*801409BC*/ { ppc::op_ps_muls0(c, 0, 0, 1, false); } | /*801409C0*/ { ppc::op_psq_st(c, 0, 29, 8, 1, 0); } | /*801409C4*/ { /* cr0 compare is folded into the next branch */ } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7437 /*80140B50*/ { ppc::op_lfs(c, 2, 3, 0); } | /*80140B54*/ { ppc::op_fmuls(c, 6, 2, 5, false); } | /*80140B58*/ { ppc::op_stfs(c, 6, 3, 0); } | /*80140B5C*/ { ppc::op_fcmpo(c, 0, 6, 1); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7441 /*80140B60*/ { ppc::op_lfs(c, 2, 3, 4); } | /*80140B64*/ { ppc::op_fmuls(c, 2, 2, 4, false); } | /*80140B68*/ { ppc::op_stfs(c, 2, 3, 4); } | /*80140B6C*/ { ppc::op_lfs(c, 2, 3, 8); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7444 /*80140B6C*/ { ppc::op_lfs(c, 2, 3, 8); } | /*80140B70*/ { ppc::op_fmuls(c, 2, 2, 3, false); } | /*80140B74*/ { ppc::op_stfs(c, 2, 3, 8); } | /*80140B78*/ { { if (ppc::crbit(c, 1) == false) { goto L_80140B84; } } } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7519 /*80140C7C*/ { ppc::op_fmadds(c, 0, 1, 2, 0, false); } | /*80140C80*/ { ppc::op_stfs(c, 0, 1, 280); } | /*80140C84*/ { ppc::op_stfs(c, 4, 26, 28); } | /*80140C88*/ { ppc::op_lfs(c, 2, 26, 40); } callers=80142230,801423E0,801B2050",
+        "game_030.cpp:7554 /*80140D08*/ { ppc::op_fmadds(c, 0, 1, 4, 0, false); } | /*80140D0C*/ { ppc::op_stfs(c, 0, 1, 308); } | /*80140D10*/ { ppc::op_stfs(c, 7, 26, 40); } | /*80140D14*/ { ppc::op_lfs(c, 0, 1, 292); } callers=80142230,801423E0,801B2050",
+        "80140C4C sole reader of806C6158; original old-target blend for9channels; test_game_pacing 30..480/pause/mode restore."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r3@block8+0x8",
+      "kind": "float-add",
+      "operations": [
+        "fadds"
+      ],
+      "priority": "review-time-use",
+      "scanner_time_dependency": true,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_030.cpp",
+        "line": 9404
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80160854",
+        "80160B24",
+        "80289DF0",
+        "80289E3C",
+        "802FC85C",
+        "802FC8E8"
+      ],
+      "store": "80142728",
+      "function": "801426D8",
+      "status": "fixed",
+      "reason": "Existing MovieUpdate hook completes the skip fade in one transition, including decoder cleanup; candidate state+6 is enum 1→2, other fields forced to final fade step.",
+      "evidence": [
+        "/*80142714*/ { ppc::op_lfs(c, 0, 3, 8); }",
+        "/*80142720*/ { ppc::op_lfs(c, 1, 4, 4); }",
+        "/*80142724*/ { ppc::op_fadds(c, 0, 0, 1, false); }",
+        "/*80142728*/ { ppc::op_stfs(c, 0, 3, 8); }",
+        "game/intro.cpp hle_MovieUpdate",
+        "tests/test_intro.cpp movie skip and cleanup"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block29+0x0",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_030.cpp",
+        "line": 9472
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80160854",
+        "80160B24",
+        "80289DF0",
+        "80289E3C",
+        "802FC85C",
+        "802FC8E8"
+      ],
+      "store": "8014281C",
+      "function": "801426D8",
+      "status": "fixed",
+      "reason": "Existing MovieUpdate hook completes the skip fade in one transition, including decoder cleanup; candidate state+6 is enum 1→2, other fields forced to final fade step.",
+      "evidence": [
+        "game_030.cpp:9451 /*80142720*/ { ppc::op_lfs(c, 1, 4, 4); } | /*80142724*/ { ppc::op_fadds(c, 0, 0, 1, false); } | /*80142728*/ { ppc::op_stfs(c, 0, 3, 8); } | /*8014272C*/ { ppc::op_addi(c, 3, 30, 13352); }",
+        "game_030.cpp:9507 /*801427E8*/ { ppc::op_addi(c, 0, 4, 1); } | /*801427EC*/ { ppc::op_sth(c, 5, 31, 4); } | /*801427F0*/ { ppc::op_sth(c, 0, 31, 6); } | /*801427F4*/ { goto L_80142874; }",
+        "game_030.cpp:9519 /*80142814*/ { ppc::op_addi(c, 0, 3, -10); } | /*80142818*/ { ppc::op_cmpi(c, 0, 0, -960); } | /*8014281C*/ { ppc::op_stw(c, 0, 31, 0); } | /*80142820*/ { { if (ppc::crbit(c, 0) == false) { goto L_8014282C; } } }",
+        "game_030.cpp:9527 /*80142830*/ { ppc::op_addi(c, 3, 3, 8); } | /*80142834*/ { ppc::op_extsh(c, 3, 0, false); } | /*80142838*/ { ppc::op_sth(c, 3, 31, 4); } | /*8014283C*/ { ppc::op_cmpi(c, 0, 0, 255); }",
+        "game/intro.cpp hle_MovieUpdate",
+        "tests/test_intro.cpp movie skip and cleanup"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block31+0x4",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_030.cpp",
+        "line": 9480
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80160854",
+        "80160B24",
+        "80289DF0",
+        "80289E3C",
+        "802FC85C",
+        "802FC8E8"
+      ],
+      "store": "80142838",
+      "function": "801426D8",
+      "status": "fixed",
+      "reason": "Existing MovieUpdate hook completes the skip fade in one transition, including decoder cleanup; candidate state+6 is enum 1→2, other fields forced to final fade step.",
+      "evidence": [
+        "game_030.cpp:9451 /*80142720*/ { ppc::op_lfs(c, 1, 4, 4); } | /*80142724*/ { ppc::op_fadds(c, 0, 0, 1, false); } | /*80142728*/ { ppc::op_stfs(c, 0, 3, 8); } | /*8014272C*/ { ppc::op_addi(c, 3, 30, 13352); }",
+        "game_030.cpp:9507 /*801427E8*/ { ppc::op_addi(c, 0, 4, 1); } | /*801427EC*/ { ppc::op_sth(c, 5, 31, 4); } | /*801427F0*/ { ppc::op_sth(c, 0, 31, 6); } | /*801427F4*/ { goto L_80142874; }",
+        "game_030.cpp:9519 /*80142814*/ { ppc::op_addi(c, 0, 3, -10); } | /*80142818*/ { ppc::op_cmpi(c, 0, 0, -960); } | /*8014281C*/ { ppc::op_stw(c, 0, 31, 0); } | /*80142820*/ { { if (ppc::crbit(c, 0) == false) { goto L_8014282C; } } }",
+        "game_030.cpp:9527 /*80142830*/ { ppc::op_addi(c, 3, 3, 8); } | /*80142834*/ { ppc::op_extsh(c, 3, 0, false); } | /*80142838*/ { ppc::op_sth(c, 3, 31, 4); } | /*8014283C*/ { ppc::op_cmpi(c, 0, 0, 255); }",
+        "game/intro.cpp hle_MovieUpdate",
+        "tests/test_intro.cpp movie skip and cleanup"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r30@block34+0x1E48",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_032.cpp",
+        "line": 3148
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8004867C",
+        "801516D4",
+        "80151BD4",
+        "80151E0C",
+        "80152504",
+        "80152848",
+        "80152A7C",
+        "80152C8C",
+        "80153278",
+        "801534EC",
+        "80154D28",
+        "80242AF0",
+        "80242B30",
+        "80242B8C",
+        "80242CA8",
+        "80291CC4",
+        "802934DC",
+        "80295EAC"
+      ],
+      "store": "8014D514",
+      "function": "8014D36C",
+      "status": "fixed",
+      "reason": "ExistingHudNameDelaynormalizesname-readinesscountertonominalframes.",
+      "evidence": [
+        "game_032.cpp:3164 /*8014D50C*/ { ppc::op_lwz(c, 3, 30, 7752); } | /*8014D510*/ { ppc::op_addi(c, 0, 3, 1); } | /*8014D514*/ { ppc::op_stw(c, 0, 30, 7752); } | L_8014D518:;",
+        "hle_HudNameDelayobject+7752park11whennottickdue;8014D514coveredexactcounter."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r25@block47+0xA8",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmuls",
+        "fnmsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_033.cpp",
+        "line": 906
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004201C",
+        "8004202C",
+        "800425AC",
+        "80044038",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "8004485C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287AC8",
+        "80287B04",
+        "80287C44",
+        "80287DA0",
+        "8028831C",
+        "802895A4",
+        "80289DE0",
+        "80289E2C"
+      ],
+      "store": "80158CC4",
+      "function": "80158860",
+      "status": "fixed",
+      "reason": "UV phase speed .02 scales with nominal step; existing dt phase/wrap unchanged.",
+      "evidence": [
+        "game_033.cpp:892 /*80158C60*/ { ppc::op_fnmsubs(c, 0, 2, 0, 1, false); } | /*80158C64*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158C68*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C6C*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:896 /*80158C70*/ { ppc::op_lfs(c, 0, 25, 200); } | /*80158C74*/ { ppc::op_fadds(c, 0, 0, 22, false); } | /*80158C78*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C7C*/ { goto L_80158CA0; }",
+        "game_033.cpp:904 /*80158C8C*/ { ppc::op_fmadds(c, 0, 2, 0, 1, false); } | /*80158C90*/ { ppc::op_fcmpo(c, 0, 0, 22); } | /*80158C94*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C98*/ { { if (ppc::crbit(c, 1) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:917 /*80158CBC*/ { ppc::op_fnmsubs(c, 0, 1, 0, 25, false); } | /*80158CC0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CC4*/ { ppc::op_stfs(c, 0, 25, 168); } | /*80158CC8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CD8; } } }",
+        "game_033.cpp:921 /*80158CCC*/ { ppc::op_lfs(c, 0, 25, 168); } | /*80158CD0*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158CD4*/ { ppc::op_stfs(c, 0, 25, 168); } | L_80158CD8:;",
+        "game_033.cpp:930 /*80158CEC*/ { ppc::op_fnmsubs(c, 0, 28, 0, 1, false); } | /*80158CF0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CF4*/ { ppc::op_stfs(c, 0, 25, 184); } | /*80158CF8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158D08; } } }",
+        "game_033.cpp:934 /*80158CFC*/ { ppc::op_lfs(c, 0, 25, 184); } | /*80158D00*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158D04*/ { ppc::op_stfs(c, 0, 25, 184); } | L_80158D08:;",
+        "80158C08 sole reader of806C6444; f24 used only at58CB8/58CE8, position direction from projectedpoint stack40/44/48. test_game_pacing30..480/pause."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r25@block48+0xA8",
+      "kind": "float-add",
+      "operations": [
+        "fadds"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_033.cpp",
+        "line": 910
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004201C",
+        "8004202C",
+        "800425AC",
+        "80044038",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "8004485C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287AC8",
+        "80287B04",
+        "80287C44",
+        "80287DA0",
+        "8028831C",
+        "802895A4",
+        "80289DE0",
+        "80289E2C"
+      ],
+      "store": "80158CD4",
+      "function": "80158860",
+      "status": "fixed",
+      "reason": "UV phase speed .02 scales with nominal step; existing dt phase/wrap unchanged.",
+      "evidence": [
+        "game_033.cpp:892 /*80158C60*/ { ppc::op_fnmsubs(c, 0, 2, 0, 1, false); } | /*80158C64*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158C68*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C6C*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:896 /*80158C70*/ { ppc::op_lfs(c, 0, 25, 200); } | /*80158C74*/ { ppc::op_fadds(c, 0, 0, 22, false); } | /*80158C78*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C7C*/ { goto L_80158CA0; }",
+        "game_033.cpp:904 /*80158C8C*/ { ppc::op_fmadds(c, 0, 2, 0, 1, false); } | /*80158C90*/ { ppc::op_fcmpo(c, 0, 0, 22); } | /*80158C94*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C98*/ { { if (ppc::crbit(c, 1) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:917 /*80158CBC*/ { ppc::op_fnmsubs(c, 0, 1, 0, 25, false); } | /*80158CC0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CC4*/ { ppc::op_stfs(c, 0, 25, 168); } | /*80158CC8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CD8; } } }",
+        "game_033.cpp:921 /*80158CCC*/ { ppc::op_lfs(c, 0, 25, 168); } | /*80158CD0*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158CD4*/ { ppc::op_stfs(c, 0, 25, 168); } | L_80158CD8:;",
+        "game_033.cpp:930 /*80158CEC*/ { ppc::op_fnmsubs(c, 0, 28, 0, 1, false); } | /*80158CF0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CF4*/ { ppc::op_stfs(c, 0, 25, 184); } | /*80158CF8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158D08; } } }",
+        "game_033.cpp:934 /*80158CFC*/ { ppc::op_lfs(c, 0, 25, 184); } | /*80158D00*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158D04*/ { ppc::op_stfs(c, 0, 25, 184); } | L_80158D08:;",
+        "80158C08 sole reader of806C6444; f24 used only at58CB8/58CE8, position direction from projectedpoint stack40/44/48. test_game_pacing30..480/pause."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r25@block49+0xB8",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmuls",
+        "fnmsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_033.cpp",
+        "line": 919
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004201C",
+        "8004202C",
+        "800425AC",
+        "80044038",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "8004485C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287AC8",
+        "80287B04",
+        "80287C44",
+        "80287DA0",
+        "8028831C",
+        "802895A4",
+        "80289DE0",
+        "80289E2C"
+      ],
+      "store": "80158CF4",
+      "function": "80158860",
+      "status": "fixed",
+      "reason": "UV phase speed .02 scales with nominal step; existing dt phase/wrap unchanged.",
+      "evidence": [
+        "game_033.cpp:892 /*80158C60*/ { ppc::op_fnmsubs(c, 0, 2, 0, 1, false); } | /*80158C64*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158C68*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C6C*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:896 /*80158C70*/ { ppc::op_lfs(c, 0, 25, 200); } | /*80158C74*/ { ppc::op_fadds(c, 0, 0, 22, false); } | /*80158C78*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C7C*/ { goto L_80158CA0; }",
+        "game_033.cpp:904 /*80158C8C*/ { ppc::op_fmadds(c, 0, 2, 0, 1, false); } | /*80158C90*/ { ppc::op_fcmpo(c, 0, 0, 22); } | /*80158C94*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C98*/ { { if (ppc::crbit(c, 1) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:917 /*80158CBC*/ { ppc::op_fnmsubs(c, 0, 1, 0, 25, false); } | /*80158CC0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CC4*/ { ppc::op_stfs(c, 0, 25, 168); } | /*80158CC8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CD8; } } }",
+        "game_033.cpp:921 /*80158CCC*/ { ppc::op_lfs(c, 0, 25, 168); } | /*80158CD0*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158CD4*/ { ppc::op_stfs(c, 0, 25, 168); } | L_80158CD8:;",
+        "game_033.cpp:930 /*80158CEC*/ { ppc::op_fnmsubs(c, 0, 28, 0, 1, false); } | /*80158CF0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CF4*/ { ppc::op_stfs(c, 0, 25, 184); } | /*80158CF8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158D08; } } }",
+        "game_033.cpp:934 /*80158CFC*/ { ppc::op_lfs(c, 0, 25, 184); } | /*80158D00*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158D04*/ { ppc::op_stfs(c, 0, 25, 184); } | L_80158D08:;",
+        "80158C08 sole reader of806C6444; f24 used only at58CB8/58CE8, position direction from projectedpoint stack40/44/48. test_game_pacing30..480/pause."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r25@block50+0xB8",
+      "kind": "float-add",
+      "operations": [
+        "fadds"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_033.cpp",
+        "line": 923
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004201C",
+        "8004202C",
+        "800425AC",
+        "80044038",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "8004485C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287AC8",
+        "80287B04",
+        "80287C44",
+        "80287DA0",
+        "8028831C",
+        "802895A4",
+        "80289DE0",
+        "80289E2C"
+      ],
+      "store": "80158D04",
+      "function": "80158860",
+      "status": "fixed",
+      "reason": "UV phase speed .02 scales with nominal step; existing dt phase/wrap unchanged.",
+      "evidence": [
+        "game_033.cpp:892 /*80158C60*/ { ppc::op_fnmsubs(c, 0, 2, 0, 1, false); } | /*80158C64*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158C68*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C6C*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:896 /*80158C70*/ { ppc::op_lfs(c, 0, 25, 200); } | /*80158C74*/ { ppc::op_fadds(c, 0, 0, 22, false); } | /*80158C78*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C7C*/ { goto L_80158CA0; }",
+        "game_033.cpp:904 /*80158C8C*/ { ppc::op_fmadds(c, 0, 2, 0, 1, false); } | /*80158C90*/ { ppc::op_fcmpo(c, 0, 0, 22); } | /*80158C94*/ { ppc::op_stfs(c, 0, 25, 200); } | /*80158C98*/ { { if (ppc::crbit(c, 1) == false) { goto L_80158CA0; } } }",
+        "game_033.cpp:917 /*80158CBC*/ { ppc::op_fnmsubs(c, 0, 1, 0, 25, false); } | /*80158CC0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CC4*/ { ppc::op_stfs(c, 0, 25, 168); } | /*80158CC8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158CD8; } } }",
+        "game_033.cpp:921 /*80158CCC*/ { ppc::op_lfs(c, 0, 25, 168); } | /*80158CD0*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158CD4*/ { ppc::op_stfs(c, 0, 25, 168); } | L_80158CD8:;",
+        "game_033.cpp:930 /*80158CEC*/ { ppc::op_fnmsubs(c, 0, 28, 0, 1, false); } | /*80158CF0*/ { ppc::op_fcmpo(c, 0, 0, 21); } | /*80158CF4*/ { ppc::op_stfs(c, 0, 25, 184); } | /*80158CF8*/ { { if (ppc::crbit(c, 0) == false) { goto L_80158D08; } } }",
+        "game_033.cpp:934 /*80158CFC*/ { ppc::op_lfs(c, 0, 25, 184); } | /*80158D00*/ { ppc::op_fadds(c, 0, 0, 26, false); } | /*80158D04*/ { ppc::op_stfs(c, 0, 25, 184); } | L_80158D08:;",
+        "80158C08 sole reader of806C6444; f24 used only at58CB8/58CE8, position direction from projectedpoint stack40/44/48. test_game_pacing30..480/pause."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r3@block16+0x24",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_033.cpp",
+        "line": 11887
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003F484",
+        "80044038",
+        "801633A8",
+        "801634F4",
+        "80163644",
+        "80163658",
+        "80289DC0",
+        "80289E0C",
+        "803840F4"
+      ],
+      "store": "80162B80",
+      "function": "80162A68",
+      "status": "fixed",
+      "reason": "Trail history advances at nominal-frame boundaries; existing secondary-camera branch preserves projection on every call.",
+      "evidence": [
+        "game_033.cpp:11899 /*80162B78*/ { ppc::op_addi(c, 14, 0, 12); } | /*80162B7C*/ { ppc::op_addi(c, 0, 4, 1); } | /*80162B80*/ { ppc::op_stw(c, 0, 3, 36); } | /*80162B84*/ { goto L_80162BC0; }",
+        "801638C0 writes render-pass gate and dispatches virtual+8;8013D35C calls it per scene render;80162B44 gate precedes history shift4876/5116 and vertex rebuild,63204 projection always runs. hle_TrailHistoryStep;30..480FPS/pause/catch-up/secondary-pass/exception tests."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "absolute+0x806C3D00",
+      "kind": "float-add",
+      "operations": [
+        "fadd"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_036.cpp",
+        "line": 9889
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004202C",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "8004485C",
+        "8004491C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287C44",
+        "8028831C",
+        "802895A4"
+      ],
+      "store": "80189048",
+      "function": "80188F74",
+      "status": "fixed",
+      "reason": "Texture-matrix translation phase adds 0.008 per render call; sole literal reader80189034 now receives step-scaled double at806C6B50 fromFrameWait.",
+      "evidence": [
+        "game_036.cpp:9915 /*80189040*/ { ppc::op_frsp(c, 1, 1, false); } | /*80189044*/ { ppc::op_fcmpo(c, 0, 1, 0); } | /*80189048*/ { ppc::op_stfs(c, 1, 13, -26912); } | /*8018904C*/ { { if (ppc::crbit(c, 1) == false) { goto L_80189058; } } }",
+        "80188FE4..80189010 phase used inGXLoadTexMtxImm;80189030..054 increment/wrap; literal r2-23472=806C6B50 .008, threshold1."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r19@block39+0x38",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmadds",
+        "fsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_036.cpp",
+        "line": 10398
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "800446A8",
+        "8004485C",
+        "8004491C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287C44",
+        "8028831C",
+        "802895A4",
+        "80289DD4",
+        "80289E20"
+      ],
+      "store": "801897C4",
+      "function": "80189434",
+      "status": "fixed",
+      "reason": "Two persistent texture phase arrays integrate fixed per-draw affine speeds; scale their four unique literals by elapsed nominal frames.",
+      "evidence": [
+        "game_036.cpp:10424 /*801897BC*/ { ppc::op_fsubs(c, 0, 0, 1, false); } | /*801897C0*/ { ppc::op_fcmpo(c, 0, 0, 25); } | /*801897C4*/ { ppc::op_stfs(c, 0, 19, 56); } | /*801897C8*/ { { if (ppc::crbit(c, 0) == false) { goto L_801897D4; } } }",
+        "game_036.cpp:10448 /*80189818*/ { ppc::op_fsubs(c, 0, 0, 1, false); } | /*8018981C*/ { ppc::op_fcmpo(c, 0, 0, 25); } | /*80189820*/ { ppc::op_stfs(c, 0, 19, 96); } | /*80189824*/ { { if (ppc::crbit(c, 0) == false) { goto L_80189830; } } }",
+        "80189690/698/6A0/6A8 sole readers for806C6B90/6B8C/6B98/6B94. 897B8/BC/C4 phase56-=0.00056*layer+0.005;89814/18/20 phase96-=0.001*layer+0.01. Ten layers, constructor89258 seedsfields; originalwrap mathretained. Testalllayers30–480Hz,pause,30Hzrestoration."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r19@block42+0x60",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fmadds",
+        "fsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_036.cpp",
+        "line": 10422
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800411F4",
+        "8004445C",
+        "8004450C",
+        "8004454C",
+        "80044668",
+        "800446A8",
+        "8004485C",
+        "8004491C",
+        "80283564",
+        "80283B58",
+        "80283B8C",
+        "8028422C",
+        "80284454",
+        "80287630",
+        "80287698",
+        "802877D8",
+        "80287818",
+        "80287858",
+        "802878B0",
+        "80287C44",
+        "8028831C",
+        "802895A4",
+        "80289DD4",
+        "80289E20"
+      ],
+      "store": "80189820",
+      "function": "80189434",
+      "status": "fixed",
+      "reason": "Two persistent texture phase arrays integrate fixed per-draw affine speeds; scale their four unique literals by elapsed nominal frames.",
+      "evidence": [
+        "game_036.cpp:10424 /*801897BC*/ { ppc::op_fsubs(c, 0, 0, 1, false); } | /*801897C0*/ { ppc::op_fcmpo(c, 0, 0, 25); } | /*801897C4*/ { ppc::op_stfs(c, 0, 19, 56); } | /*801897C8*/ { { if (ppc::crbit(c, 0) == false) { goto L_801897D4; } } }",
+        "game_036.cpp:10448 /*80189818*/ { ppc::op_fsubs(c, 0, 0, 1, false); } | /*8018981C*/ { ppc::op_fcmpo(c, 0, 0, 25); } | /*80189820*/ { ppc::op_stfs(c, 0, 19, 96); } | /*80189824*/ { { if (ppc::crbit(c, 0) == false) { goto L_80189830; } } }",
+        "80189690/698/6A0/6A8 sole readers for806C6B90/6B8C/6B98/6B94. 897B8/BC/C4 phase56-=0.00056*layer+0.005;89814/18/20 phase96-=0.001*layer+0.01. Ten layers, constructor89258 seedsfields; originalwrap mathretained. Testalllayers30–480Hz,pause,30Hzrestoration."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r25@block60+0xDE4",
+      "kind": "float-add",
+      "operations": [
+        "fsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_037.cpp",
+        "line": 8656
+      },
+      "direct_callers": [
+        "80196434"
+      ],
+      "direct_callees": [
+        "8003F484",
+        "80044E70",
+        "80046394",
+        "80064C58",
+        "80064C74",
+        "80065368",
+        "80074BF0",
+        "80074FF0",
+        "8007513C",
+        "800770B8",
+        "80077140",
+        "800B8110",
+        "800B83D4",
+        "800B8C4C",
+        "80194AF4",
+        "80196444",
+        "801964C8",
+        "801AF03C",
+        "80289DD4",
+        "80289E20",
+        "80291D94"
+      ],
+      "store": "80192A08",
+      "function": "801926B0",
+      "status": "fixed",
+      "reason": "History sampling advances by (10*dt)/(20*dt)=0.5 per call; restore nominal-frame duration.",
+      "evidence": [
+        "game_037.cpp:8872 /*80192A00*/ { ppc::op_addi(c, 21, 0, 240); } | /*80192A04*/ { ppc::op_fsubs(c, 0, 0, 25, false); } | /*80192A08*/ { ppc::op_stfs(c, 0, 25, 3556); } | L_80192A0C:; callers=80196434",
+        "game_037.cpp:8966 /*80192B60*/ { ppc::op_fmuls(c, 0, 0, 1, false); } | /*80192B64*/ { ppc::op_fmadds(c, 0, 25, 2, 0, false); } | /*80192B68*/ { ppc::op_stfs(c, 0, 25, 5204); } | /*80192B6C*/ { c.lr = 0x80192B70u; fn_801AF03C(c); } callers=80196434",
+        "game_037.cpp:8974 /*80192B80*/ { ppc::op_fmuls(c, 0, 0, 1, false); } | /*80192B84*/ { ppc::op_fmadds(c, 0, 25, 2, 0, false); } | /*80192B88*/ { ppc::op_stfs(c, 0, 25, 5208); } | /*80192B8C*/ { c.lr = 0x80192B90u; fn_801AF03C(c); } callers=80196434",
+        "game_037.cpp:8979 /*80192B94*/ { ppc::op_fsubs(c, 0, 0, 1, false); } | /*80192B98*/ { ppc::op_fcmpo(c, 0, 0, 26); } | /*80192B9C*/ { ppc::op_stfs(c, 0, 19, 7600); } | /*80192BA0*/ { { if (ppc::crbit(c, 0) == false) { goto L_80192DBC; } } } callers=80196434",
+        "92728/3C/44 builds f27=20dt,f28=10dt;929D8 divides and929E8 addsphase3556;92A08 wrapsandsampleshistory. ModelHistoryIdentity onlyLR929B0 rebuildsf28=10dt*step_scale everychild; overwritten92B34 beforelateruses. Regressiontwochildren30–480Hz,unrelatedidentitycalls,pause."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block4+0x2128",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_8f5c8a9f29ed8c00/game_039.cpp",
+        "line": 6026
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800ACB54",
+        "800B5DFC",
+        "801AC25C"
+      ],
+      "store": "801A5164",
+      "function": "801A5130",
+      "status": "fixed",
+      "reason": "Staggered action countdown consumes nominal-frame ticks, while regular actor update continues every render frame.",
+      "evidence": [
+        "game_039.cpp:6026 801A5164 r31@block4+0x2128 addi /*801A5164*/ { ppc::op_stw(c, 0, 31, 8488); } callers=",
+        "A1470 initializes nearby actors+8488 to sequential1..N atA15B4;A4C40 resets-1;A5130 decrements once/update and calls800ACB54 atzero. DeferredActorStep replays only countdown block pernominaltick and continues tailA5168 eachcall. Tests30..480Hz,pausedzero,multi-tickcatchup,one-shot,stack/LR."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r28@block23+0x108",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_042.cpp",
+        "line": 10593
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003DA30",
+        "8003ECFC",
+        "8003ED58",
+        "8003ED68",
+        "8003ED7C",
+        "8009D2F8",
+        "800CECD0",
+        "8016498C",
+        "801732D0",
+        "801B3850",
+        "801B7CE8",
+        "801B97F8",
+        "801B98A4",
+        "80289DEC",
+        "80289E38"
+      ],
+      "store": "801B9294",
+      "function": "801B916C",
+      "status": "fixed",
+      "reason": "Effect retirement grace counter now advances in nominal 30 Hz frames, while original object scanning and animation completion checks still run each update.",
+      "evidence": [
+        "game_042.cpp:10668 801B9294 r28@block23+0x108 addi /*801B9294*/ { ppc::op_stw(c, 0, 28, 264); } callers=",
+        "game_042.cpp:10724 801B9360 r5@block42+0x5978 addi /*801B9360*/ { ppc::op_stw(c, 0, 5, 22904); } callers=",
+        "801B9220..801B9294 counter gates completion check until age >= 2; hle_EffectRetireStep snapshots record identity and adjusts only unchanged original increments; 30..480 Hz, pause, replacement and grace-threshold regression passed"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block50+0x24",
+      "kind": "float-add",
+      "operations": [
+        "fdivs",
+        "fadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_044.cpp",
+        "line": 4153
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80064C58",
+        "80065368",
+        "800653BC",
+        "8007513C",
+        "8007B8A4",
+        "801490FC",
+        "801C47C4",
+        "80289DFC",
+        "80289E48"
+      ],
+      "store": "801C478C",
+      "function": "801C44BC",
+      "status": "fixed",
+      "reason": "FlightPathStep already normalizes incoming displacement in modes lacking dt; remaining+36 is distance/pathlength progress.",
+      "evidence": [
+        "game_044.cpp:4181 801C478C r31@block51+0x24 fdivs/fadds /*801C478C*/ { ppc::op_stfs(c, 1, 31, 36); } callers=",
+        "game/game_pacing.cpp hle_FlightPathStep",
+        "801C4778..78C"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r3@block17+0x2010",
+      "kind": "float-add",
+      "operations": [
+        "fadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_044.cpp",
+        "line": 5402
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800AC668",
+        "801C5874"
+      ],
+      "store": "801C57B8",
+      "function": "801C56F4",
+      "status": "fixed",
+      "reason": "Original body is entered via FlightPhaseStep; states32/34 speed is normalized.",
+      "evidence": [
+        "game_044.cpp:5388 801C5720 r3@block0+0x21E0 fadds /*801C5720*/ { ppc::op_stfs(c, 0, 3, 8672); } callers=",
+        "game_044.cpp:5418 801C578C r3@block13+0x2010 fadds /*801C578C*/ { ppc::op_stfs(c, 1, 3, 8208); } callers=",
+        "game_044.cpp:5430 801C57B8 r3@block17+0x2010 fadds /*801C57B8*/ { ppc::op_stfs(c, 1, 3, 8208); } callers=",
+        "hle_FlightPhaseStep normalizes +8176 for states32/34 before 801C56F4."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r30@block22+0x2010",
+      "kind": "float-add",
+      "operations": [
+        "fnmsubs"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_044.cpp",
+        "line": 5740
+      },
+      "direct_callers": [
+        "801C4F14",
+        "801C60C4"
+      ],
+      "direct_callees": [
+        "80064C58",
+        "80065368",
+        "8007513C",
+        "8007B8A4"
+      ],
+      "store": "801C5C94",
+      "function": "801C5B48",
+      "status": "fixed",
+      "reason": "Distance remaining consumes displacement normalized by existing FlightStep hook.",
+      "evidence": [
+        "game_044.cpp:5768 801C5C94 r30@block22+0x2010 fnmsubs /*801C5C94*/ { ppc::op_stfs(c, 1, 30, 8208); } callers=801C4F14,801C60C4",
+        "801C5C30 FlightStep(stack+8); 801C5C80..94 +8208 -= length(direction)*stack[8]."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r26@block111+0xE3C",
+      "kind": "float-add",
+      "operations": [
+        "fsubs"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_051.cpp",
+        "line": 4778
+      },
+      "direct_callers": [
+        "801F4D90"
+      ],
+      "direct_callees": [
+        "8003F484",
+        "80044E70",
+        "80046394",
+        "80064C58",
+        "80065358",
+        "80065368",
+        "80074FF0",
+        "8007513C",
+        "8007B8A4",
+        "800ACA58",
+        "800B8110",
+        "800B83D4",
+        "800B8C4C",
+        "80194AF4",
+        "80196444",
+        "801AF03C",
+        "801F4E38",
+        "80289DD4",
+        "80289E20",
+        "80291D94"
+      ],
+      "store": "801F2104",
+      "function": "801F1B88",
+      "status": "fixed",
+      "reason": "Model history sample phase advances .2 per update; scaled sole-reader literal806C8A18 preserves six nominal samples/sec.",
+      "evidence": [
+        "game_051.cpp:4799 801F2104 r26@block111+0xE3C fsubs /*801F2104*/ { ppc::op_stfs(c, 0, 26, 3644); } caller=801F4D90",
+        "game_051.cpp:4893 801F2264 r25@block133+0x14AC fsubs/fmuls/fmadds /*801F2264*/ { ppc::op_stfs(c, 0, 25, 5292); } caller=801F4D90",
+        "game_051.cpp:4901 801F2284 r25@block134+0x14B0 fsubs/fmuls/fmadds /*801F2284*/ { ppc::op_stfs(c, 0, 25, 5296); } caller=801F4D90",
+        "game_051.cpp:4906 801F2298 r19@block135+0x1688 fsubs /*801F2298*/ { ppc::op_stfs(c, 0, 19, 5768); } caller=801F4D90",
+        "801F2020 load;20E0..20EC increment;2100..217C whilephase>1 shifts48-byte history and samplesmodel;21A0..21F8 interpolatehistory."
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block5+0x54",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5448
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802102FC",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block20+0x2C",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5500
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802103B4",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block26+0x30",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5521
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802103FC",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block32+0x34",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5542
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "80210444",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block35+0x38",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5565
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "80210498",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block35+0x3C",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5566
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "8021049C",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block35+0x40",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5567
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802104A0",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block38+0x38",
+      "kind": "float-add",
+      "operations": [
+        "fmadds"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5582
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802104D8",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block38+0x3C",
+      "kind": "float-add",
+      "operations": [
+        "fmadds"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5584
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802104E0",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block38+0x40",
+      "kind": "float-add",
+      "operations": [
+        "fmadds"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5585
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "802104E4",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block39+0x44",
+      "kind": "float-multiply",
+      "operations": [
+        "fmuls"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_055.cpp",
+        "line": 5596
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003BE78",
+        "8003BEB0",
+        "80289DF0",
+        "80289E3C",
+        "80344550",
+        "80394248"
+      ],
+      "store": "8021050C",
+      "function": "8021027C",
+      "status": "fixed",
+      "reason": "Known PropStep wrapper schedules the retained per-call spring solver at nominal 60 Hz; this finding is covered by that targeted fix.",
+      "evidence": [
+        "game_055.cpp:5455 802102FC r31@block5+0x54 addi /*802102FC*/ { ppc::op_stw(c, 3, 31, 84); } caller=",
+        "game_055.cpp:5507 802103B4 r31@block20+0x2C fmuls /*802103B4*/ { ppc::op_stfs(c, 1, 31, 44); } caller=",
+        "game_055.cpp:5528 802103FC r31@block26+0x30 fmuls /*802103FC*/ { ppc::op_stfs(c, 1, 31, 48); } caller=",
+        "game_055.cpp:5549 80210444 r31@block32+0x34 fmuls /*80210444*/ { ppc::op_stfs(c, 1, 31, 52); } caller=",
+        "game_055.cpp:5572 80210498 r31@block35+0x38 fmuls /*80210498*/ { ppc::op_stfs(c, 2, 31, 56); } caller=",
+        "game_055.cpp:5573 8021049C r31@block35+0x3C fmuls /*8021049C*/ { ppc::op_stfs(c, 1, 31, 60); } caller=",
+        "game_055.cpp:5574 802104A0 r31@block35+0x40 fmuls /*802104A0*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5589 802104D8 r31@block38+0x38 fmadds /*802104D8*/ { ppc::op_stfs(c, 4, 31, 56); } caller=",
+        "game_055.cpp:5591 802104E0 r31@block38+0x3C fmadds /*802104E0*/ { ppc::op_stfs(c, 2, 31, 60); } caller=",
+        "game_055.cpp:5592 802104E4 r31@block38+0x40 fmadds /*802104E4*/ { ppc::op_stfs(c, 0, 31, 64); } caller=",
+        "game_055.cpp:5603 8021050C r31@block39+0x44 fmuls /*8021050C*/ { ppc::op_stfs(c, 2, 31, 68); } caller="
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r3@block4+0xA548",
+      "kind": "float-add",
+      "operations": [
+        "fadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_8f5c8a9f29ed8c00/game_056.cpp",
+        "line": 96
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "8003F1D4",
+        "800459A0",
+        "80048BAC",
+        "80048C00",
+        "80064CFC",
+        "80076DD4",
+        "801DBD04",
+        "801DBEDC",
+        "801DC114",
+        "801DC1A4",
+        "801DC1CC",
+        "801DC1D0",
+        "801DC1F4",
+        "80289DDC",
+        "80289E28",
+        "80291CC4",
+        "80293260",
+        "802933D8"
+      ],
+      "store": "8021179C",
+      "function": "80211734",
+      "status": "fixed",
+      "reason": "Timeline+42312 advanced by one per invocation before comparing scripted event frame times; native prologue now adds game_step_scale before original comparisons.",
+      "evidence": [
+        "game_056.cpp:96 8021179C r3@block4+0xA548 fadds /*8021179C*/ { ppc::op_stfs(c, 0, 26, -23224); } caller=",
+        "80211770/84/9C advance;80211808..2C event threshold;historical roof probe805BDA08 in F5;current map TimelineStep entry80211788;test30..480 events ABI pause"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r3@block8+0x38",
+      "kind": "float-add",
+      "operations": [
+        "fsubs",
+        "fdivs",
+        "fadds"
+      ],
+      "priority": "high",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_062.cpp",
+        "line": 6019
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "800482D4",
+        "8004867C",
+        "80064C58",
+        "8014ACB4",
+        "802452BC"
+      ],
+      "store": "802448B4",
+      "function": "802447D8",
+      "status": "fixed",
+      "reason": "UI vertical velocity received -98/target each rendered update while position already uses dt; frame-boundary gravity literal now scales by nominal step. Adjacent configured angular drag is scaled in UiPhysicsStep.",
+      "evidence": [
+        "80244884 -> 8024488C -> 80244898 -> 8024489C -> 802448A0 -> 802448AC -> 802448B0 -> 802448B4",
+        "80244B84 -> 80244B90 -> 80244B94 -> 80244B9C",
+        "8024488C/AC/B4;80244960/64 movement dt;802454F0 config loader writes108 at80245574;802448F8/80244928 drag"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "store": "802448F8",
+      "function": "802447D8",
+      "status": "fixed",
+      "reason": "Angular drag is a per-call decrement; UiPhysicsStep temporarily scales configured drag+108 and restores its exact bits.",
+      "evidence": [
+        "802454F0",
+        "802448C4-80244938",
+        "game/game_pacing.cpp:hle_UiPhysicsStep"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "80244928",
+      "function": "802447D8",
+      "status": "fixed",
+      "reason": "Angular drag is a per-call decrement; UiPhysicsStep temporarily scales configured drag+108 and restores its exact bits.",
+      "evidence": [
+        "802454F0",
+        "802448C4-80244938",
+        "game/game_pacing.cpp:hle_UiPhysicsStep"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "8039C288",
+      "function": "8039C1D0",
+      "status": "fixed",
+      "reason": "Frame-based voice stop delays and volume/pause fades were outside the local recurrence scan. SoundFrameStep normalizes the whole locked sound-manager list walk803AA7B0; backend AX callbacks retain their independent3ms clock.",
+      "evidence": [
+        "8003A680 ->8004A3CC ->803A8E80 ->803AA7B0 ->virtual16=8039C1D0",
+        "game/game_pacing.cpp:hle_SoundFrameStep",
+        "runtime/ax_audio.cpp",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "8039C2F8",
+      "function": "8039C1D0",
+      "status": "fixed",
+      "reason": "Frame-based voice stop delays and volume/pause fades were outside the local recurrence scan. SoundFrameStep normalizes the whole locked sound-manager list walk803AA7B0; backend AX callbacks retain their independent3ms clock.",
+      "evidence": [
+        "8003A680 ->8004A3CC ->803A8E80 ->803AA7B0 ->virtual16=8039C1D0",
+        "game/game_pacing.cpp:hle_SoundFrameStep",
+        "runtime/ax_audio.cpp",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "8039C36C",
+      "function": "8039C1D0",
+      "status": "fixed",
+      "reason": "Frame-based voice stop delays and volume/pause fades were outside the local recurrence scan. SoundFrameStep normalizes the whole locked sound-manager list walk803AA7B0; backend AX callbacks retain their independent3ms clock.",
+      "evidence": [
+        "8003A680 ->8004A3CC ->803A8E80 ->803AA7B0 ->virtual16=8039C1D0",
+        "game/game_pacing.cpp:hle_SoundFrameStep",
+        "runtime/ax_audio.cpp",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "8039C388",
+      "function": "8039C1D0",
+      "status": "fixed",
+      "reason": "Frame-based voice stop delays and volume/pause fades were outside the local recurrence scan. SoundFrameStep normalizes the whole locked sound-manager list walk803AA7B0; backend AX callbacks retain their independent3ms clock.",
+      "evidence": [
+        "8003A680 ->8004A3CC ->803A8E80 ->803AA7B0 ->virtual16=8039C1D0",
+        "game/game_pacing.cpp:hle_SoundFrameStep",
+        "runtime/ax_audio.cpp",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "store": "8039C3A0",
+      "function": "8039C1D0",
+      "status": "fixed",
+      "reason": "Frame-based voice stop delays and volume/pause fades were outside the local recurrence scan. SoundFrameStep normalizes the whole locked sound-manager list walk803AA7B0; backend AX callbacks retain their independent3ms clock.",
+      "evidence": [
+        "8003A680 ->8004A3CC ->803A8E80 ->803AA7B0 ->virtual16=8039C1D0",
+        "game/game_pacing.cpp:hle_SoundFrameStep",
+        "runtime/ax_audio.cpp",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "manual-call-chain"
+      ]
+    },
+    {
+      "field": "r28@block153+0x1E0",
+      "kind": "integer-step",
+      "operations": [
+        "addic_"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_103.cpp",
+        "line": 5969
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80259B60",
+        "802741DC",
+        "80274DB8",
+        "80274DC0",
+        "80274DC8",
+        "8027696C",
+        "8027AA44",
+        "80289DEC",
+        "80289E38",
+        "802E0308",
+        "802E030C",
+        "802E0310",
+        "802E14D8",
+        "802E1BCC",
+        "802E1DE8",
+        "802E3A88",
+        "803BCA30",
+        "803BCBFC",
+        "803BE5B4",
+        "803BE86C",
+        "803BEB8C",
+        "803BEF10",
+        "803BF120",
+        "803BF908",
+        "803BFCA8",
+        "803BFE88",
+        "803C166C",
+        "803C186C",
+        "803C1990",
+        "803C3B24",
+        "803C4D04",
+        "803C7AA8"
+      ],
+      "store": "803C233C",
+      "function": "803C1BFC",
+      "status": "fixed",
+      "reason": "Home menu timeout state machine now runs at nominal cadence through hle_HomeMenuStep, preserving input edges. Additional Home menu countdown is covered by the complete state-machine cadence hook; controller and fade child updates share the same entry.",
+      "evidence": [
+        "803C2334-40 decrements menu field+480",
+        "docs/testing/timing-triage.json supplemental finding for 803C233C",
+        "game/game_pacing.cpp:hle_HomeMenuStep; tests/test_game_pacing.cpp",
+        "803C1BF8",
+        "game/game_pacing.cpp:hle_HomeMenuStep"
+      ],
+      "origins": [
+        "addic-extension-57",
+        "manual-call-chain"
+      ]
+    },
+    {
+      "field": "r28@block168+0x1E4",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_103.cpp",
+        "line": 6017
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80259B60",
+        "802741DC",
+        "80274DB8",
+        "80274DC0",
+        "80274DC8",
+        "8027696C",
+        "8027AA44",
+        "80289DEC",
+        "80289E38",
+        "802E0308",
+        "802E030C",
+        "802E0310",
+        "802E14D8",
+        "802E1BCC",
+        "802E1DE8",
+        "802E3A88",
+        "803BCA30",
+        "803BCBFC",
+        "803BE5B4",
+        "803BE86C",
+        "803BEB8C",
+        "803BEF10",
+        "803BF120",
+        "803BF908",
+        "803BFCA8",
+        "803BFE88",
+        "803C166C",
+        "803C186C",
+        "803C1990",
+        "803C3B24",
+        "803C4D04",
+        "803C7AA8"
+      ],
+      "store": "803C23EC",
+      "function": "803C1BF8",
+      "status": "fixed",
+      "reason": "Home menu timeout state machine was called once per unlocked render frame. HomeMenuStep runs the complete state machine at nominal cadence and preserves input edges across skipped frames. Initialization with null input still executes once.",
+      "evidence": [
+        "803C23E4 -> 803C23E8 -> 803C23EC",
+        "803C25D0 -> 803C25D8 -> 803C25E0",
+        "803C25F8 -> 803C2600 -> 803C2608",
+        "803C261C -> 803C2624 -> 803C262C",
+        "801FFA04-801FFA24",
+        "800A7AF8-800A7AFC",
+        "803C01E8",
+        "game/game_pacing.cpp:hle_HomeMenuStep",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r28@block205+0x94",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_103.cpp",
+        "line": 6152
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80259B60",
+        "802741DC",
+        "80274DB8",
+        "80274DC0",
+        "80274DC8",
+        "8027696C",
+        "8027AA44",
+        "80289DEC",
+        "80289E38",
+        "802E0308",
+        "802E030C",
+        "802E0310",
+        "802E14D8",
+        "802E1BCC",
+        "802E1DE8",
+        "802E3A88",
+        "803BCA30",
+        "803BCBFC",
+        "803BE5B4",
+        "803BE86C",
+        "803BEB8C",
+        "803BEF10",
+        "803BF120",
+        "803BF908",
+        "803BFCA8",
+        "803BFE88",
+        "803C166C",
+        "803C186C",
+        "803C1990",
+        "803C3B24",
+        "803C4D04",
+        "803C7AA8"
+      ],
+      "store": "803C25E0",
+      "function": "803C1BF8",
+      "status": "fixed",
+      "reason": "Home menu timeout state machine was called once per unlocked render frame. HomeMenuStep runs the complete state machine at nominal cadence and preserves input edges across skipped frames. Initialization with null input still executes once.",
+      "evidence": [
+        "803C23E4 -> 803C23E8 -> 803C23EC",
+        "803C25D0 -> 803C25D8 -> 803C25E0",
+        "803C25F8 -> 803C2600 -> 803C2608",
+        "803C261C -> 803C2624 -> 803C262C",
+        "801FFA04-801FFA24",
+        "800A7AF8-800A7AFC",
+        "803C01E8",
+        "game/game_pacing.cpp:hle_HomeMenuStep",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r28@block208+0x18",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_103.cpp",
+        "line": 6163
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80259B60",
+        "802741DC",
+        "80274DB8",
+        "80274DC0",
+        "80274DC8",
+        "8027696C",
+        "8027AA44",
+        "80289DEC",
+        "80289E38",
+        "802E0308",
+        "802E030C",
+        "802E0310",
+        "802E14D8",
+        "802E1BCC",
+        "802E1DE8",
+        "802E3A88",
+        "803BCA30",
+        "803BCBFC",
+        "803BE5B4",
+        "803BE86C",
+        "803BEB8C",
+        "803BEF10",
+        "803BF120",
+        "803BF908",
+        "803BFCA8",
+        "803BFE88",
+        "803C166C",
+        "803C186C",
+        "803C1990",
+        "803C3B24",
+        "803C4D04",
+        "803C7AA8"
+      ],
+      "store": "803C2608",
+      "function": "803C1BF8",
+      "status": "fixed",
+      "reason": "Home menu timeout state machine was called once per unlocked render frame. HomeMenuStep runs the complete state machine at nominal cadence and preserves input edges across skipped frames. Initialization with null input still executes once.",
+      "evidence": [
+        "803C23E4 -> 803C23E8 -> 803C23EC",
+        "803C25D0 -> 803C25D8 -> 803C25E0",
+        "803C25F8 -> 803C2600 -> 803C2608",
+        "803C261C -> 803C2624 -> 803C262C",
+        "801FFA04-801FFA24",
+        "800A7AF8-800A7AFC",
+        "803C01E8",
+        "game/game_pacing.cpp:hle_HomeMenuStep",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r28@block211+0x18",
+      "kind": "integer-step",
+      "operations": [
+        "addi"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_103.cpp",
+        "line": 6173
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80259B60",
+        "802741DC",
+        "80274DB8",
+        "80274DC0",
+        "80274DC8",
+        "8027696C",
+        "8027AA44",
+        "80289DEC",
+        "80289E38",
+        "802E0308",
+        "802E030C",
+        "802E0310",
+        "802E14D8",
+        "802E1BCC",
+        "802E1DE8",
+        "802E3A88",
+        "803BCA30",
+        "803BCBFC",
+        "803BE5B4",
+        "803BE86C",
+        "803BEB8C",
+        "803BEF10",
+        "803BF120",
+        "803BF908",
+        "803BFCA8",
+        "803BFE88",
+        "803C166C",
+        "803C186C",
+        "803C1990",
+        "803C3B24",
+        "803C4D04",
+        "803C7AA8"
+      ],
+      "store": "803C262C",
+      "function": "803C1BF8",
+      "status": "fixed",
+      "reason": "Home menu timeout state machine was called once per unlocked render frame. HomeMenuStep runs the complete state machine at nominal cadence and preserves input edges across skipped frames. Initialization with null input still executes once.",
+      "evidence": [
+        "803C23E4 -> 803C23E8 -> 803C23EC",
+        "803C25D0 -> 803C25D8 -> 803C25E0",
+        "803C25F8 -> 803C2600 -> 803C2608",
+        "803C261C -> 803C2624 -> 803C262C",
+        "801FFA04-801FFA24",
+        "800A7AF8-800A7AFC",
+        "803C01E8",
+        "game/game_pacing.cpp:hle_HomeMenuStep",
+        "tests/test_game_pacing.cpp"
+      ],
+      "origins": [
+        "baseline-3513"
+      ]
+    },
+    {
+      "field": "r31@block124+0x11D40",
+      "kind": "integer-step",
+      "operations": [
+        "addic_"
+      ],
+      "priority": "medium",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_035.cpp",
+        "line": 10652
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80033404",
+        "8004111C",
+        "800411B4",
+        "80043294",
+        "80048B94",
+        "80048D34",
+        "80048E1C",
+        "80048E7C",
+        "80048F10",
+        "80048F6C",
+        "80048FB0",
+        "80049000",
+        "8004FBE8",
+        "80066BF4",
+        "80066EFC",
+        "80068DBC",
+        "800F3C68",
+        "800F3E9C",
+        "80102C78",
+        "80102CC8",
+        "80113CA4",
+        "80115064",
+        "801737A4",
+        "80174654",
+        "8017A070",
+        "8017B1C4",
+        "8017B1F0",
+        "8017B288",
+        "8017D304",
+        "8017D354",
+        "8017D3E4",
+        "8017E2DC",
+        "8017E2E8",
+        "8017E30C",
+        "8017E314",
+        "8017E4A8",
+        "801AEFEC",
+        "80254C54",
+        "80289DEC",
+        "80289E38",
+        "80291CC4",
+        "802933D8"
+      ],
+      "store": "8017AC88",
+      "function": "8017A7B0",
+      "status": "fixed",
+      "reason": "Stream-start wait: state 698 polls 80049000 (sound stream manager 8045D4F0) and gives up after 30 polls; the wait is for an asynchronous resource, so at 480 Hz the 1 s timeout shrank to 62 ms. SoundWaitStep makes the countdown consume nominal frames.",
+      "evidence": [
+        "80049000 returns 1 while stream handle state (8004BA3C) is not 1 and 0 once ready (then applies f1 via 8004B4F8)",
+        "8017A7D4 dispatches state 698 to 8017AC68; AC5C sets +7488 (object+0x10000) to 30, AC70 polls, AC84..8C decrement and stay in 698 while >0",
+        "Fix: hle_SoundWaitStep (map 80049000, retained body 80049004) adds 1-nominal_ticks before the caller's decrement for LR 8017AC74/8017AF5C only; other callers 80105ED0 and 801D4F34 have no counter",
+        "tests/test_game_pacing.cpp: timeout lasts exactly 1 s at 30/60/120/240/480 Hz for both callers, pause keeps the counter, ready stream and other callers unchanged",
+        "Earlier note: Branches for states 698/900 set +7488=30; AC68..88 and AF50..70 call 80049000 with fixed category/duration, decrement +7488 on its zero result, and transition state on underflow. Neighbor stores in this function (+5292/+5296/+7332) already incorporate elapsed time, but that does not settle these integer counters."
+      ],
+      "origins": [
+        "addic-extension-57"
+      ]
+    },
+    {
+      "field": "r31@block197+0x11D40",
+      "kind": "integer-step",
+      "operations": [
+        "addic_"
+      ],
+      "priority": "inspect-loop",
+      "scanner_time_dependency": false,
+      "source": {
+        "path": "D:/Projects/Native Ports/Umbrella-chronicles-recomp/generated/generation_6a8e49ea30acc1dd/game_035.cpp",
+        "line": 10855
+      },
+      "direct_callers": [],
+      "direct_callees": [
+        "80033404",
+        "8004111C",
+        "800411B4",
+        "80043294",
+        "80048B94",
+        "80048D34",
+        "80048E1C",
+        "80048E7C",
+        "80048F10",
+        "80048F6C",
+        "80048FB0",
+        "80049000",
+        "8004FBE8",
+        "80066BF4",
+        "80066EFC",
+        "80068DBC",
+        "800F3C68",
+        "800F3E9C",
+        "80102C78",
+        "80102CC8",
+        "80113CA4",
+        "80115064",
+        "801737A4",
+        "80174654",
+        "8017A070",
+        "8017B1C4",
+        "8017B1F0",
+        "8017B288",
+        "8017D304",
+        "8017D354",
+        "8017D3E4",
+        "8017E2DC",
+        "8017E2E8",
+        "8017E30C",
+        "8017E314",
+        "8017E4A8",
+        "801AEFEC",
+        "80254C54",
+        "80289DEC",
+        "80289E38",
+        "80291CC4",
+        "802933D8"
+      ],
+      "store": "8017AF70",
+      "function": "8017A7B0",
+      "status": "fixed",
+      "reason": "Same stream-start wait as 8017AC88 for state 834 (dispatch 8017A828 -> 8017AF50, stream id 2).",
+      "evidence": [
+        "8017AF48 sets +7488 to 30, AF58 polls 80049000(2), AF6C..74 decrement; fixed by SoundWaitStep with LR 8017AF5C",
+        "Earlier note: Branches for states 698/900 set +7488=30; AC68..88 and AF50..70 call 80049000 with fixed category/duration, decrement +7488 on its zero result, and transition state on underflow. Neighbor stores in this function (+5292/+5296/+7332) already incorporate elapsed time, but that does not settle these integer counters."
+      ],
+      "origins": [
+        "addic-extension-57"
+      ]
+    }
+  ]
+}
