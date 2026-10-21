@@ -11,7 +11,7 @@ target_link_libraries(uc_live_settings PUBLIC uc_options_config)
 add_library(uc_intro STATIC intro.cpp)
 target_include_directories(uc_intro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_intro PUBLIC uc_runtime)
-add_library(uc_game_pacing STATIC game_pacing.cpp cpu_sampler.cpp counter_probe.cpp write_trap.cpp state_dump.cpp)
+add_library(uc_game_pacing STATIC game_pacing.cpp pacing_fixes.cpp cpu_sampler.cpp counter_probe.cpp write_trap.cpp state_dump.cpp)
 target_include_directories(uc_game_pacing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_pacing PUBLIC uc_runtime)
 add_library(uc_crash_bundle STATIC crash_bundle.cpp)
@@ -62,6 +62,9 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(uc_smoke smoke.cpp)
   target_link_libraries(uc_smoke PRIVATE uc_game uc_common test_support)
   install(TARGETS uc_smoke RUNTIME DESTINATION tools)
+  add_executable(step_probe ${CMAKE_SOURCE_DIR}/tools/step_probe/step_probe.cpp)   # offline proof of tools/step_audit fix records
+  target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
+  add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   add_executable(uc uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm shell32
     uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch)

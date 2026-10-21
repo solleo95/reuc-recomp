@@ -14,7 +14,20 @@ struct GamePacingStats { uint64_t calls,retraces,timestep_ns,threshold_two,adjus
 void game_pacing_init(bool unlock, uint32_t game_hz = 0);   // game_hz > 0: experimental timer-driven step instead of the retrace wait
 GamePacingStats game_pacing_stats();
 float game_step_scale();   // real step / nominal frame of the game clock (1 in the original mode)
+void pacing_call_body(ppc::Ctx& c, uint32_t frame, uint32_t entry);   // run an AOT body after its lowered stwu of `frame` bytes
+// Generated step fixes (game/pacing_fixes.inc, written by tools/step_audit). Every template is the identity when the
+// step scale is 1 or 0 (pause) and when the caller's LR does not match the record.
+enum class PacingTemplate : uint8_t { scale, scale_ret, pow_alpha };
+struct PacingFix { uint32_t entry, lr; PacingTemplate tmpl; uint8_t reg; int8_t power; };
+struct PacingFixTable { const PacingFix* begin_; const PacingFix* end_; const PacingFix* begin() const { return begin_; } const PacingFix* end() const { return end_; } };
+PacingFixTable pacing_fix_table();
+void pacing_apply_record(ppc::Ctx& c, const PacingFix& fix, uint32_t frame);   // runs body entry+4 with the record's adjustment
 }
+#define PACING_ENTRY(entry, frame) void hle_PacingFix_##entry(ppc::Ctx& c);
+#define PACING_FIX(entry, lr, tmpl, reg, power)
+#include "pacing_fixes.inc"
+#undef PACING_ENTRY
+#undef PACING_FIX
 void hle_GameFrameWait(ppc::Ctx& c);
 void hle_ActorStepTime(ppc::Ctx& c);
 void hle_FixedPlaybackStep(ppc::Ctx& c);

@@ -194,9 +194,9 @@ void hle_VectorAddStep(ppc::Ctx& c) {
     ppc::op_ps_add(c,0,0,1,false);
     ppc::op_psq_st(c,0,3,8,1,0);
 }
-namespace {
+namespace uc {
 // Runs the AOT body (after the lowered stwu of `frame` bytes) with the caller's stack and link register.
-void call_body(ppc::Ctx& c,uint32_t frame,uint32_t entry) {
+void pacing_call_body(ppc::Ctx& c,uint32_t frame,uint32_t entry) {
     const auto stack=c.r[1];
     gx::Memory memory{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}};
     memory.read(stack-frame,frame+8);
@@ -204,6 +204,7 @@ void call_body(ppc::Ctx& c,uint32_t frame,uint32_t entry) {
     uc::call_indirect(c,entry);
 }
 }
+namespace { void call_body(ppc::Ctx& c,uint32_t frame,uint32_t entry) { uc::pacing_call_body(c,frame,entry); } }
 void hle_SoundFrameStep(ppc::Ctx& c) {
     const auto object=c.r[3],lr=c.lr;
     // Voice envelopes and stop delays use frames; run the complete locked list walk so removed voices are never reused during catch-up.

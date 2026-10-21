@@ -1,528 +1,528 @@
 {
-  "schema": 1,
-  "installed_at_utc": "2026-10-21T14:51:13.024Z",
-  "installed_at_moscow": "2026-10-21 17:51:13",
-  "generation": "generation_2a48cf24324130e2",
-  "target": "S:/Games/Umbrella Chronicles",
-  "build_log": "build/claude-build2.log",
-  "tests": {
-    "passed": 135,
-    "total": 135
+ "schema": 1,
+ "installed_at_utc": "2026-10-21T21:35:24.000Z",
+ "installed_at_moscow": "2026-10-22 00:35:24",
+ "generation": "generation_2a48cf24324130e2",
+ "target": "S:/Games/Umbrella Chronicles",
+ "build_log": "build/claude-build4.log",
+ "tests": {
+  "passed": 138,
+  "total": 138
+ },
+ "sound_wait_included": true,
+ "crossfade_step_included": true,
+ "copied_only_install_manifest": true,
+ "verified_files": [
+  {
+   "path": "licenses/nlohmann_json/LICENSE.MIT",
+   "bytes": 1076,
+   "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
   },
-  "sound_wait_included": true,
-  "crossfade_step_included": true,
-  "copied_only_install_manifest": true,
-  "verified_files": [
-    {
-      "path": "licenses/nlohmann_json/LICENSE.MIT",
-      "bytes": 1076,
-      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
-    },
-    {
-      "path": "licenses/Streamline/license.txt",
-      "bytes": 1591,
-      "sha256": "7b6f23e7d6f3ad6292f9308d2b42cdc3d82ae4e9b2abb55f230279d83bedd43d"
-    },
-    {
-      "path": "licenses/Streamline/nvngx_dlss.license.txt",
-      "bytes": 26727,
-      "sha256": "3027f23ca5a46dd9cb8183fbd522983a86f64d7daac5982912bf9f214671f294"
-    },
-    {
-      "path": "licenses/Streamline/reflex.license.txt",
-      "bytes": 20504,
-      "sha256": "ebf83c07fb3b2939908c3795d887afde3161c89a28ba391724efc784ce1bdabe"
-    },
-    {
-      "path": "licenses/FidelityFX/LICENSE.txt",
-      "bytes": 1136,
-      "sha256": "c93d509cd69d50698796c9c3274247352736ef122a3197ace2010f0978e21aa6"
-    },
-    {
-      "path": "tools/renderer_smoke.exe",
-      "bytes": 1569792,
-      "sha256": "31833aea4ec93a3c642e7991b8abddabba8fb065bb34892e0e8bdd5e9ef1d23b"
-    },
-    {
-      "path": "tools/SDL3.dll",
-      "bytes": 2683904,
-      "sha256": "478b04a0764be6d5e59f9f75cd49fabef5c237c9a32a089015c20d924a4b37d9"
-    },
-    {
-      "path": "tools/data/shaders/smoke.vert.spv",
-      "bytes": 32640,
-      "sha256": "9935fa47c4ea4e1b24e377bcc48e6020a86290a69087b02fc8d72c722218c3d5"
-    },
-    {
-      "path": "tools/data/shaders/smoke.frag.spv",
-      "bytes": 656948,
-      "sha256": "09a8b4506215b25a59f9edd0cd2fa94c3e9898a55b7564ea97e6446a0ab19c95"
-    },
-    {
-      "path": "tools/data/shaders/smoke.uber.spv",
-      "bytes": 665560,
-      "sha256": "a26045e9ffbe5b97cee9635cb7b12ba90a846a96deab25dcfb6432f67cfabb26"
-    },
-    {
-      "path": "tools/data/shaders/smoke.motion.vert.spv",
-      "bytes": 36088,
-      "sha256": "ed8dd85427a593797b8e314dcc49e4d809d239b532597c41fa9ee53bb887c87e"
-    },
-    {
-      "path": "tools/data/shaders/smoke.motion.frag.spv",
-      "bytes": 687532,
-      "sha256": "752d70899240ffc2a61c76c2e7319ecc704d4b55e46d0f7094c9a066d7477a84"
-    },
-    {
-      "path": "tools/data/shaders/smoke.motion.uber.spv",
-      "bytes": 695496,
-      "sha256": "d76d355af345937c59cde6620c46961d926624b9f7e0ad532dd294092ab9ab2a"
-    },
-    {
-      "path": "tools/data/shaders/rcas.comp.spv",
-      "bytes": 3708,
-      "sha256": "33ed39b5461304da63a49c960412d160e5d427a295e918b0b2238746fe6da839"
-    },
-    {
-      "path": "tools/data/shaders/smaa.edges.spv",
-      "bytes": 4776,
-      "sha256": "731dbcae3dcec043369fe3178ea8d662b43fd185abda684cb63a36f8c81cb39c"
-    },
-    {
-      "path": "tools/data/shaders/smaa.weights.spv",
-      "bytes": 24088,
-      "sha256": "9849bc0f78ec682dc752a0a420622f0e275bf42c4a91ad850c6e5f561f357993"
-    },
-    {
-      "path": "tools/data/shaders/smaa.blend.spv",
-      "bytes": 4692,
-      "sha256": "247cc0a22bf14751d11a3e4976c550de585d6a24a679127cf0fbd72fb262e0c9"
-    },
-    {
-      "path": "tools/data/shaders/smoke.shadow.vert.spv",
-      "bytes": 7496,
-      "sha256": "34fed88da7a4b82dee28e09dbf53590b8039cf52317dc29975c8dad94e6de243"
-    },
-    {
-      "path": "tools/data/shaders/gtao.ao.spv",
-      "bytes": 21124,
-      "sha256": "c1b15bbad4de589deec1d82e1f32afdc5fe23a6bd85616f3aed193a28bda71a1"
-    },
-    {
-      "path": "tools/data/shaders/gtao.denoise.spv",
-      "bytes": 11440,
-      "sha256": "c0fe1b992bd748016be97b000c4bcf9e709697ad4813342d1fe3fedfc69b177c"
-    },
-    {
-      "path": "tools/data/shaders/gtao.contact.spv",
-      "bytes": 16704,
-      "sha256": "ec2d317ecadff07589329cf430442df7454d6ae4c1784a4faaa1a5edba3876d5"
-    },
-    {
-      "path": "tools/data/shaders/gtao.composite.spv",
-      "bytes": 25380,
-      "sha256": "b33ce6199101f006cee7b7f8dcd1470ab71bce497ed5cd41b1480b25f9e30b3d"
-    },
-    {
-      "path": "tools/data/shaders/motion_blur.tile.spv",
-      "bytes": 3372,
-      "sha256": "3376af31bfff8bce4e2fa28d6636c5c6443540bb6c1475b5b617723005f2c92e"
-    },
-    {
-      "path": "tools/data/shaders/motion_blur.blur.spv",
-      "bytes": 6868,
-      "sha256": "f5e09c81f70e495c48eb8c0d7c4c6aea94baae88b15c14033776fbc9d4a33b9e"
-    },
-    {
-      "path": "tools/data/shaders/rt_transform.spv",
-      "bytes": 2932,
-      "sha256": "caba3fd4191feb8984ab200af5e6b8886ebe2df3fff4ad390659bd8816b0fe84"
-    },
-    {
-      "path": "tools/data/shaders/rt_denoise.temporal.spv",
-      "bytes": 8256,
-      "sha256": "95453831830ce6c6c6e7e1233ac9b080ec354c70a726a27300f1e28466619288"
-    },
-    {
-      "path": "tools/data/shaders/rt_denoise.atrous.spv",
-      "bytes": 10104,
-      "sha256": "ccdaa20983224f0036508a762bff63d89033519f1033d00ac3cd7bf1e9fc9848"
-    },
-    {
-      "path": "tools/data/shaders/rt_shadow.trace.spv",
-      "bytes": 26484,
-      "sha256": "3df372175ff5a0cdf600f3e111f341ac4940f3df6471eafc24caa67a91df3ca2"
-    },
-    {
-      "path": "tools/data/shaders/rt_shadow.composite.spv",
-      "bytes": 9572,
-      "sha256": "71863b5d10fce4e81bcd0fe05a34342276af75d31312fdc489e922ef864cb981"
-    },
-    {
-      "path": "tools/data/shaders/rt_reflect.trace.spv",
-      "bytes": 21768,
-      "sha256": "46395b9d1426d0b5cd5fcb519d35122022c8fdd51940f4da9f21a6b6084ef7ac"
-    },
-    {
-      "path": "tools/data/shaders/rt_reflect.composite.spv",
-      "bytes": 12508,
-      "sha256": "f662283534950445355e6dfac8aa26121c9796e254bca4af41d3c13796ee7499"
-    },
-    {
-      "path": "tools/data/shaders/rt_path.accumulate.spv",
-      "bytes": 6024,
-      "sha256": "4016e53ddb3826db5bbba2920396045b25f08d855b3bdca65f473e3b9ea4d7e3"
-    },
-    {
-      "path": "tools/data/shaders/rt_path.list.spv",
-      "bytes": 5308,
-      "sha256": "1f6955e1a1f54134cf5f2419a4ce0b44522b675789833d9c53fc3cd9756cde75"
-    },
-    {
-      "path": "tools/data/shaders/rt_path.trace.spv",
-      "bytes": 28308,
-      "sha256": "94003ccca5f46827cc48df068e53eb48ac4f1e5028430adc9309fe50927cd193"
-    },
-    {
-      "path": "tools/data/shaders/rt_path.composite.spv",
-      "bytes": 11388,
-      "sha256": "efa23ce3bbf0792beba4e19d237b11541e4f149c9c516e10baed1dedfd702a8a"
-    },
-    {
-      "path": "tools/data/shaders/rr_inputs.spv",
-      "bytes": 7540,
-      "sha256": "3ee4b5eded45664b905b935b235ec4fc284d33a3a65558f5037dc4e87330f26b"
-    },
-    {
-      "path": "tools/data/shaders/dlss5.prepare.spv",
-      "bytes": 25620,
-      "sha256": "9d763a3c8e50dbde2f9ad3c18616a9f56cb93b2c5ee40b1be748234a0e1e0043"
-    },
-    {
-      "path": "tools/data/shaders/dlss5.resolve.spv",
-      "bytes": 41884,
-      "sha256": "845e27a9c5f1d1e27cd2ecc4e12fc990aa722a75a7b11eb2e4f8bea18cd98056"
-    },
-    {
-      "path": "licenses/SDL3/LICENSE.txt",
-      "bytes": 884,
-      "sha256": "97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127"
-    },
-    {
-      "path": "tools/s1_scan.exe",
-      "bytes": 48128,
-      "sha256": "57cdb28c016cc77a9d7006321a9f8538928884b9d36092159f42955d3342c3f7"
-    },
-    {
-      "path": "tools/translator.exe",
-      "bytes": 285184,
-      "sha256": "6468fbddbb41a0b3eb9e0a28a9fbf799adbb5e7dcecc2293cfda6dc3a5642d45"
-    },
-    {
-      "path": "tools/uc_texture_decode.dll",
-      "bytes": 32768,
-      "sha256": "aa1542e0db8be868ee57cd1dc201a7a170322f21f1023e80f38d65195a752164"
-    },
-    {
-      "path": "tools/extract_textures.py",
-      "bytes": 25830,
-      "sha256": "d1c888badf7bb26fbda55855688cfc7d9cf96bba19d729f93542a4f632f7d13d"
-    },
-    {
-      "path": "tools/extract_textures.bat",
-      "bytes": 179,
-      "sha256": "596365736aece37851e96c76b75ea6c3331a2124a06a1932538b5c7f47852f84"
-    },
-    {
-      "path": "tools/uc_texture_convert.exe",
-      "bytes": 120320,
-      "sha256": "5ad16e422af98e1a2215f9896207bfb28261ed7c1ee62962dbed81c49883a1c2"
-    },
-    {
-      "path": "tools/uc_fifo_replay.exe",
-      "bytes": 1566720,
-      "sha256": "ad6de6a3572ae36a190d87be0bf1dcb299649f3b7a642940cd586d6c1ca69a13"
-    },
-    {
-      "path": "tools/uc_smoke.exe",
-      "bytes": 35868160,
-      "sha256": "da2d595e8def5b2b27114a83292c8be10f3cb8a4fce7a45d4af9c1b3fb82648c"
-    },
-    {
-      "path": "uc.exe",
-      "bytes": 61109760,
-      "sha256": "b08f5c88102ae16953b451cb84ba977e3b3000715d0684ac1a7756c6d21e7041"
-    },
-    {
-      "path": "data/uc.map",
-      "bytes": 16842529,
-      "sha256": "a1269fb4ce4bade44d34b9234f1b9a76a29d2d1ead8be2faaac9bbeed7bfb337"
-    },
-    {
-      "path": "SDL3.dll",
-      "bytes": 2683904,
-      "sha256": "478b04a0764be6d5e59f9f75cd49fabef5c237c9a32a089015c20d924a4b37d9"
-    },
-    {
-      "path": "data/shaders/smoke.vert.spv",
-      "bytes": 32640,
-      "sha256": "9935fa47c4ea4e1b24e377bcc48e6020a86290a69087b02fc8d72c722218c3d5"
-    },
-    {
-      "path": "data/shaders/smoke.frag.spv",
-      "bytes": 656948,
-      "sha256": "09a8b4506215b25a59f9edd0cd2fa94c3e9898a55b7564ea97e6446a0ab19c95"
-    },
-    {
-      "path": "data/shaders/smoke.uber.spv",
-      "bytes": 665560,
-      "sha256": "a26045e9ffbe5b97cee9635cb7b12ba90a846a96deab25dcfb6432f67cfabb26"
-    },
-    {
-      "path": "data/shaders/smoke.motion.vert.spv",
-      "bytes": 36088,
-      "sha256": "ed8dd85427a593797b8e314dcc49e4d809d239b532597c41fa9ee53bb887c87e"
-    },
-    {
-      "path": "data/shaders/smoke.motion.frag.spv",
-      "bytes": 687532,
-      "sha256": "752d70899240ffc2a61c76c2e7319ecc704d4b55e46d0f7094c9a066d7477a84"
-    },
-    {
-      "path": "data/shaders/smoke.motion.uber.spv",
-      "bytes": 695496,
-      "sha256": "d76d355af345937c59cde6620c46961d926624b9f7e0ad532dd294092ab9ab2a"
-    },
-    {
-      "path": "data/shaders/rcas.comp.spv",
-      "bytes": 3708,
-      "sha256": "33ed39b5461304da63a49c960412d160e5d427a295e918b0b2238746fe6da839"
-    },
-    {
-      "path": "data/shaders/smaa.edges.spv",
-      "bytes": 4776,
-      "sha256": "731dbcae3dcec043369fe3178ea8d662b43fd185abda684cb63a36f8c81cb39c"
-    },
-    {
-      "path": "data/shaders/smaa.weights.spv",
-      "bytes": 24088,
-      "sha256": "9849bc0f78ec682dc752a0a420622f0e275bf42c4a91ad850c6e5f561f357993"
-    },
-    {
-      "path": "data/shaders/smaa.blend.spv",
-      "bytes": 4692,
-      "sha256": "247cc0a22bf14751d11a3e4976c550de585d6a24a679127cf0fbd72fb262e0c9"
-    },
-    {
-      "path": "data/shaders/smoke.shadow.vert.spv",
-      "bytes": 7496,
-      "sha256": "34fed88da7a4b82dee28e09dbf53590b8039cf52317dc29975c8dad94e6de243"
-    },
-    {
-      "path": "data/shaders/gtao.ao.spv",
-      "bytes": 21124,
-      "sha256": "c1b15bbad4de589deec1d82e1f32afdc5fe23a6bd85616f3aed193a28bda71a1"
-    },
-    {
-      "path": "data/shaders/gtao.denoise.spv",
-      "bytes": 11440,
-      "sha256": "c0fe1b992bd748016be97b000c4bcf9e709697ad4813342d1fe3fedfc69b177c"
-    },
-    {
-      "path": "data/shaders/gtao.contact.spv",
-      "bytes": 16704,
-      "sha256": "ec2d317ecadff07589329cf430442df7454d6ae4c1784a4faaa1a5edba3876d5"
-    },
-    {
-      "path": "data/shaders/gtao.composite.spv",
-      "bytes": 25380,
-      "sha256": "b33ce6199101f006cee7b7f8dcd1470ab71bce497ed5cd41b1480b25f9e30b3d"
-    },
-    {
-      "path": "data/shaders/motion_blur.tile.spv",
-      "bytes": 3372,
-      "sha256": "3376af31bfff8bce4e2fa28d6636c5c6443540bb6c1475b5b617723005f2c92e"
-    },
-    {
-      "path": "data/shaders/motion_blur.blur.spv",
-      "bytes": 6868,
-      "sha256": "f5e09c81f70e495c48eb8c0d7c4c6aea94baae88b15c14033776fbc9d4a33b9e"
-    },
-    {
-      "path": "data/shaders/rt_transform.spv",
-      "bytes": 2932,
-      "sha256": "caba3fd4191feb8984ab200af5e6b8886ebe2df3fff4ad390659bd8816b0fe84"
-    },
-    {
-      "path": "data/shaders/rt_denoise.temporal.spv",
-      "bytes": 8256,
-      "sha256": "95453831830ce6c6c6e7e1233ac9b080ec354c70a726a27300f1e28466619288"
-    },
-    {
-      "path": "data/shaders/rt_denoise.atrous.spv",
-      "bytes": 10104,
-      "sha256": "ccdaa20983224f0036508a762bff63d89033519f1033d00ac3cd7bf1e9fc9848"
-    },
-    {
-      "path": "data/shaders/rt_shadow.trace.spv",
-      "bytes": 26484,
-      "sha256": "3df372175ff5a0cdf600f3e111f341ac4940f3df6471eafc24caa67a91df3ca2"
-    },
-    {
-      "path": "data/shaders/rt_shadow.composite.spv",
-      "bytes": 9572,
-      "sha256": "71863b5d10fce4e81bcd0fe05a34342276af75d31312fdc489e922ef864cb981"
-    },
-    {
-      "path": "data/shaders/rt_reflect.trace.spv",
-      "bytes": 21768,
-      "sha256": "46395b9d1426d0b5cd5fcb519d35122022c8fdd51940f4da9f21a6b6084ef7ac"
-    },
-    {
-      "path": "data/shaders/rt_reflect.composite.spv",
-      "bytes": 12508,
-      "sha256": "f662283534950445355e6dfac8aa26121c9796e254bca4af41d3c13796ee7499"
-    },
-    {
-      "path": "data/shaders/rt_path.accumulate.spv",
-      "bytes": 6024,
-      "sha256": "4016e53ddb3826db5bbba2920396045b25f08d855b3bdca65f473e3b9ea4d7e3"
-    },
-    {
-      "path": "data/shaders/rt_path.list.spv",
-      "bytes": 5308,
-      "sha256": "1f6955e1a1f54134cf5f2419a4ce0b44522b675789833d9c53fc3cd9756cde75"
-    },
-    {
-      "path": "data/shaders/rt_path.trace.spv",
-      "bytes": 28308,
-      "sha256": "94003ccca5f46827cc48df068e53eb48ac4f1e5028430adc9309fe50927cd193"
-    },
-    {
-      "path": "data/shaders/rt_path.composite.spv",
-      "bytes": 11388,
-      "sha256": "efa23ce3bbf0792beba4e19d237b11541e4f149c9c516e10baed1dedfd702a8a"
-    },
-    {
-      "path": "data/shaders/rr_inputs.spv",
-      "bytes": 7540,
-      "sha256": "3ee4b5eded45664b905b935b235ec4fc284d33a3a65558f5037dc4e87330f26b"
-    },
-    {
-      "path": "data/shaders/dlss5.prepare.spv",
-      "bytes": 25620,
-      "sha256": "9d763a3c8e50dbde2f9ad3c18616a9f56cb93b2c5ee40b1be748234a0e1e0043"
-    },
-    {
-      "path": "data/shaders/dlss5.resolve.spv",
-      "bytes": 41884,
-      "sha256": "845e27a9c5f1d1e27cd2ecc4e12fc990aa722a75a7b11eb2e4f8bea18cd98056"
-    },
-    {
-      "path": "sl.interposer.dll",
-      "bytes": 652928,
-      "sha256": "b1d7395aebd7b9722841d64dcf7433680020b6a8e421f851c16d5ba0c2182edf"
-    },
-    {
-      "path": "sl.common.dll",
-      "bytes": 843904,
-      "sha256": "38eea3b4209afc455636ea372b5933d65fcc13becec6c84d101dcfc4d8648f75"
-    },
-    {
-      "path": "sl.dlss.dll",
-      "bytes": 422016,
-      "sha256": "18871eea87c90345da97d8109faa81ea7d5840e8d99b51b55b0e46cfa177f84e"
-    },
-    {
-      "path": "sl.dlss_d.dll",
-      "bytes": 437376,
-      "sha256": "8dff36fd063094eb1f659e8d4dcd52c7423859a9c4a3df3796084c48412d60ac"
-    },
-    {
-      "path": "sl.dlss_g.dll",
-      "bytes": 637056,
-      "sha256": "3ed9538df724993bea8a050195a6a78b9c8c8a566d5b05ade477aab3c390e90f"
-    },
-    {
-      "path": "sl.reflex.dll",
-      "bytes": 388736,
-      "sha256": "443577e869352436ff7ec8f4d9c90418d3e95368436ce219261e0f4f07a38122"
-    },
-    {
-      "path": "sl.pcl.dll",
-      "bytes": 360064,
-      "sha256": "5698c38e722318681f215c9fe68e45b9bedd51378acc699d8eee26e961e57770"
-    },
-    {
-      "path": "nvngx_dlss.dll",
-      "bytes": 58956912,
-      "sha256": "d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e"
-    },
-    {
-      "path": "nvngx_dlssd.dll",
-      "bytes": 48343664,
-      "sha256": "b49435ae346f227feafe7bbe937d88277ea0ee7323975ec06488f377fdb46cee"
-    },
-    {
-      "path": "nvngx_dlssg.dll",
-      "bytes": 7506544,
-      "sha256": "8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7"
-    },
-    {
-      "path": "NvLowLatencyVk.dll",
-      "bytes": 57840,
-      "sha256": "2a77dc3e1c724b7eea5755be0ae7423752e79a2459fae72181a9f00e3507e5d6"
-    },
-    {
-      "path": "amd_fidelityfx_vk.dll",
-      "bytes": 9332432,
-      "sha256": "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78"
-    },
-    {
-      "path": "licenses/SMAA/LICENSE.txt",
-      "bytes": 1470,
-      "sha256": "2b848b67ba50ac40b53e11cf1ccdaee2a190ca83b4652cba695a5f1ce81f52ae"
-    },
-    {
-      "path": "THIRD_PARTY_NOTICES.md",
-      "bytes": 1723,
-      "sha256": "e41361685b00acb74bcae9a504cf7d85b44a41bc3617c3d744929a21f220cbea"
-    },
-    {
-      "path": "data/identified_sdk.txt",
-      "bytes": 165818,
-      "sha256": "29e760f3b4f7f8dd6aca333b40ccc1629f6f7ebe08d3b9b82686f8953c91dbe7"
-    },
-    {
-      "path": "data/symbols.txt",
-      "bytes": 4047,
-      "sha256": "94235c2b83a4564f4e9af19125777e828c5f32e2f2f00fc06aabc37ccfe89ac2"
-    },
-    {
-      "path": "data/gx_symbols.txt",
-      "bytes": 876,
-      "sha256": "26e8cf9c5843f4d690ca73c54256dad86056d2b1d3d01fb2457b98790c861563"
-    },
-    {
-      "path": "data/pipeline_keys.seed",
-      "bytes": 77572,
-      "sha256": "fbc2dad4b1ef76b0cd2fe26ecb28d408042f1630aadd590e009a1a015807e029"
-    },
-    {
-      "path": "licenses/imgui/LICENSE.txt",
-      "bytes": 1083,
-      "sha256": "173506a2d6f7fb67990d257fb2507f188690eca39060c39469ae7bef43aae2a3"
-    },
-    {
-      "path": "uc_launcher.exe",
-      "bytes": 1499648,
-      "sha256": "6ec5d1fb7e0e9abdeece9379e57ecf6b403d14a05d361e664ab6382ed5ad7d55"
-    },
-    {
-      "path": "assets/launcher/graphite-atlas.png",
-      "bytes": 1581599,
-      "sha256": "8201be4e656175e08d322d82f0ab8592a9ee0c6b3d6e96f9f868294323337737"
-    }
-  ],
-  "mismatched_files": []
+  {
+   "path": "licenses/Streamline/license.txt",
+   "bytes": 1591,
+   "sha256": "7b6f23e7d6f3ad6292f9308d2b42cdc3d82ae4e9b2abb55f230279d83bedd43d"
+  },
+  {
+   "path": "licenses/Streamline/nvngx_dlss.license.txt",
+   "bytes": 26727,
+   "sha256": "3027f23ca5a46dd9cb8183fbd522983a86f64d7daac5982912bf9f214671f294"
+  },
+  {
+   "path": "licenses/Streamline/reflex.license.txt",
+   "bytes": 20504,
+   "sha256": "ebf83c07fb3b2939908c3795d887afde3161c89a28ba391724efc784ce1bdabe"
+  },
+  {
+   "path": "licenses/FidelityFX/LICENSE.txt",
+   "bytes": 1136,
+   "sha256": "c93d509cd69d50698796c9c3274247352736ef122a3197ace2010f0978e21aa6"
+  },
+  {
+   "path": "tools/renderer_smoke.exe",
+   "bytes": 1569792,
+   "sha256": "31833aea4ec93a3c642e7991b8abddabba8fb065bb34892e0e8bdd5e9ef1d23b"
+  },
+  {
+   "path": "tools/SDL3.dll",
+   "bytes": 2683904,
+   "sha256": "478b04a0764be6d5e59f9f75cd49fabef5c237c9a32a089015c20d924a4b37d9"
+  },
+  {
+   "path": "tools/data/shaders/smoke.vert.spv",
+   "bytes": 32640,
+   "sha256": "9935fa47c4ea4e1b24e377bcc48e6020a86290a69087b02fc8d72c722218c3d5"
+  },
+  {
+   "path": "tools/data/shaders/smoke.frag.spv",
+   "bytes": 656948,
+   "sha256": "09a8b4506215b25a59f9edd0cd2fa94c3e9898a55b7564ea97e6446a0ab19c95"
+  },
+  {
+   "path": "tools/data/shaders/smoke.uber.spv",
+   "bytes": 665560,
+   "sha256": "a26045e9ffbe5b97cee9635cb7b12ba90a846a96deab25dcfb6432f67cfabb26"
+  },
+  {
+   "path": "tools/data/shaders/smoke.motion.vert.spv",
+   "bytes": 36088,
+   "sha256": "ed8dd85427a593797b8e314dcc49e4d809d239b532597c41fa9ee53bb887c87e"
+  },
+  {
+   "path": "tools/data/shaders/smoke.motion.frag.spv",
+   "bytes": 687532,
+   "sha256": "752d70899240ffc2a61c76c2e7319ecc704d4b55e46d0f7094c9a066d7477a84"
+  },
+  {
+   "path": "tools/data/shaders/smoke.motion.uber.spv",
+   "bytes": 695496,
+   "sha256": "d76d355af345937c59cde6620c46961d926624b9f7e0ad532dd294092ab9ab2a"
+  },
+  {
+   "path": "tools/data/shaders/rcas.comp.spv",
+   "bytes": 3708,
+   "sha256": "33ed39b5461304da63a49c960412d160e5d427a295e918b0b2238746fe6da839"
+  },
+  {
+   "path": "tools/data/shaders/smaa.edges.spv",
+   "bytes": 4776,
+   "sha256": "731dbcae3dcec043369fe3178ea8d662b43fd185abda684cb63a36f8c81cb39c"
+  },
+  {
+   "path": "tools/data/shaders/smaa.weights.spv",
+   "bytes": 24088,
+   "sha256": "9849bc0f78ec682dc752a0a420622f0e275bf42c4a91ad850c6e5f561f357993"
+  },
+  {
+   "path": "tools/data/shaders/smaa.blend.spv",
+   "bytes": 4692,
+   "sha256": "247cc0a22bf14751d11a3e4976c550de585d6a24a679127cf0fbd72fb262e0c9"
+  },
+  {
+   "path": "tools/data/shaders/smoke.shadow.vert.spv",
+   "bytes": 7496,
+   "sha256": "34fed88da7a4b82dee28e09dbf53590b8039cf52317dc29975c8dad94e6de243"
+  },
+  {
+   "path": "tools/data/shaders/gtao.ao.spv",
+   "bytes": 21124,
+   "sha256": "c1b15bbad4de589deec1d82e1f32afdc5fe23a6bd85616f3aed193a28bda71a1"
+  },
+  {
+   "path": "tools/data/shaders/gtao.denoise.spv",
+   "bytes": 11440,
+   "sha256": "c0fe1b992bd748016be97b000c4bcf9e709697ad4813342d1fe3fedfc69b177c"
+  },
+  {
+   "path": "tools/data/shaders/gtao.contact.spv",
+   "bytes": 16704,
+   "sha256": "ec2d317ecadff07589329cf430442df7454d6ae4c1784a4faaa1a5edba3876d5"
+  },
+  {
+   "path": "tools/data/shaders/gtao.composite.spv",
+   "bytes": 25380,
+   "sha256": "b33ce6199101f006cee7b7f8dcd1470ab71bce497ed5cd41b1480b25f9e30b3d"
+  },
+  {
+   "path": "tools/data/shaders/motion_blur.tile.spv",
+   "bytes": 3372,
+   "sha256": "3376af31bfff8bce4e2fa28d6636c5c6443540bb6c1475b5b617723005f2c92e"
+  },
+  {
+   "path": "tools/data/shaders/motion_blur.blur.spv",
+   "bytes": 6868,
+   "sha256": "f5e09c81f70e495c48eb8c0d7c4c6aea94baae88b15c14033776fbc9d4a33b9e"
+  },
+  {
+   "path": "tools/data/shaders/rt_transform.spv",
+   "bytes": 2932,
+   "sha256": "caba3fd4191feb8984ab200af5e6b8886ebe2df3fff4ad390659bd8816b0fe84"
+  },
+  {
+   "path": "tools/data/shaders/rt_denoise.temporal.spv",
+   "bytes": 8256,
+   "sha256": "95453831830ce6c6c6e7e1233ac9b080ec354c70a726a27300f1e28466619288"
+  },
+  {
+   "path": "tools/data/shaders/rt_denoise.atrous.spv",
+   "bytes": 10104,
+   "sha256": "ccdaa20983224f0036508a762bff63d89033519f1033d00ac3cd7bf1e9fc9848"
+  },
+  {
+   "path": "tools/data/shaders/rt_shadow.trace.spv",
+   "bytes": 26484,
+   "sha256": "3df372175ff5a0cdf600f3e111f341ac4940f3df6471eafc24caa67a91df3ca2"
+  },
+  {
+   "path": "tools/data/shaders/rt_shadow.composite.spv",
+   "bytes": 9572,
+   "sha256": "71863b5d10fce4e81bcd0fe05a34342276af75d31312fdc489e922ef864cb981"
+  },
+  {
+   "path": "tools/data/shaders/rt_reflect.trace.spv",
+   "bytes": 21768,
+   "sha256": "46395b9d1426d0b5cd5fcb519d35122022c8fdd51940f4da9f21a6b6084ef7ac"
+  },
+  {
+   "path": "tools/data/shaders/rt_reflect.composite.spv",
+   "bytes": 12508,
+   "sha256": "f662283534950445355e6dfac8aa26121c9796e254bca4af41d3c13796ee7499"
+  },
+  {
+   "path": "tools/data/shaders/rt_path.accumulate.spv",
+   "bytes": 6024,
+   "sha256": "4016e53ddb3826db5bbba2920396045b25f08d855b3bdca65f473e3b9ea4d7e3"
+  },
+  {
+   "path": "tools/data/shaders/rt_path.list.spv",
+   "bytes": 5308,
+   "sha256": "1f6955e1a1f54134cf5f2419a4ce0b44522b675789833d9c53fc3cd9756cde75"
+  },
+  {
+   "path": "tools/data/shaders/rt_path.trace.spv",
+   "bytes": 28308,
+   "sha256": "94003ccca5f46827cc48df068e53eb48ac4f1e5028430adc9309fe50927cd193"
+  },
+  {
+   "path": "tools/data/shaders/rt_path.composite.spv",
+   "bytes": 11388,
+   "sha256": "efa23ce3bbf0792beba4e19d237b11541e4f149c9c516e10baed1dedfd702a8a"
+  },
+  {
+   "path": "tools/data/shaders/rr_inputs.spv",
+   "bytes": 7540,
+   "sha256": "3ee4b5eded45664b905b935b235ec4fc284d33a3a65558f5037dc4e87330f26b"
+  },
+  {
+   "path": "tools/data/shaders/dlss5.prepare.spv",
+   "bytes": 25620,
+   "sha256": "9d763a3c8e50dbde2f9ad3c18616a9f56cb93b2c5ee40b1be748234a0e1e0043"
+  },
+  {
+   "path": "tools/data/shaders/dlss5.resolve.spv",
+   "bytes": 41884,
+   "sha256": "845e27a9c5f1d1e27cd2ecc4e12fc990aa722a75a7b11eb2e4f8bea18cd98056"
+  },
+  {
+   "path": "licenses/SDL3/LICENSE.txt",
+   "bytes": 884,
+   "sha256": "97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127"
+  },
+  {
+   "path": "tools/s1_scan.exe",
+   "bytes": 48128,
+   "sha256": "57cdb28c016cc77a9d7006321a9f8538928884b9d36092159f42955d3342c3f7"
+  },
+  {
+   "path": "tools/translator.exe",
+   "bytes": 285184,
+   "sha256": "6468fbddbb41a0b3eb9e0a28a9fbf799adbb5e7dcecc2293cfda6dc3a5642d45"
+  },
+  {
+   "path": "tools/uc_texture_decode.dll",
+   "bytes": 32768,
+   "sha256": "aa1542e0db8be868ee57cd1dc201a7a170322f21f1023e80f38d65195a752164"
+  },
+  {
+   "path": "tools/extract_textures.py",
+   "bytes": 25830,
+   "sha256": "d1c888badf7bb26fbda55855688cfc7d9cf96bba19d729f93542a4f632f7d13d"
+  },
+  {
+   "path": "tools/extract_textures.bat",
+   "bytes": 179,
+   "sha256": "596365736aece37851e96c76b75ea6c3331a2124a06a1932538b5c7f47852f84"
+  },
+  {
+   "path": "tools/uc_texture_convert.exe",
+   "bytes": 120320,
+   "sha256": "5ad16e422af98e1a2215f9896207bfb28261ed7c1ee62962dbed81c49883a1c2"
+  },
+  {
+   "path": "tools/uc_fifo_replay.exe",
+   "bytes": 1566720,
+   "sha256": "ad6de6a3572ae36a190d87be0bf1dcb299649f3b7a642940cd586d6c1ca69a13"
+  },
+  {
+   "path": "tools/uc_smoke.exe",
+   "bytes": 35868160,
+   "sha256": "cd390b5585ec3d20a0400fdd06a735c6829ec249f8767e625628345f85d62610"
+  },
+  {
+   "path": "uc.exe",
+   "bytes": 61109760,
+   "sha256": "164bcaa46902030922421d5f72c697a83579b8596e47e8b386e9652f7be542c7"
+  },
+  {
+   "path": "data/uc.map",
+   "bytes": 16842549,
+   "sha256": "482c2fbbb95f0416c306edc560b694cc2d5fd8fe9ea58177163ab4a8a4665dfa"
+  },
+  {
+   "path": "SDL3.dll",
+   "bytes": 2683904,
+   "sha256": "478b04a0764be6d5e59f9f75cd49fabef5c237c9a32a089015c20d924a4b37d9"
+  },
+  {
+   "path": "data/shaders/smoke.vert.spv",
+   "bytes": 32640,
+   "sha256": "9935fa47c4ea4e1b24e377bcc48e6020a86290a69087b02fc8d72c722218c3d5"
+  },
+  {
+   "path": "data/shaders/smoke.frag.spv",
+   "bytes": 656948,
+   "sha256": "09a8b4506215b25a59f9edd0cd2fa94c3e9898a55b7564ea97e6446a0ab19c95"
+  },
+  {
+   "path": "data/shaders/smoke.uber.spv",
+   "bytes": 665560,
+   "sha256": "a26045e9ffbe5b97cee9635cb7b12ba90a846a96deab25dcfb6432f67cfabb26"
+  },
+  {
+   "path": "data/shaders/smoke.motion.vert.spv",
+   "bytes": 36088,
+   "sha256": "ed8dd85427a593797b8e314dcc49e4d809d239b532597c41fa9ee53bb887c87e"
+  },
+  {
+   "path": "data/shaders/smoke.motion.frag.spv",
+   "bytes": 687532,
+   "sha256": "752d70899240ffc2a61c76c2e7319ecc704d4b55e46d0f7094c9a066d7477a84"
+  },
+  {
+   "path": "data/shaders/smoke.motion.uber.spv",
+   "bytes": 695496,
+   "sha256": "d76d355af345937c59cde6620c46961d926624b9f7e0ad532dd294092ab9ab2a"
+  },
+  {
+   "path": "data/shaders/rcas.comp.spv",
+   "bytes": 3708,
+   "sha256": "33ed39b5461304da63a49c960412d160e5d427a295e918b0b2238746fe6da839"
+  },
+  {
+   "path": "data/shaders/smaa.edges.spv",
+   "bytes": 4776,
+   "sha256": "731dbcae3dcec043369fe3178ea8d662b43fd185abda684cb63a36f8c81cb39c"
+  },
+  {
+   "path": "data/shaders/smaa.weights.spv",
+   "bytes": 24088,
+   "sha256": "9849bc0f78ec682dc752a0a420622f0e275bf42c4a91ad850c6e5f561f357993"
+  },
+  {
+   "path": "data/shaders/smaa.blend.spv",
+   "bytes": 4692,
+   "sha256": "247cc0a22bf14751d11a3e4976c550de585d6a24a679127cf0fbd72fb262e0c9"
+  },
+  {
+   "path": "data/shaders/smoke.shadow.vert.spv",
+   "bytes": 7496,
+   "sha256": "34fed88da7a4b82dee28e09dbf53590b8039cf52317dc29975c8dad94e6de243"
+  },
+  {
+   "path": "data/shaders/gtao.ao.spv",
+   "bytes": 21124,
+   "sha256": "c1b15bbad4de589deec1d82e1f32afdc5fe23a6bd85616f3aed193a28bda71a1"
+  },
+  {
+   "path": "data/shaders/gtao.denoise.spv",
+   "bytes": 11440,
+   "sha256": "c0fe1b992bd748016be97b000c4bcf9e709697ad4813342d1fe3fedfc69b177c"
+  },
+  {
+   "path": "data/shaders/gtao.contact.spv",
+   "bytes": 16704,
+   "sha256": "ec2d317ecadff07589329cf430442df7454d6ae4c1784a4faaa1a5edba3876d5"
+  },
+  {
+   "path": "data/shaders/gtao.composite.spv",
+   "bytes": 25380,
+   "sha256": "b33ce6199101f006cee7b7f8dcd1470ab71bce497ed5cd41b1480b25f9e30b3d"
+  },
+  {
+   "path": "data/shaders/motion_blur.tile.spv",
+   "bytes": 3372,
+   "sha256": "3376af31bfff8bce4e2fa28d6636c5c6443540bb6c1475b5b617723005f2c92e"
+  },
+  {
+   "path": "data/shaders/motion_blur.blur.spv",
+   "bytes": 6868,
+   "sha256": "f5e09c81f70e495c48eb8c0d7c4c6aea94baae88b15c14033776fbc9d4a33b9e"
+  },
+  {
+   "path": "data/shaders/rt_transform.spv",
+   "bytes": 2932,
+   "sha256": "caba3fd4191feb8984ab200af5e6b8886ebe2df3fff4ad390659bd8816b0fe84"
+  },
+  {
+   "path": "data/shaders/rt_denoise.temporal.spv",
+   "bytes": 8256,
+   "sha256": "95453831830ce6c6c6e7e1233ac9b080ec354c70a726a27300f1e28466619288"
+  },
+  {
+   "path": "data/shaders/rt_denoise.atrous.spv",
+   "bytes": 10104,
+   "sha256": "ccdaa20983224f0036508a762bff63d89033519f1033d00ac3cd7bf1e9fc9848"
+  },
+  {
+   "path": "data/shaders/rt_shadow.trace.spv",
+   "bytes": 26484,
+   "sha256": "3df372175ff5a0cdf600f3e111f341ac4940f3df6471eafc24caa67a91df3ca2"
+  },
+  {
+   "path": "data/shaders/rt_shadow.composite.spv",
+   "bytes": 9572,
+   "sha256": "71863b5d10fce4e81bcd0fe05a34342276af75d31312fdc489e922ef864cb981"
+  },
+  {
+   "path": "data/shaders/rt_reflect.trace.spv",
+   "bytes": 21768,
+   "sha256": "46395b9d1426d0b5cd5fcb519d35122022c8fdd51940f4da9f21a6b6084ef7ac"
+  },
+  {
+   "path": "data/shaders/rt_reflect.composite.spv",
+   "bytes": 12508,
+   "sha256": "f662283534950445355e6dfac8aa26121c9796e254bca4af41d3c13796ee7499"
+  },
+  {
+   "path": "data/shaders/rt_path.accumulate.spv",
+   "bytes": 6024,
+   "sha256": "4016e53ddb3826db5bbba2920396045b25f08d855b3bdca65f473e3b9ea4d7e3"
+  },
+  {
+   "path": "data/shaders/rt_path.list.spv",
+   "bytes": 5308,
+   "sha256": "1f6955e1a1f54134cf5f2419a4ce0b44522b675789833d9c53fc3cd9756cde75"
+  },
+  {
+   "path": "data/shaders/rt_path.trace.spv",
+   "bytes": 28308,
+   "sha256": "94003ccca5f46827cc48df068e53eb48ac4f1e5028430adc9309fe50927cd193"
+  },
+  {
+   "path": "data/shaders/rt_path.composite.spv",
+   "bytes": 11388,
+   "sha256": "efa23ce3bbf0792beba4e19d237b11541e4f149c9c516e10baed1dedfd702a8a"
+  },
+  {
+   "path": "data/shaders/rr_inputs.spv",
+   "bytes": 7540,
+   "sha256": "3ee4b5eded45664b905b935b235ec4fc284d33a3a65558f5037dc4e87330f26b"
+  },
+  {
+   "path": "data/shaders/dlss5.prepare.spv",
+   "bytes": 25620,
+   "sha256": "9d763a3c8e50dbde2f9ad3c18616a9f56cb93b2c5ee40b1be748234a0e1e0043"
+  },
+  {
+   "path": "data/shaders/dlss5.resolve.spv",
+   "bytes": 41884,
+   "sha256": "845e27a9c5f1d1e27cd2ecc4e12fc990aa722a75a7b11eb2e4f8bea18cd98056"
+  },
+  {
+   "path": "sl.interposer.dll",
+   "bytes": 652928,
+   "sha256": "b1d7395aebd7b9722841d64dcf7433680020b6a8e421f851c16d5ba0c2182edf"
+  },
+  {
+   "path": "sl.common.dll",
+   "bytes": 843904,
+   "sha256": "38eea3b4209afc455636ea372b5933d65fcc13becec6c84d101dcfc4d8648f75"
+  },
+  {
+   "path": "sl.dlss.dll",
+   "bytes": 422016,
+   "sha256": "18871eea87c90345da97d8109faa81ea7d5840e8d99b51b55b0e46cfa177f84e"
+  },
+  {
+   "path": "sl.dlss_d.dll",
+   "bytes": 437376,
+   "sha256": "8dff36fd063094eb1f659e8d4dcd52c7423859a9c4a3df3796084c48412d60ac"
+  },
+  {
+   "path": "sl.dlss_g.dll",
+   "bytes": 637056,
+   "sha256": "3ed9538df724993bea8a050195a6a78b9c8c8a566d5b05ade477aab3c390e90f"
+  },
+  {
+   "path": "sl.reflex.dll",
+   "bytes": 388736,
+   "sha256": "443577e869352436ff7ec8f4d9c90418d3e95368436ce219261e0f4f07a38122"
+  },
+  {
+   "path": "sl.pcl.dll",
+   "bytes": 360064,
+   "sha256": "5698c38e722318681f215c9fe68e45b9bedd51378acc699d8eee26e961e57770"
+  },
+  {
+   "path": "nvngx_dlss.dll",
+   "bytes": 58956912,
+   "sha256": "d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e"
+  },
+  {
+   "path": "nvngx_dlssd.dll",
+   "bytes": 48343664,
+   "sha256": "b49435ae346f227feafe7bbe937d88277ea0ee7323975ec06488f377fdb46cee"
+  },
+  {
+   "path": "nvngx_dlssg.dll",
+   "bytes": 7506544,
+   "sha256": "8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7"
+  },
+  {
+   "path": "NvLowLatencyVk.dll",
+   "bytes": 57840,
+   "sha256": "2a77dc3e1c724b7eea5755be0ae7423752e79a2459fae72181a9f00e3507e5d6"
+  },
+  {
+   "path": "amd_fidelityfx_vk.dll",
+   "bytes": 9332432,
+   "sha256": "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78"
+  },
+  {
+   "path": "licenses/SMAA/LICENSE.txt",
+   "bytes": 1470,
+   "sha256": "2b848b67ba50ac40b53e11cf1ccdaee2a190ca83b4652cba695a5f1ce81f52ae"
+  },
+  {
+   "path": "THIRD_PARTY_NOTICES.md",
+   "bytes": 1723,
+   "sha256": "e41361685b00acb74bcae9a504cf7d85b44a41bc3617c3d744929a21f220cbea"
+  },
+  {
+   "path": "data/identified_sdk.txt",
+   "bytes": 165818,
+   "sha256": "29e760f3b4f7f8dd6aca333b40ccc1629f6f7ebe08d3b9b82686f8953c91dbe7"
+  },
+  {
+   "path": "data/symbols.txt",
+   "bytes": 4047,
+   "sha256": "94235c2b83a4564f4e9af19125777e828c5f32e2f2f00fc06aabc37ccfe89ac2"
+  },
+  {
+   "path": "data/gx_symbols.txt",
+   "bytes": 876,
+   "sha256": "26e8cf9c5843f4d690ca73c54256dad86056d2b1d3d01fb2457b98790c861563"
+  },
+  {
+   "path": "data/pipeline_keys.seed",
+   "bytes": 77572,
+   "sha256": "fbc2dad4b1ef76b0cd2fe26ecb28d408042f1630aadd590e009a1a015807e029"
+  },
+  {
+   "path": "licenses/imgui/LICENSE.txt",
+   "bytes": 1083,
+   "sha256": "173506a2d6f7fb67990d257fb2507f188690eca39060c39469ae7bef43aae2a3"
+  },
+  {
+   "path": "uc_launcher.exe",
+   "bytes": 1499648,
+   "sha256": "6ec5d1fb7e0e9abdeece9379e57ecf6b403d14a05d361e664ab6382ed5ad7d55"
+  },
+  {
+   "path": "assets/launcher/graphite-atlas.png",
+   "bytes": 1581599,
+   "sha256": "8201be4e656175e08d322d82f0ab8592a9ee0c6b3d6e96f9f868294323337737"
+  }
+ ],
+ "mismatched_files": []
 }

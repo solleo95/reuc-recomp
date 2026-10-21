@@ -37,6 +37,11 @@ static void crossfade_body(ppc::Ctx& c) {
     CHECK(c.r[1]==0x817D0000-256 && ppc::rd32(c,c.r[1])==0x817D0000);
     crossfade_step=c.f[1]; c.r[1]+=256;
 }
+static double fix_seen,fix_return=0.25;
+static void fix_body(ppc::Ctx& c) {
+    CHECK(c.r[1]<0x817D0000 && ppc::rd32(c,c.r[1])==0x817D0000);   // lowered prologue: back chain to the caller's stack
+    fix_seen=c.f[1]; c.f[1]=c.ps1[1]=fix_return; c.r[1]=0x817D0000;
+}
 static bool stream_busy;
 static void sound_wait_body(ppc::Ctx& c) {
     CHECK(c.r[1]==0x817D0000-32 && ppc::rd32(c,c.r[1])==0x817D0000);
@@ -264,6 +269,8 @@ int main() {
     all_entries.push_back({0x8004C920,sound_retry_body});
     all_entries.push_back({0x80049004,sound_wait_body});
     all_entries.push_back({0x80165614,crossfade_body});
+    all_entries.push_back({0x80170004,fix_body});
+    for(const auto& fix:uc::pacing_fix_table()) all_entries.push_back({fix.entry+4,fix_body});
     all_entries.push_back({0x803C1BFC,home_body});
     uc::dispatch_init(all_entries.data(),all_entries.size(),0x80044D18,0x803D0000);
     auto run=[&](uint32_t object,uint32_t target,uint32_t expected,uint32_t initial=0) {
@@ -429,6 +436,37 @@ int main() {
             uc::game_pacing_set_paused(false); uc::game_pacing_set_mode({true,0}); measured_step=0.1f;
             run(0x804D3318,2,1); retry(); CHECK(ppc::rd32(c,record+72)==3);
             ppc::wr32(c,record+72,1); retry(); CHECK(ppc::rd32(c,record+72)==0);
+        }
+        measured_step=0; uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); run(0x804D3318,2,2);
+    }
+    {   // Generated pacing fixes (game/pacing_fixes.inc): identity at the nominal rate and on pause, exact templates otherwise.
+        using uc::PacingTemplate;
+        auto apply=[&](const uc::PacingFix& fix,uint32_t lr,double in) {
+            c.r[1]=0x817D0000; c.lr=lr; c.f[1]=c.ps1[1]=in; fix_seen=-1;
+            uc::pacing_apply_record(c,fix,64);
+            CHECK(c.r[1]==0x817D0000 && c.lr==lr);
+            return c.f[1];
+        };
+        const uc::PacingFix fixes[]={{0x80170000,0x80170100,PacingTemplate::scale,1,-1},{0x80170000,0x80170100,PacingTemplate::scale,1,1},
+                                     {0x80170000,0x80170100,PacingTemplate::scale_ret,1,1},{0x80170000,0x80170100,PacingTemplate::pow_alpha,1,0}};
+        for(bool paused : {false,true}) {
+            uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); uc::game_pacing_set_paused(paused); run(0x804D3318,2,2);
+            for(const auto& fix:fixes) { CHECK(apply(fix,0x80170100,0.5)==fix_return && fix_seen==0.5); }   // scale 1 or pause: identity
+            uc::game_pacing_set_paused(false);
+        }
+        uc::game_pacing_init(true); ppc::wrf32(c,0x804D3334,60); measured_step=1.f/480; run(0x804D3318,2,1);
+        const double s=uc::game_step_scale();
+        CHECK(std::fabs(s-1.0/16)<1e-6);
+        CHECK(apply(fixes[0],0x80170100,0.5)==fix_return && std::fabs(fix_seen-0.5/s)<1e-6);
+        CHECK(apply(fixes[1],0x80170100,0.5)==fix_return && std::fabs(fix_seen-0.5*s)<1e-6);
+        CHECK(std::fabs(apply(fixes[2],0x80170100,0.5)-fix_return*s)<1e-6 && fix_seen==0.5);
+        CHECK(std::fabs(apply(fixes[3],0x80170100,0.5)-(1-std::pow(1-fix_return,s)))<1e-6);
+        for(const auto& fix:fixes) { CHECK(apply(fix,0x80170200,0.5)==fix_return && fix_seen==0.5); }   // other callers unchanged
+        for(const auto& fix:uc::pacing_fix_table()) {   // every generated record: identity at the nominal rate
+            uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); run(0x804D3318,2,2);
+            c.r[1]=0x817D0000; c.lr=fix.lr; c.f[fix.reg]=c.ps1[fix.reg]=0.5; fix_seen=-1;
+            uc::pacing_apply_record(c,fix,64);
+            CHECK(c.r[1]==0x817D0000 && c.lr==fix.lr && (fix.reg!=1 || fix_seen==0.5));
         }
         measured_step=0; uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); run(0x804D3318,2,2);
     }
