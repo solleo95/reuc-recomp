@@ -69,6 +69,7 @@ public:
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
     void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
+    void set_crosshair_scale(uint32_t percent);   // aim reticle size 0..100 % of the game's (late_aim.h); 0 hides it
     // Graphics effects (graphics_effects.h): callable before or after initialize(); a change of the anisotropy level swaps the samplers at once.
     void set_effects(const GraphicsEffects& effects);
     uint32_t effective_anisotropy() const;   // the level the device runs (requested, clamped to its limit)
@@ -232,6 +233,7 @@ private:
     std::function<void()> menu_build_, menu_setup_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
     bool bloom_=true;
+    float crosshair_scale_=1;
     GraphicsEffects chosen_effects_;   // as configured
     GraphicsEffects effects_;   // effective_effects(chosen_effects_): what the passes run from
     bool anisotropy_supported_=false; float anisotropy_limit_=1;

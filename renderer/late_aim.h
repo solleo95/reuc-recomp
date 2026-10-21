@@ -18,7 +18,7 @@ inline bool reticle_texture(const TexturePixels& texture) {
     const uint32_t width = texture.guest_width ? texture.guest_width : level.width, height = texture.guest_height ? texture.guest_height : level.height;
     return width == height && (width == 100 || width == 120 || width == 154);
 }
-// Centre of the draw's screen-space bounding box in NDC (x right, y up), like the harness's draw summary.
+// Centre of the draw's screen-space bounding box in Vulkan NDC (x right, y down, like aim units); the harness's draw summary negates y.
 inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw) {
     const auto& t = draw.transforms;
     const bool indexed = draw.state->descriptors[0] != Mode::none;
@@ -43,6 +43,11 @@ inline bool is_reticle_draw(const DrawPacket& draw, const std::array<float,2>& c
     const auto center = draw_center_ndc(draw);
     if (!center) return false;
     // It must sit near the pointer the game drew with (recoil moves it a little): a ring elsewhere on the screen is something else.
-    return std::abs((*center)[0] - consumed[0] * kAimToNdcX) < 0.25f && std::abs((*center)[1] + consumed[1] * kAimToNdcY) < 0.25f;
+    return std::abs((*center)[0] - consumed[0] * kAimToNdcX) < 0.25f && std::abs((*center)[1] - consumed[1] * kAimToNdcY) < 0.25f;
+}
+// Crosshair scale (graphics.crosshair_scale): the draw's viewport is scaled about the reticle centre (draw NDC), so the quad keeps its place and changes size.
+inline void scale_viewport_about(const std::array<float,2>& center, float scale, float& x, float& y, float& width, float& height) {
+    x += (center[0] * 0.5f + 0.5f) * width * (1 - scale); width *= scale;
+    y += (center[1] * 0.5f + 0.5f) * height * (1 - scale); height *= scale;
 }
 }

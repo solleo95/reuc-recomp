@@ -42,6 +42,11 @@ Options options_from_config(const ConfigDocument& document) {
         }
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
         if(graphics.contains("bloom"))options.bloom=boolean(graphics["bloom"]);
+        if(graphics.contains("crosshair_scale")) {
+            const auto& value=graphics["crosshair_scale"];
+            if(!value.is_number_unsigned() || value.get<uint64_t>()>100)invalid("crosshair_scale must be 0..100");
+            options.crosshair_scale=value.get<uint32_t>();
+        }
         if(graphics.contains("prompt_style")) {
             if(!graphics["prompt_style"].is_string())invalid("prompt_style must be a string");
             const auto style=graphics["prompt_style"].get<std::string>();
@@ -152,6 +157,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;
     graphics["bloom"]=options.bloom;
+    graphics["crosshair_scale"]=options.crosshair_scale;
     if(options.fps_limit)graphics["fps_limit"]=*options.fps_limit;
     else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";

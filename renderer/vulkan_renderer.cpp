@@ -1000,6 +1000,10 @@ void VulkanRenderer::set_bloom(bool enabled) {
     owner();
     bloom_=enabled;
 }
+void VulkanRenderer::set_crosshair_scale(uint32_t percent) {
+    owner();
+    crosshair_scale_=std::min(percent,100u)/100.f;
+}
 void VulkanRenderer::set_prompt_style(PromptStyle style) {
     owner();
     if(style!=PromptStyle::monochrome && style!=PromptStyle::sculpted)throw std::invalid_argument("invalid native prompt style");
@@ -2082,6 +2086,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto right=std::clamp<int64_t>((int64_t(s[0])+s[2])*target.extent.width/640,x,target.extent.width);
                 const auto bottom=std::clamp<int64_t>((int64_t(s[1])+s[3])*target.extent.height/480,y,target.extent.height);
                 draw_scissor={{int32_t(x),int32_t(y)},{uint32_t(right-x),uint32_t(bottom-y)}};
+            }
+            if (draw.late_aim && crosshair_scale_!=1) {
+                if (crosshair_scale_<=0) continue;   // 0%: no crosshair (a Vulkan viewport needs a positive size)
+                if (const auto center=gx::draw_center_ndc(draw)) gx::scale_viewport_about(*center,crosshair_scale_,draw_viewport.x,draw_viewport.y,draw_viewport.width,draw_viewport.height);
             }
             if (draw.late_aim && aim_source_) {
                 const auto latest=aim_source_();

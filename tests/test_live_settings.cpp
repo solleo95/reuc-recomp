@@ -18,6 +18,7 @@ int main() {
     targets.upscaling=[&](const uc::Options&){ calls.push_back("upscaling"); };
     targets.fps_limit=[&](std::optional<uint32_t>){ calls.push_back("fps_limit"); };
     targets.bloom=[&](bool){ calls.push_back("bloom"); };
+    targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
@@ -28,6 +29,10 @@ int main() {
     {   // only the changed field reaches its subsystem, and the file has it
         auto next=live.options(); next.bloom=false; live.apply(next);
         CHECK((calls==std::vector<std::string>{"bloom"}) && !saved().bloom && !live.error());
+    }
+    {   // the crosshair size alone reaches only its target
+        calls.clear(); auto next=live.options(); next.crosshair_scale=40; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"crosshair_scale"}) && saved().crosshair_scale==40 && !live.error());
     }
     {   // nothing changed: nothing called, the file is not rewritten
         calls.clear(); const auto before=fs::last_write_time(path);

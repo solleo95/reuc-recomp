@@ -24,6 +24,10 @@ int main() {
     CHECK(document.properties["graphics"]["bloom"]==false && !uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom);
     options.bloom=true;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["bloom"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom);
+    CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).crosshair_scale==100);   // absent: the game's size
+    options.crosshair_scale=0;uc::store_options(document,options);
+    CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
+    options.crosshair_scale=100;uc::store_options(document,options);
     CHECK(!uc::options_from_config(document).fps_limit);   // absent: the previous behaviour
     options.fps_limit=165;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["fps_limit"]==165 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fps_limit==165u);
@@ -142,7 +146,8 @@ int main() {
         R"({"graphics":{"fps_limit":2000}})",R"({"graphics":{"fps_limit":"fast"}})",R"({"graphics":{"fps_limit":144.5}})",
         R"({"graphics":{"upscaler":"blit"}})",R"({"graphics":{"upscaler":1}})",R"({"graphics":{"upscale_mode":"dlaa"}})",R"({"graphics":{"sharpness":0}})",
         R"({"graphics":{"sharpness":1.5}})",R"({"graphics":{"sharpening":1}})",R"({"graphics":{"frame_generation":"on"}})",
-        R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})"}) {
+        R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
+        R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})"}) {
         bool caught=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){caught=true;}CHECK(caught);
     }
     return 0;

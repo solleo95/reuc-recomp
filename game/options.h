@@ -18,6 +18,7 @@ struct Options {
     WindowMode window_mode=WindowMode::windowed;
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool bloom=true;   // the game's glow around lights (graphics.bloom); off skips the bloom composite draw
+    uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     UpscalerKind upscaler=UpscalerKind::off;
     UpscaleMode upscale_mode=UpscaleMode::quality;
     bool sharpening=false;   // RCAS after the upscale (graphics.sharpening, --sharpness / --no-sharpening)

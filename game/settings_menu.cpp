@@ -178,6 +178,10 @@ void SettingsMenu::main_tab(float unit) {
         }
         ImGui::EndCombo();
     }
+    ImGui::Dummy({0,6*unit});
+    ImGui::TextUnformatted(tr("crosshair_scale"));
+    int crosshair=int(options.crosshair_scale);
+    if(ImGui::SliderInt("##crosshair",&crosshair,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.crosshair_scale=uint32_t(std::clamp(crosshair,0,100));
     ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
     bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow

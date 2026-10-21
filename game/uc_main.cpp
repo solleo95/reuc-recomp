@@ -364,6 +364,7 @@ static int real_main(int argc, char** argv) {
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom);
+        renderer.set_crosshair_scale(options.crosshair_scale);
         renderer.set_effects(options.effects);
         renderer.set_dlss5(options.dlss5);
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
@@ -646,6 +647,7 @@ static int real_main(int argc, char** argv) {
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
         };
         targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
+        targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
