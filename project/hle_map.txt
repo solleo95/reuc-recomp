@@ -192,7 +192,11 @@ GXLoadNrmMtxImm
 @801426D4 MovieUpdate
 @801581E0 GameFrameWait
 @800C790C ActorStepTime
+@800329FC FixedPlaybackStep
 @8014D368 HudNameDelay
+@80210278 PropStep
+@801172A4 PhysicsStep
+@80117464 PhysicsHit
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.
 KPADInit Nop

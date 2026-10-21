@@ -10,6 +10,7 @@ public:
     ~CompileScreen();
     CompileScreen(const CompileScreen&)=delete;
     CompileScreen& operator=(const CompileScreen&)=delete;
+    void show();   // at once, with a start message until the first update(); the renderer's start blocks the thread for seconds
     void update(size_t done,size_t total);   // also pumps this thread's window messages, so the game window stays responsive
     struct State;
 private:

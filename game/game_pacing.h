@@ -17,4 +17,8 @@ float game_step_scale();   // real step / nominal frame of the game clock (1 in 
 }
 void hle_GameFrameWait(ppc::Ctx& c);
 void hle_ActorStepTime(ppc::Ctx& c);
+void hle_FixedPlaybackStep(ppc::Ctx& c);
 void hle_HudNameDelay(ppc::Ctx& c);
+void hle_PropStep(ppc::Ctx& c);
+void hle_PhysicsStep(ppc::Ctx& c);
+void hle_PhysicsHit(ppc::Ctx& c);

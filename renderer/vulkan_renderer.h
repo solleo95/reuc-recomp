@@ -166,6 +166,7 @@ private:
         VkDeviceSize allocation_size=0;
         std::shared_ptr<const gx::TexturePixels> source;
         bool initialized=false;
+        const void* uploader=nullptr;   // the slot whose command buffer copies `upload`; it frees the staging buffer once its fence retired
     };
     struct Slot {
         VkCommandBuffer command = VK_NULL_HANDLE;
@@ -176,7 +177,7 @@ private:
         VkImageView view = VK_NULL_HANDLE;
         Buffer vertices, indices, pixels, uniforms, palettes, banks, motions;   // vertices/indices: this frame's non-mesh draws; motions: MotionBlock per scene draw
         std::vector<std::shared_ptr<const gx::MeshBuffers>> mesh_refs;   // keeps the meshes this submission draws alive until its fence completed
-        std::vector<Texture> textures;
+        std::vector<std::shared_ptr<Texture>> textures;   // shared through texture_pool_: one GPU image per texture, not one per slot
         std::vector<std::shared_ptr<const gx::TexturePixels>> copy_sources;
         std::vector<VkDescriptorSet> texture_sets;
         VkDescriptorPool texture_pool=VK_NULL_HANDLE;
@@ -391,6 +392,7 @@ private:
     VkDeviceMemory depth_memory_=VK_NULL_HANDLE;
     VkImageView depth_view_=VK_NULL_HANDLE;
     static constexpr size_t kFrameSlots = 16;   // GPU submissions in flight (6 stalled the render thread behind the first heavy packet of a ~23-packet frame; 16 ends that stall, 48 gains ~5% more for much more host-visible memory); the guest's queue window is larger (gx::kMaxOutstandingPackets)
+    std::unordered_map<const gx::TexturePixels*,std::weak_ptr<Texture>> texture_pool_;   // before slots_: the slots' textures erase themselves from it
     std::array<Slot, kFrameSlots> slots_{};
     // RT albedo/material targets (scene extent, created and destroyed with rt_material_active()) and the records of the frame: per frame-in-flight
     // buffers, grow-only, filled per scene packet from rt_record_count_ on. Read by RT passes at the scene boundary.

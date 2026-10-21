@@ -30,9 +30,11 @@ void paint(HWND window,const CompileScreen::State& state) {
     FillRect(dc,&client,background); DeleteObject(background);
     SetBkMode(dc,TRANSPARENT);
     SelectObject(dc,state.title); SetTextColor(dc,kText);
-    RECT title{24,18,client.right-24,52}; DrawTextW(dc,L"Компиляция шейдеров",-1,&title,DT_LEFT|DT_SINGLELINE);
+    const bool starting=state.total==0;   // before the first progress report: the renderer is still starting
+    RECT title{24,18,client.right-24,52}; DrawTextW(dc,starting ? L"Запуск игры" : L"Компиляция шейдеров",-1,&title,DT_LEFT|DT_SINGLELINE);
     SelectObject(dc,state.detail); SetTextColor(dc,kMuted);
-    RECT detail{24,54,client.right-24,80}; DrawTextW(dc,L"Нужно, чтобы игра шла без фризов.",-1,&detail,DT_LEFT|DT_SINGLELINE);
+    RECT detail{24,54,client.right-24,80}; DrawTextW(dc,starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.",-1,&detail,DT_LEFT|DT_SINGLELINE);
+    if(starting) { BitBlt(target,0,0,client.right,client.bottom,dc,0,0,SRCCOPY); SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc); EndPaint(window,&paint); return; }
     const RECT track{24,96,client.right-24,112};
     HBRUSH track_brush=CreateSolidBrush(kTrack); FillRect(dc,&track,track_brush); DeleteObject(track_brush);
     RECT fill=track; fill.right=track.left+LONG((track.right-track.left)*(state.total ? double(std::min(state.done,state.total))/double(state.total) : 0.0));
@@ -70,6 +72,9 @@ CompileScreen::~CompileScreen() {
     if(state_->title) DeleteObject(state_->title);
     if(state_->detail) DeleteObject(state_->detail);
     delete state_; state_=nullptr;
+}
+void CompileScreen::show() {
+    ShowWindow(state_->window,SW_SHOWNOACTIVATE); state_->shown=true; UpdateWindow(state_->window);
 }
 void CompileScreen::update(size_t done,size_t total) {
     state_->done=done; state_->total=total;

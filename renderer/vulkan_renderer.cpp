@@ -481,10 +481,7 @@ void VulkanRenderer::destroy_texture(Texture& texture) {
 void VulkanRenderer::retire_textures(Slot& slot) {
     if (slot.texture_pool) vkDestroyDescriptorPool(device,slot.texture_pool,nullptr);
     slot.texture_pool=VK_NULL_HANDLE; slot.descriptor_capacity=0; slot.texture_sets.clear();
-    for (auto& texture : slot.textures) {
-        destroy_texture(texture);
-    }
-    slot.textures.clear();
+    slot.textures.clear();   // the last slot to drop a texture destroys it
     slot.copy_sources.clear();
 }
 PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_pass) const {
@@ -1725,14 +1722,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     std::vector<const gx::DrawUniform*> record_uniforms;
     std::unordered_set<const gx::TexturePixels*> used_textures;
     for(const auto& draw:packet.draws) for(size_t map=0;map<8;++map) used_textures.insert(draw_texture(draw,map).get());
-    std::unordered_map<const gx::TexturePixels*,size_t> renderer_references;
-    for(const auto& cached_slot:slots_) for(const auto& texture:cached_slot.textures) ++renderer_references[texture.source.get()];
-    // CPU-cache/queued-packet owners retain textures across different passes; this slot's fence is retired.
+    // This slot's fence is retired. A texture's GPU image is shared by all slots; the renderer holds one reference to its pixels, so more
+    // belong to the CPU cache or queued packets, which retain it across passes.
     for (auto it=slot.textures.begin();it!=slot.textures.end();) {
-        const bool owned=it->source && size_t(it->source.use_count())>renderer_references.at(it->source.get());
-        const bool used=!it->source || used_textures.contains(it->source.get());
-        if (!used && !owned) { destroy_texture(*it); it=slot.textures.erase(it); }
-        else { if (it->initialized) destroy_buffer(it->upload); ++it; }
+        Texture& texture=**it;
+        if (texture.initialized && texture.uploader==&slot) { destroy_buffer(texture.upload); texture.uploader=nullptr; }
+        const bool owned=texture.source && texture.source.use_count()>1;
+        const bool used=!texture.source || used_textures.contains(texture.source.get());
+        if (!used && !owned) it=slot.textures.erase(it); else ++it;
     }
     // Per draw: where its vertices live (a persistent mesh buffer, or this frame's dynamic buffer for non-mesh draws) and which palette it reads.
     struct DrawGpu { PipelineKey key{}; PipelineChoice choice{}; const Buffer* vertices=nullptr; const Buffer* indices=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0, first_index=0; int32_t first_vertex=0; uint32_t palette=0, current=0, indexed=0, bank=kNoBank; uint64_t mesh_id=0; };   // mesh_id: GpuMesh::id of a cached mesh draw (0 for an inline draw)
@@ -1881,7 +1878,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         // The slot fence has retired; rewrite its retained sets before their next submission.
         slot.textures.reserve(count);
         std::unordered_map<const gx::TexturePixels*,size_t> texture_indices;
-        for(size_t i=0;i<slot.textures.size();++i) texture_indices.emplace(slot.textures[i].source.get(),i);
+        for(size_t i=0;i<slot.textures.size();++i) texture_indices.emplace(slot.textures[i]->source.get(),i);
         VkDeviceSize uniform_offset=0;
         for (size_t i=0;i<count;++i) {
             std::array<VkDescriptorImageInfo,8> image{};
@@ -1900,11 +1897,17 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 const auto& source=*chosen;
                 auto found=texture_indices.find(source.get());
                 if (found==texture_indices.end()) {
-                    auto texture=make_texture(source.get()); texture.source=source;
-                    try { slot.textures.push_back(texture); } catch (...) { destroy_texture(texture); throw; }
+                    std::shared_ptr<Texture> shared;
+                    if(const auto pooled=texture_pool_.find(source.get()); pooled!=texture_pool_.end()) shared=pooled->second.lock();
+                    if(!shared) {
+                        auto texture=make_texture(source.get()); texture.source=source;
+                        shared=std::shared_ptr<Texture>(new Texture(std::move(texture)),[this](Texture* dead) { texture_pool_.erase(dead->source.get()); destroy_texture(*dead); delete dead; });
+                        texture_pool_[source.get()]=shared;
+                    }
+                    slot.textures.push_back(std::move(shared));
                     found=texture_indices.emplace(source.get(),slot.textures.size()-1).first;
                 }
-                image[map]={VK_NULL_HANDLE,slot.textures[found->second].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                image[map]={VK_NULL_HANDLE,slot.textures[found->second]->view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
             if(i==0 || packet.draws[i].uniforms.block()!=packet.draws[i-1].uniforms.block() ||
                !std::equal(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,gpu_draws[i-1].key.begin()+1)) {
@@ -1969,8 +1972,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query);
     pass_timer_.reset(slot.command, first_query / 2);
     slot.timed = true;
-    for (const auto& texture : slot.textures) {
+    for (const auto& pooled : slot.textures) {
+        Texture& texture=*pooled;
         if (texture.initialized) continue;
+        texture.uploader=&slot;
         barrier(slot.command,texture.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_2_NONE,0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,texture.mip_levels);
         std::vector<VkBufferImageCopy> copies(texture.mip_levels); VkDeviceSize at=0;
         for(uint32_t i=0;i<texture.mip_levels;++i) {
@@ -2319,7 +2324,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) copy_target->initialized=true;
-    for (auto& texture : slot.textures) texture.initialized=true;
+    for (auto& texture : slot.textures) texture->initialized=true;
     if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); dlss5_scene_.ready=false; }
     slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
     if (!present_image) return true;

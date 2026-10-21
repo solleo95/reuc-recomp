@@ -179,3 +179,37 @@ Fix outline: pass the 8 per-vertex ids in the vertex (u8 x8 -> 2 uints), give TM
 - `uc_fifo_replay` no longer refuses the stream (bank from XF memory) and has `--allow-unresolved` (the log's frame 0 uses an EFB-copy texture that is copied later in the same frame; it is replaced by gray).
   `dining_car_live.dff` frame 3 renders (`uc_fifo_replay dining_car_live.dff 3 out.png --allow-unresolved`).
 
+
+## 2026-10-20: prop integrator runs once per 60 Hz step above 60 Hz (PropStep)
+
+`80210278` is a damped spring with per-call damping and an age counter. Measured with a body probe (`UC_PROP_PROBE=<file>`): the recorded motion lasted 2.24 s at 60 Hz, 0.95 s at 120, 0.72 s at 240. `hle_PropStep` (`entry 8021027C`) now skips the call while `2*game_step_scale() < 1` (accumulator per body), giving 66 executed steps at every rate (verified 60/120/240). 60 Hz and 30 Hz are unchanged (test_game_pacing). The earlier identification of this body as the visible chandelier was incorrect; its rendered object was not established. The train chandelier uses ODE, below.
+
+Open (same method): the script step `800D027C` (event `smBh` at `800CCDAC` ends after 18 calls at any rate; gating the whole step loses one-call hit pulses, do not repeat), `800ACFA8`, `803946F0`, the +1 counters `804AFB1C`, `909A0928`... (UI), leeches, dogs. Tools: `-DUC_FN_COUNT=ON` probe build, per-step function log, burst-length classifier (compare run lengths in steps at 60 and 120 Hz: equal = per call).
+
+## 2026-10-21: confirmed chandelier ODE timestep and shot impulse
+
+The visible `r010_chandelier` resolves from model node `80E9C878` to actor `80E9B180` (vtable `803F7EA0`, body ID 0 at +3252). ODE manager `804A197C` stores 44-byte records at its +24 pointer; record ID +40 maps to the body pointer at +0. In the corridor replay this is `933DC230`, position +152 and rotation +184. The visible matrices are `80E9CC80` / `80E9CE60`; writes through the physical alias explain why a trap on only the cached address missed them.
+
+`80159BC0` passes a fixed `2 / clock.rate` seconds to `801172A4` on every game step. That function divides it into four ODE substeps (`800EC6F8` -> `800F215C` -> `800EE300`). Thus rigid bodies ran twice as fast at 60 Hz, four times at 120 Hz. `hle_PhysicsStep` scales that duration by the actual/nominal frame ratio and skips the solver during pause. Original 30 Hz remains unchanged.
+
+Shots enter `80117464` from `8010000C` at `80100938` and add force/torque for one solver substep. `hle_PhysicsHit` inversely scales only this event's strength, preserving the original impulse when the substep shrinks; generic forces remain untouched. Tests cover elapsed physics time and shot impulse at 30/60/120/240/480 Hz, plus pause. Removing either normalization makes the corresponding test fail.
+
+An identical `cg60` replay before/after the timestep fix has matching matrices before the hit and corrected rotation/fall afterward (`demofn-codex_state60-1792558666`, `demofn-codex_ode60-1792559059`). Separate unlocked 120/240 Hz harness runs capture the body position and rotation through repeated hits.
+
+Pictures are confirmed ODE clients too: actors `8109F900`, `810A5920`, `810AB940`, `810B1960` have body IDs 9..12 and share model resource `92DE4AE0`, MDL0 name `r008_picture` (resource pointer at actor +6216). Targeted harness shots at 120/240 Hz record picture rotation and falling to the floor in `pictures-120-1792561619452566300` and `pictures-240-1792561550176317600`. These are live aiming runs, not identical collision trajectories: one picture catches on the rail before falling, so time to final rest is not a clean timing benchmark.
+
+## 2026-10-21: actor timestep was scaled twice for animated enemies
+
+The earlier assumption that every `800C790C` result is a fixed nominal timestep was wrong. In live 120 Hz gameplay, the original body returns `0.008333334` for classes `803F2B60` (zombies), `80408534` and `80411484`, but `0.0333667` for the plain props (`803F7EA0`). Multiplying all results by `game_step_scale() == 0.24975` made enemy AI/state timing four times slower than their already-correct animation and root-motion paths.
+
+The animated model getter `80032AA0` reads a nested playback value already containing elapsed time: `0.24975` at 120 Hz, `1.4985` when the accelerated test uses a 50 ms step. Both `8016B178` and `800312CC` divide this by the nominal 29.97 Hz, recovering actual elapsed time. Experimental extra scaling in those two paths was rejected by live probes and removed.
+
+`ActorStepTime` now preserves the original result and only enforces host pause. `FixedPlaybackStep` wraps the plain model getter `800329FC` (its own +16 playback property), applying the frame ratio only when called from the original actor-timestep division (`LR 800C799C`). Other property consumers and animated models keep their original values. This preserves the previous correction for fixed-step props while removing the duplicate factor from enemies. The regression test fails with the old blanket multiplier and checks animated/fixed paths, pause and unrelated getter callers at 60/120/240/480 Hz.
+
+Evidence: `build/actor-time120.txt`, `build/autotest/live-120-135-1792560788729229700`; probe columns are game step, actor, class, caller, original timestep, frame ratio. Temporary timing probes were removed from production sources.
+
+Post-fix live checks: roof leeches approach and attack at 120/240 Hz (`live-120-140-1792561336855142000`, `live-240-140-1792561432162952300`); the first-car zombies approach and reach the player at 480 Hz (`live-480-20-1792561675445062200`). The route, camera phase and hit results vary with live autoplay, so these establish working behavior rather than bit-identical replay. Full build and CTest: 134/134 passed (`build/actor-fixed-build.log`).
+
+The unblocked zombie #162 covers about 22.7 world units over six game seconds in the 30 FPS reference (`live-30-20-1792561731127962200`) and 22.5 at 480 Hz, about 3.8 units/s in both. Zombie #163 moves from the seat row (z=10.14) into the aisle (z=-0.16) in the 480 Hz check. These checks do not cover every enemy type or every navigation state; the reported dog-against-wall case still needs a dedicated scene check.
+
+Additional progression smoke: `live-120-600-1792562171777636200` reached the first train chapter's results and `chapter_done` at retrace 32718. The diagnostic script exits with `route stopped: chapter_done` because its requested 600-second capture lies after the chapter ends; this is not a game crash. This route used speed 8 (50 ms effective game steps), so it proves chapter progression only; the targeted high-frequency checks above switch to speed 1. The dog-against-wall scene was not identified by this route or by the preceding Claude session notes.

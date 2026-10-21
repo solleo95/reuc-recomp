@@ -37,6 +37,12 @@ A `kpad` press holds its buttons for `hold_frames` and then releases them keepin
 - `exit`: `code`.
 Crash information is not sent on the pipe: the client reads the tail of `run.log` and the newest `debug/crash-*.txt` itself when the process dies.
 
+## Codex Windows sandbox
+
+On this machine, launch the harness outside the Codex process sandbox when testing GPU behavior. The isolated process environment makes NVIDIA repeat expensive pipeline creation: the same executable and byte-identical application cache warmed 346 pipelines in 8.5 seconds inside the sandbox, versus 0.47 and 0.52 seconds in consecutive ordinary launches (2026-10-21). Keep all harness window, mute, input and copied-save protections. Shader-cache deletion is unnecessary.
+
+For CTest, use a temporary directory inside `build`. Tests that exercise atomic file replacement can still receive `Access denied` inside the sandbox; rerun those tests outside it before treating the failure as a product regression.
+
 ## Time
 
 `n` counts KPAD samples. `retraces` counts VI retraces = game time at 60 ticks/s at any speed. Menu animations, loading and tutorials follow game time, so waits that depend on them use `retraces` (`Game.advance(ticks)`). With `--speed k` the whole runtime clock is scaled by k (verified at 1/2/4/8: retraces/s = 60·k). Above 4 the KPAD/present rate is capped near 160–190 Hz (rendering is not skipped), so game logic frames per game tick fall below 1.

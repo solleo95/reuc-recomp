@@ -357,6 +357,8 @@ static int real_main(int argc, char** argv) {
     double render_aspect=16.0/9;
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
+        std::optional<uc::CompileScreen> screen;
+        if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
@@ -365,8 +367,7 @@ static int real_main(int argc, char** argv) {
         renderer.set_effects(options.effects);
         renderer.set_dlss5(options.dlss5);
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
-            uc::CompileScreen screen;
-            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen.update(done,total); });
+            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen->update(done,total); });
         } else renderer.warm_pipelines([](size_t,size_t) {});   // a restart: the pipelines come from the disk cache
     };
     if (!options.demo_record.empty()) input.demo_record(options.demo_record);
