@@ -5,7 +5,7 @@
 
 namespace uc::mods {
 using Clock = std::chrono::steady_clock;
-constexpr uint32_t kQuietCallsToForgive = 3600;   // one minute of nominal 60 Hz steps without a failure
+constexpr uint32_t kQuietCallsToForgive = 1800;   // one minute of game time (about 30 nominal frames a second) without a failure
 
 struct ModHost::Running {
     ModManifest manifest;
@@ -15,12 +15,15 @@ struct ModHost::Running {
     std::unique_ptr<ModContext> context;
     std::unique_ptr<ModRuntime> script, native;
     std::mutex mutex;   // held around every call into this mod's runtimes: the game thread and the menu thread both call in
+    bool started = false;   // runtimes exist and on_load has run (sync() starts and stops mods while the game runs)
     uint32_t failures = 0;
     uint32_t quiet_calls = 0;   // on_step calls since the last failure; a long quiet stretch clears the failure count
-    bool disabled = false;
+    bool disabled = false;   // switched off for the rest of its run (a failed start or too many failures)
+    bool load_failed = false;   // it failed while starting: sync() tries again (the manager may have changed what it was missing, e.g. a DLL confirmation)
     std::string last_error;
     std::map<const void*, std::shared_ptr<bool>> hook_flags;   // per runtime: false once its hooks are dropped (a hook call already in flight sees it)
     std::unique_ptr<Hooks> hooks;
+    bool live() const { return started && !disabled; }
 };
 
 // The hook installer a mod's runtimes talk to. Hook points run on the game thread: each call takes the mod's lock, skips a mod that is
@@ -37,7 +40,7 @@ public:
         Running& mod = mod_;
         return hook_registry().add(*address, owner, [&host, &mod, alive = flag, callback = std::move(callback)](ppc::Ctx& ctx) {
             std::lock_guard lock(mod.mutex);
-            if (!*alive || mod.disabled) return;
+            if (!*alive || !mod.live()) return;
             HookRegs regs = read_hook_regs(ctx);
             const CallResult result = callback(regs, host.config_.step_budget);
             if (result.ok) write_hook_regs(ctx, regs); else host.record(mod, result);
@@ -52,13 +55,19 @@ private:
 ModHost::ModHost(ModRegistry& registry, ApiRegistry& api, ModHostConfig config) : registry_(registry), api_(api), config_(std::move(config)) {}
 ModHost::~ModHost() { shutdown(); }
 
+ModHost::Running* ModHost::find(std::string_view id) const {
+    for (const auto& mod : mods_) if (mod->manifest.id == id) return mod.get();
+    return nullptr;
+}
+
+// Every mod that could run this session gets its bookkeeping now (settings, API view, context); its runtimes exist only while it is switched on.
 void ModHost::start() {
     if (!mods_.empty()) return;
-    for (const ModEntry* entry : registry_.active()) {
-        if (config_.include && !config_.include(*entry)) continue;
+    for (const ModEntry& entry : registry_.entries()) {
+        if (entry.state != ModState::enabled && entry.state != ModState::disabled && entry.state != ModState::dependency_disabled) continue;   // broken, incompatible or missing a dependency
         auto mod = std::make_unique<Running>();
-        mod->manifest = entry->manifest;
-        mod->root = entry->root;
+        mod->manifest = entry.manifest;
+        mod->root = entry.root;
         const auto stored = config_.stored_settings ? config_.stored_settings(mod->manifest.id) : nlohmann::json();
         mod->settings = std::make_unique<ModSettings>(mod->manifest.settings, stored);
         for (const auto& warning : mod->settings->warnings()) if (config_.log) config_.log(mod->manifest.id, warning);
@@ -66,18 +75,69 @@ void ModHost::start() {
         mod->api = std::make_unique<ApiRegistry>(api_.for_mod(mod->manifest.id, mod->manifest.touches_gameplay));
         mod->context = std::make_unique<ModContext>(ModContext{*mod->api, *mod->settings, mod->manifest.id,
             [this, id = mod->manifest.id](std::string_view line) { if (config_.log) config_.log(id, line); }, config_.ui, config_.memory,
-            mod->manifest.touches_gameplay ? mod->hooks.get() : nullptr});   // a hook can change anything: only gameplay mods get them
-        {
-            std::lock_guard lock(mod->mutex);
-            create_runtimes(*mod, true, true);
-            if (!mod->disabled) emit(*mod, nullptr, "on_load", Value::object(), config_.ui_budget);
-            if (!mod->disabled) {   // a mod that did not start does not change the game, by script or by data
-                const auto patches = apply_data_patches(mod->root, *mod->api);   // after on_load, in load order: the last mod's value stays
-                for (const auto& error : patches.errors) if (config_.log) config_.log(mod->manifest.id, "data patch: " + error);
-            }
-        }
+            mod->manifest.touches_gameplay ? mod->hooks.get() : nullptr, mod->manifest.touches_gameplay});   // a hook can change anything: only gameplay mods get them
         mods_.push_back(std::move(mod));
     }
+    sync();
+}
+
+// Makes the running mods match what the registry says is switched on, in load order. A mod that starts or stops takes every mod after it in load
+// order with it (they restart in order), so the state is always what a fresh start would give.
+void ModHost::sync() {
+    std::lock_guard sync_lock(sync_mutex_);
+    std::vector<Running*> desired;
+    const bool native_allowed = config_.allow_native_now ? config_.allow_native_now() : config_.native.allow_native;
+    for (const ModEntry* entry : registry_.active()) {
+        if (config_.include && !config_.include(*entry)) continue;
+        if (!entry->manifest.native.empty() && !native_allowed) continue;   // native code is switched off: such a mod does not run (a DLL cannot be half-loaded)
+        if (Running* mod = find(entry->manifest.id)) desired.push_back(mod);
+    }
+    const auto failed_to_start = [&](const std::string& id) {
+        Running& mod = *find(id);
+        std::lock_guard lock(mod.mutex);
+        return mod.load_failed;
+    };
+    size_t keep = 0;
+    while (keep < run_order_.size() && keep < desired.size() && run_order_[keep] == desired[keep]->manifest.id && !failed_to_start(run_order_[keep])) ++keep;
+    for (size_t i = run_order_.size(); i-- > keep;) {
+        Running& mod = *find(run_order_[i]);
+        std::lock_guard lock(mod.mutex);
+        stop_mod(mod);
+    }
+    run_order_.resize(keep);
+    for (size_t i = keep; i < desired.size(); ++i) {
+        std::lock_guard lock(desired[i]->mutex);
+        start_mod(*desired[i]);
+        run_order_.push_back(desired[i]->manifest.id);
+    }
+}
+
+void ModHost::start_mod(Running& mod) {
+    mod.failures = 0; mod.quiet_calls = 0; mod.disabled = false; mod.load_failed = false; mod.last_error.clear();
+    mod.started = true;
+    ++running_count_;
+    create_runtimes(mod, true, true);
+    if (mod.live()) emit(mod, nullptr, "on_load", Value::object(), config_.ui_budget);
+    if (mod.live()) apply_patches(mod);   // after on_load, in load order: the last mod's value stays
+}
+
+void ModHost::stop_mod(Running& mod) {
+    if (!mod.started) return;
+    if (mod.live()) emit(mod, nullptr, "on_unload", Value::object(), config_.ui_budget);
+    drop_hooks(mod, mod.script.get());
+    drop_hooks(mod, mod.native.get());
+    dropped(mod);   // the game takes back what the mod set (switches, weapon values, data patches)
+    mod.script.reset();   // (the lock is held: a hook call waiting for it finds the mod stopped)
+    mod.native.reset();
+    mod.started = false;
+    mod.disabled = false;   // "off" is not a failure: switching it on again starts clean
+    mod.failures = 0; mod.quiet_calls = 0; mod.last_error.clear();
+    --running_count_;
+}
+
+void ModHost::apply_patches(Running& mod) {
+    const auto patches = apply_data_patches(mod.root, *mod.api);
+    for (const auto& error : patches.errors) if (config_.log) config_.log(mod.manifest.id, "data patch: " + error);
 }
 
 void ModHost::create_runtimes(Running& mod, bool scripts, bool native) {
@@ -86,7 +146,11 @@ void ModHost::create_runtimes(Running& mod, bool scripts, bool native) {
         switch (kind) {
             case RuntimeKind::lua: return make_lua_runtime(*mod.context);
             case RuntimeKind::js: return make_js_runtime(*mod.context);
-            case RuntimeKind::native: return make_native_runtime(*mod.context, config_.native);
+            case RuntimeKind::native: {
+                NativePolicy policy = config_.native;
+                if (config_.allow_native_now) policy.allow_native = config_.allow_native_now();   // the switch in the Mods tab, as it is now
+                return make_native_runtime(*mod.context, std::move(policy));
+            }
         }
         return nullptr;
     };
@@ -95,6 +159,7 @@ void ModHost::create_runtimes(Running& mod, bool scripts, bool native) {
         const CallResult result = slot->load(mod.root, entry);
         if (!result.ok) {
             mod.disabled = true;
+            mod.load_failed = true;
             mod.last_error = result.error;
             if (config_.log) config_.log(mod.manifest.id, "could not start: " + result.error);
             dropped(mod);
@@ -141,7 +206,7 @@ void ModHost::drop_hooks(Running& mod, const void* owner) {
 }
 
 void ModHost::step(uint32_t nominal) {
-    if (mods_.empty()) return;
+    if (running_count_.load(std::memory_order_relaxed) == 0) return;   // no mod is switched on: nothing to run, nothing to pay
     for (const auto& tick : config_.ticks) tick();
     std::vector<std::pair<std::string, std::string>> changed;
     {
@@ -149,10 +214,9 @@ void ModHost::step(uint32_t nominal) {
         changed.swap(pending_settings_);
     }
     for (const auto& [id, key] : changed) {
-        for (auto& mod : mods_) {
-            if (mod->manifest.id != id) continue;
+        if (Running* mod = find(id)) {
             std::lock_guard lock(mod->mutex);
-            if (!mod->disabled) emit(*mod, nullptr, "on_settings_changed", Value{{"key", key}}, config_.ui_budget);
+            if (mod->live()) emit(*mod, nullptr, "on_settings_changed", Value{{"key", key}}, config_.ui_budget);
         }
     }
     if (nominal == 0) return;
@@ -165,31 +229,47 @@ void ModHost::step(uint32_t nominal) {
             if (remaining.count() <= 0) break;   // the step's share is used up; the next step starts with another mod
             Running& mod = *mods_[(rotation_ + i) % count];
             std::lock_guard lock(mod.mutex);
-            if (mod.disabled) continue;
-            emit(mod, nullptr, "on_step", Value::object(), Budget{remaining / int64_t(count - i)});   // a fair share of what is left: an idle mod's share goes to the next
-            if (!mod.disabled && ++mod.quiet_calls >= kQuietCallsToForgive && mod.failures) mod.failures = 0;   // record() resets quiet_calls on a failure
+            if (!mod.live()) continue;
+            // Everything that is left is the interrupt limit, but a mod is only failed for its own overrun: one that stayed within an equal share of the
+            // step did not cause it (a slow mod ahead of it ate the budget), so its call is just cut short.
+            const auto started = Clock::now();
+            const CallResult result = run_step(mod, remaining);
+            if (!result.ok) {
+                const auto own = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started);
+                if (!result.budget_exceeded || own > config_.step_budget.limit / int64_t(count)) record(mod, result);
+            }
+            if (mod.live() && ++mod.quiet_calls >= kQuietCallsToForgive && mod.failures) mod.failures = 0;   // record() resets quiet_calls on a failure
         }
     }
     rotation_ = (rotation_ + 1) % count;
 }
 
+CallResult ModHost::run_step(Running& mod, std::chrono::microseconds limit) {
+    for (ModRuntime* runtime : {mod.script.get(), mod.native.get()}) {
+        if (!runtime) continue;
+        const CallResult result = runtime->fire("on_step", Value::object(), Budget{limit});
+        if (!result.ok) return result;
+    }
+    return {};
+}
+
 void ModHost::fire_game_event(std::string_view event, const Value& payload) {
     for (auto& mod : mods_) {
         std::lock_guard lock(mod->mutex);
-        if (!mod->disabled) emit(*mod, nullptr, event, payload, config_.step_budget);
+        if (mod->live()) emit(*mod, nullptr, event, payload, config_.step_budget);
     }
 }
 
 void ModHost::settings_changed(std::string_view mod_id, std::string_view key) {
     std::lock_guard lock(pending_mutex_);
-    pending_settings_.emplace_back(std::string(mod_id), std::string(key));
+    const std::pair<std::string, std::string> item{std::string(mod_id), std::string(key)};
+    if (std::find(pending_settings_.begin(), pending_settings_.end(), item) == pending_settings_.end()) pending_settings_.push_back(item);   // a paused game must not pile them up
 }
 
 CallResult ModHost::draw_ui(std::string_view mod_id, const ImGuiHandles* imgui) {
-    for (auto& mod : mods_) {
-        if (mod->manifest.id != mod_id) continue;
+    if (Running* mod = find(mod_id)) {
         std::lock_guard lock(mod->mutex);
-        if (mod->disabled) return {};
+        if (!mod->live()) return {};
         for (ModRuntime* runtime : {mod->script.get(), mod->native.get()}) {
             if (!runtime) continue;
             if (imgui) runtime->set_imgui(*imgui);
@@ -201,30 +281,34 @@ CallResult ModHost::draw_ui(std::string_view mod_id, const ImGuiHandles* imgui) 
 }
 
 void ModHost::reload_scripts() {
-    for (auto& mod : mods_) {
+    std::lock_guard sync_lock(sync_mutex_);
+    for (const auto& id : run_order_) {   // in start order: overlapping data patches resolve as after a fresh start
+        Running* mod = find(id);
+        if (!mod) continue;
         std::lock_guard lock(mod->mutex);
-        if (!mod->script) continue;
+        if (!mod->started || !mod->script) continue;
         emit(*mod, mod->script.get(), "on_unload", Value::object(), config_.ui_budget);
         drop_hooks(*mod, mod->script.get());
-        dropped(*mod);
+        dropped(*mod);   // everything the mod set is taken back, its data patches included: they are applied again below
         mod->script.reset();
-        if (!mod->native) { mod->disabled = false; mod->failures = 0; mod->last_error.clear(); }   // a native part keeps its failure state
+        if (!mod->native) { mod->disabled = false; mod->load_failed = false; mod->failures = 0; mod->last_error.clear(); }   // a native part keeps its failure state
         create_runtimes(*mod, true, false);
-        if (mod->script && !mod->disabled) emit(*mod, mod->script.get(), "on_load", Value::object(), config_.ui_budget);
+        if (mod->script && mod->live()) {
+            emit(*mod, mod->script.get(), "on_load", Value::object(), config_.ui_budget);
+            if (mod->live()) apply_patches(*mod);
+        }
     }
 }
 
 void ModHost::shutdown() {
-    for (auto& mod : mods_) {
-        std::lock_guard lock(mod->mutex);
-        if (!mod->disabled) emit(*mod, nullptr, "on_unload", Value::object(), config_.ui_budget);
-        drop_hooks(*mod, mod->script.get());
-        drop_hooks(*mod, mod->native.get());
-        dropped(*mod);
-        mod->disabled = true;   // a hook call that is still in flight must not reach the runtimes below
-        mod->script.reset();
-        mod->native.reset();
+    std::lock_guard sync_lock(sync_mutex_);
+    for (size_t i = run_order_.size(); i-- > 0;) {
+        if (Running* mod = find(run_order_[i])) {
+            std::lock_guard lock(mod->mutex);
+            stop_mod(*mod);
+        }
     }
+    run_order_.clear();
     mods_.clear();
 }
 
@@ -233,14 +317,14 @@ std::vector<ModHost::ModStatus> ModHost::status() const {
     for (const auto& mod : mods_) {
         std::lock_guard lock(mod->mutex);
         const bool ui = (mod->script && mod->script->has_ui()) || (mod->native && mod->native->has_ui());
-        result.push_back({mod->manifest.id, mod->script || mod->native, mod->disabled, !mod->manifest.native.empty(), ui, !mod->manifest.settings.empty(), mod->last_error, mod->failures});
+        result.push_back({mod->manifest.id, mod->started, mod->disabled, !mod->manifest.native.empty(), ui, !mod->manifest.settings.empty(), mod->last_error, mod->failures});
     }
     return result;
 }
 
 ModSettings* ModHost::settings_of(std::string_view mod_id) {
-    for (auto& mod : mods_) if (mod->manifest.id == mod_id) return mod->settings.get();
-    return nullptr;
+    const Running* mod = find(mod_id);
+    return mod ? mod->settings.get() : nullptr;
 }
 
 std::vector<std::string> ModHost::ids() const {
@@ -250,24 +334,20 @@ std::vector<std::string> ModHost::ids() const {
 }
 
 bool ModHost::try_edit_settings(std::string_view mod_id, const std::function<void(ModSettings&)>& edit) {
-    for (auto& mod : mods_) {
-        if (mod->manifest.id != mod_id) continue;
-        std::unique_lock lock(mod->mutex, std::try_to_lock);
-        if (!lock.owns_lock()) return false;
-        edit(*mod->settings);
-        return true;
-    }
-    return false;
+    Running* mod = find(mod_id);
+    if (!mod) return false;
+    std::unique_lock lock(mod->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    edit(*mod->settings);
+    return true;
 }
 
 bool ModHost::edit_settings(std::string_view mod_id, const std::function<void(ModSettings&)>& edit) {
-    for (auto& mod : mods_) {
-        if (mod->manifest.id != mod_id) continue;
-        std::lock_guard lock(mod->mutex);
-        edit(*mod->settings);
-        return true;
-    }
-    return false;
+    Running* mod = find(mod_id);
+    if (!mod) return false;
+    std::lock_guard lock(mod->mutex);
+    edit(*mod->settings);
+    return true;
 }
 
 }  // namespace uc::mods

@@ -5,8 +5,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -21,6 +24,9 @@ public:
     ~SaveFs();
     SaveFs(const SaveFs&)=delete; SaveFs& operator=(const SaveFs&)=delete;
     int initialize();
+    // Moves the game to another save folder: any thread. It takes effect at the first path operation of the game thread while no save file is open.
+    // `done` runs on the game thread right after the switch (not when the switch fails: it is logged).
+    void request_root(std::filesystem::path root, std::function<void()> done = {});
     int create_dir(const std::string& path);
     int create_file(const std::string& path);
     int open(const std::string& path,uint32_t mode);
@@ -42,6 +48,11 @@ private:
     std::map<int,File> files_;
     int next_fd_=100;
     uint64_t revision_=0;
+    std::mutex pending_mutex_;
+    std::optional<std::filesystem::path> pending_root_;
+    std::function<void()> pending_done_;
+    int adopting_depth_=0;  // game thread only
+    void adopt_pending();   // game thread, at the start of a path operation
     static int pin(const std::filesystem::path& directory,Pins& pins);
     int resolve(const std::string& path,std::filesystem::path& host,Pins& pins) const;
     int backup(HANDLE source);

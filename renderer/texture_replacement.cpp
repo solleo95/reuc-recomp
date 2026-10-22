@@ -57,7 +57,15 @@ std::string texture_key(const TextureDesc& desc, std::span<const std::byte> base
     return key + "_" + std::to_string(unsigned(format));
 }
 
+void TextureReplacements::clear() {
+    std::unique_lock lock(m_);
+    files_.clear();
+    generation_.fetch_add(1, std::memory_order_relaxed);
+}
+
 size_t TextureReplacements::load_index(const std::filesystem::path& dir, bool replace_existing) {
+    std::unique_lock lock(m_);
+    generation_.fetch_add(1, std::memory_order_relaxed);
     std::error_code error;
     for (std::filesystem::directory_iterator it(dir, error), last; !error && it != last; it.increment(error)) {
         const auto utf8_name = it->path().filename().u8string();   // string() throws for names outside the system code page
@@ -75,6 +83,7 @@ size_t TextureReplacements::load_index(const std::filesystem::path& dir, bool re
 }
 
 std::optional<TextureReplacements::Found> TextureReplacements::find(const TextureDesc& desc, std::span<const std::byte> encoded, PaletteView palette) const {
+    std::shared_lock lock(m_);
     if (files_.empty() || encoded.size() < base_size(desc)) return {};
     const auto base = encoded.first(base_size(desc));
     for (const bool wildcard : {false, true}) {

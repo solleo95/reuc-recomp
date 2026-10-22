@@ -12,10 +12,12 @@ namespace {
 struct Text { const char* key; const char* en; const char* ru; };
 constexpr Text kTexts[] = {
     {"mods_tab", "Mods", "Моды"},
-    {"intro", "Mods live in the mods folder next to the game. Enabling, disabling and reordering mods, and changes to files, textures and native code, apply the next time the game starts.",
-              "Моды лежат в папке mods рядом с игрой. Включение, выключение и порядок модов, а также файлы, текстуры и нативный код вступают в силу при следующем запуске игры."},
+    {"intro", "Mods live in the mods folder next to the game. Switch them on and off at any time, also during the game. Replaced files and textures show up the next time the game loads them (for example in the next area).",
+              "Моды лежат в папке mods рядом с игрой. Включать и выключать их можно в любой момент, в том числе во время игры. Подменённые файлы и текстуры видны, когда игра загрузит их в следующий раз (например, в следующей локации)."},
     {"none", "No mods found. Put a mod folder (or .zip) into the mods folder next to the game.", "Модов нет. Положите папку мода (или .zip) в папку mods рядом с игрой."},
-    {"restart", "Restart the game to apply the changes.", "Перезапустите игру, чтобы применить изменения."},
+    {"modded_saves", "A mod that changes gameplay was switched on: the game now saves to the separate modded saves and stays there until it is restarted.",
+                     "Включён мод, меняющий игровой процесс: теперь игра сохраняется в отдельные сохранения для модов и остаётся в них до перезапуска."},
+    {"waiting", "switched on, but not running (see the notes above)", "включён, но не работает (см. заметки выше)"},
     {"allow_native", "Allow native (DLL) mods", "Разрешить нативные (DLL) моды"},
     {"native_title", "Native mods", "Нативные моды"},
     {"native_warning", "A native mod runs with full access to your computer, like any program. Only enable them from sources you trust. Each DLL must also be confirmed separately.",
@@ -45,12 +47,7 @@ constexpr Text kTexts[] = {
 }  // namespace
 
 ModMenuUi::ModMenuUi(GetRegistry registry, GetHost host, std::string language) : registry_(std::move(registry)), host_(std::move(host)), language_(std::move(language)) {
-    if (auto* r = registry_()) {
-        for (const auto* mod : r->active()) loaded_active_.push_back(mod->manifest.id);
-        loaded_allow_native_ = r->allow_native();
-        for (const auto& e : r->entries()) loaded_native_hash_[e.manifest.id] = r->native_hash(e.manifest.id);
-        conflicts_ = r->conflicts();
-    }
+    if (auto* r = registry_()) conflicts_ = r->conflicts();
 }
 
 const char* ModMenuUi::tr(const char* key) const {
@@ -82,16 +79,6 @@ std::optional<std::array<float, 4>> ModMenuUi::rect_of(const std::string& key) c
     return at->second;
 }
 
-bool ModMenuUi::restart_required() {
-    auto* r = registry_();
-    if (!r) return false;
-    std::vector<std::string> now;
-    for (const auto* mod : r->active()) now.push_back(mod->manifest.id);
-    if (now != loaded_active_ || r->allow_native() != loaded_allow_native_) return true;
-    for (const auto& id : now) if (loaded_native_hash_[id] != r->native_hash(id)) return true;
-    return false;
-}
-
 void ModMenuUi::mark_changed() {
     dirty_ = true;
     if (auto* r = registry_()) conflicts_ = r->conflicts();
@@ -102,19 +89,22 @@ void ModMenuUi::manager_tab(float unit) {
     ImGui::Dummy({0, 6 * unit});
     ImGui::TextWrapped("%s", tr("intro"));
     if (!r) { ImGui::Spacing(); ImGui::TextWrapped("%s", tr("none")); return; }
-    if (restart_required()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .78f, .35f, 1.f)); ImGui::TextWrapped("%s", tr("restart")); ImGui::PopStyleColor(); }
+    for (const auto& note : notes_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .78f, .35f, 1.f));
+        ImGui::TextWrapped("%s", note == "modded_saves" ? tr("modded_saves") : note.c_str());
+        ImGui::PopStyleColor();
+    }
     ImGui::Separator();
 
     bool allow = r->allow_native();
     if (ImGui::Checkbox(tr("allow_native"), &allow)) {
-        if (allow) ImGui::OpenPopup("##native_warning");
+        if (allow) ImGui::OpenPopup("###native_warning");
         else { r->set_allow_native(false); mark_changed(); }
     }
     remember("manager/allow_native");
-    if (ImGui::BeginPopupModal("##native_warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    // The title goes in the window's own title bar (the ### part is the popup's identity).
+    if (ImGui::BeginPopupModal((std::string(tr("native_title")) + "###native_warning").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-        ImGui::TextUnformatted(tr("native_title"));
-        ImGui::Separator();
         ImGui::TextWrapped("%s", tr("native_warning"));
         ImGui::PopTextWrapPos();
         const bool enable_native = ImGui::Button(tr("ok"));
@@ -145,15 +135,21 @@ void ModMenuUi::manager_tab(float unit) {
         const bool broken = e->state == ModState::error && !e->manifest.version.size();   // a manifest that did not parse has no version
         bool on = r->wanted(id);
         const std::string title = localized(e->manifest.names, e->manifest.name) + (e->manifest.version.empty() ? "" : "  v" + e->manifest.version);
+        const float arrow = ImGui::GetFrameHeight(), gap = ImGui::GetStyle().ItemInnerSpacing.x;
+        const float right_edge = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;   // the order buttons sit flush right, at the same x in every row
         ImGui::BeginDisabled(broken);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap * 2.5f, ImGui::GetStyle().ItemInnerSpacing.y));   // room between the box and the name
         if (ImGui::Checkbox(title.c_str(), &on)) { r->set_enabled(id, on); mark_changed(); }
+        ImGui::PopStyleVar();
         remember("manager/enable/" + id);
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("^")) { r->move(id, -1); mark_changed(); }
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, right_edge - 2 * arrow - gap));   // never on top of the name
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) { r->move(id, -1); mark_changed(); }
+        remember("manager/up/" + id);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("up"));
-        ImGui::SameLine();
-        if (ImGui::SmallButton("v")) { r->move(id, 1); mark_changed(); }
+        ImGui::SameLine(0, gap);
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) { r->move(id, 1); mark_changed(); }
+        remember("manager/down/" + id);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("down"));
         const char* badge = e->state == ModState::enabled ? "enabled" : e->state == ModState::disabled ? "disabled" : e->state == ModState::incompatible ? "incompatible"
             : e->state == ModState::missing_dependency ? "missing" : e->state == ModState::dependency_disabled ? "dep_off" : "error";
@@ -161,9 +157,14 @@ void ModMenuUi::manager_tab(float unit) {
         if (!e->manifest.author.empty()) line += "  ·  " + e->manifest.author;
         const auto running = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == id; });
         if (running != status.end() && running->disabled_for_session) line = std::string(tr("stopped")) + ": " + running->last_error;
+        else if (e->state == ModState::enabled && running != status.end() && !running->running) line = tr("waiting");   // enabled, but the game does not run it (gameplay saves unavailable, native code off)
         ImGui::TextDisabled("%s", line.c_str());
         if (!e->manifest.description.empty()) ImGui::TextWrapped("%s", e->manifest.description.c_str());
-        if (e->manifest.touches_gameplay) ImGui::TextDisabled("%s", tr("gameplay_note"));
+        if (e->manifest.touches_gameplay) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", tr("gameplay_note"));
+            ImGui::PopStyleColor();
+        }
         for (const auto& message : e->messages) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .52f, .52f, 1.f)); ImGui::TextWrapped("%s", message.c_str()); ImGui::PopStyleColor(); }
         if (!e->manifest.native.empty()) {
             ImGui::TextDisabled("%s", tr("has_native"));
@@ -181,11 +182,9 @@ void ModMenuUi::manager_tab(float unit) {
         ImGui::Separator();
         ImGui::PopID();
     }
-    if (open_confirm_) { ImGui::OpenPopup("##native_confirm"); open_confirm_ = false; }
-    if (ImGui::BeginPopupModal("##native_confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (open_confirm_) { ImGui::OpenPopup("###native_confirm"); open_confirm_ = false; }
+    if (ImGui::BeginPopupModal((std::string(tr("confirm_title")) + "###native_confirm").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-        ImGui::TextUnformatted(tr("confirm_title"));
-        ImGui::Separator();
         ImGui::TextWrapped("%s", tr("confirm_text"));
         ImGui::TextUnformatted(hash_cache_[confirm_id_].c_str());
         ImGui::PopTextWrapPos();
@@ -287,7 +286,7 @@ void ModMenuUi::draw_tab(const std::string& id, float unit) {
             ImGui::PopStyleColor();
         }
     }
-    if (ImGui::IsAnyItemActive()) active_frame_ = ImGui::GetFrameCount();   // a slider is being dragged or a text field edited
+    if (ImGui::IsAnyItemActive()) editing_until_ = Clock::now() + std::chrono::milliseconds(100);   // a slider is being dragged or a text field edited
     current_mod_.clear();
     ImGui::PopID();
 }
@@ -296,9 +295,12 @@ void ModMenuUi::commit() {
     auto* r = registry_();
     if (!r) return;
     auto* host = host_();
-    if (!host && !dirty_) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
+    const bool pending = pending_ && pending_();
+    if (!host && !dirty_ && !pending) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
     // While a widget of a mod's tab is being edited the value changes every frame: write it (and tell the mod) once, when the edit ends.
-    if (ImGui::GetCurrentContext() && ImGui::GetFrameCount() - active_frame_ <= 1) return;
+    // (Wall-clock time, not ImGui state: commit() runs in the main loop, where the menu's ImGui context is not current.)
+    if (Clock::now() < editing_until_) return;
+    const bool manager_changed = dirty_ || pending;
     bool changed = dirty_;
     std::vector<std::pair<std::string, std::string>> notify;   // (mod id, setting key) to tell the mods about, after the locks are released
     if (host) {
@@ -326,6 +328,7 @@ void ModMenuUi::commit() {
         save_(section);
     }
     dirty_ = false;
+    if (manager_changed && apply_) for (auto& note : apply_()) if (std::find(notes_.begin(), notes_.end(), note) == notes_.end()) notes_.push_back(std::move(note));   // notes stay until the game restarts   // the running game follows what was just saved: mods start and stop, files and textures swap
     if (host) for (const auto& [id, key] : notify) host->settings_changed(id, key);
 }
 

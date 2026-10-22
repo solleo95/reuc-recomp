@@ -137,7 +137,7 @@ static void start_creates_runtime_per_mod_and_fires_on_load() {
     CHECK(s.created == 3);   // a: lua; b: js + native
     CHECK((s.script("a").events == std::vector<std::string>{"load", "fire:on_load"}));
     CHECK(s.behavior("b", RuntimeKind::js)->events.size() == 2 && s.behavior("b", RuntimeKind::native)->events.size() == 2);
-    CHECK(!s.status("c") && s.status("a")->running && s.status("b")->has_native);
+    CHECK(s.status("c") && !s.status("c")->running && s.status("a")->running && s.status("b")->has_native);   // c is known but switched off
 }
 
 static void step_fires_each_mod_once() {
@@ -170,24 +170,18 @@ static void on_step_follows_nominal_frames() {
     CHECK(s.script("a").steps == 8);
 }
 
-// A slow mod must not leave the mods after it nothing: each gets a fair share of what is left, and an idle mod's share goes to the next.
-static void step_budget_is_shared_fairly() {
-    const auto dir = fresh("host_fair");
-    for (const char* id : {"a", "b", "c"}) add_mod(dir, id, R"("script":"scripts/main.lua")");
-    Setup s(dir, {"a", "b", "c"});
+// The 1 ms is for all mods together: mods that stay inside it as a group are never failed, however many there are and wherever they sit in the rotation.
+static void mods_within_the_total_budget_are_never_failed() {
+    const auto dir = fresh("host_total_ok");
+    for (const char* id : {"a", "b", "c", "d"}) add_mod(dir, id, R"("script":"scripts/main.lua")");
+    Setup s(dir, {"a", "b", "c", "d"});
+    s.config.step_budget = {std::chrono::milliseconds(4)};   // slack for timer noise: the four mods use 0.2 ms each, 0.8 ms of the 4
     s.make_host();
     s.host->start();
-    s.host->step();
-    CHECK(s.script("a").last_step_budget <= std::chrono::microseconds(334) && s.script("a").last_step_budget > std::chrono::microseconds(300));
-    CHECK(s.script("b").last_step_budget <= std::chrono::microseconds(500) && s.script("b").last_step_budget > std::chrono::microseconds(450));
-    CHECK(s.script("c").last_step_budget > std::chrono::microseconds(800));   // a and b used almost nothing: the rest is c's
-    const auto dir2 = fresh("host_fair_single");
-    add_mod(dir2, "only", R"("script":"scripts/main.lua")");
-    Setup single(dir2, {"only"});
-    single.make_host();
-    single.host->start();
-    single.host->step();
-    CHECK(single.script("only").last_step_budget > std::chrono::microseconds(900));
+    for (const char* id : {"a", "b", "c", "d"}) s.script(id).spin_ms = 0.2;
+    for (int i = 0; i < 40; ++i) s.host->step();
+    for (const char* id : {"a", "b", "c", "d"}) CHECK(s.status(id)->failures == 0 && s.script(id).steps == 40);
+    CHECK(s.script("a").last_step_budget > std::chrono::microseconds(2500));   // each call is given what is left of the step, not a slice of it
 }
 
 // Failures are a count of recent trouble: a mod that behaved for a minute of game time starts over with a clean slate.
@@ -201,7 +195,7 @@ static void failures_decay_after_a_quiet_minute() {
     s.host->step(); s.host->step();
     s.script("a").fail_fire = false;
     CHECK(s.status("a")->failures == 2 && !s.status("a")->disabled_for_session);
-    for (int i = 0; i < 3600; ++i) s.host->step();
+    for (int i = 0; i < 1800; ++i) s.host->step();
     CHECK(s.status("a")->failures == 0);
     s.script("a").fail_fire = true;
     s.host->step(); s.host->step();
@@ -258,6 +252,113 @@ static void try_edit_settings_does_not_wait() {
     CHECK(s.host->try_edit_settings("a", [&](ModSettings&) { ran = true; }) && ran);
 }
 
+// Mods are switched on and off while the game runs: on_load / on_unload at the right moments, what a mod set is taken back, and the state is what a fresh
+// start in the new order would give (a change restarts the mods after it).
+static void mods_switch_on_and_off_live() {
+    hook_registry().clear();
+    const auto dir = fresh("host_live");
+    for (const char* id : {"a", "b", "c"}) add_mod(dir, id, R"("touches_gameplay":true,"script":"scripts/main.lua")");
+    Setup s(dir, {"a"});
+    std::vector<std::string> dropped;
+    s.config.on_mod_dropped = [&](const std::string& id) { dropped.push_back(id); };
+    s.make_host();
+    s.host->start();
+    CHECK(s.host->running_count() == 1 && s.script("b").loads == 0 && s.host->ids().size() == 3);
+    s.registry.set_enabled("b", true);                                   // b on: only b starts (it is last in load order)
+    s.host->sync();
+    CHECK(s.host->running_count() == 2 && s.script("a").loads == 1 && s.script("b").loads == 1 && s.script("b").count("fire:on_load") == 1);
+    s.host->step();
+    CHECK(s.script("a").steps == 1 && s.script("b").steps == 1 && s.script("c").steps == 0);
+    s.registry.set_enabled("a", false);                                  // a off: it is told, what it set is taken back, b restarts (it came after a)
+    s.host->sync();
+    CHECK(s.script("a").count("fire:on_unload") == 1 && !s.status("a")->running && s.status("b")->running);
+    CHECK(s.script("b").loads == 2 && s.script("b").count("fire:on_unload") == 1);
+    CHECK(std::count(dropped.begin(), dropped.end(), "a") == 1 && std::count(dropped.begin(), dropped.end(), "b") == 1);
+    s.registry.set_enabled("c", true);                                   // c on after b: nothing before it restarts
+    s.host->sync();
+    CHECK(s.script("b").loads == 2 && s.script("c").loads == 1 && s.host->running_count() == 2);
+    s.registry.move("c", -1);                                            // c before b: the load order changed, both restart in the new order
+    s.host->sync();
+    CHECK(s.script("c").loads == 2 && s.script("b").loads == 3);
+    s.registry.set_enabled("b", false); s.registry.set_enabled("c", false);
+    s.host->sync();
+    const int steps_before = s.script("a").steps;
+    CHECK(s.host->running_count() == 0);
+    s.host->step();                                                      // nothing is on: nothing runs
+    CHECK(s.script("a").steps == steps_before && s.script("b").steps == 1);
+    s.registry.set_enabled("a", true);                                   // and a mod that was off starts clean
+    s.host->sync();
+    CHECK(s.script("a").loads == 2 && s.status("a")->running && s.status("a")->failures == 0);
+}
+
+// A mod switched off while it was failing starts clean the next time; hooks of a stopped mod are gone and its data patches are taken back.
+static void switching_off_clears_failures_and_hooks() {
+    hook_registry().clear();
+    const auto dir = fresh("host_live_hooks");
+    add_mod(dir, "a", R"("touches_gameplay":true,"script":"scripts/main.lua")");
+    Setup s(dir, {"a"});
+    s.script("a").install_hook = true;
+    s.make_host();
+    s.host->start();
+    CHECK(hook_registry().count(0x8006C268u) == 1);
+    s.script("a").fail_fire = true;
+    for (int i = 0; i < 3; ++i) s.host->step();
+    CHECK(s.status("a")->disabled_for_session);
+    s.registry.set_enabled("a", false);
+    s.host->sync();
+    CHECK(hook_registry().count(0x8006C268u) == 0 && !s.status("a")->running && !s.status("a")->disabled_for_session);
+    s.script("a").fail_fire = false;
+    s.registry.set_enabled("a", true);
+    s.host->sync();
+    CHECK(s.status("a")->running && !s.status("a")->disabled_for_session && s.status("a")->failures == 0 && hook_registry().count(0x8006C268u) == 1);
+}
+
+// Reloading the scripts puts the mod's data patches back (the reload took back everything the mod had set).
+static void reload_applies_data_patches_again() {
+    const auto dir = fresh("host_reload_patch");
+    add_mod(dir, "a", R"("touches_gameplay":true,"script":"scripts/main.lua")");
+    fs::create_directories(dir / "a" / "data");
+    std::ofstream(dir / "a" / "data" / "w.json") << R"({"weapon.0.damage": 7})";
+    Setup s(dir, {"a"});
+    int writes = 0;
+    Member damage;
+    damage.path = "weapon.damage"; damage.scope = "id";
+    damage.set = [&](const json&, const json&) { ++writes; };
+    s.api.add(std::move(damage));
+    s.make_host();
+    s.host->start();
+    CHECK(writes == 1);
+    s.host->reload_scripts();
+    CHECK(writes == 2);
+}
+
+// Settings changes queue up once per (mod, key) while nothing steps (a paused game).
+static void settings_changes_are_deduplicated() {
+    const auto dir = fresh("host_dedupe");
+    add_mod(dir, "a", R"("script":"scripts/main.lua","settings":[{"key":"scale","type":"number","default":1.0,"min":0,"max":10,"label":{"en":"S"}}])");
+    Setup s(dir, {"a"});
+    s.make_host();
+    s.host->start();
+    for (int i = 0; i < 50; ++i) s.host->settings_changed("a", "scale");
+    s.host->step();
+    CHECK(s.script("a").count("fire:on_settings_changed:scale") == 1);
+}
+
+// A mod that stays inside its own share is not failed for a slow mod ahead of it eating the step.
+static void innocent_mod_is_not_failed_for_a_slow_neighbour() {
+    const auto dir = fresh("host_innocent");
+    for (const char* id : {"a", "b"}) add_mod(dir, id, R"("script":"scripts/main.lua")");
+    Setup s(dir, {"a", "b"});
+    s.config.step_budget = {std::chrono::milliseconds(4)};
+    s.config.max_failures = 100;
+    s.make_host();
+    s.host->start();
+    s.script("a").spin_ms = 3.8;   // nearly all of the step
+    s.script("b").spin_ms = 0.3;   // well inside its half (2 ms) but only 0.2 ms are left when a runs first
+    for (int i = 0; i < 20; ++i) s.host->step();
+    CHECK(s.status("b")->failures == 0);
+}
+
 static void step_total_budget() {
     const auto dir = fresh("host_budget");
     for (const char* id : {"a", "b", "c"}) add_mod(dir, id, R"("script":"scripts/main.lua")");
@@ -266,9 +367,9 @@ static void step_total_budget() {
     s.make_host();
     s.host->start();
     for (const char* id : {"a", "b", "c"}) s.script(id).spin_ms = 0.8;
-    s.host->step();   // a gets a third of the 1 ms and overruns it (0.8 ms), b gets a share of the 0.2 ms left and overruns, c never starts
+    s.host->step();   // a runs (0.8 ms of the 1 ms), b gets the 0.2 ms left and overruns, c never starts
     CHECK(s.script("a").steps == 1 && s.script("b").steps == 1 && s.script("c").steps == 0);
-    CHECK(s.status("a")->failures == 1 && s.status("b")->failures == 1 && s.status("c")->failures == 0);
+    CHECK(s.status("a")->failures == 0 && s.status("b")->failures == 1 && s.status("c")->failures == 0);
     for (int i = 0; i < 6; ++i) s.host->step();   // the starting mod rotates, nobody starves
     CHECK(s.script("c").steps > 0 && s.script("a").steps > 1);
 }
@@ -338,7 +439,7 @@ static void no_mods_no_cost() {
     s.make_host();
     s.host->start();
     s.host->step();
-    CHECK(s.created == 0 && s.host->empty() && s.host->status().empty() && ticks == 0);   // not even the game API ticks run
+    CHECK(s.created == 0 && s.host->running_count() == 0 && !s.status("a")->running && ticks == 0);   // nothing is on: not even the game API ticks run
     CHECK(s.host->draw_ui("a").ok);
     s.host->shutdown();
 }
@@ -443,7 +544,7 @@ static void dropped_mods_are_reported() {
     CHECK((dropped == std::vector<std::string>{"a", "a", "b"}));
     dropped.clear();
     s.host->shutdown();
-    CHECK((dropped == std::vector<std::string>{"a", "b"}));
+    CHECK((dropped == std::vector<std::string>{"b", "a"}));   // stopped in reverse start order: a mod can rely on the ones before it until the end
 }
 
 // A mod with only data files (no script, no DLL) still starts: its patches go through the API in load order, the later mod wins, and a bad key
@@ -539,6 +640,7 @@ int main() {
     reload_scripts_restarts_script_mods_only(); concurrent_calls_serialised(); no_mods_no_cost(); ticks_run_before_mods(); draw_ui_counts_failures();
     settings_events_and_stored_values(); data_patches_apply_in_load_order(); shutdown_fires_unload_once();
     gameplay_flag_gates_writes_and_hooks(); dropped_mods_are_reported(); on_step_follows_nominal_frames();
-    step_budget_is_shared_fairly(); failures_decay_after_a_quiet_minute(); script_extension_is_case_insensitive(); failed_mod_does_not_patch(); try_edit_settings_does_not_wait();
+    innocent_mod_is_not_failed_for_a_slow_neighbour(); mods_switch_on_and_off_live(); switching_off_clears_failures_and_hooks(); reload_applies_data_patches_again(); settings_changes_are_deduplicated();
+    mods_within_the_total_budget_are_never_failed(); failures_decay_after_a_quiet_minute(); script_extension_is_case_insensitive(); failed_mod_does_not_patch(); try_edit_settings_does_not_wait();
     std::puts("ok");
 }

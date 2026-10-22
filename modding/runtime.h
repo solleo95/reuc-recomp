@@ -69,6 +69,7 @@ struct ModContext {
     UiApi* ui = nullptr;   // null in headless runs
     GuestMemory* memory = nullptr;   // native mods read and write guest memory through it
     HookHost* hooks = nullptr;
+    bool gameplay = true;   // the manifest says touches_gameplay: a DLL may write guest memory only then
 };
 
 class ModRuntime {

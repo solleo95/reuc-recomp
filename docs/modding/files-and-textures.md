@@ -8,7 +8,7 @@ Everything under `mods/<id>/files/` is laid over the game's disc files. The fold
 - A file that does not exist on the disc is added; the game can open it by name.
 - Later mods in the load order win over earlier ones. The Mods tab lists every path that two or more enabled mods provide.
 - Symbolic links and junctions inside `files/` are ignored.
-- Changes take effect when the game starts (enabling, disabling and reordering need a restart; the tab says so).
+- Mods can be switched on and off, and reordered, while the game runs. The overlay is rebuilt at once, but the game uses it the next time it opens a file: a file it already holds open or has loaded into memory (a level, a sound already playing) stays as it was until the game loads it again, for example in the next area.
 
 **Archives:** the overlay works on whole files. If the game keeps its assets inside packed archives that it opens as one file and reads itself, such an archive can only be replaced as a whole file; editing a single asset inside it is not supported by the overlay.
 

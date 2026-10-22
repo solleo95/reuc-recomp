@@ -38,7 +38,7 @@
           "example": { "lua": "on('on_load', function() log.write('started') end)", "js": "on('on_load', () => log.write('started'));" } },
         { "name": "on_unload", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "The mod is being stopped (game exit or script reload). Payload: {}.",
           "example": { "lua": "on('on_unload', function() log.write('stopping') end)", "js": "on('on_unload', () => log.write('stopping'));" } },
-        { "name": "on_step", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "Once per nominal game frame (60 per second of game time, whatever the real step rate): a step shorter than a nominal frame skips it, a longer one runs it up to 4 times. Not delivered while the game is paused. Payload: {}.",
+        { "name": "on_step", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "Once per nominal game frame (the game's own 30 Hz step: about 30 per second of game time, whatever the real step rate): a step shorter than a nominal frame skips it, a longer one runs it up to 4 times. Not delivered while the game is paused. Payload: {}.",
           "example": { "lua": "on('on_step', function() uc.player(1).magazine = 15 end)", "js": "on('on_step', () => { uc.player(1).magazine = 15; });" } },
         { "name": "on_settings_changed", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A setting of this mod changed in the menu. Payload: { key: string }.",
           "example": { "lua": "on('on_settings_changed', function(e) log.write(e.key) end)", "js": "on('on_settings_changed', (e) => log.write(e.key));" } },

@@ -1,7 +1,9 @@
 #pragma once
 #include "gx_textures.h"
+#include <atomic>
 #include <filesystem>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
@@ -15,11 +17,16 @@ class TextureReplacements {
 public:
     struct Found { std::filesystem::path path; size_t bytes; };
     // Returns how many files are indexed in total. A key that is already indexed keeps its file unless replace_existing (mod folders
-    // loaded after the base folder, in load order). Not thread safe against find(): call before the guest runs.
+    // loaded after the base folder, in load order). Safe against find() from other threads (mods are switched on and off while the game runs).
     size_t load_index(const std::filesystem::path& dir, bool replace_existing = false);
-    bool empty() const { return files_.empty(); }
+    void clear();
+    // Changes whenever the table does: a texture cache that built textures from an older generation must drop them (a replacement may be gone or new).
+    uint64_t generation() const { return generation_.load(std::memory_order_relaxed); }
+    bool empty() const { std::shared_lock lock(m_); return files_.empty(); }
     std::optional<Found> find(const TextureDesc& desc, std::span<const std::byte> encoded, PaletteView palette) const;
 private:
+    mutable std::shared_mutex m_;
+    std::atomic<uint64_t> generation_{0};
     std::unordered_map<std::string, Found> files_;
 };
 TextureReplacements& texture_replacements();

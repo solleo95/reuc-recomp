@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <fstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 using namespace uc::mods;
@@ -58,6 +59,7 @@ struct World {
     ApiRegistry api;
     std::map<std::string, std::shared_ptr<Behavior>> behaviors;
     std::vector<json> saved;   // every section the menu asked to save
+    int applies = 0;           // how often the manager asked the game to follow its changes
     std::unique_ptr<ModHost> host;
     std::unique_ptr<ModMenuUi> ui;
     ModHost* host_ptr = nullptr;
@@ -82,6 +84,7 @@ struct World {
         host->start();
         host_ptr = host.get();
         ui->set_save([this](const json& section) { saved.push_back(section); });
+        ui->set_apply([this] { ++applies; host->sync(); return std::vector<std::string>(); });   // what GameMods::apply does for the host
         // The settings menu around it, in a headless ImGui context (the same arrangement as tests/test_settings_menu.cpp).
         config_path = dir / "config.json";
         uc::ConfigDocument document; uc::Options options;
@@ -131,6 +134,7 @@ struct World {
         io.AddMousePosEvent(x, y); frame();
         io.AddMouseButtonEvent(0, true); frame();
         io.AddMouseButtonEvent(0, false); frame(); frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));   // commit() waits a moment after a widget was active
     }
     bool click(const std::string& key) {
         const auto rect = ui->rect_of(key);
@@ -192,10 +196,15 @@ static void commit_waits_for_the_end_of_a_drag() {
     const float y = ((*rect)[1] + (*rect)[3]) / 2, x = (*rect)[0] + 5;
     io.AddMousePosEvent(x, y); w.frame();
     io.AddMouseButtonEvent(0, true); w.frame();
-    for (int i = 1; i <= 5; ++i) { io.AddMousePosEvent(x + 20.f * float(i), y); w.frame(); w.menu->commit(); }
+    // The game commits from its main loop, where the menu's ImGui context is not current: leave none current here too.
+    const auto commit_without_context = [&] { ImGui::SetCurrentContext(nullptr); w.menu->commit(); ImGui::SetCurrentContext(w.context); };
+    for (int i = 1; i <= 5; ++i) { io.AddMousePosEvent(x + 20.f * float(i), y); w.frame(); commit_without_context(); }
     CHECK(w.host->settings_of("alpha")->dirty() && w.saved.empty());   // still dragging: nothing written yet
     io.AddMouseButtonEvent(0, false); w.frame(); w.frame();
-    w.menu->commit();
+    commit_without_context();
+    CHECK(w.saved.empty());                                            // released a moment ago: the value may still be in flight
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    commit_without_context();
     CHECK(w.saved.size() == 1 && !w.host->settings_of("alpha")->dirty());
     w.host->step();
     CHECK(std::count(w.behavior("alpha")->events.begin(), w.behavior("alpha")->events.end(), "fire:on_settings_changed:scale") == 1);
@@ -228,16 +237,38 @@ static void free_draw_ids_unique_between_mods() {
     CHECK(w.host->status()[1].failures >= 1);
 }
 
-static void manager_toggle_marks_restart_required() {
+// Mods are switched on and off from the manager while the game runs: the change is saved and then applied (GameMods::apply in the game).
+static void manager_toggle_switches_mods_live() {
     World w("menu_manager", {{"alpha", ""}, {"beta", "", false}});
     w.select(3);
-    CHECK(!w.ui->restart_required() && w.registry.wanted("alpha") && !w.registry.wanted("beta"));
+    const auto count = [&](const char* id, const char* event) { return std::count(w.behavior(id)->events.begin(), w.behavior(id)->events.end(), event); };
+    CHECK(w.registry.wanted("alpha") && !w.registry.wanted("beta") && w.host->status()[0].running && !w.host->status()[1].running && w.applies == 0);
     CHECK(w.click("manager/enable/beta"));
-    CHECK(w.registry.wanted("beta") && w.ui->restart_required());
+    CHECK(w.registry.wanted("beta"));
     w.menu->commit();
-    CHECK(w.saved.size() == 1 && w.saved[0]["enabled"] == json::array({"alpha", "beta"}));
-    CHECK(w.click("manager/enable/beta"));   // back to what is loaded: nothing to restart for
-    CHECK(!w.registry.wanted("beta") && !w.ui->restart_required());
+    CHECK(w.saved.size() == 1 && w.saved[0]["enabled"] == json::array({"alpha", "beta"}) && w.applies == 1);
+    CHECK(w.host->status()[1].running && count("beta", "fire:on_load") == 1 && count("alpha", "fire:on_load") == 1);   // beta started, alpha was left alone
+    CHECK(w.click("manager/enable/beta"));                                                                                 // and off again
+    w.menu->commit();
+    CHECK(!w.registry.wanted("beta") && !w.host->status()[1].running && count("beta", "fire:on_unload") == 1 && w.applies == 2);
+    w.menu->commit();
+    CHECK(w.applies == 2);                                                                                                  // nothing changed: nothing applied
+}
+
+// The order buttons are real arrow buttons, flush right at the same x in every row.
+static void manager_order_buttons_are_aligned_and_work() {
+    World w("menu_order", {{"alpha", ""}, {"beta", ""}, {"gamma", ""}});
+    w.select(3);
+    const auto up_a = w.ui->rect_of("manager/up/alpha"), up_b = w.ui->rect_of("manager/up/beta"), down_a = w.ui->rect_of("manager/down/alpha"), down_c = w.ui->rect_of("manager/down/gamma");
+    CHECK(up_a && up_b && down_a && down_c);
+    CHECK((*up_a)[0] == (*up_b)[0] && (*down_a)[0] == (*down_c)[0] && (*up_a)[2] - (*up_a)[0] == (*up_a)[3] - (*up_a)[1]);   // same column in every row, square buttons
+    CHECK((*down_a)[2] > (*up_a)[2] && (*down_a)[0] - (*up_a)[2] < 20);                                                         // the pair sits together
+    const auto enable_a = w.ui->rect_of("manager/enable/alpha");
+    CHECK(enable_a && (*up_a)[1] >= (*enable_a)[1] - 1 && (*up_a)[3] <= (*enable_a)[3] + 1);                                    // on the checkbox's line
+    CHECK(w.click("manager/down/alpha"));
+    w.menu->commit();
+    CHECK(w.saved.back()["order"] == json::array({"beta", "alpha", "gamma"}) && w.applies == 1);
+    CHECK(w.host->status().size() == 3);
 }
 
 static void native_confirmation_flow() {
@@ -274,7 +305,8 @@ int main() {
         {"tabs_appear_after_builtins", tabs_appear_after_builtins}, {"tab_bar_scrolls_with_many_mods", tab_bar_scrolls_with_many_mods},
         {"declared_setting_click_and_commit", declared_setting_click_and_commit}, {"commit_waits_for_the_end_of_a_drag", commit_waits_for_the_end_of_a_drag},
         {"language_fallback_for_names_and_labels", language_fallback_for_names_and_labels},
-        {"free_draw_ids_unique_between_mods", free_draw_ids_unique_between_mods}, {"manager_toggle_marks_restart_required", manager_toggle_marks_restart_required},
+        {"free_draw_ids_unique_between_mods", free_draw_ids_unique_between_mods}, {"manager_toggle_switches_mods_live", manager_toggle_switches_mods_live},
+        {"manager_order_buttons_are_aligned_and_work", manager_order_buttons_are_aligned_and_work},
         {"native_confirmation_flow", native_confirmation_flow}, {"no_mods_menu_is_harmless", no_mods_menu_is_harmless}};
     for (const auto& [name, run] : tests) { std::printf("%s\n", name); std::fflush(stdout); run(); }
     std::puts("ok");

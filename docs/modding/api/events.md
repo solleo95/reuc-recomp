@@ -84,7 +84,7 @@ on('on_unload', () => log.write('stopping'));
 
 Status: **implemented**, since API 1.0.
 
-Once per nominal game frame (60 per second of game time, whatever the real step rate): a step shorter than a nominal frame skips it, a longer one runs it up to 4 times. Not delivered while the game is paused. Payload: {}.
+Once per nominal game frame (the game's own 30 Hz step: about 30 per second of game time, whatever the real step rate): a step shorter than a nominal frame skips it, a longer one runs it up to 4 times. Not delivered while the game is paused. Payload: {}.
 
 Lua:
 

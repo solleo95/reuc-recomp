@@ -119,6 +119,18 @@ static void callbacks_from_another_thread() {
     CHECK(rig.runtime->fire("on_step", json::object(), kBudget).ok && rig.word(0x80000300) == 2);
 }
 
+// A DLL of a mod without touches_gameplay reads guest memory but cannot write it.
+static void native_memory_writes_need_the_gameplay_flag() {
+    NativeRig rig(true, true);
+    rig.context->gameplay = false;
+    rig.set(0x80000300, 0); rig.set(0x80000308, 0);
+    CHECK(rig.runtime->load(mod_with(TEST_DLL_GOOD, u8"native_readonly"), "native/mod.dll").ok);
+    CHECK(rig.runtime->fire("on_step", json::object(), kBudget).ok);
+    CHECK(rig.word(0x80000300) == 0);   // the DLL's write was refused
+    rig.context->gameplay = true;
+    CHECK(rig.runtime->fire("on_step", json::object(), kBudget).ok && rig.word(0x80000300) == 1);
+}
+
 static void native_hook_pre() {
     NativeRig rig(true, true);
     CHECK(rig.runtime->load(mod_with(TEST_DLL_GOOD, u8"native_hook"), "native/mod.dll").ok);
@@ -188,7 +200,7 @@ static void non_ascii_dll_path() {
 }
 
 int main() {
-    callbacks_from_another_thread(); imgui_handles_reach_the_dll_at_each_draw(); sha256_known(); refuses_when_not_allowed(); refuses_when_unconfirmed(); loads_test_dll(); native_hook_pre(); api_major_mismatch_refused(); imgui_version_mismatch_refused();
+    native_memory_writes_need_the_gameplay_flag(); callbacks_from_another_thread(); imgui_handles_reach_the_dll_at_each_draw(); sha256_known(); refuses_when_not_allowed(); refuses_when_unconfirmed(); loads_test_dll(); native_hook_pre(); api_major_mismatch_refused(); imgui_version_mismatch_refused();
     missing_exports_reported(); init_failure_reported(); slow_and_crashing_callbacks(); non_ascii_dll_path();
     std::puts("ok");
 }

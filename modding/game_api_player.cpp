@@ -146,10 +146,14 @@ public:
             state_[i].infinite_ammo = !infinite_ammo_by_[i].empty();
         }
         for (auto it = weapon_overrides_.begin(); it != weapon_overrides_.end();) {
-            if (it->second.owner != owner) { ++it; continue; }
-            memory_.write_u32(it->first, it->second.original);
-            it = weapon_overrides_.erase(it);
+            auto& stack = it->second.stack;
+            const auto mine = std::remove_if(stack.begin(), stack.end(), [&](const auto& entry) { return entry.first == owner; });
+            if (mine == stack.end()) { ++it; continue; }
+            stack.erase(mine, stack.end());
+            if (stack.empty()) { memory_.write_u32(it->first, it->second.original); it = weapon_overrides_.erase(it); }   // nobody else set it: the game's own value
+            else { memory_.write_u32(it->first, stack.back().second); ++it; }                                           // the mod that set it before is in force again
         }
+        for (auto& slot : state_) slot.known = false;   // the ticker may have been idle: the next tick starts from a fresh baseline, not from stale values
     }
 
 private:
@@ -206,7 +210,11 @@ private:
         const auto existing = weapon_overrides_.find(address);
         const auto original = existing != weapon_overrides_.end() ? std::optional<uint32_t>(existing->second.original) : memory_.read_u32(address);
         if (!original || !memory_.write_u32(address, word)) throw ApiError("game memory is not writable right now");
-        weapon_overrides_[address] = {word, *original, OwnerScope::current()};   // the last mod to set a field owns it; the game's own value is what gets restored
+        auto& entry = weapon_overrides_[address];
+        entry.original = *original;   // what the game had before any mod touched the field
+        const std::string& owner = OwnerScope::current();
+        entry.stack.erase(std::remove_if(entry.stack.begin(), entry.stack.end(), [&](const auto& e) { return e.first == owner; }), entry.stack.end());
+        entry.stack.emplace_back(owner, word);   // the latest setter is in force; when it goes, the one before it is
     }
     void write_float(uint32_t address, float value) {
         uint32_t word;
@@ -214,7 +222,7 @@ private:
         override_word(address, word);
     }
     void reapply_weapon_overrides() {
-        for (const auto& [address, entry] : weapon_overrides_) if (memory_.read_u32(address) != entry.word) memory_.write_u32(address, entry.word);
+        for (const auto& [address, entry] : weapon_overrides_) if (memory_.read_u32(address) != entry.stack.back().second) memory_.write_u32(address, entry.stack.back().second);
     }
     static uint32_t count_of(const Value& v, const char* what) {
         if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxMagazine) throw ApiError(std::string(what) + " must be a whole number from 0 to 65535");
@@ -292,7 +300,7 @@ private:
     }
 
     GuestMemory& memory_;
-    struct WeaponOverride { uint32_t word, original; std::string owner; };   // original: what the game had before any mod touched the field
+    struct WeaponOverride { uint32_t original = 0; std::vector<std::pair<std::string, uint32_t>> stack; };   // stack: (owner, word) in the order set; never empty while the entry exists
     std::mutex mutex_;   // guards everything below: mods call in from the game thread and the menu thread
     SlotState state_[2];
     std::set<std::string> invulnerable_by_[2], infinite_ammo_by_[2];

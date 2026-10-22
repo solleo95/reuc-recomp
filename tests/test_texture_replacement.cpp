@@ -130,6 +130,22 @@ int main() {
         for (const auto& folder : {first, second}) std::filesystem::remove_all(folder);
     }
 
+    // Mods are switched on and off while the game runs: the table can be emptied and rebuilt, and a generation number tells the texture cache when to drop what it built.
+    {
+        const auto folder = std::filesystem::temp_directory_path() / "uc_texture_replacement_live";
+        std::filesystem::remove_all(folder);
+        std::filesystem::create_directories(folder);
+        write_dds(folder / "tex1_4x4_f7c67301db6713f0_6.dds", 4, 4, std::vector<uint8_t>(16), 1);
+        gx::TextureReplacements live;
+        const auto start = live.generation();
+        CHECK(live.load_index(folder) == 1 && live.generation() != start);
+        const auto loaded = live.generation();
+        live.clear();
+        CHECK(live.empty() && live.generation() != loaded && !live.find(desc, rgba, {}));
+        CHECK(live.load_index(folder) == 1 && live.find(desc, rgba, {}));
+        std::filesystem::remove_all(folder);
+    }
+
     // A file whose name has no mapping in the system code page (std::filesystem::path::string() throws for it) is skipped, not fatal.
     {
         const auto folder = std::filesystem::temp_directory_path() / "uc_texture_replacement_names";

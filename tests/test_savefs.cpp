@@ -85,4 +85,17 @@ int main() {
     if (CreateSymbolicLinkW((root/"link").c_str(),outside.c_str(),SYMBOLIC_LINK_FLAG_DIRECTORY|SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
         CHECK(fs.create_file("/link/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));
     else CHECK(GetLastError()==ERROR_PRIVILEGE_NOT_HELD); // platform cannot create this fixture
+
+    // The game can be moved to another save folder while it runs (a gameplay mod was switched on): the switch waits until no save file is open,
+    // then every later operation sees the new folder.
+    const auto other=root.parent_path()/("uc-save-other-"+suffix);
+    std::filesystem::create_directories(other/"title");
+    { std::ofstream(other/"title"/"only-here.bin")<<"x"; }
+    fd=fs.open("/title/data/a",1); CHECK(fd>=0);
+    fs.request_root(other);
+    CHECK(fs.open("/title/only-here.bin",1)==-106);            // a file is open: still the old folder
+    CHECK(fs.close(fd)==0);
+    fd=fs.open("/title/only-here.bin",1); CHECK(fd>=0 && fs.close(fd)==0);   // now the new one
+    CHECK(fs.open("/title/data/a",1)==-106);
+    std::filesystem::remove_all(other);
 }

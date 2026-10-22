@@ -39,4 +39,4 @@ Errors from the API are thrown as exceptions (`try { ... } catch (e) { e.message
 
 ## Limits
 
-Same as Lua: 1 ms per step for all `on_step` handlers together, 4 ms per drawing call, 2 s to load, 64 MiB of memory; the interruption cannot be caught by `try/catch`. Three failures switch the mod off for the session. Stack traces name the file; the line of the failing frame inside a function is approximate.
+Array-likes longer than 16 777 216 elements are refused by the built-in array methods (a RangeError), so they cannot run for ever. Same as Lua: 1 ms per step for all `on_step` handlers together, 4 ms per drawing call, 2 s to load, 64 MiB of memory; the interruption cannot be caught by `try/catch`. Three failures switch the mod off until it is switched off and on again. Stack traces name the file; the line of the failing frame inside a function is approximate.

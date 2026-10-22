@@ -2,6 +2,7 @@
 #include "host.h"
 #include "menu_bridge.h"
 #include <array>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <optional>
@@ -19,6 +20,10 @@ public:
     using SaveSection = std::function<void(const nlohmann::ordered_json& mods_section)>;
 
     ModMenuUi(GetRegistry registry, GetHost host, std::string language);
+    // After a manager change has been saved: makes the running game follow (GameMods::apply). Returns notes: "modded_saves" or a warning text.
+    using Apply = std::function<std::vector<std::string>()>;
+    // `pending` (optional) says the game finished something that needs another apply (a save-folder switch): checked every commit().
+    void set_apply(Apply apply, std::function<bool()> pending = {}) { apply_ = std::move(apply); pending_ = std::move(pending); }
     void set_save(SaveSection save) { save_ = std::move(save); }   // the config's "mods" section writer (LiveSettings::apply_mods); may arrive after construction
 
     // ModMenu
@@ -42,8 +47,6 @@ public:
     void tooltip(const std::string& text) override;
     std::array<float, 4> color_edit(const std::string& label, std::array<float, 4> rgba) override;
 
-    bool restart_required();   // what the player changed in the manager differs from what is loaded now
-
     // Screen rectangle {min x, min y, max x, max y} of a control as last drawn, for tests that click it. Keys: "manager/allow_native", "manager/enable/<id>",
     // "manager/confirm/<id>", "popup/native_ok", "popup/confirm_ok", "setting/<id>/<key>", "ui/<id>/<label>" (buttons).
     std::optional<std::array<float, 4>> rect_of(const std::string& key) const;
@@ -62,12 +65,13 @@ private:
     std::string language_;
     bool in_draw_ = false;
     bool dirty_ = false;
-    int active_frame_ = -1000;   // the last ImGui frame in which an item of a mod tab was active (commit() waits for the edit to end)
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point editing_until_{};   // an item of a mod tab was active until shortly before this: commit() waits for the edit to end
     bool open_confirm_ = false;
     std::vector<Conflict> conflicts_;
-    std::vector<std::string> loaded_active_;                       // ids active when the game started, in load order
-    bool loaded_allow_native_ = false;
-    std::map<std::string, std::string> loaded_native_hash_;        // id -> confirmed hash at start
+    Apply apply_;
+    std::function<bool()> pending_;
+    std::vector<std::string> notes_;                               // what the last apply() reported, shown in the manager
     std::map<std::string, std::string> hash_cache_;                // id -> sha256 of its DLL (computed once)
     std::map<std::string, nlohmann::ordered_json> saved_settings_; // the settings of each mod that changed this session, as last written to the config
     std::map<std::string, std::string> text_buffers_, last_text_;  // input_text state per (mod, label): the edit buffer and what the script was given last

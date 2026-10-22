@@ -58,7 +58,7 @@ TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte>
 size_t encoded_texture_size(const TextureDesc& desc);
 class TextureCache {
 public:
-    explicit TextureCache(size_t budget = 64 * 1024 * 1024) : budget_(budget) {}
+    explicit TextureCache(size_t budget = 64 * 1024 * 1024);
     TextureCache(const TextureCache&) = delete;
     TextureCache& operator=(const TextureCache&) = delete;
     TextureCache(TextureCache&&) = delete;
@@ -66,7 +66,7 @@ public:
     std::shared_ptr<const TexturePixels> snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette = {});
     // With async on, a cache miss returns at once and a small worker pool fills the pixels; the renderer calls TexturePixels::wait() before it reads them.
     void set_async(bool on) { async_ = on; }
-    void set_budget(size_t bytes) { budget_ = bytes; }
+    void set_budget(size_t bytes) { budget_ = bytes; }   // any thread (mods can switch texture packs on while the game runs)
     size_t resident_bytes() const { return resident_; }
     uint64_t decodes() const { return decodes_; }
     void clear() { by_address_.clear(); entries_.clear(); resident_ = 0; decodes_ = 0; }
@@ -82,7 +82,10 @@ private:
     };
     std::list<Entry> entries_;
     std::unordered_multimap<uint32_t, std::list<Entry>::iterator> by_address_;
-    size_t budget_, resident_ = 0;
+    static uint64_t replacement_generation();   // of the replacement table (texture_replacement.h)
+    std::atomic<size_t> budget_;
+    size_t resident_ = 0;
+    uint64_t seen_generation_ = 0;
     uint64_t decodes_ = 0;
     bool async_ = false;
 };

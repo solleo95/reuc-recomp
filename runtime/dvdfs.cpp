@@ -25,7 +25,8 @@ void DvdFs::walk(const fs::path& dir, const std::string& rel) {
 }
 
 bool DvdFs::open_root(const fs::path& root) {
-    e_.clear(); index_.clear();
+    std::unique_lock lock(m_);
+    e_.clear(); index_.clear(); undo_.clear(); hidden_.clear();
     if (!fs::is_directory(root)) return false;
     e_.push_back({"", root, true, 0});
     index_[""] = 0;
@@ -33,45 +34,103 @@ bool DvdFs::open_root(const fs::path& root) {
     return true;
 }
 
-size_t DvdFs::overlay(const fs::path& files_root) {
-    if (e_.empty()) return 0;
-    std::vector<std::pair<std::string, fs::path>> files;   // relative path (UTF-8, '/'), full path
+size_t DvdFs::add_entry(Entry entry) {
+    const std::string key = lower(entry.rel);
+    size_t slot;
+    const auto hidden = hidden_.find(key);
+    if (hidden != hidden_.end() && e_[hidden->second].dir == entry.dir) {   // the same path (and kind) was added before and taken back: same number again
+        slot = hidden->second;
+        hidden_.erase(hidden);
+        e_[slot] = std::move(entry);
+    } else {   // (a path that comes back as another kind gets a new number: a held number never changes meaning)
+        e_.push_back(std::move(entry));
+        slot = e_.size() - 1;
+    }
+    index_[key] = int(slot);
+    undo_.push_back({slot, true, {}});
+    return slot;
+}
+
+void DvdFs::clear_locked() {
+    for (size_t i = undo_.size(); i-- > 0;) {
+        Undo& undo = undo_[i];
+        if (undo.added) {
+            Entry& entry = e_[undo.slot];
+            const std::string key = lower(entry.rel);
+            index_.erase(key);
+            hidden_[key] = undo.slot;
+            entry.hidden = true; entry.size = 0; entry.full.clear();   // the slot stays: a number the game holds must never point at another file
+        } else {
+            e_[undo.slot] = std::move(undo.original);
+        }
+    }
+    undo_.clear();
+}
+
+void DvdFs::clear_overlays() {
+    std::unique_lock lock(m_);
+    clear_locked();
+}
+
+// The regular files below files_root (no symlinks or junctions): relative path (UTF-8, '/'), full path, size. Takes no lock: the scan can be slow.
+std::vector<DvdFs::Found> DvdFs::scan(const fs::path& files_root) {
+    std::vector<Found> files;
     std::error_code error;
     for (fs::recursive_directory_iterator it(files_root, error), last; !error && it != last; it.increment(error)) {
         std::error_code entry_error;
         const auto type = it->symlink_status(entry_error).type();
         if (type == fs::file_type::symlink || type == fs::file_type::junction) { it.disable_recursion_pending(); continue; }
-        if (type != fs::file_type::regular || it->file_size(entry_error) > UINT32_MAX) continue;
+        if (type != fs::file_type::regular) continue;
+        const auto measured = it->file_size(entry_error);
+        if (entry_error || measured > UINT32_MAX) continue;
         const auto rel = it->path().lexically_relative(files_root).generic_u8string();
-        files.emplace_back(std::string(rel.begin(), rel.end()), it->path());
+        files.push_back({std::string(rel.begin(), rel.end()), it->path(), uint32_t(measured)});
     }
-    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return lower(a.first) < lower(b.first); });
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return lower(a.rel) < lower(b.rel); });
+    return files;
+}
+
+size_t DvdFs::apply_locked(const fs::path& files_root, const std::vector<Found>& files) {
     size_t count = 0;
-    for (const auto& [rel, full] : files) {
-        std::error_code size_error;
-        const auto measured = fs::file_size(full, size_error);
-        if (size_error || measured > UINT32_MAX) continue;   // the file changed or vanished since the scan
-        const uint32_t size = uint32_t(measured);
+    for (const auto& [rel, full, size] : files) {
         if (const auto at = index_.find(lower(rel)); at != index_.end()) {
             Entry& entry = e_[size_t(at->second)];
             if (entry.dir) continue;
+            undo_.push_back({size_t(at->second), false, entry});
             entry.full = full; entry.size = size; ++count;
             continue;
         }
         for (size_t slash = rel.find('/'); slash != std::string::npos; slash = rel.find('/', slash + 1)) {   // missing parent folders
             const std::string folder = rel.substr(0, slash);
             if (index_.count(lower(folder))) continue;
-            e_.push_back({folder, files_root / fs::path(std::u8string(folder.begin(), folder.end())), true, 0});
-            index_[lower(folder)] = int(e_.size()) - 1;
+            add_entry({folder, files_root / fs::path(std::u8string(folder.begin(), folder.end())), true, 0});
         }
-        e_.push_back({rel, full, false, size});
-        index_[lower(rel)] = int(e_.size()) - 1;
+        add_entry({rel, full, false, size});
         ++count;
     }
     return count;
 }
 
+size_t DvdFs::overlay(const fs::path& files_root) {
+    const auto files = scan(files_root);
+    std::unique_lock lock(m_);
+    if (e_.empty()) return 0;
+    return apply_locked(files_root, files);
+}
+
+size_t DvdFs::set_overlays(const std::vector<fs::path>& files_roots) {
+    std::vector<std::vector<Found>> scanned;
+    for (const auto& root : files_roots) scanned.push_back(scan(root));
+    std::unique_lock lock(m_);   // one swap: a reader sees the old overlays or the new ones, never the disc's own files in between
+    clear_locked();
+    if (e_.empty()) return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < files_roots.size(); ++i) count += apply_locked(files_roots[i], scanned[i]);
+    return count;
+}
+
 int DvdFs::entry_of(std::string path) const {
+    std::shared_lock lock(m_);
     for (char& c : path) if (c == '\\') c = '/';
     std::string norm;
     size_t i = 0;
@@ -88,6 +147,7 @@ int DvdFs::entry_of(std::string path) const {
 }
 
 int64_t DvdFs::read(int entry, void* dst, uint32_t len, uint32_t offset) const {
+    std::shared_lock lock(m_);   // held across the file read: a swap of the overlays waits for the read in flight, so a read sees one whole version
     if (!valid(entry) || e_[size_t(entry)].dir) return -1;
     const Entry& e = e_[size_t(entry)];
     if (len == 0 || offset >= e.size) return 0;

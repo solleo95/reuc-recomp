@@ -240,7 +240,7 @@ private:
     }
     static int c_mem_write(uint32_t address, const void* source, uint32_t length) {
         auto* self = current();
-        return self && self->ctx_.memory && source && self->ctx_.memory->write_bytes(address, source, length) ? 1 : 0;
+        return self && self->ctx_.gameplay && self->ctx_.memory && source && self->ctx_.memory->write_bytes(address, source, length) ? 1 : 0;   // like the API's writers: gameplay mods only
     }
     static Value parse_json(const char* text) {
         if (!text || !*text) return Value::object();

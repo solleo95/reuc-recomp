@@ -135,6 +135,18 @@ static void stack_limit_follows_the_calling_thread() {
     }
 }
 
+// A built-in that loops over a huge array-like in C must reach the interrupt handler too.
+static void builtin_loops_are_interrupted() {
+    for (const char* body : {"Array.prototype.indexOf.call({length: 2 ** 53}, 0)", "Array.prototype.fill.call({length: 2 ** 40}, 1)",
+                             "Array.from({length: 2 ** 32}, (x) => 0)", "'x'.repeat(2 ** 29).split('').length", "/(a+)+b/.test('a'.repeat(60))"}) {
+        Rig rig(fresh(u8"js_builtin"));
+        CHECK(rig.run(std::string("on('on_step', () => { ") + body + "; });").ok);
+        const auto begin = std::chrono::steady_clock::now();
+        const auto r = rig.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(20)});
+        CHECK(!r.ok && std::chrono::steady_clock::now() - begin < std::chrono::seconds(2));
+    }
+}
+
 static void memory_cap() {
     Rig rig(fresh(u8"js_memory"));
     const auto r = rig.run("const a = []; for (;;) a.push('x'.repeat(1000) + a.length);");
@@ -200,6 +212,6 @@ static void hook_pre_regs_round_trip() {
 int main() {
     hook_pre_regs_round_trip();
     no_std_os(); import_confined(); non_ascii_mod_root(); events(); promise_jobs_run(); api_read_write(); api_error_is_exception(); settings_get(); budget_endless_loop();
-    stack_limit_follows_the_calling_thread(); memory_cap(); syntax_error_reported(); runtime_error_has_location(); ui_calls_forwarded();
+    stack_limit_follows_the_calling_thread(); builtin_loops_are_interrupted(); memory_cap(); syntax_error_reported(); runtime_error_has_location(); ui_calls_forwarded();
     std::puts("ok");
 }

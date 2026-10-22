@@ -52,6 +52,17 @@ FetchContent_Declare(quickjs URL "${quickjs_archive}"
   SOURCE_SUBDIR no_cmake
   DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(quickjs)
+# Array builtins loop in C over `length` without reaching the interrupt handler: Array.prototype.indexOf.call({length: 2 ** 53}, 0) would freeze the game
+# thread. An array-like longer than 16M elements (a real array of that size does not fit the mods' memory cap) is refused with a RangeError instead.
+file(READ ${quickjs_SOURCE_DIR}/quickjs.c uc_quickjs_source)
+if(NOT uc_quickjs_source MATCHES "uc_array_like_limit")
+  set(uc_length_tail "    return JS_ToLengthFree(ctx, pres, len_val);\n}\n\nstatic __exception int js_set_length64")
+  string(REPLACE "${uc_length_tail}" "    if (JS_ToLengthFree(ctx, pres, len_val) < 0) return -1;\n    if (*pres > 16777216) { /* uc_array_like_limit */ *pres = 0; JS_ThrowRangeError(ctx, \"array-like is too long (more than 16777216 elements)\"); return -1; }\n    return 0;\n}\n\nstatic __exception int js_set_length64" uc_quickjs_patched "${uc_quickjs_source}")
+  if(uc_quickjs_patched STREQUAL uc_quickjs_source)
+    message(FATAL_ERROR "quickjs.c: js_get_length64 was not found, the array-like length patch cannot be applied")
+  endif()
+  file(WRITE ${quickjs_SOURCE_DIR}/quickjs.c "${uc_quickjs_patched}")
+endif()
 # The engine only (no quickjs-libc: nothing here gives scripts std/os/file/network access).
 add_library(uc_quickjs STATIC ${quickjs_SOURCE_DIR}/cutils.c ${quickjs_SOURCE_DIR}/libregexp.c ${quickjs_SOURCE_DIR}/libunicode.c ${quickjs_SOURCE_DIR}/quickjs.c ${quickjs_SOURCE_DIR}/xsum.c)
 target_include_directories(uc_quickjs PUBLIC ${quickjs_SOURCE_DIR})

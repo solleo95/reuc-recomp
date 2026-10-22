@@ -457,6 +457,9 @@ static int real_main(int argc, char** argv) {
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
     uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
+    mods.set_save_root_handler([&saves](const std::filesystem::path& root, std::function<void()> done) { saves.request_root(root, std::move(done)); });   // a gameplay mod switched on live: the game moves to the modded saves
+    mods.set_texture_handler([] { uc::gx_set_texture_budget(size_t(2) << 30); });   // textures of a mod switched on live need the larger cache too
+    mod_menu.set_apply([&mods] { return mods.apply(); }, [&mods] { return mods.needs_apply(); });   // the manager's changes (on, off, order, native code) reach the running game
     mods.start(boot.mem,options.headless ? nullptr : &mod_menu);   // on_load runs here; the guest starts right below
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);

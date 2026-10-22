@@ -299,7 +299,26 @@ static void concurrent_setters_and_ticks() {
     CHECK(f.get("player.invulnerable", slot(1)) == false && f.get("player.invulnerable", slot(2)) == false);
 }
 
+// Two mods set the same weapon field: switching the later one off puts the earlier one's value back, not the game's.
+static void overlapping_weapon_values_restore_in_order() {
+    Fixture f;
+    constexpr uint32_t kRecord = 0x8046A86C;
+    f.memory.write_u32(kRecord + 0x14, 15);
+    const std::string a = "a", b = "b";
+    { OwnerScope scope(a); f.set("weapon.capacity", weapon(0), 30); }
+    { OwnerScope scope(b); f.set("weapon.capacity", weapon(0), 50); }
+    CHECK(f.memory.read_u32(kRecord + 0x14) == 50u);
+    f.ticker->drop_owner(b);
+    CHECK(f.memory.read_u32(kRecord + 0x14) == 30u);
+    f.memory.write_u32(kRecord + 0x14, 15);
+    f.tick();
+    CHECK(f.memory.read_u32(kRecord + 0x14) == 30u);   // still a's, also after the game refills the table
+    f.ticker->drop_owner(a);
+    CHECK(f.memory.read_u32(kRecord + 0x14) == 15u);
+}
+
 int main() {
+    overlapping_weapon_values_restore_in_order();
     effects_belong_to_the_mod_that_set_them(); concurrent_setters_and_ticks();
     weapon_changes_are_kept_when_the_game_rewrites_the_table();
     weapon_records_roundtrip();

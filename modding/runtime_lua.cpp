@@ -254,6 +254,15 @@ private:
         }
         lua_pushcfunction(L_, &LuaRuntime::l_pcall); lua_setglobal(L_, "pcall");
         lua_pushcfunction(L_, &LuaRuntime::l_xpcall); lua_setglobal(L_, "xpcall");
+        const auto wrap = [&](const char* library, const char* function, const char* saved, lua_CFunction replacement) {   // library == nullptr: a global
+            if (library) lua_getglobal(L_, library); else lua_pushglobaltable(L_);
+            lua_getfield(L_, -1, function); lua_setfield(L_, LUA_REGISTRYINDEX, saved);
+            lua_pushcfunction(L_, replacement); lua_setfield(L_, -2, function);
+            lua_pop(L_, 1);
+        };
+        wrap(nullptr, "setmetatable", "uc_setmetatable", &LuaRuntime::l_setmetatable);
+        wrap("string", "rep", "uc_rep", &LuaRuntime::l_rep);
+        wrap("table", "move", "uc_move", &LuaRuntime::l_move);
         for (const char* removed : {"dofile", "loadfile", "load", "loadstring", "print", "collectgarbage"}) { lua_pushnil(L_); lua_setglobal(L_, removed); }
         lua_getglobal(L_, "string"); lua_pushnil(L_); lua_setfield(L_, -2, "dump"); lua_pop(L_, 1);
         lua_pushcfunction(L_, &LuaRuntime::l_collectgarbage); lua_setglobal(L_, "collectgarbage");
@@ -267,6 +276,39 @@ private:
 
     // ---- C functions ----
     static LuaRuntime* me(lua_State* L) { return self_of(L); }
+
+    // Library functions that can run for ever without ever reaching the clock check are wrapped: a check first, then the original (kept in the registry).
+    static int forward(lua_State* L, const char* original) {
+        lua_getfield(L, LUA_REGISTRYINDEX, original);
+        lua_insert(L, 1);
+        lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+        return lua_gettop(L);
+    }
+    // A finalizer runs with the instruction-count hook switched off (and its errors are swallowed): not available to mods.
+    static int l_setmetatable(lua_State* L) {
+        if (lua_istable(L, 2)) {
+            lua_pushliteral(L, "__gc");
+            lua_rawget(L, 2);
+            if (!lua_isnil(L, -1)) return luaL_error(L, "__gc finalizers are not available to mods");
+            lua_pop(L, 1);
+        }
+        return forward(L, "uc_setmetatable");
+    }
+    // string.rep('', huge) loops about 2^63 times copying nothing.
+    static int l_rep(lua_State* L) {
+        size_t length = 0, separator = 0;
+        luaL_checklstring(L, 1, &length);
+        luaL_checkinteger(L, 2);
+        luaL_optlstring(L, 3, "", &separator);
+        if (length + separator == 0) { lua_pushliteral(L, ""); return 1; }
+        return forward(L, "uc_rep");
+    }
+    // table.move({}, 1, maxinteger - 1, 1, {}) loops that many times without allocating.
+    static int l_move(lua_State* L) {
+        const lua_Integer from = luaL_checkinteger(L, 2), to = luaL_checkinteger(L, 3);
+        if (to >= from && static_cast<lua_Unsigned>(to) - static_cast<lua_Unsigned>(from) >= (1u << 24)) return luaL_error(L, "table.move: at most 16777216 elements at a time");
+        return forward(L, "uc_move");
+    }
 
     static int l_collectgarbage(lua_State* L) {
         const char* option = luaL_optstring(L, 1, "count");

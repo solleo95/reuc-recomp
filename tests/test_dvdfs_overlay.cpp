@@ -2,8 +2,10 @@
 #include "dvdfs.h"
 #include "overlay.h"
 #include "registry.h"
+#include <atomic>
 #include <cstdlib>
 #include <fstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 using namespace uc;
@@ -82,7 +84,84 @@ static void overlay_ignores_escapes() {
     CHECK(dvd.entry_of("escape/secret.bin") < 0 && dvd.entry_of("DATA/ok.bin") > 0);
 }
 
+// Mods are switched on and off while the game runs: taking the overlays back restores the disc's own files, files a mod added disappear, and putting
+// them on again reuses the same entry numbers (a number the game already holds never points somewhere else).
+static void overlays_can_be_taken_back_and_reapplied() {
+    const auto root = fresh("ov_disc5"), files = fresh("ov_files5"), other = fresh("ov_files5b");
+    auto dvd = disc(root);
+    const int original = dvd.entry_of("DATA/a.bin");
+    put(files / "DATA" / "a.bin", "replaced!");
+    put(files / "DATA" / "extra" / "x.bin", "xx");
+    CHECK(dvd.overlay(files) == 2);
+    const int added = dvd.entry_of("DATA/extra/x.bin"), folder = dvd.entry_of("DATA/extra");
+    CHECK(added > 0 && folder > 0 && dvd.length(original) == 9);
+    dvd.clear_overlays();
+    CHECK(dvd.entry_of("DATA/extra/x.bin") == -1 && dvd.entry_of("DATA/extra") == -1);           // gone
+    CHECK(dvd.length(added) == 0 && dvd.read(added, nullptr, 0, 0) == -1 && dvd.path_of(added).empty());   // a number the game still holds is harmless
+    CHECK(dvd.length(original) == 3 && read_entry(dvd, original) == "abc");                       // the disc's own file is back
+    put(other / "DATA" / "extra" / "x.bin", "different");
+    CHECK(dvd.overlay(files) == 2 && dvd.overlay(other) == 1);
+    CHECK(dvd.entry_of("DATA/extra/x.bin") == added && dvd.entry_of("DATA/extra") == folder);     // the same numbers again
+    CHECK(read_entry(dvd, added) == "different" && read_entry(dvd, original) == "replaced!");
+    dvd.clear_overlays();
+    dvd.clear_overlays();                                                                          // harmless twice
+    CHECK(read_entry(dvd, original) == "abc" && dvd.entry_of("DATA/extra/x.bin") == -1);
+}
+
+// The disc tree is read by the game's threads while the menu thread changes the overlays.
+static void overlays_change_while_the_game_reads() {
+    const auto root = fresh("ov_disc6"), files = fresh("ov_files6");
+    auto dvd = disc(root);
+    put(files / "DATA" / "a.bin", "replaced!");
+    put(files / "DATA" / "more" / "m.bin", "mm");
+    std::atomic<bool> stop{false};
+    std::thread reader([&] {
+        char buffer[16];
+        const int a = dvd.entry_of("DATA/a.bin");
+        while (!stop) {
+            const int64_t n = dvd.read(a, buffer, sizeof buffer, 0);
+            if (n != 3 && n != 9) { std::puts("torn read"); std::abort(); }   // always one whole version of the file
+            dvd.entry_of("DATA/more/m.bin");
+        }
+    });
+    for (int i = 0; i < 300; ++i) { dvd.overlay(files); dvd.clear_overlays(); }
+    stop = true;
+    reader.join();
+}
+
+// set_overlays swaps in one step: a reader never sees the disc's own file in between, and a path that comes back as another kind gets a new number.
+static void set_overlays_is_atomic() {
+    const auto root = fresh("ov_disc7"), files = fresh("ov_files7"), other = fresh("ov_files7b");
+    auto dvd = disc(root);
+    put(files / "DATA" / "a.bin", "replaced!");
+    put(other / "DATA" / "a.bin", "other-one");
+    CHECK(dvd.set_overlays({files}) == 1);
+    const int a = dvd.entry_of("DATA/a.bin");
+    std::atomic<bool> stop{false};
+    std::thread reader([&] {
+        char buffer[16];
+        while (!stop) if (dvd.read(a, buffer, sizeof buffer, 0) != 9) { std::puts("saw the disc file or a torn read"); std::abort(); }
+    });
+    for (int i = 0; i < 300; ++i) dvd.set_overlays({i % 2 ? files : other});
+    stop = true;
+    reader.join();
+    dvd.set_overlays({});
+    CHECK(read_entry(dvd, a) == "abc");
+    put(files / "DATA" / "kind" / "x.bin", "x");
+    dvd.set_overlays({files});
+    const int folder = dvd.entry_of("DATA/kind");
+    CHECK(dvd.is_dir(folder));
+    dvd.set_overlays({});
+    fs::remove_all(files / "DATA" / "kind");
+    put(files / "DATA" / "kind", "now a file");
+    dvd.set_overlays({files});
+    const int again = dvd.entry_of("DATA/kind");
+    CHECK(again > 0 && again != folder && !dvd.is_dir(again));
+}
+
 int main() {
+    set_overlays_is_atomic();
+    overlays_can_be_taken_back_and_reapplied(); overlays_change_while_the_game_reads();
     overlay_replaces_file(); overlay_adds_file_and_dirs(); overlay_order(); overlay_ignores_escapes();
     std::puts("ok");
 }

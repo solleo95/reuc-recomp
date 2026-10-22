@@ -84,7 +84,92 @@ static void mod_not_enabled_stays_off() {
     uc::GameMods mods(exe, ordered_json::object(), dvd, "RBUE08", false);
     CHECK(!mods.active() && mods.registry() && dvd.length(dvd.entry_of("DATA/a.bin")) == 3);
     mods.start(uc::guest_mem_base(), nullptr);
-    CHECK(!mods.host());   // no runtime is created for a registry without active mods
+    CHECK(mods.host() && mods.host()->running_count() == 0);   // the host is there (mods can be switched on live) but no runtime exists
+}
+
+// Everything the manager can change takes effect while the game runs: the save folder (once, and it stays), the file overlay, the texture table and the scripts.
+static void mods_switch_on_and_off_while_the_game_runs() {
+    uc::guest_mem_init();
+    uint8_t* memory = uc::guest_mem_base();
+    uc::mods::GuestMemory view(memory);
+    const auto exe = setup("gm_live", true, true);   // the counter mod changes gameplay
+    put(exe / "saves" / "slot1.bin", "vanilla");
+    put(exe / "mods" / "counter" / "textures" / "tex1_4x4_f7c67301db6713f0_6.dds", "not a real dds: only the name is indexed");
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({}), dvd, "RBUE08", false, false);   // nothing is on at startup
+    gx::TextureReplacements table;
+    int textures_raised = 0, save_moves = 0;
+    std::filesystem::path moved_to;
+    std::function<void()> pending_done;   // the game thread's confirmation that the save folder was switched
+    mods.set_texture_handler([&] { ++textures_raised; });
+    mods.set_save_root_handler([&](const std::filesystem::path& root, std::function<void()> done) { ++save_moves; moved_to = root; pending_done = std::move(done); });
+    CHECK(!mods.active() && mods.save_root() == exe / "saves" && mods.load_textures(table) == 0 && table.empty());
+    mods.start(memory, nullptr);
+    CHECK(mods.host() && mods.host()->running_count() == 0 && dvd.length(dvd.entry_of("DATA/a.bin")) == 3);
+    view.write_u32(0x80000400, 0);
+    uc::mods::mods_step();
+    CHECK(view.read_u32(0x80000400) == 0u);                              // nothing runs
+
+    mods.registry()->set_enabled("counter", true);
+    const auto notes = mods.apply();
+    CHECK(!mods.active() && mods.host()->running_count() == 0 && !mods.needs_apply());   // the gameplay mod waits until the game really is on the modded saves
+    CHECK(dvd.length(dvd.entry_of("DATA/a.bin")) == 3 && table.empty());
+    pending_done();                                                       // the game thread switched the folder
+    CHECK(mods.needs_apply());
+    CHECK(mods.apply().empty());                                          // the menu thread's follow-up
+    CHECK(mods.active() && mods.host()->running_count() == 1 && !mods.needs_apply());
+    CHECK(save_moves == 1 && moved_to == exe / "saves-modded" && fs::exists(exe / "saves-modded" / "slot1.bin"));   // moved to the modded saves, a copy of the current ones
+    CHECK(std::find(notes.begin(), notes.end(), "modded_saves") != notes.end());
+    CHECK(dvd.length(dvd.entry_of("DATA/a.bin")) == 9);                  // the overlay is in
+    CHECK(!table.empty() && textures_raised == 1);                       // the textures too
+    view.write_u32(0x80000400, 0);
+    uc::mods::mods_step(); uc::mods::mods_step();
+    CHECK(view.read_u32(0x80000400) == 2u);                              // and the script runs
+
+    mods.registry()->set_enabled("counter", false);
+    const auto after = mods.apply();
+    CHECK(!mods.active() && mods.host()->running_count() == 0 && after.empty());
+    CHECK(dvd.length(dvd.entry_of("DATA/a.bin")) == 3 && table.empty());   // everything is back
+    CHECK(save_moves == 1);                                              // the game stays on the modded saves for the session
+    uc::mods::mods_step();
+    CHECK(view.read_u32(0x80000400) == 2u);
+    mods.registry()->set_enabled("counter", true);
+    CHECK(mods.apply().empty() && save_moves == 1 && mods.host()->running_count() == 1);   // switched on again: no second move, no second note
+    mods.shutdown();
+}
+
+// A harness run (explicit save root) is never moved to the modded saves, and a gameplay mod can still be switched on.
+static void explicit_save_root_is_never_moved_live() {
+    uc::guest_mem_init();
+    const auto exe = setup("gm_live_explicit", true, true);
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({}), dvd, "RBUE08", false, true);
+    int save_moves = 0;
+    mods.set_save_root_handler([&](const std::filesystem::path&, std::function<void()>) { ++save_moves; });
+    mods.start(uc::guest_mem_base(), nullptr);
+    mods.registry()->set_enabled("counter", true);
+    CHECK(mods.apply().empty() && save_moves == 0 && mods.host()->running_count() == 1 && !fs::exists(exe / "saves-modded"));
+    mods.shutdown();
+}
+
+// If the modded saves cannot be made, a gameplay mod switched on live does not run and the player is told.
+static void gameplay_mod_is_refused_live_when_the_modded_saves_fail() {
+    uc::guest_mem_init();
+    const auto exe = setup("gm_live_refused", true, true);
+    put(exe / "saves" / "slot1.bin", "vanilla");
+    put(exe / "saves-modded", "a file where the folder should be");
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({}), dvd, "RBUE08", false, false);
+    int save_moves = 0;
+    mods.set_save_root_handler([&](const std::filesystem::path&, std::function<void()>) { ++save_moves; });
+    mods.start(uc::guest_mem_base(), nullptr);
+    mods.registry()->set_enabled("counter", true);
+    const auto notes = mods.apply();
+    CHECK(!notes.empty() && save_moves == 0 && mods.host()->running_count() == 0 && dvd.length(dvd.entry_of("DATA/a.bin")) == 3);
+    mods.shutdown();
 }
 
 // The game API's per-step half runs through the host: a script switches invulnerability on, the next game step zeroes the damage meter,
@@ -149,7 +234,7 @@ static void refused_gameplay_mods_do_not_run() {
     CHECK(!mods.active() && mods.save_root() == exe / "saves");
     CHECK(dvd.length(dvd.entry_of("DATA/a.bin")) == 3);   // the disc is untouched
     mods.start(memory, nullptr);
-    CHECK(!mods.host());
+    CHECK(mods.host() && mods.host()->running_count() == 0);   // the refused mod does not run
     CHECK(fs::exists(exe / "saves" / "slot1.bin") && fs::is_regular_file(exe / "saves-modded"));
 }
 
@@ -191,6 +276,7 @@ static void log_is_capped_and_bad_config_is_reported() {
 }
 
 int main() {
+    mods_switch_on_and_off_while_the_game_runs(); explicit_save_root_is_never_moved_live(); gameplay_mod_is_refused_live_when_the_modded_saves_fail();
     log_is_capped_and_bad_config_is_reported();
     applies_overlay_and_runs_scripts(); nothing_without_the_folder_or_when_disabled(); mod_not_enabled_stays_off(); game_api_ticks_through_the_host(); gameplay_mods_use_the_modded_saves(); refused_gameplay_mods_do_not_run(); textures_of_mods_are_indexed();
     std::puts("ok");

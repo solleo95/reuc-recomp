@@ -33,7 +33,7 @@ inline std::atomic<const HookChain*> g_hook_slots[kHookCount];   // null: nobody
 void run_hook_chain(const HookChain& chain, ppc::Ctx& ctx);   // out of line: keeps std::function out of the translated code
 
 // The per-step event: the game calls mods_step() once per elapsed game step (not while paused); the mod host installs the callback.
-// `nominal` is the number of nominal (60 Hz) frames the step covers: 0 for a step shorter than one, more for a long one.
+// `nominal` is the number of nominal frames (the game's own 30 Hz step, about 30 per second of game time) the step covers: 0 for a step shorter than one, more for a long one.
 using StepCallback = void (*)(void* user, uint32_t nominal);
 inline std::atomic<StepCallback> g_step_callback{nullptr};
 inline std::atomic<void*> g_step_user{nullptr};

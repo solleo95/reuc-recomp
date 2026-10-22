@@ -6,7 +6,7 @@ Mods come from the internet. What the port does, and what it cannot do.
 
 Scripts run in a sandbox: no files, no processes, no network, no loading code from outside the mod folder (see [lua.md](lua.md) and [javascript.md](javascript.md) for the exact lists). They can only use the game API, their own settings, the log and the menu widgets.
 
-Resource limits per mod: 1 ms per game step for all `on_step` handlers together, 4 ms per frame for menu drawing, 2 s to start, 64 MiB of memory. An endless loop is interrupted (JavaScript's interruption cannot be caught by the script). Three errors or overruns in a session switch the mod off until the next start; the Mods tab shows the last error. The game keeps running.
+Resource limits per mod: 1 ms per game step for all `on_step` handlers together, 4 ms per frame for menu drawing, 2 s to start, 64 MiB of memory. An endless loop is interrupted (JavaScript's interruption cannot be caught by the script). Three errors or overruns in a session switch the mod off until it is switched off and on again in the Mods tab (a mod that runs a minute of game time without trouble starts again from zero); the Mods tab shows the last error. The game keeps running.
 
 Known limit: Lua's time check runs between instructions, so one long call into a library function cannot be interrupted.
 

@@ -6,7 +6,7 @@ Set `"script": "scripts/main.lua"` in `mod.json`. The file runs once when the mo
 log.write('hello from ' .. 'my mod')
 
 on('on_step', function()
-  -- runs once per game step, not while paused
+  -- runs at the game's own step rate (about 30 times per second of game time, whatever the real frame rate), not while paused
   uc.player(1).magazine = 15
 end)
 ```
@@ -46,6 +46,7 @@ Numbers: integers stay integers (`uc.mem.read_u32` gives an integer), floats are
 
 - Time: all `on_step` handlers of all mods share 1 ms per game step; a menu drawing function gets 4 ms; the file itself gets 2 s to load. A script that runs too long is stopped with an error.
 - Memory: 64 MiB per mod.
-- Three errors or overruns in one session switch the mod off until the next start (the Mods tab shows why). "Reload scripts" in the Mods tab gives it a fresh start.
+- Three errors or overruns in one session switch the mod off until it is switched off and on again (the Mods tab shows why). "Reload scripts" in the Mods tab gives it a fresh start.
 - The time limit cannot be caught: `pcall` and `xpcall` pass the "time budget" error on, and pattern matching (`string.find`, `gsub`, ...) checks the clock too, so even a pathological pattern is stopped.
-- Known limit: a single long library call that is not pattern matching (for example `table.sort` of a huge table) is checked only when it returns.
+- Some library calls are restricted so they cannot run for ever: `setmetatable` refuses a metatable with `__gc` (finalizers are not available), `table.move` takes at most 16 777 216 elements at a time.
+- Known limit: a single long library call of another kind (for example `table.sort` of a huge table) is checked only when it returns.

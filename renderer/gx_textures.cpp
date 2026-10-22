@@ -166,12 +166,19 @@ size_t decoded_bytes(const TextureDesc& desc) {
     return total;
 }
 } // namespace
+TextureCache::TextureCache(size_t budget) : budget_(budget), seen_generation_(replacement_generation()) {}
+uint64_t TextureCache::replacement_generation() { return texture_replacements().generation(); }
+
 std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, const TextureDesc& desc, std::span<const std::byte> pixels, PaletteView palette) {
     const auto required = encoded_texture_size(desc);
     if (pixels.size() < required) throw TextureError(TextureErrorCode::truncated, "truncated GX texture mip chain");
     pixels = pixels.first(required);
     address &= 0x3FFFFFFF;
     if (watch_exhausted()) { watch_reset(); clear(); }
+    if (const auto generation = replacement_generation(); generation != seen_generation_) {   // mods were switched on or off: textures built with the old table are stale
+        seen_generation_ = generation;
+        by_address_.clear(); entries_.clear(); resident_ = 0;
+    }
     const auto candidates = by_address_.equal_range(address);
     for (auto candidate = candidates.first; candidate != candidates.second; ++candidate) {
         const auto it = candidate->second;

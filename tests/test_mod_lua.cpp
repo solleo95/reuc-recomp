@@ -135,6 +135,25 @@ static void non_code_page_mod_root() {
     CHECK(r.ok && rig.log.size() == 1 && rig.log[0] == "8");
 }
 
+// C loops that never poll the clock, and finalizers (which run with the count hook off), must not be a way to freeze the game thread.
+static void other_ways_to_run_forever_are_closed() {
+    Rig gc(fresh(u8"lua_gc"));
+    const auto finalizer = gc.run("setmetatable({}, {__gc = function() while true do end end}) collectgarbage('collect')");   // collectgarbage('count') only is allowed
+    CHECK(!finalizer.ok && finalizer.error.find("__gc") != std::string::npos);
+    Rig rep(fresh(u8"lua_rep"));
+    CHECK(rep.run("on('on_step', function() return string.rep('', math.maxinteger) end)").ok);
+    auto begin = std::chrono::steady_clock::now();
+    auto r = rep.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(20)});
+    CHECK(r.ok && std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(500));   // an empty result is an empty string, at once
+    CHECK(rep.run("log.write(string.rep('ab', 3, '-') .. '|' .. string.rep('', 5, '') .. '|' .. string.rep('x', 0))").ok && rep.log.back() == "ab-ab-ab||");
+    Rig move(fresh(u8"lua_move"));
+    CHECK(move.run("on('on_step', function() return table.move({}, 1, math.maxinteger - 1, 1, {}) end)").ok);
+    begin = std::chrono::steady_clock::now();
+    r = move.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(20)});
+    CHECK(!r.ok && std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(500));
+    CHECK(move.run("local t = table.move({1, 2, 3}, 1, 3, 2) log.write(table.concat(t, ','))").ok && move.log.back() == "1,1,2,3");   // ordinary use is unchanged
+}
+
 static void memory_cap() {
     Rig rig(fresh(u8"lua_memory"));
     const auto r = rig.run("local t = {} for i = 1, 1e9 do t[i] = ('x'):rep(1000) .. i end");
@@ -197,7 +216,7 @@ static void hook_pre_regs_round_trip() {
 }
 
 int main() {
-    non_code_page_mod_root(); pcall_cannot_swallow_the_budget(); pattern_bomb_is_stopped();
+    other_ways_to_run_forever_are_closed(); non_code_page_mod_root(); pcall_cannot_swallow_the_budget(); pattern_bomb_is_stopped();
     hook_pre_regs_round_trip();
     sandbox_missing_libs(); require_confined(); non_ascii_mod_root(); events(); api_read_write(); api_error_is_lua_error(); settings_get(); budget_endless_loop();
     memory_cap(); syntax_error_reported(); runtime_error_has_location(); ui_calls_forwarded();
