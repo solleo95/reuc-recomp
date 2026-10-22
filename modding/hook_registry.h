@@ -16,7 +16,7 @@ struct HookRegs {
 };
 
 // Installs and removes callbacks at the hook points of hooks.h. Chains are published copy-on-write so the guest thread never waits;
-// replaced chains are kept until exit (they are tiny, and a guest thread may still be walking one).
+// replaced chains are freed as soon as no guest thread is inside a hook (a thread that is walking one is counted).
 class HookRegistry {
 public:
     using Callback = std::function<void(ppc::Ctx&)>;
@@ -28,6 +28,7 @@ public:
     void remove_owner(const void* owner);
     size_t count(uint32_t address) const;                                // callbacks installed at the address
     void clear();                                                        // everything (tests)
+    size_t retired_chains() const;                                       // replaced chains not freed yet (tests)
 };
 
 HookRegistry& hook_registry();

@@ -19,7 +19,7 @@ A key must name an **implemented** member that can be written. The value goes th
 
 Keys that do not work are skipped and logged with the file name and the reason, and the rest of the file still applies:
 
-- unknown or not implemented yet (`planned` members, such as `weapon.<id>.fire_rate`, are listed in the reference but cannot be patched);
+- unknown or not implemented yet (`planned` members, such as `hook.post`, are listed in the reference but cannot be patched);
 - read-only members (`camera.view`);
 - an entity that is not a whole number, or a missing or extra entity part;
 - a value of the wrong type or outside the allowed range.

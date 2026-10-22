@@ -1,0 +1,1 @@
+{ "id": "fire-rate-2", "name": "Fire rate 2", "version": "1.0", "api": "1.0", "touches_gameplay": true, "script": "scripts/main.lua" }

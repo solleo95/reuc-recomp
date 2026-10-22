@@ -9,7 +9,7 @@ First version.
 - Scripts: Lua 5.4 and JavaScript (QuickJS-ng), native DLLs (`uc_mod.h`).
 - Domains: `mem`, `symbols`, `player`, `weapon`, `camera`, `enemies`, `hook`, plus the per-mod `log`, `settings`, `ui` and `on` events.
 - Implemented players: presence, magazine, grenades, damage meter, `invulnerable`, `infinite_ammo`; events `on_weapon_fired`, `on_reload`, `on_damage_taken`.
-- Implemented weapons (by record id 0 to 19): `capacity`, `reload_time`, `fire_mode`, `damage` (checked: with 100 a handgun hit takes 100 off a zombie).
+- Implemented weapons (by record id 0 to 19): `capacity`, `reload_time`, `fire_mode`, `damage` (checked: with 100 a handgun hit takes 100 off a zombie), `fire_rate` (checked: shots in a fixed time follow the rate).
 - Enemies: zombies only (id, class, position, hp).
 - Hooks: `hook.pre` on `GameWeaponUpdate` (checked in the game: r3 is the weapon object, clearing r4 stops firing) and `PlayerEventHandler` (`unverified`: unit-tested, not exercised in a live fight).
-- Not yet: `player.position`, `weapon.fire_rate`, `input.fire_held`, `hook.post`, `hook.replace`.
+- Not yet: `player.position`, `input.fire_held`, `hook.post`, `hook.replace`.

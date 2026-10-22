@@ -25,6 +25,7 @@ constexpr uint32_t kMaxMagazine = 65535;
 
 // The weapon table: 20 records of 168 bytes, found through the record accessor 8006C8C8 (id clamped to 0..19, 8046A86C + id * 168).
 constexpr uint32_t kWeaponTable = 0x8046A86C, kWeaponStride = 168, kWeaponCount = 20;
+constexpr uint32_t kRecordFireRate = 0x0C, kWeaponInterval = 0x4C4;   // the record's rate becomes the per-weapon interval 1 / rate (player + 0x4C4) when the weapon is equipped (fn 8006C7B0)
 constexpr uint32_t kRecordFireMode = 0x10, kRecordCapacity = 0x14, kRecordDamage = 0x24, kRecordReloadTime = 0x38;
 constexpr uint32_t kModeAuto = 0, kModeSemi = 1, kModeBurst = 3;   // values seen in the table: submachine gun 0, handgun/shotgun/others 1, 3 on record 3
 constexpr long long kMaxCapacity = 999;
@@ -92,8 +93,15 @@ public:
         };
         const auto damage = real_field("damage", kRecordDamage, 10000);
         add_weapon("damage", damage.first, damage.second);
-        // fire_rate (record +0x0C: 1 for single shots, 10 to 15 for automatic weapons) is not exposed: on the handgun in automatic mode
-        // the values 10 and 30 give the same cadence (docs/spikes/M1-weapon-data.md), so what it controls is not understood.
+        // fire_rate: shots per second. The game turns the record's rate into the weapon's interval (1 / rate) once, when the weapon is equipped, and the
+        // interval is what sets the cadence of automatic fire (measured: shots in a fixed time follow 1 / interval). So both are kept: see refresh_intervals.
+        add_weapon("fire_rate",
+            [](PlayerWeaponApi& s, uint32_t record) { return Value(double(s.read_float(record + kRecordFireRate))); },
+            [](PlayerWeaponApi& s, uint32_t record, const Value& v) {
+                if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() < 0.05 || v.get<double>() > 60) throw ApiError("fire_rate must be a number from 0.05 to 60 (shots per second)");
+                s.write_float(record + kRecordFireRate, float(v.get<double>()));
+                s.refresh_intervals();
+            });
         const auto reload_time = real_field("reload_time", kRecordReloadTime, 1000);
         add_weapon("reload_time", reload_time.first, reload_time.second);
         add_weapon("capacity",
@@ -145,13 +153,26 @@ public:
             state_[i].invulnerable = !invulnerable_by_[i].empty();
             state_[i].infinite_ammo = !infinite_ammo_by_[i].empty();
         }
+        std::vector<uint32_t> restored_rates;   // rate fields that went back to the game's value: the live intervals follow
         for (auto it = weapon_overrides_.begin(); it != weapon_overrides_.end();) {
             auto& stack = it->second.stack;
             const auto mine = std::remove_if(stack.begin(), stack.end(), [&](const auto& entry) { return entry.first == owner; });
             if (mine == stack.end()) { ++it; continue; }
             stack.erase(mine, stack.end());
-            if (stack.empty()) { memory_.write_u32(it->first, it->second.original); it = weapon_overrides_.erase(it); }   // nobody else set it: the game's own value
+            if (stack.empty()) {
+                memory_.write_u32(it->first, it->second.original);
+                if ((it->first - kWeaponTable) % kWeaponStride == kRecordFireRate) restored_rates.push_back(it->first);
+                it = weapon_overrides_.erase(it);
+            }   // nobody else set it: the game's own value
             else { memory_.write_u32(it->first, stack.back().second); ++it; }                                           // the mod that set it before is in force again
+        }
+        for (int slot = 1; slot <= 2; ++slot) {
+            const auto object = player_object(slot);
+            if (!object) continue;
+            const uint32_t id = memory_.read_u32(*object + kWeaponId).value_or(kWeaponCount);
+            if (id >= kWeaponCount || std::find(restored_rates.begin(), restored_rates.end(), kWeaponTable + id * kWeaponStride + kRecordFireRate) == restored_rates.end()) continue;
+            const float rate = memory_.read_f32(kWeaponTable + id * kWeaponStride + kRecordFireRate).value_or(0.f);
+            if (rate > 0) memory_.write_f32(*object + kWeaponInterval, 1.f / rate);
         }
         for (auto& slot : state_) slot.known = false;   // the ticker may have been idle: the next tick starts from a fresh baseline, not from stale values
     }
@@ -160,6 +181,7 @@ private:
     void tick_locked(std::vector<std::pair<const char*, Value>>& events) {
         const auto emit = [&](const char* event, Value payload) { events.emplace_back(event, std::move(payload)); };
         reapply_weapon_overrides();
+        refresh_intervals_locked();
         const auto scene_address = scene();
         for (int slot = 1; slot <= 2; ++slot) {
             SlotState& s = state_[size_t(slot - 1)];
@@ -220,6 +242,24 @@ private:
         uint32_t word;
         std::memcpy(&word, &value, sizeof word);
         override_word(address, word);
+    }
+    // The live interval of every player whose weapon has a rate set by a mod (the game fills it in at equip time from the record).
+    void refresh_intervals() {
+        std::lock_guard lock(mutex_);
+        refresh_intervals_locked();
+    }
+    void refresh_intervals_locked() {
+        for (int slot = 1; slot <= 2; ++slot) {
+            const auto object = player_object(slot);
+            if (!object) continue;
+            const uint32_t id = memory_.read_u32(*object + kWeaponId).value_or(kWeaponCount);
+            if (id >= kWeaponCount) continue;
+            const uint32_t rate_address = kWeaponTable + id * kWeaponStride + kRecordFireRate;
+            const auto override_entry = weapon_overrides_.find(rate_address);
+            if (override_entry == weapon_overrides_.end()) continue;   // a weapon no mod changed keeps the game's own interval
+            const float rate = memory_.read_f32(rate_address).value_or(0.f);
+            if (rate > 0 && memory_.read_f32(*object + kWeaponInterval) != 1.f / rate) memory_.write_f32(*object + kWeaponInterval, 1.f / rate);
+        }
     }
     void reapply_weapon_overrides() {
         for (const auto& [address, entry] : weapon_overrides_) if (memory_.read_u32(address) != entry.stack.back().second) memory_.write_u32(address, entry.stack.back().second);

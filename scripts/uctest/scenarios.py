@@ -522,6 +522,23 @@ def weapon_damage(g, args):
     return result
 
 
+def fire_rate(g, args):
+    """weapon.fire_rate = 2 with automatic fire: a held trigger (150 frames) uses 11 to 15 rounds. Measured 2026-10-22 with the interval written by hand: the
+    plain automatic handgun fires 7 times in that time, semi-automatic once, an interval of 0.5 (rate 2) 14 times."""
+    reach_gameplay(g)
+    g.advance(60)
+    result = {}
+    with g.step("held_trigger"):
+        before = g.state()["player"]["magazine"]
+        g.press("B", 150)
+        g.advance(30)
+        after = g.state()["player"]["magazine"]
+        result["shots"] = before - after
+        if not 11 <= before - after <= 15:
+            g.fail(f"{before - after} rounds used with fire_rate 2 (expected 11 to 15; plain automatic is about 7)", "fire rate")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

@@ -30,7 +30,7 @@ constexpr size_t hook_index(uint32_t address) {   // only for hookable addresses
 
 inline std::atomic<const HookChain*> g_hook_slots[kHookCount];   // null: nobody hooked this function
 
-void run_hook_chain(const HookChain& chain, ppc::Ctx& ctx);   // out of line: keeps std::function out of the translated code
+void run_hook_slot(size_t index, ppc::Ctx& ctx);   // out of line: keeps std::function out of the translated code; registers as a reader so a replaced chain is not freed under it
 
 // The per-step event: the game calls mods_step() once per elapsed game step (not while paused); the mod host installs the callback.
 // `nominal` is the number of nominal frames (the game's own 30 Hz step, about 30 per second of game time) the step covers: 0 for a step shorter than one, more for a long one.
@@ -48,7 +48,7 @@ inline void mods_step(uint32_t nominal = 1) {
 template <uint32_t Address>
 inline void hook_enter(ppc::Ctx& ctx) {
     if constexpr (is_hookable(Address)) {
-        if (const HookChain* chain = g_hook_slots[hook_index(Address)].load(std::memory_order_relaxed)) run_hook_chain(*chain, ctx);
+        if (g_hook_slots[hook_index(Address)].load(std::memory_order_relaxed)) run_hook_slot(hook_index(Address), ctx);
     }
 }
 

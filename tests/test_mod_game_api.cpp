@@ -209,7 +209,7 @@ static void weapon_records_roundtrip() {
     f.memory.write_u32(kTable + 2 * kStride + 0x10, 0);
     CHECK(f.get("weapon.capacity", weapon(0)) == 15 && f.get("weapon.capacity", weapon(2)) == 50);
     CHECK(f.get("weapon.damage", weapon(0)) == 10.0 && f.get("weapon.reload_time", weapon(0)) == 1.0);
-    CHECK(!f.api.find("weapon.fire_rate"));   // found in the table but its effect is not understood: not exposed
+    CHECK(f.api.find("weapon.fire_rate") && f.get("weapon.fire_rate", weapon(0)) == 1.0);
     CHECK(f.get("weapon.fire_mode", weapon(0)) == "semi" && f.get("weapon.fire_mode", weapon(2)) == "auto");
     f.set("weapon.capacity", weapon(0), 99);
     f.set("weapon.damage", weapon(0), 25.5);
@@ -317,7 +317,33 @@ static void overlapping_weapon_values_restore_in_order() {
     CHECK(f.memory.read_u32(kRecord + 0x14) == 15u);
 }
 
+// fire_rate: the record's rate (+0x0C) is turned into a per-weapon interval (1 / rate, player + 0x4C4) when a weapon is equipped, and that interval is what
+// sets the cadence. So the API writes both, keeps the live interval of players holding that weapon, and gives it back when the mod goes.
+static void fire_rate_sets_the_live_interval() {
+    Fixture f;
+    constexpr uint32_t kRecord = 0x8046A86C, kInterval = 0x4C4, kWeaponId = 0x4C8;
+    f.memory.write_f32(kRecord + 0x0C, 1.f);                 // handgun: one shot per second at rest
+    f.memory.write_f32(kRecord + 19 * 168 + 0x0C, 1.f);
+    f.memory.write_u32(kP1 + kWeaponId, 0); f.memory.write_f32(kP1 + kInterval, 1.f);
+    f.memory.write_u32(kP2 + kWeaponId, 2); f.memory.write_f32(kP2 + kInterval, 0.5f);   // player 2 holds another weapon
+    const std::string a = "a";
+    { OwnerScope scope(a); f.set("weapon.fire_rate", weapon(0), 4.0); }
+    CHECK(f.memory.read_f32(kRecord + 0x0C) == 4.f && f.memory.read_f32(kP1 + kInterval) == 0.25f);   // record and the live interval at once
+    CHECK(f.memory.read_f32(kP2 + kInterval) == 0.5f);                                                 // another weapon is not touched
+    f.get("weapon.fire_rate", weapon(0));
+    CHECK(f.get("weapon.fire_rate", weapon(0)) == 4.0);
+    f.memory.write_f32(kP1 + kInterval, 1.f);                 // the game recomputes the interval (a weapon change, a mission start)
+    f.memory.write_f32(kRecord + 0x0C, 1.f);
+    f.tick();
+    CHECK(f.memory.read_f32(kRecord + 0x0C) == 4.f && f.memory.read_f32(kP1 + kInterval) == 0.25f);   // the next step puts both back
+    CHECK(f.throws([&] { f.set("weapon.fire_rate", weapon(0), 0); }) && f.throws([&] { f.set("weapon.fire_rate", weapon(0), -2); }) && f.throws([&] { f.set("weapon.fire_rate", weapon(0), 1000); }) && f.throws([&] { f.set("weapon.fire_rate", weapon(0), "fast"); }));
+    f.ticker->drop_owner(a);
+    CHECK(f.memory.read_f32(kRecord + 0x0C) == 1.f && f.memory.read_f32(kP1 + kInterval) == 1.f);     // the game's own rate and interval are back
+    CHECK(f.memory.read_f32(kP2 + kInterval) == 0.5f);
+}
+
 int main() {
+    fire_rate_sets_the_live_interval();
     overlapping_weapon_values_restore_in_order();
     effects_belong_to_the_mod_that_set_them(); concurrent_setters_and_ticks();
     weapon_changes_are_kept_when_the_game_rewrites_the_table();

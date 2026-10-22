@@ -24,7 +24,7 @@ interface PlayerHandle {
 interface WeaponHandle {
     /** Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay). [implemented] */
     damage: number;
-    /** Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now. [planned] */
+    /** Shots per second, 0.05 to 60 (the handgun is 1; submachine guns 10 to 15). The game turns the rate into an interval (1 / rate) when a weapon is equipped; the API sets both the record and the interval of players holding the weapon, and keeps them. Checked in the game with automatic fire: a rate of 2 gives about twice the shots in the same time, 0.25 four times as many as 1. Semi-automatic weapons need `fire_mode = 'auto'` for the rate to matter while the trigger is held. [implemented] */
     fire_rate: number;
     /** Magazine size, 0 to 999. The game reads it when a reload ends: with 30 set for the handgun a reload refills 30 rounds. [implemented] */
     capacity: number;

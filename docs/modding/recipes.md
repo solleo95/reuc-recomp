@@ -27,7 +27,7 @@ Invulnerability per player through `uc.player(n).invulnerable`, and a free-drawi
 for _, id in ipairs({ 0, 19 }) do uc.weapon(id).fire_mode = 'auto' end
 ```
 
-Weapon records 0 and 19 are the handgun. With `fire_mode = 'auto'` a held trigger keeps firing (checked in the game: about four shots in 90 frames instead of one). How fast it fires is fixed by the weapon's animation; `weapon.fire_rate` is not available yet.
+Weapon records 0 and 19 are the handgun. With `fire_mode = 'auto'` a held trigger keeps firing (checked in the game: about four shots in 90 frames instead of one). How fast it fires is set by `weapon.fire_rate` (the handgun is 1 shot per second at rest; a rate of 2 gives about twice the shots).
 
 ## Damage multiplier (Lua) — `damage_multiplier`
 

@@ -7,7 +7,7 @@ Parameters of a weapon type: one record of the game's weapon table, addressed by
 | Member | Kind | Type | Status | Since |
 |---|---|---|---|---|
 | `damage` | read/write | `float` | implemented | 1.0 |
-| `fire_rate` | read/write | `float` | planned | 1.0 |
+| `fire_rate` | read/write | `float` | implemented | 1.0 |
 | `capacity` | read/write | `int` | implemented | 1.0 |
 | `reload_time` | read/write | `float` | implemented | 1.0 |
 | `fire_mode` | read/write | `string` | implemented | 1.0 |
@@ -36,9 +36,21 @@ uc.weapon(0).damage *= 2;
 
 `uc.weapon(id).fire_rate` (`float`, read/write)
 
-Status: **planned**, since API 1.0.
+Status: **implemented**, since API 1.0.
 
-Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now.
+Shots per second, 0.05 to 60 (the handgun is 1; submachine guns 10 to 15). The game turns the rate into an interval (1 / rate) when a weapon is equipped; the API sets both the record and the interval of players holding the weapon, and keeps them. Checked in the game with automatic fire: a rate of 2 gives about twice the shots in the same time, 0.25 four times as many as 1. Semi-automatic weapons need `fire_mode = 'auto'` for the rate to matter while the trigger is held.
+
+Lua:
+
+```lua
+uc.weapon(0).fire_mode = 'auto'; uc.weapon(0).fire_rate = 2
+```
+
+JavaScript:
+
+```js
+uc.weapon(0).fire_mode = 'auto'; uc.weapon(0).fire_rate = 2;
+```
 
 ## `capacity`
 

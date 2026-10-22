@@ -1,7 +1,10 @@
 #include "check.h"
 #include "hook_registry.h"
 #include "ppc_rt.h"
+#include <atomic>
+#include <memory>
 #include <set>
+#include <thread>
 
 using namespace uc::mods;
 
@@ -90,7 +93,32 @@ static void regs_round_trip() {
     CHECK(c.r[3] == 1 && c.f[8] == -1.0 && c.r[2] == 7 && c.r[11] == 8 && c.f[0] == 1.0 && c.f[9] == 2.0);
 }
 
+// Chains are replaced while the guest thread runs them (mods are switched on and off live): a chain that is still being walked is never freed, and
+// replaced chains do not pile up for ever.
+static void replaced_chains_are_freed_and_never_under_a_running_hook() {
+    hook_registry().clear();
+    std::atomic<bool> stop{false};
+    std::atomic<int> calls{0}, bad{0};
+    std::thread guest([&] {
+        ppc::Ctx c = make_ctx();
+        while (!stop) { hook_enter<0x8006C268u>(c); }
+    });
+    std::vector<int> owners(8);
+    for (int round = 0; round < 3000; ++round) {
+        for (auto& owner : owners) {
+            auto payload = std::make_shared<int>(7);   // freed with the chain: a callback running on a freed chain would read garbage
+            hook_registry().add(0x8006C268u, &owner, [payload, &calls, &bad](ppc::Ctx&) { if (*payload != 7) ++bad; ++calls; });
+        }
+        for (auto& owner : owners) hook_registry().remove_owner(&owner);
+    }
+    stop = true;
+    guest.join();
+    CHECK(bad == 0 && calls > 0);
+    CHECK(hook_registry().retired_chains() < 64);   // not one per add/remove ever made (48000)
+}
+
 int main() {
+    replaced_chains_are_freed_and_never_under_a_running_hook();
     hook_slot_null_by_default(); hook_installed_called_with_context(); callbacks_run_in_install_order_and_owners_are_independent();
     non_hookable_address_refused(); names_and_addresses(); hook_index_stable(); regs_round_trip();
     std::puts("ok");
