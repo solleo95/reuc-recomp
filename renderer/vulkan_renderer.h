@@ -83,7 +83,7 @@ public:
     uint32_t effective_anisotropy() const;   // the level the device runs (requested, clamped to its limit)
     // DLSS 5 Neural Rendering (dlss5_settings.h): callable before or after initialize(). The pass needs the device created with the NGX extensions (dlss5_device())
     // and the nvngx_dlssnr.dll NGX accepts; when either fails it stays off and dlss5_status() says why.
-    void allow_dlss5(bool allowed) { owner(); dlss5_allowed_=allowed; }   // before initialize: false keeps nvngx_dlssnr.dll unloaded (the launcher's DLSS 5 checkbox)
+    void allow_dlss5(bool allowed) { dlss5_allowed_=allowed; }   // before initialize: false keeps nvngx_dlssnr.dll unloaded (the launcher's DLSS 5 checkbox)
     void set_dlss5(const Dlss5Settings& settings);
     bool dlss5_device() const { return dlss5_device_; }
     void use_dlss5_backend(std::function<std::unique_ptr<NgxBackend>()> backend, const std::filesystem::path& directory);   // tests: run the pass against a stand-in for NGX (a directory holding a nvngx_dlssnr.dll placeholder), whatever this GPU can do
