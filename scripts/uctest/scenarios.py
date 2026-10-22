@@ -358,7 +358,7 @@ def overlay(g, args):
         result["menu"] = g.capture()
     changes = [dict(hdr=True), dict(hdr_peak_nits=600), dict(hdr_paper_white_nits=300), dict(hdr_ui_nits=120),   # HDR stays on for the switches below (SDR fallback when Windows HDR is off)
                dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x
-               dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
+               dict(bloom=False), dict(bloom=True), dict(bloom_strength=150), dict(bloom_strength=0), dict(bloom_strength=100), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
                dict(fps_limit=60), dict(fps_limit=144), dict(fps_limit=0), dict(upscaler="fsr"), dict(upscale_mode="performance"), dict(upscale_mode="native"),
                dict(upscaler="dlss"), dict(sharpening=True), dict(sharpness=.75), dict(sharpening=False),
                dict(upscaler="off"), dict(upscaler="dlss"), dict(upscaler="off"), dict(upscaler="dlss"),

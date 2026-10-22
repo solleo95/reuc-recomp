@@ -25,6 +25,9 @@ inline float hdr_expand(float y, float paper, float peak) {
     const float over=std::max(0.f,(y-kHdrKnee)/(1-kHdrKnee));
     return (y+over*over*(peak/paper-1))*paper;
 }
+// The bloom's glow (BloomPass::glow_view, scene-referred: 1.0 = paper white) added in nits to the expanded luminance, never above the peak. The shader adds it
+// per colour channel and then keeps the hue of whatever passes the peak; this is the single-value form tested here.
+inline float hdr_with_glow(float y, float glow, float paper, float peak) { return std::min(hdr_expand(y,paper,peak)+std::max(0.f,glow)*paper,peak); }
 // SMPTE ST 2084 inverse EOTF: absolute nits -> PQ signal 0..1.
 inline float pq_encode(float nits) {
     const float m1=.1593017578125f, m2=78.84375f, c1=.8359375f, c2=18.8515625f, c3=18.6875f;

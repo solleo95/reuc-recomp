@@ -998,9 +998,19 @@ void VulkanRenderer::set_menu(std::function<void()> build, std::function<void()>
     owner();
     menu_build_=std::move(build); menu_setup_=std::move(setup);
 }
-void VulkanRenderer::set_bloom(bool enabled) {
+void VulkanRenderer::set_bloom(const BloomSettings& settings) {
     owner();
-    bloom_=enabled;
+    const bool path_before=scene_path_wanted();
+    bloom_=settings;
+    apply_scene_path(false,path_before);   // the glow runs on the scene targets, which a pass-through upscaler keeps only while an effect needs them
+}
+BloomLayer VulkanRenderer::bloom_layer(VkOffset2D origin, VkExtent2D size) const {
+    BloomLayer layer;
+    if (!hdr_active_ || !bloom_pass_.glow_valid(0) || !bloom_region_.width || !bloom_region_.height) return layer;
+    layer.view=bloom_pass_.glow_view(0);
+    layer.uv_origin[0]=float(origin.x)/bloom_region_.width; layer.uv_origin[1]=float(origin.y)/bloom_region_.height;
+    layer.uv_size[0]=float(size.width)/bloom_region_.width; layer.uv_size[1]=float(size.height)/bloom_region_.height;
+    return layer;
 }
 void VulkanRenderer::set_crosshair_scale(uint32_t percent) {
     owner();
@@ -1282,6 +1292,18 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
         pass_timer_.end(command,timer_slot,GpuPass::motion_blur);
     }
     record_dlss5(command,Dlss5Hook::upscaled,in.output,{0,0},in.output_size,{0,0},black_output);   // DLSS 5 after the upscaler, before the HUD
+    if (bloom_active() && !black_output) {   // the glow: added to the picture in SDR, kept in float for the HDR encode; both before the HUD
+        bloom_pass_.initialize(device,memory_,shaders_,1,[this] { vk_check(present_.wait_idle(device),"bloom idle"); });
+        pass_timer_.begin(command,timer_slot,GpuPass::bloom);
+        BloomInputs bloom;
+        bloom.command=command; bloom.color=in.output; bloom.region=in.output_size; bloom.settings=bloom_; bloom.hdr=hdr_active_;
+        bloom.hdr_headroom=float(hdr_settings_.peak_nits)/float(hdr_settings_.paper_white_nits);
+        bloom.slot=0; bloom.targets_generation=targets_generation_;
+        bloom_pass_.record(bloom);
+        bloom_region_=in.output_size;
+        if (bloom_pass_.generation()!=bloom_generation_) { hdr_pass_.forget(); bloom_generation_=bloom_pass_.generation(); }   // the pass idled the device when it recreated the glow: sets naming the old views are stale
+        pass_timer_.end(command,timer_slot,GpuPass::bloom);
+    } else bloom_pass_.invalidate(0);
     barrier(command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
     if (scene_restore_copy_) {   // restore reconstructed pixels after bloom, rather than the raw jittered scene saved before this boundary
@@ -2102,7 +2124,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
             const size_t set_index=d;
             if (!info.index_count) continue;
-            if (!bloom_ && gx::bloom_composite(draw)) continue;
+            if (gx::bloom_composite(draw) && (motion_outputs_ || !bloom_active())) continue;   // the game's own bloom is replaced by bloom_pass_ (off means none); a device without the scene-target path cannot run it and keeps the game's
             if (scene && effects_need_lights()) scene_lights_.add(*draw.uniforms);
             if (std::find(skipped_callsites.begin(),skipped_callsites.end(),draw.callsite)!=skipped_callsites.end()) continue;
             const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
@@ -2253,7 +2275,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,all,any,all,any);
             hdr_pass_.record(slot.command,efb_view_,{blit.srcOffsets[0].x,blit.srcOffsets[0].y},
                              {uint32_t(std::max(1,blit.srcOffsets[1].x-blit.srcOffsets[0].x)),uint32_t(std::max(1,blit.srcOffsets[1].y-blit.srcOffsets[0].y))},
-                             VK_NULL_HANDLE,hudless.view,hudless_extent_,hdr_settings_);
+                             VK_NULL_HANDLE,hudless.view,hudless_extent_,hdr_settings_,
+                             bloom_layer({blit.srcOffsets[0].x,blit.srcOffsets[0].y},{uint32_t(std::max(1,blit.srcOffsets[1].x-blit.srcOffsets[0].x)),uint32_t(std::max(1,blit.srcOffsets[1].y-blit.srcOffsets[0].y))}));
             barrier(slot.command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
             barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,VK_ACCESS_2_MEMORY_READ_BIT);
         } else {
@@ -2363,7 +2386,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
             barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             barrier(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, all, any, all, any);
-            hdr_pass_.record(slot.command, slot.view, {0, 0}, extent_, ui_layer ? slot.ui_view : VK_NULL_HANDLE, present_image->view, extent_, hdr_settings_);
+            const VkOffset2D glow_from{int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480)};   // the EFB rectangle the slot image shows (the blit above)
+            const VkOffset2D glow_to{std::max(glow_from.x+1,int32_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)),std::max(glow_from.y+1,int32_t(uint64_t(display[1]+display[3])*efb_extent_.height/480))};
+            hdr_pass_.record(slot.command, slot.view, {0, 0}, extent_, ui_layer ? slot.ui_view : VK_NULL_HANDLE, present_image->view, extent_, hdr_settings_,
+                             packet.black_output ? BloomLayer{} : bloom_layer(glow_from,{uint32_t(glow_to.x-glow_from.x),uint32_t(glow_to.y-glow_from.y)}));   // a blanked frame is black: the scene boundary came in an earlier packet and could not know
+            bloom_pass_.invalidate(0);   // this frame's glow is spent: a later frame without a scene must not find it
             barrier(slot.command, slot.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, any, all, any);
             barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, present_layout,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
@@ -2445,7 +2472,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        dlss5_pass_.shutdown(); rcas_.shutdown(); hdr_pass_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
+        dlss5_pass_.shutdown(); rcas_.shutdown(); hdr_pass_.shutdown(); bloom_pass_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

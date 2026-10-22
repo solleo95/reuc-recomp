@@ -61,9 +61,11 @@ The owner chose "variant 5" from a comparison sheet (`build/bloom_variants.png`,
 From the comparison script (variant 5): level weights `[0.20, 0.20, 0.18, 0.16, 0.14, 0.12]` for levels 1..6 (level 0 is the Karis-filtered half-resolution base); each level softened with two passes of the `[0.25, 0.5, 0.25]` kernel (the 13-tap downsample plus tent upsample replaces this in the real pass); the result is **added** to the scene (scaled, not lerped): `scene + bloom * 0.15 * strength` in SDR, `* 0.15 * 2.5 * strength` in HDR (in nits space, before the peak clamp). No threshold. Level `i` is output (scene target) size divided by `2^(i+1)`, so the look follows the screen, not the texel count.
 Not in the script (the script worked on a float scene): the inverse expansion. Starting values: knee 0.6 (as `kHdrKnee`), SDR headroom ratio 4 (a pixel at 1.0 counts as 4x white), HDR headroom = peak / paper white. Expose these as constants in the math header so they can be tuned with an A/B step early in the plan.
 
+Found in the game (2026-10-22): with no threshold, the lit train car turned milky (every wall adds its own value). A soft threshold was added in the first level: energy above 0.6 (knee 0.3, scene-referred, after the expansion) feeds the glow (`bloom_soft_threshold`). The glow image is half the region's size, bilinear-sampled by the HDR encode, and one image serves all slots (it is read by the same frame's present before the next frame's bloom).
+
 ## More calls by the designer (answers to the builder check)
 
-- No scene boundary in a frame (menus, movies, black frames): no bloom that frame. Without an upscaler the pyramid starts from the internal-size scene target; levels are fractions of it, so the look matches across render scales.
+- No scene boundary in a frame (menus, movies, black frames): no bloom that frame. The pyramid starts from the output-size EFB colour after the upscaler (with no upscaler too); levels are fractions of it, so the look matches across render scales.
 - The SDR composite decodes with gamma 2.2 (same as `hdr.slang`, not the piecewise sRGB curve), adds, re-encodes, and applies a static ordered-dither of +-0.5 LSB to avoid banding in the dark gradients. The dither is a fixed pattern, so deterministic runs stay identical.
 - Frame generation: the bloom is part of the HUD-less copy in both SDR and HDR, so real and generated frames match.
 - Config: `graphics.bloom=false` (the old "disable glow") now means bloom off; no migration, no default reset.

@@ -184,8 +184,14 @@ void SettingsMenu::main_tab(float unit) {
     if(ImGui::SliderInt("##crosshair",&crosshair,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.crosshair_scale=uint32_t(std::clamp(crosshair,0,100));
     ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
-    bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow
-    if(compact_checkbox("##bloom",tr("bloom"),no_bloom,unit)) options.bloom=!no_bloom;
+    compact_checkbox("##bloom",tr("bloom"),options.bloom,unit);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    ImGui::BeginDisabled(!options.bloom);
+    ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr("bloom_strength"));
+    int bloom_strength=int(options.bloom_strength);
+    if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(kBloomStrengthMax)));
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("hdr"));
     compact_checkbox("##hdr",tr("hdr"),options.hdr.enabled,unit);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hdr_hint"));

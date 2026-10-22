@@ -65,8 +65,8 @@ std::vector<Action> PromptRegistry::actions(const gx::Memory& memory,uint32_t pa
         switch(button_of(*layout,name)) {
         case Button::a: return {menu ? Action::confirm : Action::interact};
         case Button::b: return {menu ? Action::back : Action::fire};
-        case Button::ab: return {Action::interact,Action::fire};   // like the dodge prompt, drawn while the scene gate reads as menu
-        case Button::shake: return {Action::qte_shake}; // The dodge prompt of boss fights is drawn while the scene gate reads as menu.
+        case Button::ab: return {Action::interact,Action::fire};   // like the dodge prompt, drawn in a suspended scene
+        case Button::shake: return {Action::qte_shake}; // The dodge prompt of boss fights is drawn in a suspended scene.
         case Button::none: break;
         }
     } catch(const gx::Error&) {return {};} // Bounds failure cannot enable suppression.

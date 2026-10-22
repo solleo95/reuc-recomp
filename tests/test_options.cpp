@@ -43,6 +43,10 @@ int main() {
     CHECK(!std::get<uc::Options>(defaults).fps_limit && std::get<uc::Options>(parse(std::array<std::string_view,2>{"--fps-limit","144"})).fps_limit==144u);
     CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--fps-limit","0"})).fps_limit==0u);   // 0 = unlimited
     for (auto invalid : {"19","1001","abc","-5"}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--fps-limit",invalid})));
+    CHECK(std::get<uc::Options>(defaults).bloom_strength==100u && std::get<uc::Options>(parse(std::array<std::string_view,2>{"--bloom-strength","150"})).bloom_strength==150u);
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--bloom-strength","0"})).bloom_strength==0u);
+    for (auto invalid : {"201","abc","-5",""}) CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--bloom-strength",invalid})));
+    CHECK((std::get<uc::Options>(parse(std::array<std::string_view,1>{"--no-bloom"})).bloom_settings()==uc::BloomSettings{false,100}));
     auto result = parse(std::array<std::string_view, 9>{"--width", "3840", "--height", "2160", "--seconds", "20", "--headless", "--validation", "--gx-audit"});
     auto& options = std::get<uc::Options>(result);
     CHECK(options.width == 3840 && options.height == 2160 && options.seconds == 20 && options.headless && options.validation && options.gx_audit);

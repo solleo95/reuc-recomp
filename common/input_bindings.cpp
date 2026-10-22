@@ -92,7 +92,7 @@ void BindingResolver::cancel() {
     canceled_releases_|=frame_.released|frame_.held;
     frame_={}; frame_.released=canceled_releases_; raw_actions_=0; suppress_fire_=false;
     motion_event_.reset(); motion_x_=motion_y_=0;
-    shake_start_=shake_previous_=0; shake_x_=shake_y_=shake_previous_x_=shake_previous_y_=0;
+    shake_={};
 }
 void BindingResolver::replace(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings)) throw std::invalid_argument(*error);
@@ -106,7 +106,7 @@ void BindingResolver::qte_window(bool active) {
     if(qte_window_==active)return;
     finish_motion();
     qte_window_=active;
-    shake_start_=shake_previous_=0;shake_x_=shake_y_=shake_previous_x_=shake_previous_y_=0;
+    shake_={};
     size_t kept=0;
     for(size_t i=0;i<frame_.count;++i)if(frame_.events[i].action!=Action::qte_shake)frame_.events[kept++]=frame_.events[i];
     frame_.count=kept;frame_.pressed&=~bit(Action::qte_shake);frame_.released&=~bit(Action::qte_shake);
@@ -179,20 +179,27 @@ void BindingResolver::wheel(int steps) {
 }
 void BindingResolver::qte_motion(float x,float y,uint64_t time) {
     if(!time || !qte_window_ || !special(Action::qte_shake,BindingKind::qte_motion))return;
-    if(!shake_start_ || time<shake_start_ || time-shake_start_>100000000) {
-        shake_start_=time; shake_x_=shake_y_=0;
-        shake_previous_=0;
+    // One step per reversal: the mouse travels kShakeStroke counts back against the stroke since its peak, at shaking speed.
+    // The speed is a decayed path length, not the speed since the turn: a hand's speed passes through zero at every turn.
+    auto& s=shake_;
+    if(s.last && (time<s.last || time-s.last>kShakeGapNs))s={};
+    s.path=s.path*std::exp(-(s.last ? double(time-s.last)/1e9 : 0.0)/kShakePathSeconds)+std::hypot(x,y);
+    s.last=time;
+    if(!s.stroke) {
+        s.back_x+=x; s.back_y+=y;
+        const double length=std::hypot(s.back_x,s.back_y);
+        if(length<kShakeStroke)return;
+        s.dx=s.back_x/length; s.dy=s.back_y/length; s.proj=s.peak=length; s.back_x=s.back_y=0; s.stroke=true;
+        return;
     }
-    shake_x_+=x; shake_y_+=y;
-    const double length=std::hypot(shake_x_,shake_y_);
-    if(length<24)return;
-    const double duration=double(std::max(uint64_t(1000000),time-shake_start_))/1e9;
-    if(length/duration<600) {shake_start_=time;shake_x_=shake_y_=0;shake_previous_=0;return;}
-    const double dx=shake_x_/length,dy=shake_y_/length;
-    if(shake_previous_ && time>=shake_previous_ && time-shake_previous_<=250000000 &&
-        dx*shake_previous_x_+dy*shake_previous_y_<-.5) {finish_motion();pulse(Action::qte_shake,float(dx),float(dy));}
-    shake_previous_=time;shake_previous_x_=dx;shake_previous_y_=dy;
-    shake_start_=time;shake_x_=shake_y_=0;
+    s.proj+=x*s.dx+y*s.dy;
+    if(s.proj>=s.peak) {s.peak=s.proj; s.back_x=s.back_y=0; return;}
+    s.back_x+=x; s.back_y+=y;
+    if(-(s.back_x*s.dx+s.back_y*s.dy)<kShakeStroke)return;
+    if(s.path<kShakeMinPath) {s.peak=s.proj; s.back_x=s.back_y=0; return;}   // a slow return is aiming: the stroke restarts here
+    const double length=std::hypot(s.back_x,s.back_y);
+    s.dx=s.back_x/length; s.dy=s.back_y/length; s.proj=s.peak=length; s.back_x=s.back_y=0;
+    finish_motion(); pulse(Action::qte_shake,float(s.dx),float(s.dy));
 }
 void BindingResolver::motion(float x,float y,uint64_t timestamp_ns) {
     if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid mouse motion");

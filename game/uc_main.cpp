@@ -364,7 +364,7 @@ static int real_main(int argc, char** argv) {
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
         renderer.set_prompt_style(options.prompt_style);
-        renderer.set_bloom(options.bloom);
+        renderer.set_bloom(options.bloom_settings());
         renderer.set_crosshair_scale(options.crosshair_scale);
         renderer.set_effects(options.effects);
         renderer.set_dlss5(options.dlss5);
@@ -656,7 +656,7 @@ static int real_main(int argc, char** argv) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
             uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
         };
-        targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
+        targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
         targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
@@ -852,7 +852,7 @@ static int real_main(int argc, char** argv) {
                 const double profile_ms=std::chrono::duration<double,std::milli>(now-last_profile_time).count();
                 std::fprintf(stderr,"[fps] window_ms %.3f retraces %llu:%llu presents %llu fps %.3f\n",profile_ms,(unsigned long long)last_profile_retrace,(unsigned long long)profile_retrace,(unsigned long long)(presents-last_profile_presents),1000.0*(presents-last_profile_presents)/profile_ms);
                 last_profile_time=now; last_profile_retrace=profile_retrace;
-                std::fprintf(stderr,"[gpu] passes: upscale %.2f ms, smaa %.2f ms, occlusion %.2f ms, shadow %.2f ms, motion blur %.2f ms (%llu runs), rt_as (last packet) %.2f ms, rt_shadows %.2f ms\n",renderer.pass_ms(uc::GpuPass::upscale),renderer.pass_ms(uc::GpuPass::smaa),renderer.pass_ms(uc::GpuPass::occlusion),renderer.pass_ms(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::motion_blur),(unsigned long long)renderer.pass_runs(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::rt_as),renderer.pass_ms(uc::GpuPass::rt_shadows));
+                std::fprintf(stderr,"[gpu] passes: upscale %.2f ms, smaa %.2f ms, occlusion %.2f ms, shadow %.2f ms, motion blur %.2f ms (%llu runs), rt_as (last packet) %.2f ms, rt_shadows %.2f ms, bloom %.2f ms\n",renderer.pass_ms(uc::GpuPass::upscale),renderer.pass_ms(uc::GpuPass::smaa),renderer.pass_ms(uc::GpuPass::occlusion),renderer.pass_ms(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::motion_blur),(unsigned long long)renderer.pass_runs(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::rt_as),renderer.pass_ms(uc::GpuPass::rt_shadows),renderer.pass_ms(uc::GpuPass::bloom));
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws());
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
                 if(!present_intervals.empty()) {

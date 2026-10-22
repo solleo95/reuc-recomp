@@ -1590,6 +1590,88 @@ int main(int argc, char** argv) {
             for(Image* image:{&noisy,&depth,&motion,&gbuffer}) { vkDestroyImageView(device,image->view,nullptr); vkDestroyImage(device,image->image,nullptr); vkFreeMemory(device,image->memory,nullptr); }
             vkUnmapMemory(device,staging_memory); vkDestroyBuffer(device,staging,nullptr); vkFreeMemory(device,staging_memory,nullptr);
         }
+        if (wanted("bloom")) {
+            // Bloom (renderer/bloom_pass.cpp) on a bright square against a dark wall: the glow falls off with distance, is symmetric, is gone before the far side of the
+            // picture, grows with the strength, strength 0 and "off" add nothing, a replay is identical, and a frame without a scene (a menu) gets none.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            const auto projection=[](gx::DrawPacket& draw) { draw.transforms.edit().projection={{{1,0,0,0},{0,1,0,0},{0,0,-100.f/99,-100.f/99},{0,0,-1,0}}}; };   // near 1, far 100, 90 degrees
+            const auto surface=[&](std::array<std::array<float,3>,4> corners,uint8_t level) {
+                auto draw=quad(0x1000,-1,-1,1,1,{level,level,level,255},true);
+                for(size_t i=0;i<4;++i) { draw.vertices[i].position=corners[i]; draw.vertices[i].normal={0,0,1,0,0,0,0,0,0}; }
+                projection(draw);
+                return draw;
+            };
+            uc::GraphicsEffects plain; plain.anisotropy=1; renderer.set_effects(plain);
+            auto frame=[&](uc::BloomSettings settings,bool menu=false) {
+                renderer.set_bloom(settings);
+                gx::FramePacket scene; scene.present=false;
+                if(!menu) {
+                    scene.draws.push_back(surface({{{-12,-8,-8},{12,-8,-8},{12,8,-8},{-12,8,-8}}},20));   // the wall
+                    scene.draws.push_back(surface({{{-1.5f,-1.5f,-7},{1.5f,-1.5f,-7},{1.5f,1.5f,-7},{-1.5f,1.5f,-7}}},255));   // the bright square
+                    submit(std::move(scene));
+                    gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                    auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                    boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                    submit(std::move(boundary));
+                    gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                    submit(std::move(empty));
+                }
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                hud.draws.push_back(quad(0x5678,0.6f,-0.9f,0.9f,-0.6f,{255,0,0,255},false));
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto red=[&](const uc::RenderPixels& pixels,uint32_t x,uint32_t y) { return int(pixels.rgba[(size_t(y)*pixels.width+x)*4]); };
+            const uc::BloomSettings off{false,100}, full{true,100}, zero{true,0}, strong{true,200};
+            frame(off); const auto base=frame(off);   // the first frame decides scene mode for the next one
+            uint32_t left=0, right=0;
+            for(uint32_t x=0;x<base.width;++x) if(red(base,x,360)>200) { if(!left) left=x; right=x; }
+            std::fprintf(stderr,"bloom: bright square spans %u..%u\n",left,right);
+            CHECK(left>400 && right<880 && right>left+100);
+            frame(full); const auto glow=frame(full);
+            const auto gain=[&](const uc::RenderPixels& image,uint32_t x) { return red(image,x,360)-red(base,x,360); };
+            const int near_right=gain(glow,right+8), mid_right=gain(glow,right+40), far_right=gain(glow,right+120), near_left=gain(glow,left-8), mid_left=gain(glow,left-40);
+            std::fprintf(stderr,"bloom: glow right %d / %d / %d, left %d / %d, 400 px away %d\n",near_right,mid_right,far_right,near_left,mid_left,gain(glow,right+400));
+            CHECK(near_right>=3 && near_right>mid_right && mid_right>far_right && far_right>=0);   // it falls off with distance and never darkens
+            CHECK(std::abs(mid_right-mid_left)<=2 && std::abs(near_right-near_left)<=2);           // symmetric
+            CHECK(gain(glow,right+400)<=1);                                                      // gone before the far side of the picture
+            CHECK(red(glow,640,360)==255);                                                       // the square itself stays white
+            frame(strong); const auto stronger=frame(strong);
+            CHECK(gain(stronger,right+8)>near_right);                                           // 200 % glows more than 100 %
+            frame(zero); const auto none=frame(zero);
+            CHECK(none.rgba==base.rgba);                                                         // strength 0 equals off, byte for byte
+            frame(full); const auto replay=frame(full);
+            CHECK(replay.rgba==glow.rgba);                                                       // no temporal state or per-frame noise
+            for(int toggle=0;toggle<20;++toggle) frame(toggle%2 ? full : off);                   // switching live keeps the frames valid (validation is checked at the end)
+            frame(off,true); const auto menu_off=frame(off,true);
+            frame(full,true); const auto menu_on=frame(full,true);
+            CHECK(menu_on.rgba==menu_off.rgba);                                                  // a frame without a scene gets no glow, and none left over from the last frame
+            CHECK(renderer.pass_runs(uc::GpuPass::bloom)>0);
+            {   // a render scale change recreates the pyramid: the glow keeps its shape relative to the picture (no stale images, validation is checked at the end)
+                renderer.set_render_scale(1.5);
+                frame(full); const auto scaled=frame(full);
+                uint32_t scaled_left=0, scaled_right=0;
+                renderer.set_bloom(off); frame(off); const auto scaled_base=frame(off); renderer.set_bloom(full);
+                for(uint32_t x=0;x<scaled_base.width;++x) if(red(scaled_base,x,scaled_base.height/2)>200) { if(!scaled_left) scaled_left=x; scaled_right=x; }
+                const uint32_t edge_gap=scaled_base.width/160;   // 8 px at 1280 wide
+                const int scaled_near=red(scaled,scaled_right+edge_gap,scaled.height/2)-red(scaled_base,scaled_right+edge_gap,scaled.height/2);
+                std::fprintf(stderr,"bloom: render scale 1.5, glow beside the square %d (1x: %d)\n",scaled_near,near_right);
+                CHECK(std::abs(scaled_near-near_right)<=20);
+                renderer.set_render_scale(1.0);
+                frame(full); frame(full);
+            }
+            {   // HDR: the glow moves to the HDR encode, so the SDR picture is left alone; toggling HDR on and off with bloom on stays valid (only when Windows HDR is on)
+                uc::HdrSettings hdr; hdr.enabled=true; renderer.set_hdr(hdr);
+                frame(full); const auto hdr_frame=frame(full);
+                std::fprintf(stderr,"bloom: HDR %s\n",renderer.hdr_active() ? "active" : "not available here (SDR checks only)");
+                if(renderer.hdr_active()) {
+                    CHECK(hdr_frame.rgba==base.rgba);   // the captured SDR picture has no glow in it
+                    frame(full,true); frame(off); frame(full);
+                }
+                hdr.enabled=false; renderer.set_hdr(hdr);
+                frame(full); const auto sdr_again=frame(full);
+                CHECK(sdr_again.rgba==glow.rgba);
+            }
+        }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
         SDL_DestroyWindow(window);

@@ -180,9 +180,28 @@ static void qte_mouse_jerks() {
     mixed.motion(32,0,6000000000);mixed.motion(-32,0,6030000000);
     CHECK(downs(mixed.consume(),Action::qte_shake)==1); // Knife coalescing must not discard a QTE step.
 }
+// A hand shake is a sine in position: speed passes through zero at every turn, so a detector that measures speed from the turn misses moderate shakes.
+static size_t sine_shake_steps(double amplitude,double hz,double seconds,unsigned report_hz) {
+    auto r=game(); r.context(InputContext::qte); r.qte_window(true);
+    const double pi=3.14159265358979323846; double previous=0,pending=0; size_t steps=0;
+    for(unsigned i=1;i<=unsigned(seconds*report_hz);++i) {
+        const double position=amplitude*std::sin(2*pi*hz*i/report_hz); pending+=position-previous; previous=position;
+        const double counts=std::trunc(pending); pending-=counts;   // a mouse reports whole counts
+        if(counts!=0) {r.motion(float(counts),0,1000000000ull+uint64_t(i)*1000000000ull/report_hz);steps+=downs(r.consume(),Action::qte_shake);}
+    }
+    return steps;
+}
+static void qte_mouse_shake_profiles() {
+    for(unsigned rate:{1000u,125u}) for(double hz:{3.0,5.0,8.0}) for(double amplitude:{30.0,60.0,120.0,250.0,500.0}) {
+        const size_t reversals=size_t(2*hz*2)-1,steps=sine_shake_steps(amplitude,hz,2,rate);
+        CHECK(steps>=reversals*8/10 && steps<=reversals*12/10);   // about one step per reversal, whatever the amplitude, frequency or report rate
+    }
+    CHECK(sine_shake_steps(60,.5,4,1000)==0 && sine_shake_steps(60,1,4,1000)==0);   // a slow wave is aiming, not shaking
+    CHECK(sine_shake_steps(15,8,4,1000)==0 && sine_shake_steps(10,10,4,1000)==0);   // tremor-sized jitter
+}
 int main() {
     defaults_and_context(); multiple_sources_and_short_click(); ordered_chord_and_dedup(); clear_special_and_remap();
     wheel_keyboard_repeat_and_chords(); replace_focus_and_context_cancel(); knife_direction_bursts_and_overflow(); knife_key_direction_and_mouse_threshold();
     wheel_pulse_preserves_keyboard_hold(); validation_preserves_configuration();
-    qte_mouse_jerks();
+    qte_mouse_jerks(); qte_mouse_shake_profiles();
 }

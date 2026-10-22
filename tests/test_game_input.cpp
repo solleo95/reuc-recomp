@@ -47,11 +47,14 @@ int main() {
     CHECK(uc::game_input_context(s)==uc::InputContext::menu);
     s.tutorial_state=0x00100000; CHECK(uc::game_input_context(s)==uc::InputContext::gameplay);
     s.tutorial_loaded=false;
+    // A suspended scene is where the button QTEs (B, A+B) wait: the mouse must reach the game as A/B there, not as confirm/back.
     s.scene_valid=true; s.scene_words[1]=1;
-    CHECK(uc::game_input_context(s)==uc::InputContext::menu);
+    CHECK(uc::game_input_context(s)==uc::InputContext::qte);
     s.scene_words[1]=0;
     s.scene_words[0]=std::bit_cast<uint32_t>(.1f);
-    CHECK(uc::game_input_context(s)==uc::InputContext::menu);
+    CHECK(uc::game_input_context(s)==uc::InputContext::qte);
+    s.ui_states[4]=7; CHECK(uc::game_input_context(s)==uc::InputContext::menu);   // a real menu on top of the suspension stays a menu
+    s.ui_states[4]=uint32_t(-1);
     s.scene_words[0]=0;
     s.fade_words={std::bit_cast<uint32_t>(.25f),0,std::bit_cast<uint32_t>(1.f),std::bit_cast<uint32_t>(1.f),0x01000000,std::bit_cast<uint32_t>(1.f)};
     CHECK(uc::game_input_context(s)==uc::InputContext::gameplay);

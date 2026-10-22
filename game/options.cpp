@@ -44,6 +44,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
         else if (arg == "--no-bloom") options.bloom = false;
+        else if (arg == "--bloom-strength") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --bloom-strength";
+            uint32_t strength = 0; const auto value = arguments[i];
+            auto parsed = std::from_chars(value.data(), value.data() + value.size(), strength);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || !valid_bloom_settings({true, strength})) return "invalid value for --bloom-strength";
+            options.bloom_strength = strength;
+        }
         else if (arg == "--input-probe") options.input_probe = true;
         else if (arg == "--gx-gaps") options.gx_gaps = true;
         else if (arg == "--audio-audit") options.audio_audit = true;

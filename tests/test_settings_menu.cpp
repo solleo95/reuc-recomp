@@ -172,7 +172,7 @@ int main(int argc,char** argv) {
     uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
-    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](bool){}; targets.crosshair_scale=[](uint32_t){}; targets.effects=[](const uc::GraphicsEffects&){};
+    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.effects=[](const uc::GraphicsEffects&){};
     targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;

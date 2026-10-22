@@ -42,6 +42,11 @@ Options options_from_config(const ConfigDocument& document) {
         }
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
         if(graphics.contains("bloom"))options.bloom=boolean(graphics["bloom"]);
+        if(graphics.contains("bloom_strength")) {
+            const auto& value=graphics["bloom_strength"];
+            if(!value.is_number_unsigned() || value.get<uint64_t>()>kBloomStrengthMax)invalid("bloom_strength must be 0..200");
+            options.bloom_strength=value.get<uint32_t>();
+        }
         if(graphics.contains("crosshair_scale")) {
             const auto& value=graphics["crosshair_scale"];
             if(!value.is_number_unsigned() || value.get<uint64_t>()>100)invalid("crosshair_scale must be 0..100");
@@ -166,6 +171,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;
     graphics["bloom"]=options.bloom;
+    graphics["bloom_strength"]=options.bloom_strength;
     graphics["crosshair_scale"]=options.crosshair_scale;
     graphics["hdr"]=options.hdr.enabled;
     graphics["hdr_peak_nits"]=options.hdr.peak_nits;

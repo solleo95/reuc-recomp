@@ -28,6 +28,12 @@ int main() {
     options.crosshair_scale=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
     options.crosshair_scale=100;uc::store_options(document,options);
+    CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).bloom_strength==100);   // absent: the full glow
+    options.bloom_strength=0;uc::store_options(document,options);
+    CHECK(document.properties["graphics"]["bloom_strength"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom_strength==0);
+    options.bloom_strength=200;uc::store_options(document,options);
+    CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom_strength==200);
+    options.bloom_strength=100;uc::store_options(document,options);
     CHECK((uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).hdr==uc::HdrSettings{}));   // absent: SDR, the defaults
     options.hdr={true,1400,250,120};uc::store_options(document,options);
     CHECK(document.properties["graphics"]["hdr"]==true && document.properties["graphics"]["hdr_peak_nits"]==1400 && document.properties["graphics"]["hdr_paper_white_nits"]==250 && document.properties["graphics"]["hdr_ui_nits"]==120);
@@ -152,6 +158,7 @@ int main() {
         R"({"graphics":{"upscaler":"blit"}})",R"({"graphics":{"upscaler":1}})",R"({"graphics":{"upscale_mode":"dlaa"}})",R"({"graphics":{"sharpness":0}})",
         R"({"graphics":{"sharpness":1.5}})",R"({"graphics":{"sharpening":1}})",R"({"graphics":{"frame_generation":"on"}})",
         R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
+        R"({"graphics":{"bloom_strength":201}})",R"({"graphics":{"bloom_strength":-1}})",R"({"graphics":{"bloom_strength":50.5}})",R"({"graphics":{"bloom_strength":"x"}})",
         R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",
         R"({"graphics":{"hdr":1}})",R"({"graphics":{"hdr_peak_nits":0}})",R"({"graphics":{"hdr_peak_nits":2001}})",R"({"graphics":{"hdr_paper_white_nits":79}})",
         R"({"graphics":{"hdr_paper_white_nits":"bright"}})",R"({"graphics":{"hdr_ui_nits":501}})",R"({"graphics":{"hdr_ui_nits":100.5}})"}) {

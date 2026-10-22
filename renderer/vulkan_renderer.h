@@ -7,6 +7,7 @@
 #include "prompt_overlay.h"
 #include "menu_overlay.h"
 #include "motion_tracker.h"
+#include "bloom_pass.h"
 #include "motion_blur_pass.h"
 #include "occlusion_pass.h"
 #include "pass_timer.h"
@@ -69,7 +70,8 @@ public:
     void set_uber_only(bool enabled) { owner(); uber_only_=enabled; }   // tests: draw everything with the ubershader
     void set_render_scale(double scale); // Multiplier of720p; output resize preserves it.
     void set_prompt_style(PromptStyle);
-    void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
+    // The renderer's own bloom (bloom_pass.h) replaces the game's, whose composite draw is always skipped. Off or strength 0: no bloom at all. Live; off in a fresh renderer.
+    void set_bloom(const BloomSettings&);
     void set_crosshair_scale(uint32_t percent);   // aim reticle size 0..100 % of the game's (late_aim.h); 0 hides it
     // HDR10 output (hdr_math.h): callable before or after initialize(). Active only while Windows reports HDR for the window's display and the
     // surface offers HDR10; otherwise the SDR swapchain stays. hdr_state_changed(): SDL_EVENT_WINDOW_HDR_STATE_CHANGED, re-picks the mode.
@@ -96,7 +98,8 @@ public:
     bool set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sharpening, double sharpness, bool frame_generation, uint32_t multiplier);
     // SMAA works on the finished frame at the output size, whatever the quality setting says.
     UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
-    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || dlss5_requested()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
+    bool bloom_active() const { return bloom_.enabled && bloom_.strength>0; }
+    bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || dlss5_requested() || bloom_active()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
@@ -241,7 +244,8 @@ private:
     MenuOverlay menu_overlay_;
     std::function<void()> menu_build_, menu_setup_;
     PromptStyle prompt_style_=PromptStyle::monochrome;
-    bool bloom_=true;
+    BloomSettings bloom_{false,100};
+    BloomPass bloom_pass_;   // one glow image for all slots: it is read by the present (or the HUD-less copy) of the frame that wrote it, before the next frame's bloom
     float crosshair_scale_=1;
     GraphicsEffects chosen_effects_;   // as configured
     GraphicsEffects effects_;   // effective_effects(chosen_effects_): what the passes run from
@@ -310,6 +314,9 @@ private:
     VkFormat hudless_format_=VK_FORMAT_R8G8B8A8_UNORM;   // the back buffer's: HDR10 while HDR is active (frame generation compares the two)
     HdrSettings hdr_settings_;
     bool hdr_active_=false;       // this swapchain is HDR10 (settings on, Windows HDR on, surface offers it)
+    VkExtent2D bloom_region_{};   // the part of the EFB the glow covers, in EFB pixels (set when the bloom is recorded)
+    uint64_t bloom_generation_=0; // BloomPass::generation() the HDR pass's descriptor sets were last reset for
+    BloomLayer bloom_layer(VkOffset2D origin, VkExtent2D size) const;   // the glow for an HDR encode of this EFB rectangle; empty unless this frame's glow is valid
     bool colorspace_ext_=false;   // VK_EXT_swapchain_colorspace enabled: HDR10 surface formats are usable
     const char* hdr_status_=nullptr;   // the last logged mode (a string literal), printed when it changes
     HdrPass hdr_pass_;

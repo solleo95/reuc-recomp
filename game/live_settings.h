@@ -10,7 +10,7 @@ struct SettingsTargets {
     std::function<void(double)> render_scale;                  // 0 = the monitor's scale
     std::function<void(const Options&)> upscaling;             // upscaler, quality, sharpening, frame generation
     std::function<void(std::optional<uint32_t>)> fps_limit;
-    std::function<void(bool)> bloom;
+    std::function<void(const BloomSettings&)> bloom;
     std::function<void(uint32_t)> crosshair_scale;             // percent 0..100
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects
     std::function<void(const Dlss5Settings&)> dlss5;           // DLSS 5 Neural Rendering

@@ -14,6 +14,14 @@ int main() {
     CHECK(std::abs(hdr_expand(.5f,400,100)-100)<1e-3f);
     CHECK(std::abs(hdr_expand(.1f,400,100)-40)<1e-3f);
     CHECK(std::abs(hdr_expand(1,200,200)-200)<1e-3f);
+    // Bloom glow (scene-referred, 1.0 = paper white) is added in nits and never passes the peak; no glow is the plain expansion.
+    CHECK(hdr_with_glow(.3f,0,200,1000)==hdr_expand(.3f,200,1000));
+    CHECK(hdr_with_glow(0,0,200,1000)==0);
+    CHECK(std::abs(hdr_with_glow(0,.5f,200,1000)-100)<1e-3f);
+    CHECK(std::abs(hdr_with_glow(.5f,.5f,200,1000)-200)<1e-3f);
+    CHECK(std::abs(hdr_with_glow(1,9,200,1000)-1000)<1e-3f);
+    CHECK(std::abs(hdr_with_glow(.5f,5,400,100)-100)<1e-3f);   // a peak below paper white clamps, no inversion
+    CHECK(hdr_with_glow(.2f,-1,200,1000)==hdr_expand(.2f,200,1000));   // a negative glow adds nothing
     // PQ (SMPTE ST 2084): 0 nits is code 0 at 10 bits, 10000 nits is 1, 100 nits about 0.508.
     CHECK(pq_encode(0)*1023<.5f);
     CHECK(std::abs(pq_encode(10000)-1)<1e-5f);

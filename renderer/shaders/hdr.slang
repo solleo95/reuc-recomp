@@ -3,7 +3,9 @@
 // luminance-only highlight expansion from paper white to the peak, the port's overlays at their own brightness, BT.709 -> BT.2020, PQ.
 [[vk::binding(0, 0)]] Texture2D<float4> scene;
 [[vk::binding(1, 0)]] Texture2D<float4> overlay;   // premultiplied (the ImGui blend over a cleared layer), the target's size
-struct Constants { int2 origin; int2 size; int2 extent; float paper; float peak; float ui; uint has_overlay; };
+[[vk::binding(2, 0)]] Texture2D<float4> glow;   // the bloom's glow (renderer/bloom_pass.h): scene-referred linear light, 1.0 = paper white
+[[vk::binding(3, 0)]] SamplerState glowSampler;
+struct Constants { int2 origin; int2 size; int2 extent; float paper; float peak; float ui; uint has_overlay; float2 bloom_origin; float2 bloom_size; uint has_bloom; uint reserved; };
 [[vk::push_constant]] ConstantBuffer<Constants> constants;
 
 static const float kKnee = 0.6;   // kHdrKnee
@@ -39,6 +41,10 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target {
     float3 lin = pow(saturate(scene.Load(int3(source, 0)).rgb), 2.2);
     float y = dot(lin, float3(0.2126, 0.7152, 0.0722));
     float3 nits = y > 0.0 ? lin * (expand(y) / y) : float3(0.0, 0.0, 0.0);
+    if (constants.has_bloom != 0) {   // hdr_with_glow: the glow adds nits on top of the expansion; the peak clamp below keeps the hue
+        float2 uv = constants.bloom_origin + position.xy / float2(constants.extent) * constants.bloom_size;   // position is the pixel centre
+        if (all(uv >= 0.0) && all(uv <= 1.0)) nits += glow.SampleLevel(glowSampler, uv, 0).rgb * constants.paper;
+    }
     float brightest = max(nits.r, max(nits.g, nits.b));
     if (brightest > constants.peak) nits *= constants.peak / brightest;   // saturated highlights keep their hue
     if (constants.has_overlay != 0) {

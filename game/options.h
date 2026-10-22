@@ -1,4 +1,5 @@
 #pragma once
+#include "bloom_math.h"
 #include "dlss5_settings.h"
 #include "graphics_effects.h"
 #include "hdr_math.h"
@@ -18,7 +19,9 @@ struct Options {
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.
     WindowMode window_mode=WindowMode::windowed;
     PromptStyle prompt_style=PromptStyle::monochrome;
-    bool bloom=true;   // the game's glow around lights (graphics.bloom); off skips the bloom composite draw
+    bool bloom=true;   // the glow around lights (graphics.bloom); the renderer's own bloom replaces the game's, off means no bloom at all
+    uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
+    BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off
     UpscalerKind upscaler=UpscalerKind::off;

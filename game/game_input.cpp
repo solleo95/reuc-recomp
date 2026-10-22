@@ -80,9 +80,10 @@ InputContext game_input_context(const InputProbeSnapshot& state) {
     // Timed-action mode set by800677A0/8006786C and consumed by800DB2D4.
     if(player.mode_630==1 || player.mode_630==2)return InputContext::qte;
     if(player.mode_630!=0)return InputContext::inactive;
+    bool suspended=false;
     if(state.scene_valid) {
         // Original scene gate800F3E28: suspension counter/timer and both fades.
-        if(std::bit_cast<float>(state.scene_words[0])>0 || int32_t(state.scene_words[1])>0)return InputContext::menu;
+        suspended=std::bit_cast<float>(state.scene_words[0])>0 || int32_t(state.scene_words[1])>0;
         for(size_t offset:{0u,3u}) {
             float alpha=std::bit_cast<float>(state.fade_words[offset])/std::bit_cast<float>(state.fade_words[offset+2]);
             if(alpha>=1)alpha=1;
@@ -90,7 +91,8 @@ InputContext game_input_context(const InputProbeSnapshot& state) {
             if(alpha>0.9998999834060669f)return InputContext::menu;
         }
     }
-    return InputContext::gameplay;
+    // The button QTEs (B, A+B) wait in a suspended scene: they need real A/B, not the menu's confirm/back (which has no B).
+    return suspended ? InputContext::qte : InputContext::gameplay;
 }
 InputSample game_input_buttons(InputContext context,const ActionFrame& frame) {
     InputSample result;

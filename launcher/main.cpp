@@ -117,7 +117,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom
+    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.hdr==b.hdr;
 }
@@ -536,7 +536,13 @@ int run(int argc,wchar_t** argv) {
             ImGui::Dummy({0,8*unit});
             toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,(features_ready && !features.effects && !options.effects.contact_shadows) || rt.raster_replaced,rt.raster_replaced ? tr("replaced_by_rt") : tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
-            bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
+            toggle("##bloom",tr("bloom"),options.bloom);
+            ImGui::BeginDisabled(!options.bloom);
+            ImGui::Dummy({0,8*unit});ImGui::TextUnformatted(tr("bloom_strength"));
+            int bloom_strength=int(options.bloom_strength);ImGui::SetNextItemWidth(-1);
+            if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(uc::kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(uc::kBloomStrengthMax)));
+            track("bloom-strength");
+            ImGui::EndDisabled();
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("hdr"));
             toggle("##hdr",tr("hdr"),options.hdr.enabled);
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("hdr_hint"));ImGui::PopStyleColor();

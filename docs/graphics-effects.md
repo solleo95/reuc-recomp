@@ -11,6 +11,7 @@ All effects live in the renderer (GPU passes recorded on the render thread); the
 | Per-pixel lighting | `per_pixel_lighting` | `--per-pixel-lighting` | on/off (off) | the effects path |
 | Ambient occlusion (GTAO) | `ambient_occlusion` | `--ambient-occlusion` | off, low, medium, high, ultra (off) | the effects path |
 | Contact shadows | `contact_shadows` | `--contact-shadows` | on/off (off) | the effects path, a directional or spot light in the scene |
+| Bloom | `bloom`, `bloom_strength` | `--no-bloom`, `--bloom-strength` | on/off (on), 0..200 % (100) | the scene-target path (kept alive by the bloom itself) |
 | Motion blur | `motion_blur` | `--motion-blur` | off, low, medium, high, ultra (off) | the effects path; skipped on camera cuts |
 | Ray tracing (master switch) | `ray_tracing` | `--ray-tracing` | on/off (off) | a GPU with ray query (`uc.exe --features`: `ray_tracing`) |
 | Ray-traced shadows | `rt_shadows` | `--rt-shadows` | off, low, medium, high, ultra (off) | the master switch on; replaces the shadow map and contact shadows |
@@ -30,6 +31,15 @@ All effects live in the renderer (GPU passes recorded on the render thread); the
 * Per-pixel lighting is a push-constant bit in the motion shader variants: the GX lighting equations run on the interpolated view normal and position instead of per vertex.
 * SMAA is an `Upscaler` at ratio 1 (compute, `third_party/smaa`); no jitter, no vectors.
 * Presets (budget per effect on the owner's RTX 4080, measured with the pass timestamps): GTAO medium + contact shadows 0.30 ms and high 0.50 ms at the harness size (limits 0.4 / 1.0 ms).
+
+## Bloom
+
+Design: `docs/superpowers/specs/2026-10-22-bloom-design.md`; plan: `docs/superpowers/plans/2026-10-22-bloom.md`. The renderer's own bloom (`renderer/bloom_pass.{h,cpp}`, `shaders/bloom.slang`, math in `renderer/bloom_math.h`) replaces the game's: the game's composite draw (`gx::bloom_composite`) is always skipped, off means no bloom at all (`graphics.bloom=false` or strength 0).
+
+* Runs at the scene boundary after the upscaler, motion blur and the DLSS 5 hook, before the HUD, on the output-size EFB colour. A six-level RGBA16F pyramid (level 0 is half size): the first level reads the 8-bit colour in linear light (gamma 2.2), expands it above a knee (`bloom_expand`: 1.0 counts as 4x white in SDR, peak/paper white in HDR; the buffer is 8-bit, so this is an estimate), keeps only the energy above a soft threshold (`bloom_soft_threshold`: 0.6, knee 0.3; without it every lit wall turned the picture milky) and averages 4x4 texels with Karis weights; the next levels are 13-tap downsamples; the glow is the weighted sum (0.20 0.20 0.18 0.16 0.14 0.12) of tent upsamples, scaled by the mix (`bloom_mix`: 0.15 x strength in SDR, x2.5 more in HDR). No temporal state: deterministic runs stay identical.
+* SDR: the glow is added to the EFB in place (gamma 2.2, a static ordered dither of +-0.5 LSB), so the HUD drawn afterwards is untouched. HDR: the glow stays in a float image (`BloomPass::glow_view`) that `shaders/hdr.slang` adds in nits at the HDR encode (the present and frame generation's HUD-less copy), so it passes paper white up to the peak; the encode adds it over the HUD too (owner option A; option B, separate scene and HUD layers, is the fallback if that looks bad). Captures stay SDR, so they show no glow in HDR.
+* Constants are starting values tuned by eye; they live in `bloom_math.h` and `bloom.slang` (mirrored, tested in `test_bloom_math`). Frame log and `--profile`: `GpuPass::bloom`.
+* Tests: `test_bloom_math`, `renderer_effects_smoke --bloom` (falloff, symmetry, strength, determinism, menu frames, render scale; the HDR part runs only when Windows HDR is on for the window).
 
 ## Ray tracing
 

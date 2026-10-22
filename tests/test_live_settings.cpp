@@ -17,7 +17,8 @@ int main() {
     targets.render_scale=[&](double){ calls.push_back("render_scale"); };
     targets.upscaling=[&](const uc::Options&){ calls.push_back("upscaling"); };
     targets.fps_limit=[&](std::optional<uint32_t>){ calls.push_back("fps_limit"); };
-    targets.bloom=[&](bool){ calls.push_back("bloom"); };
+    uc::BloomSettings last_bloom;
+    targets.bloom=[&](const uc::BloomSettings& settings){ calls.push_back("bloom"); last_bloom=settings; };
     targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
@@ -30,6 +31,12 @@ int main() {
     {   // only the changed field reaches its subsystem, and the file has it
         auto next=live.options(); next.bloom=false; live.apply(next);
         CHECK((calls==std::vector<std::string>{"bloom"}) && !saved().bloom && !live.error());
+    }
+    {   // the strength alone reaches the bloom target once, with both fields
+        calls.clear(); auto next=live.options(); next.bloom_strength=150; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"bloom"}) && (last_bloom==uc::BloomSettings{false,150}) && saved().bloom_strength==150 && !live.error());
+        calls.clear(); live.apply(next);
+        CHECK(calls.empty());
     }
     {   // the crosshair size alone reaches only its target
         calls.clear(); auto next=live.options(); next.crosshair_scale=40; live.apply(next);
