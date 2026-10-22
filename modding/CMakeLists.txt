@@ -70,7 +70,9 @@ target_compile_definitions(uc_quickjs PRIVATE _GNU_SOURCE WIN32_LEAN_AND_MEAN _W
 target_compile_options(uc_quickjs PRIVATE -w)
 install(FILES ${quickjs_SOURCE_DIR}/LICENSE DESTINATION licenses/quickjs-ng)
 
-add_library(uc_mods STATIC manifest.cpp mod_paths.cpp mod_zip.cpp registry.cpp overlay.cpp settings.cpp api_registry.cpp game_api.cpp game_api_player.cpp input_api.cpp runtime_lua.cpp runtime_js.cpp runtime_native.cpp host.cpp hook_registry.cpp data_patch.cpp mod_guest_call.cpp guest_api_calls.cpp audio/brstm.cpp audio/wav.cpp audio/ogg.cpp)
+add_library(uc_mods STATIC manifest.cpp mod_paths.cpp mod_zip.cpp registry.cpp overlay.cpp settings.cpp api_registry.cpp game_api.cpp game_api_player.cpp input_api.cpp runtime_lua.cpp runtime_js.cpp runtime_native.cpp host.cpp hook_registry.cpp data_patch.cpp mod_guest_call.cpp guest_api_calls.cpp audio/brstm.cpp audio/wav.cpp audio/ogg.cpp third_party/stb_vorbis.c)
+# stb_vorbis (public domain, v1.22): the decoder is built as C without its file API; its warnings are not ours.
+set_source_files_properties(third_party/stb_vorbis.c PROPERTIES COMPILE_DEFINITIONS STB_VORBIS_NO_STDIO COMPILE_OPTIONS -w)
 target_include_directories(uc_mods PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_mods PUBLIC nlohmann_json::nlohmann_json uc_miniz uc_lua uc_quickjs uc_runtime bcrypt)
 

@@ -1,5 +1,7 @@
 #include "check.h"
 #include "audio/decode.h"
+#include "audio_fixtures.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -116,6 +118,29 @@ static void wav_errors_name_the_problem() {
     CHECK(!read_wav(make_wav(empty)).audio);   // zero frames
 }
 
+static void ogg_decodes_tone_length_and_rate() {
+    const auto r = read_ogg(std::span<const uint8_t>(kToneOgg, sizeof kToneOgg));
+    CHECK(r.audio && r.error.empty() && r.audio->rate == 32000 && r.audio->channels.size() == 1 && !r.audio->loop);
+    CHECK(r.audio->frames() >= 3200 && r.audio->frames() <= 3600);
+    int peak = 0;
+    for (int16_t v : r.audio->channels[0]) peak = std::max(peak, std::abs(int(v)));
+    CHECK(peak > 2000);   // a tone, not silence (ffmpeg's sine source peaks at 1/8 of full scale)
+}
+
+static void ogg_garbage_is_an_error() {
+    std::vector<uint8_t> junk(500, 0x55);
+    const auto r = read_ogg(junk);
+    CHECK(!r.audio && !r.error.empty());
+    CHECK(!read_ogg({}).audio);
+    const auto cut = read_ogg(std::span<const uint8_t>(kToneOgg, 200));   // the headers are cut off
+    CHECK(!cut.audio && !cut.error.empty());
+}
+
+static void ogg_loop_comments() {
+    const auto r = read_ogg(std::span<const uint8_t>(kLoopOgg, sizeof kLoopOgg));
+    CHECK(r.audio && r.audio->loop && r.audio->loop->first == 100u && r.audio->loop->second == 600u);
+}
+
 int main() {
     wav_pcm16_mono();
     wav_stereo_deinterleaves();
@@ -123,6 +148,9 @@ int main() {
     wav_skips_unknown_chunks_and_pads_odd_sizes();
     wav_smpl_loop_is_read();
     wav_errors_name_the_problem();
+    ogg_decodes_tone_length_and_rate();
+    ogg_garbage_is_an_error();
+    ogg_loop_comments();
     std::puts("test_audio_decode: ok");
     return 0;
 }
