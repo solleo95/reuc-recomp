@@ -294,7 +294,26 @@ function uc.enemies.list() end
 ---Player input as the game sees it.
 uc.input = {}
 
----True while the fire button of the slot is held. [planned]
----@param slot integer Player slot, 1 or 2.
----@return boolean
-function uc.input.fire_held(slot) end
+---@type integer
+---The buttons the game sees as held on the pad, after the mods: a combination of A 0x800, B 0x400 (the trigger), minus 0x10 and plus 0x1000. Player 1's pad only. [implemented]
+uc.input.held = nil
+
+---@type boolean
+---True while the trigger (button B) is held, as the game sees it. [implemented]
+uc.input.fire_held = nil
+
+---@type number[]
+---Where the pointer is, [x, y], each from -1 to 1 (0, 0 is the middle of the screen, y down), as the game sees it. [implemented]
+uc.input.aim = nil
+
+---@type integer
+---Buttons the game sees as held although the player does not hold them (a combination of A 0x800, B 0x400, minus 0x10, plus 0x1000; 0 clears). The game sees a press when one starts. Masks of several mods add up; yours is taken back when the mod stops. [implemented]
+uc.input.force_held = nil
+
+---@type integer
+---Buttons that never reach the game even when the player holds them (same masks; 0 clears). The game sees the button let go when a block starts. Taken back when the mod stops. [implemented]
+uc.input.block_held = nil
+
+---@type number[]
+---Makes the game see the pointer at [x, y] (each -1 to 1); nil gives it back to the player. With several mods the latest setter wins; taken back when the mod stops. Reads nil while no mod overrides. [implemented]
+uc.input.aim_override = nil

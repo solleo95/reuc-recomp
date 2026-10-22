@@ -54,7 +54,7 @@ inc = files["modding/generated/hookable.inc"]
 check('UC_HOOKABLE(0x8006C268u, "GameWeaponUpdate")' in inc, "hookable.inc wrong")
 page = files["docs/modding/api/player.md"]
 check("`magazine`" in page and "implemented" in page and "uc.player(1).magazine = 15" in page, "player page wrong")
-check("planned" in files["docs/modding/api/input.md"], "planned members must show up as planned (input.fire_held)")
+check("`input.force_held`" in files["docs/modding/api/input.md"] or "force_held" in files["docs/modding/api/input.md"], "input page lacks force_held")
 
 # The committed files are current.
 stale = gen.stale_files(root, files)

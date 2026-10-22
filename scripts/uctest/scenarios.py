@@ -620,6 +620,42 @@ def player_api(g, args):
     return result
 
 
+def input_force(g, args):
+    """input.force_held = B: the harness holds nothing, yet the game sees the trigger (the mod logs fire_held) and the handgun fires (15 -> 14 or lower)."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("forced_trigger"):
+        before = g.state()["player"]["magazine"]
+        g.advance(240)
+        after = g.state()["player"]["magazine"]
+        result["magazine"] = {"before": before, "after": after}
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        if "input fire_held=true" not in text:
+            g.fail("the mod never saw fire_held although it forced the trigger", "input force")
+        if after >= before:
+            g.fail(f"the magazine went from {before} to {after}: the forced trigger did not fire", "input force")
+    return result
+
+
+def input_block(g, args):
+    """input.block_held = B: the harness holds the trigger for 90 frames, the game does not see it (no shot, fire_held never true)."""
+    reach_gameplay(g)
+    g.advance(60)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("blocked_trigger"):
+        before = g.state()["player"]["magazine"]
+        g.press("B", 90)
+        g.advance(30)
+        after = g.state()["player"]["magazine"]
+        result["magazine"] = {"before": before, "after": after}
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        if after != before or "input fire_held=SEEN" in text:
+            g.fail(f"the blocked trigger reached the game (magazine {before} -> {after})", "input block")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

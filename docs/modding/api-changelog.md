@@ -6,6 +6,7 @@ The API is versioned `major.minor`. A new minor version only adds members or mak
 
 - `hook.post` and `hook.replace` (Lua, JavaScript, native `hook_post` / `hook_replace`): code after a hookable function or instead of it. `UC_MOD_API_MINOR` is 1.
 - `weapon.fire_rate` and a confirmed `weapon.damage` (both were announced for 1.0 but only checked later).
+- `input.held`, `input.fire_held`, `input.aim` (what the game sees on player 1's pad) and `input.force_held`, `input.block_held`, `input.aim_override` (add to or take away from it).
 - `player.weapon` (held weapon id), `player.health` (0 to 1), `player.reserve` (spare ammo of the held weapon; nil for the handgun).
 - `camera.position`, `camera.forward`, `camera.right`, `camera.up`, computed from the view matrix. `player.position` is not offered: the game is on rails and both players share the camera, so the camera is the player's viewpoint.
 
@@ -19,4 +20,4 @@ First version.
 - Implemented weapons (by record id 0 to 19): `capacity`, `reload_time`, `fire_mode`, `damage` (checked: with 100 a handgun hit takes 100 off a zombie), `fire_rate` (checked: shots in a fixed time follow the rate).
 - Enemies: zombies only (id, class, position, hp).
 - Hooks: `hook.pre` on `GameWeaponUpdate` (checked in the game: r3 is the weapon object, clearing r4 stops firing) and `PlayerEventHandler` (`unverified`: unit-tested, not exercised in a live fight).
-- Not yet: `input.fire_held`.
+- Not yet: nothing announced.

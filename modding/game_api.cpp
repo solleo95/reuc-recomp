@@ -1,4 +1,5 @@
 #include "game_api.h"
+#include "input_api.h"
 #include "trace.h"
 #include <cmath>
 
@@ -105,9 +106,23 @@ SymbolTable runtime_symbols() {
     return table;
 }
 
+namespace {
+// One ticker for the parts of the game API that keep per-step state or per-mod state.
+class CompositeTicker : public GameApiTicker {
+public:
+    explicit CompositeTicker(std::vector<std::shared_ptr<GameApiTicker>> parts) : parts_(std::move(parts)) {}
+    void tick(const GameEventSink& emit) override { for (const auto& part : parts_) part->tick(emit); }
+    void drop_owner(const std::string& owner) override { for (const auto& part : parts_) part->drop_owner(owner); }
+private:
+    std::vector<std::shared_ptr<GameApiTicker>> parts_;
+};
+}  // namespace
+
 std::shared_ptr<GameApiTicker> register_game_api(ApiRegistry& api, GuestMemory& mem, const SymbolTable& symbols) {
     register_low_level_api(api, mem, symbols);
-    return register_player_weapon_api(api, mem);
+    auto player = register_player_weapon_api(api, mem);
+    auto input = register_input_api(api);
+    return std::make_shared<CompositeTicker>(std::vector<std::shared_ptr<GameApiTicker>>{player, input});
 }
 
 }  // namespace uc::mods

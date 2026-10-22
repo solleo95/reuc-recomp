@@ -6,14 +6,129 @@ Player input as the game sees it.
 
 | Member | Kind | Type | Status | Since |
 |---|---|---|---|---|
-| `fire_held` | function | `bool` | planned | 1.0 |
+| `held` | read | `int` | implemented | 1.1 |
+| `fire_held` | read | `bool` | implemented | 1.1 |
+| `aim` | read | `array<float>` | implemented | 1.1 |
+| `force_held` | read/write | `int` | implemented | 1.1 |
+| `block_held` | read/write | `int` | implemented | 1.1 |
+| `aim_override` | read/write | `array<float>` | implemented | 1.1 |
+
+## `held`
+
+`uc.input.held` (`int`, read)
+
+Status: **implemented**, since API 1.1.
+
+The buttons the game sees as held on the pad, after the mods: a combination of A 0x800, B 0x400 (the trigger), minus 0x10 and plus 0x1000. Player 1's pad only.
+
+Lua:
+
+```lua
+if uc.input.held & 0x400 ~= 0 then log.write('trigger') end
+```
+
+JavaScript:
+
+```js
+if (uc.input.held & 0x400) log.write('trigger');
+```
 
 ## `fire_held`
 
-`uc.input.fire_held(slot)` returns `bool`
+`uc.input.fire_held` (`bool`, read)
 
-Status: **planned**, since API 1.0.
+Status: **implemented**, since API 1.1.
 
-True while the fire button of the slot is held.
+True while the trigger (button B) is held, as the game sees it.
 
-- `slot` (`int`): Player slot, 1 or 2.
+Lua:
+
+```lua
+if uc.input.fire_held then log.write('firing') end
+```
+
+JavaScript:
+
+```js
+if (uc.input.fire_held) log.write('firing');
+```
+
+## `aim`
+
+`uc.input.aim` (`array<float>`, read)
+
+Status: **implemented**, since API 1.1.
+
+Where the pointer is, [x, y], each from -1 to 1 (0, 0 is the middle of the screen, y down), as the game sees it.
+
+Lua:
+
+```lua
+local a = uc.input.aim
+```
+
+JavaScript:
+
+```js
+const a = uc.input.aim;
+```
+
+## `force_held`
+
+`uc.input.force_held` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Buttons the game sees as held although the player does not hold them (a combination of A 0x800, B 0x400, minus 0x10, plus 0x1000; 0 clears). The game sees a press when one starts. Masks of several mods add up; yours is taken back when the mod stops.
+
+Lua:
+
+```lua
+uc.input.force_held = 0x400
+```
+
+JavaScript:
+
+```js
+uc.input.force_held = 0x400;
+```
+
+## `block_held`
+
+`uc.input.block_held` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Buttons that never reach the game even when the player holds them (same masks; 0 clears). The game sees the button let go when a block starts. Taken back when the mod stops.
+
+Lua:
+
+```lua
+uc.input.block_held = 0x400
+```
+
+JavaScript:
+
+```js
+uc.input.block_held = 0x400;
+```
+
+## `aim_override`
+
+`uc.input.aim_override` (`array<float>`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Makes the game see the pointer at [x, y] (each -1 to 1); nil gives it back to the player. With several mods the latest setter wins; taken back when the mod stops. Reads nil while no mod overrides.
+
+Lua:
+
+```lua
+uc.input.aim_override = { 0.0, 0.0 }
+```
+
+JavaScript:
+
+```js
+uc.input.aim_override = [0, 0];
+```

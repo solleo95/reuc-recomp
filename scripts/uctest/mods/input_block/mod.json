@@ -1,0 +1,1 @@
+{ "id": "input-block", "name": "Input block", "version": "1.0", "api": "1.1", "touches_gameplay": true, "script": "scripts/main.lua" }

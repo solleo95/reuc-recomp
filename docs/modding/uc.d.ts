@@ -109,8 +109,18 @@ declare namespace uc {
     }
     /** Player input as the game sees it. */
     namespace input {
-        /** True while the fire button of the slot is held. [planned] */
-        function fire_held(slot: number): boolean;
+        /** The buttons the game sees as held on the pad, after the mods: a combination of A 0x800, B 0x400 (the trigger), minus 0x10 and plus 0x1000. Player 1's pad only. [implemented] */
+        const held: number;
+        /** True while the trigger (button B) is held, as the game sees it. [implemented] */
+        const fire_held: boolean;
+        /** Where the pointer is, [x, y], each from -1 to 1 (0, 0 is the middle of the screen, y down), as the game sees it. [implemented] */
+        const aim: number[];
+        /** Buttons the game sees as held although the player does not hold them (a combination of A 0x800, B 0x400, minus 0x10, plus 0x1000; 0 clears). The game sees a press when one starts. Masks of several mods add up; yours is taken back when the mod stops. [implemented] */
+        let force_held: number;
+        /** Buttons that never reach the game even when the player holds them (same masks; 0 clears). The game sees the button let go when a block starts. Taken back when the mod stops. [implemented] */
+        let block_held: number;
+        /** Makes the game see the pointer at [x, y] (each -1 to 1); nil gives it back to the player. With several mods the latest setter wins; taken back when the mod stops. Reads nil while no mod overrides. [implemented] */
+        let aim_override: number[];
     }
 }
 

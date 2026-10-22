@@ -21,7 +21,7 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 | [weapon](weapon.md) | registry | 5 | 5 |
 | [camera](camera.md) | registry | 5 | 5 |
 | [enemies](enemies.md) | registry | 1 | 1 |
-| [input](input.md) | registry | 1 | 0 |
+| [input](input.md) | registry | 6 | 6 |
 
 ## Hookable functions
 

@@ -1,5 +1,6 @@
 #include "game_input.h"
 #include "hooks.h"
+#include "input_api.h"
 #include "test_state.h"
 #include "gx_vertices.h"
 #include "guest_call.h"
@@ -118,7 +119,7 @@ InputSample game_input_buttons(InputContext context,const ActionFrame& frame) {
     result.released&=~result.held;
     return result;
 }
-InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
+static InputSample game_input_sample_unfiltered(const ppc::Ctx& c,const InputSample& raw) {
     if(!input)return raw;
     const auto state=input_probe_snapshot(c);
     const auto context=game_input_context(state);
@@ -162,6 +163,14 @@ InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
     result.held=buttons.held; result.pressed=buttons.pressed; result.released=buttons.released;
     if(context==InputContext::gameplay && std::any_of(requests.begin(),requests.end(),[](auto request){return weapon(request.action);}))result.pressed|=kNativeWeaponStep;
     return result;
+}
+// Every pad sample the guest reads, host input or the harness's pad: the mods' input overrides (input.force_held and the others) apply last.
+InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
+    auto sample=game_input_sample_unfiltered(c,raw);
+    uc::mods::InputView view{sample.x,sample.y,sample.held,sample.pressed,sample.released};
+    uc::mods::filter_input(view);
+    sample.x=view.x; sample.y=view.y; sample.held=view.held; sample.pressed=view.pressed; sample.released=view.released;
+    return sample;
 }
 void game_input_init(NativeInput* source,bool trace) { input=source; requests.clear(); generation=native_holds=qte_token=0; actor=traced_tutorial=0; trace_actions=trace; trace_records=request_records=wrapper_records=gate_records=tutorial_records=0; current_context=InputContext::inactive; input_hle_set_map(source ? game_input_sample : nullptr); }
 void game_input_shutdown() { input_hle_set_map(nullptr); input=nullptr; requests.clear(); }
