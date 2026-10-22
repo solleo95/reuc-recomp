@@ -91,6 +91,8 @@ public:
 
 // Everything under a registry domain of the schema that is implemented. The returned ticker shares state with the registered members.
 std::shared_ptr<GameApiTicker> register_game_api(ApiRegistry&, GuestMemory&, const SymbolTable&);
+// guest.call, game.give_weapon and game.select_weapon (guest_api_calls.cpp).
+void register_guest_calls_api(ApiRegistry&, GuestMemory&);
 // The player, camera and enemies members (game_api_player.cpp).
 std::shared_ptr<GameApiTicker> register_player_weapon_api(ApiRegistry&, GuestMemory&);
 

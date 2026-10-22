@@ -121,6 +121,7 @@ private:
 std::shared_ptr<GameApiTicker> register_game_api(ApiRegistry& api, GuestMemory& mem, const SymbolTable& symbols) {
     register_low_level_api(api, mem, symbols);
     auto player = register_player_weapon_api(api, mem);
+    register_guest_calls_api(api, mem);
     auto input = register_input_api(api);
     return std::make_shared<CompositeTicker>(std::vector<std::shared_ptr<GameApiTicker>>{player, input});
 }

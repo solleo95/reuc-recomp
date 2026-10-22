@@ -38,15 +38,16 @@ void run_hook_slot(HookKind kind, size_t index, ppc::Ctx& ctx);   // out of line
 
 // The per-step event: the game calls mods_step() once per elapsed game step (not while paused); the mod host installs the callback.
 // `nominal` is the number of nominal frames (the game's own 30 Hz step, about 30 per second of game time) the step covers: 0 for a step shorter than one, more for a long one.
-using StepCallback = void (*)(void* user, uint32_t nominal);
+// `ctx` is the register file of the guest thread making the call (nullptr in tests): mods may call game functions with it during the step.
+using StepCallback = void (*)(void* user, uint32_t nominal, ppc::Ctx* ctx);
 inline std::atomic<StepCallback> g_step_callback{nullptr};
 inline std::atomic<void*> g_step_user{nullptr};
 inline void set_step_callback(StepCallback callback, void* user) {
     g_step_user.store(user, std::memory_order_relaxed);
     g_step_callback.store(callback, std::memory_order_release);
 }
-inline void mods_step(uint32_t nominal = 1) {
-    if (const StepCallback callback = g_step_callback.load(std::memory_order_acquire)) callback(g_step_user.load(std::memory_order_relaxed), nominal);
+inline void mods_step(uint32_t nominal = 1, ppc::Ctx* ctx = nullptr) {
+    if (const StepCallback callback = g_step_callback.load(std::memory_order_acquire)) callback(g_step_user.load(std::memory_order_relaxed), nominal, ctx);
 }
 
 // Entry hook of a translated function (UC_ENTER): runs the pre hooks, then the replace hooks. True when the function body must be skipped.

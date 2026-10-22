@@ -1,4 +1,5 @@
 #include "hook_registry.h"
+#include "mod_guest_call.h"
 #include "ppc_rt.h"
 #include <atomic>
 #include <memory>
@@ -44,6 +45,7 @@ void run_hook_slot(HookKind kind, size_t index, ppc::Ctx& ctx) {
         Reader() { g_readers.fetch_add(1, std::memory_order_seq_cst); }
         ~Reader() { g_readers.fetch_sub(1, std::memory_order_seq_cst); }
     } reader;
+    GuestCallScope guest(&ctx);   // the handlers may call game functions with this thread's registers
     if (const HookChain* chain = g_hook_slots[size_t(kind)][index].load(std::memory_order_seq_cst))
         for (const auto& entry : chain->entries) entry.second(ctx);
 }

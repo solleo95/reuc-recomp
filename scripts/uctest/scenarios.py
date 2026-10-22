@@ -484,6 +484,24 @@ def state_dump(g, args):
     return {"dump": str(g.run_dir / "state_dump.txt"), "state": snaps[-1][1]}
 
 
+def player_dump(g, args):
+    """Spike (block 7 of the mod API): raw dumps of the player object, the weapon table and the ammo table in the first chapter -> player_dump.json."""
+    import json
+    reach_gameplay(g, args.chapter)
+    g.advance(120)
+
+    def peek(addr, size):
+        return bytes.fromhex(g.request({"cmd": "peek", "addr": addr, "size": size})["hex"])
+
+    state = g.state()["player"]
+    p1 = int.from_bytes(peek(0x806C3AD8, 4), "big")
+    p2 = int.from_bytes(peek(0x806C3ADC, 4), "big")
+    dump = {"p1": p1, "p2": p2, "player1": peek(p1, 0x900).hex(), "player2": peek(p2, 0x900).hex() if p2 else "",
+            "weapons": peek(0x8046A86C, 168 * 20).hex(), "ammo": peek(0x8056F300, 0x200).hex(), "state": state}
+    (g.run_dir / "player_dump.json").write_text(json.dumps(dump), encoding="utf-8")
+    return {"dump": str(g.run_dir / "player_dump.json")}
+
+
 def hook_probe(g, args):
     """Hooks in the real game: a mod's hook on GameWeaponUpdate is called with the weapon object, and clearing the 'allowed' flag (r4) from a hook changes
     what the game does. Reads debug/mods.log next to the exe; fire presses use the game's own pad input."""
@@ -760,6 +778,45 @@ def game_api(g, args):
     return result
 
 
+def guest_api(g, args):
+    """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
+    given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+
+    def lines(prefix):
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        return [l.split("guest ", 1)[1] for l in text.splitlines() if "guest " + prefix in l]
+
+    result = {}
+    with g.step("call_and_switch"):
+        for _ in range(20):
+            g.advance(30)
+            if lines("record="):
+                break
+        done = lines("record=")
+        if not done:
+            g.fail("the probe mod never ran its calls (see mods.log)", "guest api")
+        result["calls"] = done[0]
+        if "record=8046A9BC" not in done[0] or "current=true" not in done[0]:   # 0x8046A86C + 2 * 168
+            g.fail(f"unexpected call results: {done[0]}", "guest api")
+    with g.step("weapon_in_hand"):
+        g.advance(60)
+        last = lines("weapon=")[-1]
+        result["after"] = last
+        if "weapon=2" not in last:
+            g.fail(f"the submachine gun is not the player's weapon: {last}", "guest api")
+        before = int(last.split("magazine=")[1])
+        g.press("B", 60)
+        g.advance(30)
+        after = int(lines("weapon=")[-1].split("magazine=")[1])
+        result["magazine"] = [before, after]
+        if after >= before:
+            g.fail(f"the held trigger did not use the magazine: {before} -> {after}", "guest api")
+        result["capture"] = g.capture()
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "game_api": game_api}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

@@ -8,6 +8,8 @@ The state of the game as a whole. The mission clock and the counters keep their 
 |---|---|---|---|---|
 | `time` | read/write | `int` | implemented | 1.1 |
 | `paused` | read | `bool` | implemented | 1.1 |
+| `give_weapon` | function | `int` | implemented | 1.1 |
+| `select_weapon` | function | `bool` | implemented | 1.1 |
 | `stars` | read/write | `int` | implemented | 1.1 |
 
 ## `time`
@@ -48,6 +50,54 @@ JavaScript:
 
 ```js
 if (uc.game.paused) log.write('paused');
+```
+
+## `give_weapon`
+
+`uc.game.give_weapon(slot, id, key, magazine)` returns `int`
+
+Status: **implemented**, since API 1.1.
+
+Puts a weapon into the first free slot of the player's loadout (16 slots) and returns the slot number; a weapon the player already has just gives its slot. It does not equip the weapon: the game's own weapon switch reaches it, or call select_weapon.
+
+- `slot` (`int`): Player 1 or 2.
+- `id` (`int`): Weapon id, 0 to 19 (the record number of the weapon table).
+- `key` (`int`, optional): Ammo key of the spare ammo, 0 to 20; 0 (the default) is an infinite reserve like the handgun's.
+- `magazine` (`int`, optional): Rounds in the magazine; the weapon's capacity by default.
+
+Lua:
+
+```lua
+local index = uc.game.give_weapon(1, 2)
+```
+
+JavaScript:
+
+```js
+const index = uc.game.give_weapon(1, 2);
+```
+
+## `select_weapon`
+
+`uc.game.select_weapon(slot, index)` returns `bool`
+
+Status: **implemented**, since API 1.1.
+
+Makes a loadout slot the one the player uses, by running the game's own switch function (the weapon object, the magazine and the HUD follow). Returns true when the slot is current afterwards. Works only from the game's own events (on_step, the game events, hook handlers).
+
+- `slot` (`int`): Player 1 or 2.
+- `index` (`int`): Loadout slot, 0 to 15 (what give_weapon returns); it must hold a weapon.
+
+Lua:
+
+```lua
+uc.game.select_weapon(1, uc.game.give_weapon(1, 2))
+```
+
+JavaScript:
+
+```js
+uc.game.select_weapon(1, uc.game.give_weapon(1, 2));
 ```
 
 ## `stars`

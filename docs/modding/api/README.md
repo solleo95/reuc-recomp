@@ -18,7 +18,8 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 | [mem](mem.md) | registry | 18 | 18 |
 | [symbols](symbols.md) | registry | 2 | 2 |
 | [player](player.md) | registry | 12 | 12 |
-| [game](game.md) | registry | 3 | 3 |
+| [game](game.md) | registry | 5 | 5 |
+| [guest](guest.md) | registry | 1 | 1 |
 | [weapon](weapon.md) | registry | 5 | 5 |
 | [camera](camera.md) | registry | 5 | 5 |
 | [enemy](enemy.md) | registry | 4 | 4 |

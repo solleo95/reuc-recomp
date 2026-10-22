@@ -162,7 +162,28 @@
       "members": [
         { "name": "time", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.1", "doc": "Mission clock in whole seconds (0 to 359999), the time the result screen shows. Checked: it counts about one per second of game time while a mission runs.", "example": { "lua": "log.write(uc.game.time)", "js": "log.write(uc.game.time);" } },
         { "name": "paused", "kind": "property", "type": "bool", "access": "r", "status": "implemented", "since": "1.1", "doc": "True while the game's pause menu is open.", "example": { "lua": "if uc.game.paused then log.write('paused') end", "js": "if (uc.game.paused) log.write('paused');" } },
+        { "name": "give_weapon", "kind": "function", "type": "int", "status": "implemented", "since": "1.1",
+          "args": [ { "name": "slot", "type": "int", "doc": "Player 1 or 2." }, { "name": "id", "type": "int", "doc": "Weapon id, 0 to 19 (the record number of the weapon table)." },
+                    { "name": "key", "type": "int", "optional": true, "doc": "Ammo key of the spare ammo, 0 to 20; 0 (the default) is an infinite reserve like the handgun's." },
+                    { "name": "magazine", "type": "int", "optional": true, "doc": "Rounds in the magazine; the weapon's capacity by default." } ],
+          "doc": "Puts a weapon into the first free slot of the player's loadout (16 slots) and returns the slot number; a weapon the player already has just gives its slot. It does not equip the weapon: the game's own weapon switch reaches it, or call select_weapon.",
+          "example": { "lua": "local index = uc.game.give_weapon(1, 2)", "js": "const index = uc.game.give_weapon(1, 2);" } },
+        { "name": "select_weapon", "kind": "function", "type": "bool", "status": "implemented", "since": "1.1",
+          "args": [ { "name": "slot", "type": "int", "doc": "Player 1 or 2." }, { "name": "index", "type": "int", "doc": "Loadout slot, 0 to 15 (what give_weapon returns); it must hold a weapon." } ],
+          "doc": "Makes a loadout slot the one the player uses, by running the game's own switch function (the weapon object, the magazine and the HUD follow). Returns true when the slot is current afterwards. Works only from the game's own events (on_step, the game events, hook handlers).",
+          "example": { "lua": "uc.game.select_weapon(1, uc.game.give_weapon(1, 2))", "js": "uc.game.select_weapon(1, uc.game.give_weapon(1, 2));" } },
         { "name": "stars", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.1", "doc": "The stars (the money spent on weapon upgrades), 0 to 9999. The game keeps it in its save data.", "example": { "lua": "uc.game.stars = 9999", "js": "uc.game.stars = 9999;" } }
+      ]
+    },
+    {
+      "name": "guest", "provider": "registry",
+      "doc": "Calls into the game's own code. Only from the game's own events: on_step, the game events (on_weapon_fired and the rest) and hook handlers; anywhere else (the settings window) the call is an error. The game's registers are restored afterwards, so the interrupted code does not notice. Needs 'touches_gameplay' like every write.",
+      "members": [
+        { "name": "call", "kind": "function", "type": "int", "status": "implemented", "since": "1.1",
+          "args": [ { "name": "address", "type": "int", "doc": "Guest address of the first instruction of a translated game function (uc.symbols.lookup gives named ones; most functions have no name)." },
+                    { "name": "args", "type": "array<int>", "optional": true, "doc": "Up to 8 whole numbers, passed in registers r3 to r10 (negative numbers are two's complement)." } ],
+          "doc": "Runs the game function and returns the value it leaves in r3 (an unsigned 32-bit number; pointers are guest addresses). An address that is not the start of a function is an error, not a crash; a wrong argument is not checked, the game function runs with whatever it is given (a bad pointer can crash the game), and nesting is limited to 4 calls.",
+          "example": { "lua": "local record = uc.guest.call(0x8006C8C8, { 0 })", "js": "const record = uc.guest.call(0x8006C8C8, [0]);" } }
       ]
     },
     {

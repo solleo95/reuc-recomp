@@ -1,4 +1,5 @@
 #include "game_mods.h"
+#include "mod_guest_call.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -96,7 +97,8 @@ void GameMods::log(std::string_view mod_id, std::string_view line) {
     log_file_.flush();   // a crash must not lose the lines that explain it
 }
 
-void GameMods::step(void* self, uint32_t nominal) {
+void GameMods::step(void* self, uint32_t nominal, ppc::Ctx* ctx) {
+    mods::GuestCallScope guest(ctx);   // mods may call game functions during the step
     if (auto* host = static_cast<GameMods*>(self)->host_.get()) host->step(nominal);
 }
 

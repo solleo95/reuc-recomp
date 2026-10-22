@@ -276,9 +276,32 @@ uc.game.time = nil
 ---True while the game's pause menu is open. [implemented]
 uc.game.paused = nil
 
+---Puts a weapon into the first free slot of the player's loadout (16 slots) and returns the slot number; a weapon the player already has just gives its slot. It does not equip the weapon: the game's own weapon switch reaches it, or call select_weapon. [implemented]
+---@param slot integer Player 1 or 2.
+---@param id integer Weapon id, 0 to 19 (the record number of the weapon table).
+---@param key? integer Ammo key of the spare ammo, 0 to 20; 0 (the default) is an infinite reserve like the handgun's.
+---@param magazine? integer Rounds in the magazine; the weapon's capacity by default.
+---@return integer
+function uc.game.give_weapon(slot, id, key, magazine) end
+
+---Makes a loadout slot the one the player uses, by running the game's own switch function (the weapon object, the magazine and the HUD follow). Returns true when the slot is current afterwards. Works only from the game's own events (on_step, the game events, hook handlers). [implemented]
+---@param slot integer Player 1 or 2.
+---@param index integer Loadout slot, 0 to 15 (what give_weapon returns); it must hold a weapon.
+---@return boolean
+function uc.game.select_weapon(slot, index) end
+
 ---@type integer
 ---The stars (the money spent on weapon upgrades), 0 to 9999. The game keeps it in its save data. [implemented]
 uc.game.stars = nil
+
+---Calls into the game's own code. Only from the game's own events: on_step, the game events (on_weapon_fired and the rest) and hook handlers; anywhere else (the settings window) the call is an error. The game's registers are restored afterwards, so the interrupted code does not notice. Needs 'touches_gameplay' like every write.
+uc.guest = {}
+
+---Runs the game function and returns the value it leaves in r3 (an unsigned 32-bit number; pointers are guest addresses). An address that is not the start of a function is an error, not a crash; a wrong argument is not checked, the game function runs with whatever it is given (a bad pointer can crash the game), and nesting is limited to 4 calls. [implemented]
+---@param address integer Guest address of the first instruction of a translated game function (uc.symbols.lookup gives named ones; most functions have no name).
+---@param args? integer[] Up to 8 whole numbers, passed in registers r3 to r10 (negative numbers are two's complement).
+---@return integer
+function uc.guest.call(address, args) end
 
 ---Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits.
 ---@param id integer

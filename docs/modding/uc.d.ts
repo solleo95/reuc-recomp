@@ -111,8 +111,17 @@ declare namespace uc {
         let time: number;
         /** True while the game's pause menu is open. [implemented] */
         const paused: boolean;
+        /** Puts a weapon into the first free slot of the player's loadout (16 slots) and returns the slot number; a weapon the player already has just gives its slot. It does not equip the weapon: the game's own weapon switch reaches it, or call select_weapon. [implemented] */
+        function give_weapon(slot: number, id: number, key?: number, magazine?: number): number;
+        /** Makes a loadout slot the one the player uses, by running the game's own switch function (the weapon object, the magazine and the HUD follow). Returns true when the slot is current afterwards. Works only from the game's own events (on_step, the game events, hook handlers). [implemented] */
+        function select_weapon(slot: number, index: number): boolean;
         /** The stars (the money spent on weapon upgrades), 0 to 9999. The game keeps it in its save data. [implemented] */
         let stars: number;
+    }
+    /** Calls into the game's own code. Only from the game's own events: on_step, the game events (on_weapon_fired and the rest) and hook handlers; anywhere else (the settings window) the call is an error. The game's registers are restored afterwards, so the interrupted code does not notice. Needs 'touches_gameplay' like every write. */
+    namespace guest {
+        /** Runs the game function and returns the value it leaves in r3 (an unsigned 32-bit number; pointers are guest addresses). An address that is not the start of a function is an error, not a crash; a wrong argument is not checked, the game function runs with whatever it is given (a bad pointer can crash the game), and nesting is limited to 4 calls. [implemented] */
+        function call(address: number, args?: number[]): number;
     }
     /** Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits. */
     function weapon(id: number): WeaponHandle;

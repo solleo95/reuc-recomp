@@ -47,7 +47,7 @@ public:
 
 private:
     void log(std::string_view mod_id, std::string_view line);
-    static void step(void* self, uint32_t nominal);
+    static void step(void* self, uint32_t nominal, ppc::Ctx* ctx);
     bool runs(const mods::ModEntry& mod) const;
     void refresh_files(bool initial);
 

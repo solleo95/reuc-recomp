@@ -33,6 +33,7 @@
 #include "test_control.h"
 #include "test_server.h"
 #include "game_mods.h"
+#include "mod_guest_call.h"
 #include "menu_ui.h"
 #include "test_state.h"
 #include "test_draws.h"
@@ -295,6 +296,8 @@ static int real_main(int argc, char** argv) {
 
     map_hardware();
     uc::dispatch_init(uc_functions, uc_function_count, uc_text_begin, uc_text_end);
+    static const uc::mods::GuestCallBackend guest_calls{&uc::has_function, &uc::call_indirect};   // mods calling game functions (modding/mod_guest_call.h)
+    uc::mods::set_guest_call_backend(&guest_calls);
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
     // Mods: their file overlays go into the disc tree now, before the game opens anything; the scripts start once the guest is about to run.

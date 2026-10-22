@@ -1,0 +1,1 @@
+{ "id": "guest-probe", "name": "Guest probe", "version": "1.0", "api": "1.1", "touches_gameplay": true, "script": "scripts/main.lua" }

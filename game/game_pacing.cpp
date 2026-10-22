@@ -148,7 +148,7 @@ void hle_GameFrameWait(ppc::Ctx& c) {
         uc::counter_probe_step(c,step);
         uc::state_dump_step(c,step);
         uc::write_trap_step(c);
-        if(!zero_step) uc::mods::mods_step(nominal_ticks);   // mod scripts' on_step: once per nominal frame, on the guest thread
+        if(!zero_step) uc::mods::mods_step(nominal_ticks,&c);   // mod scripts' on_step: once per nominal frame, on the guest thread
         ++calls; retraces+=ppc::rd32(c,object+0x24);
         timestep_ns+=uint64_t(std::llround(double(step)*1e9));
         threshold_two+=target==2;

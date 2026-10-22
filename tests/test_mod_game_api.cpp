@@ -1,6 +1,8 @@
 #include "check.h"
 #include "game_api.h"
 #include "guest_mem.h"
+#include "mod_guest_call.h"
+#include "ppc_rt.h"
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -279,6 +281,59 @@ static void game_state_and_stats() {
     CHECK(f.throws([&] { f.set("player.hits", slot(1), -1); }) && f.throws([&] { f.set("player.hits", slot(1), 100000); }));
 }
 
+static GuestMemory* g_guest_memory = nullptr;
+static void fake_call(ppc::Ctx& c, uint32_t address) {
+    if (address == 0x80067980u) g_guest_memory->write_u32(c.r[3] + 0x784, c.r[4]);   // the game's slot switch, reduced to its visible effect
+    else c.r[3] = c.r[3] * 2 + c.r[4];
+    c.r[10] = 0xDEAD;   // clobbered: the caller must get its own registers back
+}
+static bool fake_has(uint32_t address) { return address == 0x80001000u || address == 0x80067980u; }
+
+static void guest_calls_and_loadout() {
+    Fixture f;
+    g_guest_memory = &f.memory;
+    const GuestCallBackend backend{&fake_has, &fake_call};
+    ppc::Ctx ctx{};
+    ctx.r[3] = 11; ctx.r[10] = 77; ctx.lr = 0x1234;
+    CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001000u}}); }));   // no backend yet
+    set_guest_call_backend(&backend);
+    CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001000u}}); }));   // not a guest thread
+    {
+        GuestCallScope scope(&ctx);
+        CHECK(f.call("guest.call", {{"address", 0x80001000u}, {"args", {20, 3}}}) == 43);
+        CHECK(ctx.r[3] == 11u && ctx.r[10] == 77u && ctx.lr == 0x1234u);   // the interrupted registers are back
+        CHECK(f.call("guest.call", {{"address", 0x80001000u}, {"args", {-1, 0}}}) == 0xFFFFFFFEu);
+        CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001004u}}); }));   // not a function entry
+        CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001000u}, {"args", {1, 2, 3, 4, 5, 6, 7, 8, 9}}}); }));
+        CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001000u}, {"args", {1.5}}}); }));
+        CHECK(f.throws([&] { f.call("guest.call", {{"address", "x"}}); }));
+    }
+    CHECK(f.throws([&] { f.call("guest.call", {{"address", 0x80001000u}}); }));   // the scope ended
+
+    // The loadout: slot 0 holds the handgun, the rest are empty.
+    for (uint32_t i = 0; i < 16; ++i) f.memory.write_u32(kP1 + 0x704 + 4 * i, 0xFFFFFFFFu);
+    f.memory.write_u32(kP1 + 0x704, 0); f.memory.write_u32(kP1 + 0x6C4, 15);
+    f.memory.write_u32(0x8046A86C + 2 * 168 + 0x14, 50);   // the submachine gun's capacity
+    CHECK(f.call("game.give_weapon", {{"slot", 1}, {"id", 2}}) == 1);
+    CHECK(f.memory.read_u32(kP1 + 0x708) == 2u && f.memory.read_u32(kP1 + 0x748) == 0u && f.memory.read_u32(kP1 + 0x6C8) == 50u);
+    CHECK(f.call("game.give_weapon", {{"slot", 1}, {"id", 2}}) == 1);   // already there
+    CHECK(f.call("game.give_weapon", {{"slot", 1}, {"id", 7}, {"key", 7}, {"magazine", 3}}) == 2);
+    CHECK(f.memory.read_u32(kP1 + 0x74C) == 7u && f.memory.read_u32(kP1 + 0x6CC) == 3u);
+    CHECK(f.throws([&] { f.call("game.give_weapon", {{"slot", 1}, {"id", 20}}); }) && f.throws([&] { f.call("game.give_weapon", {{"slot", 3}, {"id", 1}}); })
+          && f.throws([&] { f.call("game.give_weapon", {{"slot", 1}, {"id", 1}, {"key", 21}}); }));
+    f.memory.write_u32(kPlayerTable + 4, 0);
+    CHECK(f.throws([&] { f.call("game.give_weapon", {{"slot", 2}, {"id", 1}}); }));   // player 2 is not there
+
+    CHECK(f.throws([&] { f.call("game.select_weapon", {{"slot", 1}, {"index", 1}}); }));   // not a guest thread
+    {
+        GuestCallScope scope(&ctx);
+        CHECK(f.call("game.select_weapon", {{"slot", 1}, {"index", 1}}) == true && f.memory.read_u32(kP1 + 0x784) == 1u);
+        CHECK(f.throws([&] { f.call("game.select_weapon", {{"slot", 1}, {"index", 5}}); }));    // empty slot
+        CHECK(f.throws([&] { f.call("game.select_weapon", {{"slot", 1}, {"index", 16}}); }));
+    }
+    set_guest_call_backend(nullptr);
+}
+
 static void enemies_list_parses_actor_table() {
     Fixture f;
     const auto zombie = [&](uint32_t address, uint32_t id, float x, float y, float z, float hp) {
@@ -502,6 +557,7 @@ int main() {
     enemy_members();
     weapon_health_and_reserve();
     game_state_and_stats();
+    guest_calls_and_loadout();
     camera_position_and_axes_from_the_view_matrix();
     camera_position_and_axes_from_the_view_matrix();
     fire_rate_sets_the_live_interval();

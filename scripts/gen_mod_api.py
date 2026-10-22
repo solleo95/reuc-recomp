@@ -111,7 +111,7 @@ def ts_type(t):
 
 
 def ts_args(m):
-    return ", ".join("%s: %s" % (a["name"], ts_type(a["type"])) for a in m.get("args", []))
+    return ", ".join("%s%s: %s" % (a["name"], "?" if a.get("optional") else "", ts_type(a["type"])) for a in m.get("args", []))
 
 
 def camel(name):
@@ -206,7 +206,7 @@ def render_lua(schema):
             if m["kind"] == "function":
                 out.append("---%s [%s]\n" % (m["doc"].replace("\n", " "), m["status"]))
                 for a in m.get("args", []):
-                    out.append("---@param %s %s %s\n" % (a["name"], lua_type(a["type"]), a["doc"]))
+                    out.append("---@param %s%s %s %s\n" % (a["name"], "?" if a.get("optional") else "", lua_type(a["type"]), a["doc"]))
                 if m["type"] != "void":
                     out.append("---@return %s\n" % lua_type(m["type"]))
                 out.append("function %s.%s(%s) end\n\n" % (prefix, m["name"], ", ".join(a["name"] for a in m.get("args", []))))
@@ -243,7 +243,7 @@ def render_domain(schema, d):
             out.append(" returns `%s`" % m["type"] if m["kind"] == "function" else " (`%s`, %s)" % (m["type"], access_of(m)))
         out.append("\n\nStatus: **%s**, since API %s.\n\n%s\n" % (m["status"], m["since"], m["doc"]))
         for a in m.get("args", []):
-            out.append("\n- `%s` (`%s`): %s" % (a["name"], a["type"], a["doc"]))
+            out.append("\n- `%s` (`%s`%s): %s" % (a["name"], a["type"], ", optional" if a.get("optional") else "", a["doc"]))
         if m.get("args"):
             out.append("\n")
         ex = m.get("example")
