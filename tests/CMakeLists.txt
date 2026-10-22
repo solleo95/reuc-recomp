@@ -343,6 +343,7 @@ add_test(NAME test_gx_list_audit COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURREN
 add_test(NAME test_timing_audit COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_timing_audit.py ${CMAKE_SOURCE_DIR})
 add_test(NAME test_pacing_hooks COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_pacing_hooks.py ${CMAKE_SOURCE_DIR})
 add_test(NAME test_step_audit COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_step_audit.py ${CMAKE_SOURCE_DIR})
+add_test(NAME test_docs_links COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_docs_links.py ${CMAKE_SOURCE_DIR})
 add_test(NAME test_mod_api_generated COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_mod_api_generated.py ${CMAKE_SOURCE_DIR})
 add_test(NAME test_build_tools COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_build_tools.py ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/build_tools)
 foreach(t test_dol test_dol_scan test_isa test_analyzer test_isa_roundtrip test_emit test_dsy test_format)

@@ -1,5 +1,7 @@
 # Making a mod
 
+> **New to modding?** The step-by-step guides are in [guide/en/README.md](guide/en/README.md) (English) and [guide/ru/README.md](guide/ru/README.md) (Русский): one overview and one guide each for textures, audio, text, disc files, data patches, Lua, JavaScript, settings and UI, the game API, hooks, native DLLs, and testing and sharing. This page is the short reference version.
+
 A mod is a folder in `mods/` next to `uc.exe`. The smallest useful one is two files.
 
 `mods/infinite-ammo/mod.json`
