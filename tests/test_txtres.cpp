@@ -80,6 +80,25 @@ static void rejects_damaged_files() {
     bad = good; bad.resize(0x10 + 4 * 5 - 2); CHECK(read_fails(bad));                        // cut inside the table
 }
 
+// A base file that is structurally valid but built to hurt: records inside the header or the table or on top of each other (a patch would overwrite them),
+// and shared line pointers that make the total scanning work explode.
+static void rejects_hostile_layouts() {
+    const auto good = make_txtres(sample());
+    std::string error;
+    auto bad = good; put32(bad, 0x10, 4); CHECK(read_fails(bad));                                 // record 0 starts inside the header
+    bad = good; put32(bad, 0x10, 0x14); CHECK(read_fails(bad));                                   // record 0 starts inside the table
+    bad = good; put32(bad, 0x10 + 4, uint32_t(rec(0) + 4)); CHECK(read_fails(bad));               // records 0 and 1 overlap
+    bad = good; put32(bad, 0x10 + 4, uint32_t(rec(0))); CHECK(read_fails(bad));                   // two table entries for one record
+    CHECK(!patch_txtres(bad, {{1, {"x"}}}, error) && !error.empty());                             // the patcher refuses them too
+    std::vector<Rec> many;
+    many.push_back({1, "", std::vector<std::string>(1000, std::string(100, 'x'))});
+    for (uint32_t i = 2; i < 2000; ++i) many.push_back({i, "", std::vector<std::string>(1000, "x"), true});   // 1999 records that all point at the same 1000 lines
+    const auto heavy = make_txtres(many);
+    CHECK(read_fails(heavy));                                                                     // 200 MB of scanning for a 300 KB file: refused
+    CHECK(!patch_txtres(heavy, {{1, {"x"}}}, error) && !error.empty());
+    CHECK(patch_txtres(make_txtres(sample()), {{1, {"x"}}}, error).has_value());                   // an honest file with a shared string is fine
+}
+
 static void patched_file_reads_back_with_read_txtres() {
     std::string error;
     TextChanges changes;
@@ -98,6 +117,7 @@ int main() {
     unknown_ids_are_reported();
     shared_strings_are_not_disturbed();
     rejects_damaged_files();
+    rejects_hostile_layouts();
     patched_file_reads_back_with_read_txtres();
     std::puts("test_txtres: ok");
     return 0;

@@ -2,6 +2,7 @@
 #include "text/txtres.h"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
@@ -35,6 +36,29 @@ std::string hex(uint64_t value) {
     char text[17];
     for (int i = 0; i < 16; ++i) text[i] = "0123456789abcdef"[(value >> (60 - 4 * i)) & 15];
     text[16] = 0;
+    return text;
+}
+
+// The printf conversions of a text ("%s%d" for "a %s b %d"): the game hands some records to printf, so a text may not add, drop or change them. "%%" is a
+// percent sign; a '%' that starts no valid conversion counts as "?" (it would be one for printf: "100% damage" is "% d").
+std::string conversions(const std::string& text) {
+    std::string result;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '%') continue;
+        if (++i >= text.size()) { result += '?'; break; }
+        if (text[i] == '%') continue;
+        while (i < text.size() && std::strchr("-+ #0", text[i])) ++i;
+        while (i < text.size() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '*')) ++i;
+        if (i < text.size() && text[i] == '.') { ++i; while (i < text.size() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '*')) ++i; }
+        while (i < text.size() && std::strchr("hlLqjzt", text[i])) ++i;
+        result += i < text.size() && std::strchr("diouxXeEfgGaAcspn", text[i]) ? text[i] : '?';
+    }
+    return result;
+}
+
+std::string joined(const std::vector<std::string>& lines) {
+    std::string text;
+    for (const auto& line : lines) text += line;
     return text;
 }
 
@@ -87,6 +111,7 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
     const auto add_problems = [&](const std::string& mod, const std::vector<std::string>& texts) { for (const auto& t : texts) add_problem(mod, t); };
 
     std::map<std::string, std::optional<std::vector<uint8_t>>> bases;   // looked up once per language
+    std::map<std::string, std::map<uint32_t, std::string>> placeholders;   // language -> record id -> printf conversions of the original
     const auto base_of = [&](const std::string& lang) -> const std::optional<std::vector<uint8_t>>& {
         auto it = bases.find(lang);
         if (it == bases.end()) it = bases.emplace(lang, base(lang)).first;
@@ -113,8 +138,23 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
         }
         add_problems(id, problems);
         const auto apply = [&](const std::string& lang, const Parsed& parsed) {
-            for (const auto& [record, lines] : parsed.changes) { changes[lang][record] = lines; origin[lang][record] = {id, parsed.file}; }
-            if (!parsed.changes.empty()) contributors[lang].insert(id);
+            auto original = placeholders.find(lang);   // the printf conversions of each record of the base, read once per language
+            if (original == placeholders.end()) {
+                std::map<uint32_t, std::string> found;
+                std::string ignored;
+                if (const auto records = read_txtres(*base_of(lang), ignored)) for (const auto& r : *records) found[r.id] = conversions(joined(r.lines));
+                original = placeholders.emplace(lang, std::move(found)).first;
+            }
+            bool any = false;
+            for (const auto& [record, lines] : parsed.changes) {
+                const auto expected = original->second.find(record);
+                if (expected != original->second.end() && conversions(joined(lines)) != expected->second) {
+                    add_problem(id, "text: " + parsed.file + ": id \"" + std::to_string(record) + "\": the placeholders (%s, %d, ...) must match the original's, which has \"" + expected->second + "\" (write %% for a percent sign); the original text is kept");
+                    continue;
+                }
+                changes[lang][record] = lines; origin[lang][record] = {id, parsed.file}; any = true;
+            }
+            if (any) contributors[lang].insert(id);
         };
         for (const char* lang_name : kTextLanguages) {
             const std::string lang = lang_name;
@@ -154,7 +194,15 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
     for (const auto& [lang, bytes] : produced) { hash = fnv1a(hash, lang.data(), lang.size()); hash = fnv1a(hash, bytes.data(), bytes.size()); }
     const fs::path root = cache_root / "_text" / hex(hash);
     std::error_code error;
-    if (!fs::is_directory(root / "Data" / "message", error)) {
+    const auto complete = [&] {   // a folder of this key from an earlier run: every file there and as long as it should be (a cut-short copy is rebuilt)
+        for (const auto& [lang, bytes] : produced) {
+            std::error_code size_error;
+            const uintmax_t size = fs::file_size(root / "Data" / "message" / ("mes_" + lang + ".txtres"), size_error);
+            if (size_error || size != bytes.size()) return false;
+        }
+        return true;
+    };
+    if (!complete()) {
         fs::path temp = root;
         temp += ".tmp";
         fs::remove_all(temp, error);
@@ -163,7 +211,8 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
         for (const auto& [lang, bytes] : produced) {
             std::ofstream out(temp / "Data" / "message" / ("mes_" + lang + ".txtres"), std::ios::binary);
             out.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
-            ok = ok && out.good();
+            out.close();   // the buffered tail is written here: a full disk shows up only now
+            ok = ok && !out.fail();
         }
         if (ok) { fs::remove_all(root, error); fs::rename(temp, root, error); ok = !error; }
         if (!ok) {

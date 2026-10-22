@@ -142,6 +142,42 @@ static void same_input_reuses_the_folder_and_changed_input_makes_a_new_one() {
     CHECK(!fs::exists(first.root) && fs::exists(changed.root));
 }
 
+// A folder of the cache that was cut short (disk full, antivirus) is rebuilt instead of reused.
+static void a_damaged_cache_folder_is_rebuilt() {
+    Rig rig;
+    const auto& mod = rig.add("one");
+    write(mod.root / "text" / "us.json", R"({"1":"v1"})");
+    const auto first = rig.build();
+    const fs::path file = first.root / "Data" / "message" / "mes_us.txtres";
+    const auto whole = read_bytes(file);
+    fs::resize_file(file, whole.size() / 2);
+    const auto again = rig.build();
+    CHECK(again.root == first.root && read_bytes(file) == whole);   // the same key, repaired
+    std::string error;
+    CHECK(read_txtres(read_bytes(file), error).has_value());
+}
+
+// The game feeds some texts to printf: the placeholders of a record are part of its contract.
+static void placeholders_must_match_the_original() {
+    Rig rig;
+    const auto& mod = rig.add("one");
+    write(mod.root / "text" / "us.json", R"({"7":"Sieben","1":"50%% done %s","2":"100% damage","12":"ok"})");   // 7 needs its %s; 1 has none in the original; 2 has "% d"
+    const auto build = rig.build();
+    const auto us = Rig::records(build.root, "us");
+    CHECK(us[2].lines[0] == "Seven %s");           // refused: the original keeps its text
+    CHECK(us[0].lines[0] == "Enter");               // refused: a %s the original does not have
+    CHECK(us[1].lines[0] == "first");               // refused: "% d" is a printf conversion
+    CHECK(us[3].lines[0] == "ok");                  // no placeholders on either side
+    const auto& problems = build.problems.at("one");
+    const auto has = [&](const char* id, const char* word) { for (const auto& p : problems) if (p.find(id) != std::string::npos && p.find(word) != std::string::npos) return true; return false; };
+    CHECK(problems.size() == 3 && has("\"7\"", "placeholder") && has("\"1\"", "placeholder") && has("\"2\"", "placeholder"));
+    write(mod.root / "text" / "us.json", R"({"7":"Sieben %s","1":"50%% done","2":"a %%s b %d"})");   // %% is a percent sign; 2 gets a %d it did not have
+    const auto fixed = rig.build();
+    const auto us2 = Rig::records(fixed.root, "us");
+    CHECK(us2[2].lines[0] == "Sieben %s" && us2[0].lines[0] == "50%% done" && us2[1].lines[0] == "first");
+    CHECK(fixed.problems.at("one").size() == 1);
+}
+
 static void no_text_means_empty_root() {
     Rig rig;
     rig.add("plain");
@@ -191,6 +227,8 @@ int main() {
     unknown_id_bad_json_and_bad_values_are_problems_not_fatal();
     limits();
     same_input_reuses_the_folder_and_changed_input_makes_a_new_one();
+    a_damaged_cache_folder_is_rebuilt();
+    placeholders_must_match_the_original();
     no_text_means_empty_root();
     missing_base_is_a_problem();
     all_json_unknown_id_is_reported_once_when_no_language_has_it();
