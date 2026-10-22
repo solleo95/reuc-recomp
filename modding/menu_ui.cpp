@@ -171,7 +171,7 @@ void ModMenuUi::manager_tab(float unit) {
         if (status_line_) {
             const std::string extra = status_line_(id);
             if (!extra.empty()) {
-                const bool problem = extra.find("audio:") != std::string::npos;   // error lines start with "audio:"; progress ("converting audio") is plain
+                const bool problem = extra.find("audio:") != std::string::npos || extra.find("text:") != std::string::npos;   // problem lines start with "audio:" or "text:"; progress ("converting audio") is plain
                 ImGui::PushStyleColor(ImGuiCol_Text, problem ? ImVec4(1.f, .52f, .52f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextWrapped("%s", extra.c_str());
                 ImGui::PopStyleColor();

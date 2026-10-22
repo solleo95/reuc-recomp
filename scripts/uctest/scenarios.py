@@ -811,6 +811,40 @@ def audio_replace_silent(g, args):
     return {"audio_frames": frames, "nonzero_samples": nonzero}
 
 
+def _find_in_guest_memory(g, needle, start=0x80400000, size=2 << 20):
+    """The first guest address in [start, start + size) where `needle` bytes occur, or None (by peek, 256 KB at a time: a scan of all memory takes minutes)."""
+    chunk = 262144
+    tail = b""
+    for offset in range(0, size, chunk):
+        data = tail + bytes.fromhex(g.request({"cmd": "peek", "addr": start + offset, "size": chunk}, seconds=60)["hex"])
+        at = data.find(needle)
+        if at >= 0:
+            return start + offset - len(tail) + at
+        tail = data[-(len(needle) - 1):]
+    return None
+
+
+def text_replace(g, args):
+    """The text_marker mod sets records 500, 550 and 553 (the handgun's name in the HUD, which shows UCTEXTMARKER in the capture) for every language. The game reads the whole text file into MEM2
+    (around 0x91240000): the scenario finds the original text of record 500 in that window (which proves the window holds the file) and requires the marker
+    in it exactly when the mod is on (text_replace_plain runs without the mod)."""
+    reach_gameplay(g)
+    g.advance(60)
+    window = {"start": 0x91000000, "size": 8 << 20}
+    capture = g.capture()   # before the scan: the player is not defended while the game runs on
+    with g.step("scan_memory"):
+        original = _find_in_guest_memory(g, "Kvu".encode() + bytes([0xC3, 0xA8]) + b"ok cawypa", **window)   # "Samurai Edge" in the owner's Russian mes_us (font code points)
+        marker = _find_in_guest_memory(g, b"UCTEXTMARKER" + bytes([0]), **window)
+    if original is None:
+        g.fail("the game's text file was not found in memory (is mes_us the Russian one? the scan window may be wrong)", "text replace")
+    marked = "text_marker" in (getattr(g, "mods", None) or [])
+    if marked and marker is None:
+        g.fail("the marker text is not in the game's memory: the patched text file was not used", "text replace")
+    if not marked and marker is not None:
+        g.fail(f"the marker text is in memory at {marker:08X} without the mod", "text replace")
+    return {"original_at": f"{original:08X}", "marker_at": None if marker is None else f"{marker:08X}", "capture": capture}
+
+
 def guest_api(g, args):
     """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
     given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
@@ -851,5 +885,5 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

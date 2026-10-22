@@ -2,6 +2,8 @@
 #include "audio/brstm.h"
 #include "game_mods.h"
 #include "guest_mem.h"
+#include "text/txtres.h"
+#include "txtres_fixture.h"
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -234,13 +236,59 @@ static void audio_of_a_mod_replaces_a_disc_stream() {
     CHECK(dvd.read(dvd.entry_of("Data/sound/stream/music.brstm"), bytes.data(), uint32_t(bytes.size()), 0) == int64_t(bytes.size()));
     const auto converted = uc::mods::read_brstm(bytes);
     CHECK(converted && converted->rate == 48000 && converted->channels.size() == 1 && std::abs(int(converted->frames()) - 24000) <= 1);
-    CHECK(mods.audio_status("tune").find("other.wav") != std::string::npos);   // the stray file is reported, the rest works
+    CHECK(mods.mod_status("tune").find("other.wav") != std::string::npos);   // the stray file is reported, the rest works
     mods.registry()->set_enabled("tune", false);
     mods.apply();
     CHECK(length() == original_file.size());   // switched off: the original again
 }
 
+// A mod's text/us.json patches the disc's mes_us.txtres (read before any overlay), a second mod's own files/ copy of the file is the base for the patches,
+// a bad entry shows up in the mod's status, and switching the mod off puts the disc file back.
+static void text_of_a_mod_replaces_a_disc_text_file() {
+    using namespace txtres_fixture;
+    uc::guest_mem_init();
+    const auto exe = fresh("gm_text");
+    const std::vector<Rec> disc_records = {{1, "", {"Enter"}}, {2, "", {"Two"}}, {7, "", {"Seven"}}};
+    const auto disc_file = make_txtres(disc_records);
+    put(exe / "disc" / "Data" / "message" / "mes_us.txtres", std::string(disc_file.begin(), disc_file.end()));
+    put(exe / "mods" / "words" / "mod.json", R"({"id":"words","name":"Words","version":"1.0","api":"1.1"})");
+    put(exe / "mods" / "words" / "text" / "us.json", R"({"1":"Betreten","999":"nobody"})");
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({"words"}), dvd, "RBUE08", false);
+    const int entry = dvd.entry_of("Data/message/mes_us.txtres");
+    const auto lines_of = [&](uint32_t id) {
+        std::vector<uint8_t> bytes(dvd.length(dvd.entry_of("Data/message/mes_us.txtres")));
+        CHECK(dvd.read(dvd.entry_of("Data/message/mes_us.txtres"), bytes.data(), uint32_t(bytes.size()), 0) == int64_t(bytes.size()));
+        std::string error;
+        const auto records = uc::mods::read_txtres(bytes, error);
+        CHECK(records.has_value());
+        for (const auto& r : *records) if (r.id == id) return r.lines;
+        return std::vector<std::string>();
+    };
+    CHECK(entry > 0 && lines_of(1) == std::vector<std::string>{"Betreten"} && lines_of(2) == std::vector<std::string>{"Two"});
+    CHECK(mods.mod_status("words").find("text:") != std::string::npos && mods.mod_status("words").find("999") != std::string::npos);
+    // a mod that ships its own copy of the file: its copy is the base, and the other mod's text is applied on top
+    const std::vector<Rec> own_records = {{1, "", {"Own one"}}, {2, "", {"Own two"}}, {7, "", {"Own seven"}}};
+    const auto own_file = make_txtres(own_records);
+    put(exe / "mods" / "base" / "mod.json", R"({"id":"base","name":"Base","version":"1.0","api":"1.1"})");
+    put(exe / "mods" / "base" / "files" / "Data" / "message" / "mes_us.txtres", std::string(own_file.begin(), own_file.end()));
+    uc::DvdFs dvd2;
+    CHECK(dvd2.open_root(exe / "disc"));
+    uc::GameMods both(exe, enabled({"words", "base"}), dvd2, "RBUE08", false);   // load order: the registry's discovery order
+    std::vector<uint8_t> bytes(dvd2.length(dvd2.entry_of("Data/message/mes_us.txtres")));
+    CHECK(dvd2.read(dvd2.entry_of("Data/message/mes_us.txtres"), bytes.data(), uint32_t(bytes.size()), 0) == int64_t(bytes.size()));
+    std::string error;
+    const auto records = uc::mods::read_txtres(bytes, error);
+    CHECK(records && (*records)[0].lines == std::vector<std::string>{"Betreten"} && (*records)[1].lines == std::vector<std::string>{"Own two"});
+    // switched off: the disc file again
+    mods.registry()->set_enabled("words", false);
+    mods.apply();
+    CHECK(dvd.length(dvd.entry_of("Data/message/mes_us.txtres")) == disc_file.size() && lines_of(1) == std::vector<std::string>{"Enter"});
+}
+
 int main() {
+    text_of_a_mod_replaces_a_disc_text_file();
     audio_of_a_mod_replaces_a_disc_stream();
     mods_switch_on_and_off_while_the_game_runs();
     log_is_capped_and_bad_config_is_reported();

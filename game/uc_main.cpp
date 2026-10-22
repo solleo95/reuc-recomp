@@ -462,7 +462,7 @@ static int real_main(int argc, char** argv) {
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
     uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
     mods.set_texture_handler([] { uc::gx_set_texture_budget(size_t(2) << 30); });   // textures of a mod switched on live need the larger cache too
-    mod_menu.set_status_line([&mods](const std::string& id) { return mods.audio_status(id); });   // audio conversion progress and problems under the mod
+    mod_menu.set_status_line([&mods](const std::string& id) { return mods.mod_status(id); });   // audio conversion progress and the audio and text problems under the mod
     mod_menu.set_apply([&mods] { mods.apply(); });   // the manager's changes (on, off, order, native code) reach the running game
     mods.start(boot.mem,options.headless ? nullptr : &mod_menu);   // on_load runs here; the guest starts right below
     GuestRunner runner(sched, mt, packets);

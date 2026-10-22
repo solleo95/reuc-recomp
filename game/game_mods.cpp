@@ -25,12 +25,25 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
         if (!header || header->channels < 1 || header->channels > 2 || header->rate == 0) return std::nullopt;
         return mods::StreamOriginal{header->rate, header->channels};
     }, [this] { audio_changed(); });
+    // Text replacement: the unpatched text files are read now, before the first overlay hides them.
+    bool any_text = false;
+    for (const auto& entry : registry_->entries()) any_text = any_text || fs::is_directory(entry.root / "text", error);
+    if (any_text) {
+        for (const char* lang : mods::kTextLanguages) {
+            const int entry = dvd_->entry_of(std::string("Data/message/mes_") + lang + ".txtres");
+            const uint32_t length = entry < 0 ? 0 : dvd_->length(entry);
+            if (length == 0 || length > (64u << 20)) continue;
+            std::vector<uint8_t> bytes(length);
+            if (dvd_->read(entry, bytes.data(), length, 0) == int64_t(length)) text_bases_[lang] = std::move(bytes);
+        }
+    }
     for (const auto& entry : registry_->entries()) {
         if (entry.state == mods::ModState::enabled) continue;
         if (entry.state == mods::ModState::disabled) continue;
         for (const auto& message : entry.messages) std::fprintf(stderr, "[mods] %s: %s\n", entry.manifest.id.c_str(), message.c_str());
     }
     refresh_files(true);
+    mods::prune_text_cache(mods_dir_ / ".cache", text_root_);   // older versions of the patched text: nothing has them open yet
 }
 
 GameMods::~GameMods() { shutdown(); }
@@ -50,6 +63,7 @@ std::vector<fs::path> GameMods::overlay_roots() const {
         }
         if (fs::is_directory(mod.root / "files", error)) roots.push_back(mod.root / "files");
     }
+    if (!text_root_.empty()) roots.push_back(text_root_);   // last: the patched text files win over every mod's files
     return roots;
 }
 
@@ -74,7 +88,26 @@ void GameMods::refresh_files(bool initial) {
     }
     std::vector<const mods::ModEntry*> active;
     for (const auto& mod : active_) active.push_back(&mod);
-    if (audio_) audio_->set_active(active);   // starts converting, and removes the generated files of mods that are off
+    if (audio_) audio_->set_active(active);   // starts converting
+    {   // the text of the active mods, applied to the base files (a mod's own files/Data/message/mes_<lang>.txtres is that mod's base; the last one wins)
+        const auto base = [&](const std::string& lang) -> std::optional<std::vector<uint8_t>> {
+            const std::string name = "mes_" + lang + ".txtres";
+            for (auto it = active.rbegin(); it != active.rend(); ++it) {
+                const fs::path file = (*it)->root / "files" / "Data" / "message" / name;
+                std::error_code file_error;
+                const uintmax_t size = fs::is_regular_file(file, file_error) ? fs::file_size(file, file_error) : 0;
+                if (size == 0 || size > (64u << 20)) continue;
+                std::vector<uint8_t> bytes(size);
+                std::ifstream in(file, std::ios::binary);
+                if (in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size))) return bytes;
+            }
+            const auto disc = text_bases_.find(lang);
+            return disc == text_bases_.end() ? std::nullopt : std::optional<std::vector<uint8_t>>(disc->second);
+        };
+        auto built = mods::build_text_mods(mods_dir_ / ".cache", active, base);
+        text_root_ = std::move(built.root);
+        text_problems_ = std::move(built.problems);
+    }
     const std::vector<fs::path> files_roots = overlay_roots();
     std::vector<fs::path> texture_roots;
     for (const auto* mod : active) {
@@ -129,6 +162,13 @@ void GameMods::log(std::string_view mod_id, std::string_view line) {
     }
     log_file_ << '[' << mod_id << "] " << text << '\n';
     log_file_.flush();   // a crash must not lose the lines that explain it
+}
+
+std::string GameMods::mod_status(const std::string& mod_id) const {
+    std::string text = audio_ ? audio_->status(mod_id) : std::string();
+    const auto problems = text_problems_.find(mod_id);
+    if (problems != text_problems_.end()) for (const auto& problem : problems->second) text += (text.empty() ? "" : "; ") + problem;
+    return text;
 }
 
 void GameMods::step(void* self, uint32_t nominal, ppc::Ctx* ctx) {

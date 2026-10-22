@@ -132,6 +132,7 @@ void hle_DVDReadPrio(ppc::Ctx& c) {
     uint32_t fi = c.r[3], buf = c.r[4], len = c.r[5], off = c.r[6];
     int e = int(ppc::rd32(c, fi + layout::kFiStart));
     if (!guest_range_ok(buf, len)) fatal("DVDReadPrio into an invalid guest buffer %08X+%u", buf, len);
+    if (g_log) std::fprintf(stderr, "[dvd] read %s offset %u length %u\n", g_fs->path_of(e).c_str(), off, len);
     std::vector<uint8_t> data;
     int64_t n = read_padded(open_version(fi, e), data, len, off);
     if (n < 0) { c.r[3] = uint32_t(-1); return; }
@@ -145,6 +146,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
     uint32_t fi = c.r[3], buf = c.r[4], len = c.r[5], off = c.r[6], cb = c.r[7];
     int e = int(ppc::rd32(c, fi + layout::kFiStart));
     if (!guest_range_ok(buf, len)) fatal("DVDReadAsyncPrio into an invalid guest buffer %08X+%u", buf, len);
+    if (g_log) std::fprintf(stderr, "[dvd] read %s offset %u length %u\n", g_fs->path_of(e).c_str(), off, len);
     ppc::wr32(c, fi + layout::kCbState, 1);                 // DVD_STATE_BUSY
     const auto version = open_version(fi, e);
     Sched& s = os_sched();

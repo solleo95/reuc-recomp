@@ -12,7 +12,7 @@ Everything under `mods/<id>/files/` is laid over the game's disc files. The fold
 
 **Archives:** the overlay works on whole files. If the game keeps its assets inside packed archives that it opens as one file and reads itself, such an archive can only be replaced as a whole file; editing a single asset inside it is not supported by the overlay.
 
-**Music and voices** do not need game-format files: see [audio.md](audio.md) (an `audio/` folder with `.ogg` or `.wav`).
+**Music and voices** do not need game-format files: see [audio.md](audio.md) (an `audio/` folder with `.ogg` or `.wav`). **Text** is changed with JSON files in a `text/` folder: see [text.md](text.md).
 
 ## Textures
 

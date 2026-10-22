@@ -1,0 +1,42 @@
+# Replacing text
+
+A mod changes what the game says with plain JSON files in `mods/<id>/text/`. The port patches the game's text files itself; no tools are needed to build anything.
+
+```
+mods/my-words/
+  mod.json
+  text/
+    all.json       applies to every language the game has
+    us.json        applies to the US text file only
+    jp.json        ... one file per language: us en fr ge it jp sp du
+```
+
+Each file maps a record id to the new text:
+
+```json
+{
+  "500": "Samurai Edge",
+  "681": "First line\nSecond line"
+}
+```
+
+`\n` starts a new line; the number of lines of the record follows the text (the game's texts are split into lines already: a record with two lines in the original has two lines in the dump). Keep `%s`, `%c` and `%d` where the original has them: the game fills them in.
+
+## Finding the ids
+
+`tools\dump_text.bat <file>` (next to the game) prints a text file as exactly this JSON:
+
+```
+tools\dump_text.bat "game\DATA\files\Data\message\mes_en.txtres" --output en-original.json
+```
+
+Cut the entries you do not want to change and edit the rest. The files are in `game/DATA/files/Data/message/`: `mes_us`, `mes_en`, `mes_fr`, `mes_ge`, `mes_it`, `mes_jp`, `mes_sp`, `mes_du`. The game picks one by its region, so a mod for a US game needs `us.json` (or `all.json`). Some localizations show their own alphabet through the font's code points (a Russian `mes_us` stores `Handgun` as `&ucmovem`): the dump shows the file as it is, and so must your text.
+
+## Rules
+
+- Order: for each mod, `all.json` first and then the language file; later mods win per id. A mod that ships its own `files/Data/message/mes_<lang>.txtres` gives the base the patches are applied to (the last such mod wins); otherwise the game's own file is the base.
+- A line may hold at most 2048 bytes and a record at most 32 lines; text may not contain a NUL character.
+- Problems do not stop the mod: a bad entry (unknown id, not text, too long), a file that is not valid JSON, or a language the game has no file for is listed under the mod in the Mods tab as `text: <file>: ...`, and the other entries still apply.
+- The game reads its text when it starts a screen that needs it, so a change from the Mods tab shows up the next time the game opens the file (often only after a restart); a file that is already open keeps what it opened.
+
+The original files are never changed: the patched copies live in `mods/.cache/_text/`, one folder per version, and older folders are deleted at the next start. Subtitle tables (`movie_jimaku*.csvtbl`) are replaced as whole files through `files/` (see [files-and-textures.md](files-and-textures.md)).

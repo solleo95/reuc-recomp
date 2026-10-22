@@ -7,6 +7,8 @@ mods/my-mod/
   mod.json
   files/        replacements and additions for the game's disc files (see files-and-textures.md)
   textures/     replacement textures
+  audio/        replacement music and voices, .ogg or .wav (see audio.md)
+  text/         replacement text, one JSON file per language (see text.md)
   data/         data patches, one JSON file each (see data-patches.md)
   scripts/      Lua or JavaScript
   native/       a DLL (see native-dll.md)
