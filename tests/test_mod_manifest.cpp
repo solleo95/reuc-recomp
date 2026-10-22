@@ -95,7 +95,38 @@ static void depends_and_names() {
     CHECK(!with(R"("depends":[{"id":"Bad Id"}])").manifest);
 }
 
+static void audio_loops_parse() {
+    const auto r = with(R"("audio":{"00_Title":{"loop_start":1000,"loop_end":50000},"VO_01":{"loop_start":0,"loop_end":2147483648}})");
+    CHECK(r.manifest && r.errors.empty() && r.manifest->audio.size() == 2);
+    const auto title = r.manifest->audio.find("00_title");   // stems are kept lower-case
+    CHECK(title != r.manifest->audio.end() && title->second.loop_start == 1000u && title->second.loop_end == 50000u);
+    CHECK(r.manifest->audio.at("vo_01").loop_end == 2147483648u);
+}
+
+static void audio_loop_start_not_before_end_is_an_error() {
+    CHECK(!with(R"("audio":{"a":{"loop_start":5,"loop_end":5}})").manifest);
+    CHECK(!with(R"("audio":{"a":{"loop_start":9,"loop_end":5}})").manifest);
+    CHECK(!with(R"("audio":{"a":{"loop_start":0,"loop_end":2147483649}})").manifest);
+    CHECK(!with(R"("audio":{"a":{"loop_start":-1,"loop_end":5}})").manifest);
+    CHECK(!with(R"("audio":{"a":{"loop_start":1.5,"loop_end":5}})").manifest);
+    CHECK(!with(R"("audio":{"a":{"loop_start":1}})").manifest);       // both keys are needed
+    CHECK(!with(R"("audio":{"a":5})").manifest && !with(R"("audio":[])").manifest);
+    const auto r = with(R"("audio":{"a":{"loop_start":9,"loop_end":5}})");
+    CHECK(r.errors.size() == 1 && r.errors[0].find("audio.a") != std::string::npos);   // the error names the key
+}
+
+static void audio_stem_with_a_path_is_an_error() {
+    for (const char* stem : {"../x", "a/b", "a b", "", "a.ogg"})
+        CHECK(!with(std::string(R"("audio":{")") + stem + R"(":{"loop_start":0,"loop_end":5}})").manifest);
+}
+
+static void audio_key_is_optional() {
+    const auto r = parse_manifest(kMinimal);
+    CHECK(r.manifest && r.manifest->audio.empty());
+}
+
 int main() {
     valid_minimal(); bad_id(); invalid_json(); api_format(); settings_types(); script_and_native_paths(); script_extension(); depends_and_names();
+    audio_loops_parse(); audio_loop_start_not_before_end_is_an_error(); audio_stem_with_a_path_is_an_error(); audio_key_is_optional();
     std::puts("ok");
 }

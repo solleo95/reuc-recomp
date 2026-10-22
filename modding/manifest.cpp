@@ -118,6 +118,31 @@ void parse_setting(const json& item, size_t index, ModManifest& manifest, std::s
     for (const auto& message : local) errors.push_back(name + ": " + message);
     if (local.empty()) manifest.settings.push_back(std::move(decl));
 }
+bool valid_stem(std::string_view stem) {
+    return !stem.empty() && stem.size() <= 64 && std::all_of(stem.begin(), stem.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-'; });
+}
+
+void parse_audio(const json& value, ModManifest& manifest, std::vector<std::string>& errors) {
+    constexpr uint64_t kLimit = 2147483648ull;
+    if (!value.is_object()) { errors.push_back("audio must be an object of stream name to loop points"); return; }
+    for (const auto& [stem, item] : value.items()) {
+        const std::string where = "audio." + stem;
+        if (!valid_stem(stem)) { errors.push_back(where + ": the stream name may hold letters, digits, '_' and '-' only (no extension, no folders)"); continue; }
+        if (!item.is_object()) { errors.push_back(where + " must be an object with loop_start and loop_end"); continue; }
+        bool good = true;
+        uint64_t numbers[2] = {};
+        for (int i = 0; i < 2; ++i) {
+            const char* key = i == 0 ? "loop_start" : "loop_end";
+            if (!item.contains(key) || !item[key].is_number_unsigned() || item[key].get<uint64_t>() > kLimit) { errors.push_back(where + "." + key + " must be a whole number of samples from 0 to 2147483648"); good = false; }
+            else numbers[i] = item[key].get<uint64_t>();
+        }
+        if (good && numbers[0] >= numbers[1]) { errors.push_back(where + ": loop_start must be before loop_end"); continue; }
+        if (!good) continue;
+        std::string lower(stem);
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        manifest.audio[lower] = AudioLoop{uint32_t(numbers[0]), uint32_t(std::min<uint64_t>(numbers[1], 0xFFFFFFFFull))};
+    }
+}
 }  // namespace
 
 bool is_safe_relative_path(std::string_view path) {
@@ -178,6 +203,7 @@ ManifestResult parse_manifest(std::string_view text) {
         if (!is_safe_relative_path(m.native)) errors.push_back("native must be a relative path inside the mod folder");
         else if (extension(m.native) != "dll") errors.push_back("native must end in .dll");
     }
+    if (root.contains("audio")) parse_audio(root["audio"], m, errors);
     if (root.contains("names")) m.names = string_map(root["names"], "names", errors);
     if (root.contains("settings")) {
         if (!root["settings"].is_array()) errors.push_back("settings must be an array");

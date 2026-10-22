@@ -46,6 +46,7 @@ A zip may hold the files directly or inside one top-level folder. It is unpacked
 | `script` | no | Entry file inside the mod folder, `.lua` for Lua, `.js` or `.mjs` for JavaScript. |
 | `native` | no | A DLL inside the mod folder. It needs the "Allow native mods" switch and a confirmation (see safety.md). |
 | `names` | no | Display names per language code. |
+| `audio` | no | Loop points for replaced music streams: `{ "00_Title": { "loop_start": 1000, "loop_end": 900000 } }`, in samples of the mod's own file (end exclusive). Without an entry the loop comes from the file itself, or there is none. See audio.md. |
 | `settings` | no | The mod's settings, drawn in its settings window (gear button in the Mods tab of the Insert menu) (see settings-and-ui.md). |
 
 Paths in a manifest are relative to the mod folder, use `/`, and may not contain `..`, a drive letter or a leading `/`.

@@ -23,6 +23,9 @@ struct SettingDecl {
 struct ModDependency { std::string id; std::string min_version; };
 struct ApiVersion { int major = 0, minor = 0; };
 
+// Loop points of a replaced music stream (audio/<stem>.ogg|.wav), in samples of the mod's own file; end is exclusive.
+struct AudioLoop { uint32_t loop_start = 0, loop_end = 0; };
+
 struct ModManifest {
     std::string id, name, version, author, description;
     ApiVersion api;   // minimum API version; the same major version is required
@@ -32,6 +35,7 @@ struct ModManifest {
     std::string script, native;
     std::vector<SettingDecl> settings;
     std::map<std::string, std::string> names;   // localized display names
+    std::map<std::string, AudioLoop> audio;     // "audio": loop points by stream stem (lower-case)
 };
 
 struct ManifestResult {
