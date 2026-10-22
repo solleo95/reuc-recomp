@@ -59,13 +59,17 @@ A mod author should be able to change what the game plays and says without tools
 - **Status.** Conversion state is reported through the platform's existing per-mod status text (the same place that shows "enabled but not working"), no new channel. "Big file" threshold for converting at install: 4 MB of source audio.
 - **Tests.** Converter, TRES and U8 tests use small synthetic fixtures and run everywhere; tests that need the owner's install are separate harness scenarios and skip when the game data is missing.
 
+## Spike result (2026-10-22): PCM16 works
+
+A PCM16 BRSTM (codec 1) plays in the game. `tools/spikes/brstm_pcm16.py` rewrote the stereo looped title music as PCM16 (28.9 MB from 8.3 MB, `ADPC` chunk zero-filled): the native audio statistics over 900 title ticks gave 1 014 023 nonzero samples against 1 004 807 for the original, and 0 for the same file silenced. So milestone 1 needs no DSP-ADPCM encoder. Still unchecked: playback past the loop point and a mono stream (the milestone-1 plan checks both).
+
 ## Left to the builder
 
 Container details of the converter, cache location and naming, how "converting" is shown in the Mods tab, error messages for bad input files (wrong sample rate, unsupported channel count, clipping), how channel counts that differ from the original are handled (the original is mono, the mod is stereo: downmix is the proposed default, a warning in the log).
 
 ## Order of work
 
-1. Spike: PCM16 BRSTM accepted by the game? (replace one stream by a hand-made PCM16 BRSTM, play it through the harness).
+1. Spike: PCM16 BRSTM accepted by the game? Done, yes (see above).
 2. Audio converter and overlay hook, with the live check and the mod manifest keys.
 3. TRES spike and `tools/dump_text`, then the text patch.
 4. U8 member overlay and `arc_unpack` / `arc_pack`.
