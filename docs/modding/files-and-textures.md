@@ -12,6 +12,8 @@ Everything under `mods/<id>/files/` is laid over the game's disc files. The fold
 
 **Archives:** the overlay works on whole files. If the game keeps its assets inside packed archives that it opens as one file and reads itself, such an archive can only be replaced as a whole file; editing a single asset inside it is not supported by the overlay.
 
+**Music and voices** do not need game-format files: see [audio.md](audio.md) (an `audio/` folder with `.ogg` or `.wav`).
+
 ## Textures
 
 Put replacement textures in `mods/<id>/textures/`, named like the dumps of the texture extractor (`tex1_<width>x<height>_<hash>_<format>.dds`, BC7 with a full mip chain, see [texture-extraction.md](../texture-extraction.md)). The base `textures/` folder next to the exe still works. When two folders hold the same texture, the later mod wins over the earlier one and over the base folder.

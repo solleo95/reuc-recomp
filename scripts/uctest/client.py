@@ -171,7 +171,23 @@ class Game:
             pass   # cleanup must never mask the step failure
         for folder in getattr(self, "_installed_mods", []):   # the example mods this run copied next to the exe
             shutil.rmtree(folder, ignore_errors=True)
+        for cache in getattr(self, "_installed_caches", []):   # what the game converted from them (audio), named by mod id
+            shutil.rmtree(cache, ignore_errors=True)
         self._installed_mods = []
+        self._installed_caches = []
+
+    def finish(self, seconds=30):
+        """Quits the game the normal way and returns its whole run.log (the exit statistics, e.g. 'audio stats: ...', are only in the log after the quit)."""
+        if self.transport and not self.exited:
+            try:
+                self.transport.send_line(json.dumps({"id": self._take_id(), "cmd": "quit"}))
+            except OSError:
+                pass
+        try:
+            self.process.wait(seconds)
+        except subprocess.TimeoutExpired:
+            self.fail(f"the game did not quit within {seconds} s", "quit", capture=False)
+        return (self.run_dir / "run.log").read_text(errors="replace")
 
     def _install_mods(self, config):
         """mods=[names]: copies those folders of mods-examples/ into <exe folder>/mods and enables them in this run's config copy; removed at cleanup."""
@@ -189,6 +205,7 @@ class Game:
             marker.write_text("installed by uctest; removed at cleanup", encoding="utf-8")
             self._installed_mods.append(folder)
             ids.append(json.loads((source / "mod.json").read_text(encoding="utf-8"))["id"])
+            self._installed_caches = getattr(self, "_installed_caches", []) + [target / ".cache" / ids[-1]]
         data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
         data["mods"] = {"enabled": ids}
         config.write_text(json.dumps(data, indent=1), encoding="utf-8")

@@ -778,6 +778,39 @@ def game_api(g, args):
     return result
 
 
+def _title_audio(g, ticks):
+    """Seconds of the title screen; returns the 'audio stats' of the exit log: (frames, nonzero samples). The title screen plays only 00_Title.brstm, so
+    the nonzero count is that stream's (the original music gives about a million in 900 ticks)."""
+    import re
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    with g.step("listen"):
+        g.advance(ticks)
+    log = g.finish()
+    found = re.search(r"audio stats: native frames (\d+) nonzero samples (\d+)", log)
+    if not found:
+        g.fail("the exit log has no audio statistics", "audio stats", capture=False)
+    return int(found.group(1)), int(found.group(2))
+
+
+def audio_replace(g, args):
+    """The audio_tone mod replaces the title music with a 1 s, 22.05 kHz mono WAV looped over its first half (converted by the port to the original's
+    32 kHz stereo PCM16 BRSTM). 15 s of game time at the title keep sounding well past the loop length, so the converted stream plays and loops."""
+    frames, nonzero = _title_audio(g, 900)
+    if nonzero < 500_000:
+        g.fail(f"the converted stream stopped early or never played: {nonzero} nonzero samples in {frames} audio frames", "audio replace", capture=False)
+    return {"audio_frames": frames, "nonzero_samples": nonzero}
+
+
+def audio_replace_silent(g, args):
+    """Control for audio_replace: the audio_silent mod replaces the title music with silence, so nothing at all may sound (proves the title audio is the
+    converted file and not the original)."""
+    frames, nonzero = _title_audio(g, 900)
+    if nonzero != 0:
+        g.fail(f"the original title music still plays: {nonzero} nonzero samples", "audio replace", capture=False)
+    return {"audio_frames": frames, "nonzero_samples": nonzero}
+
+
 def guest_api(g, args):
     """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
     given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
@@ -818,5 +851,5 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

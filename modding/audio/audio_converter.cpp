@@ -93,6 +93,7 @@ void AudioConverter::set_active(const std::vector<const ModEntry*>& mods) {
         if (active.count(it->first)) { ++it; continue; }
         std::error_code error;
         fs::remove_all(generated_root(it->first), error);
+        fs::remove_all(cache_root_ / it->first / "keys", error);
         queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [&](const Job& j) { return j.mod_id == it->first; }), queue_.end());
         it = mods_.erase(it);
     }
@@ -113,7 +114,7 @@ void AudioConverter::set_active(const std::vector<const ModEntry*>& mods) {
             if (it->path().extension() != ".brstm" || stems.count(lower(it->path().stem().string()))) continue;
             std::error_code remove_error;
             fs::remove(it->path(), remove_error);
-            fs::remove(generated_root(id) / ".keys" / it->path().stem(), remove_error);
+            fs::remove(cache_root_ / id / "keys" / it->path().stem(), remove_error);
         }
         for (const auto& source : scan.sources) {
             Job job{id, source.path, source.stem, std::nullopt, state.generation};
@@ -180,7 +181,7 @@ void AudioConverter::process(const Job& job) {
         if (size > kMaxSourceBytes) return add_problem(job, "the file is larger than 512 MB");
         const std::optional<StreamOriginal> original = lookup_(job.stem);
         const fs::path generated = generated_root(job.mod_id) / "Data" / "sound" / "stream" / (job.stem + ".brstm");
-        const fs::path stamp = generated_root(job.mod_id) / ".keys" / job.stem;
+        const fs::path stamp = cache_root_ / job.mod_id / "keys" / job.stem;   // outside the generated root: that folder is laid over the disc as it is
         if (!original) {
             fs::remove(generated, error);
             return add_problem(job, "the game has no stream named '" + job.stem + "' (sound/stream/" + job.stem + ".brstm), the file is ignored");
