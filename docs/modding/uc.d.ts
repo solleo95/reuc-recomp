@@ -38,6 +38,18 @@ interface WeaponHandle {
     fire_mode: string;
 }
 
+/** One enemy, addressed by the id uc.enemies.list() gives (uc.enemy(10)). Only zombies are supported in this version; another id or an actor of another kind is an error. Ids are valid until the zombie leaves the scene. */
+interface EnemyHandle {
+    /** Health: zombies start with 10 to 30 and lose the weapon's damage per hit; 0 or less is dead (the actor stays in the scene until the wave ends). -1000 to 100000. [implemented] */
+    hp: number;
+    /** True while hp is above 0. [implemented] */
+    readonly alive: boolean;
+    /** True while the head is on (it comes off with a head shot). [implemented] */
+    readonly head: boolean;
+    /** World position [x, y, z] in units of 10 cm, y up. Writing moves the zombie at once; the game moves it on from there. [implemented] */
+    position: number[];
+}
+
 declare namespace uc {
     /** Guest (Wii) memory. Addresses are Wii virtual addresses: MEM1 0x80000000..0x817FFFFF, MEM2 0x90000000..0x93FFFFFF. Values are big-endian in the game; these functions convert. An address outside both ranges is an error (the script gets an exception), never a crash. */
     namespace mem {
@@ -102,6 +114,8 @@ declare namespace uc {
         /** The camera's up direction, a unit vector. [implemented] */
         const up: number[];
     }
+    /** One enemy, addressed by the id uc.enemies.list() gives (uc.enemy(10)). Only zombies are supported in this version; another id or an actor of another kind is an error. Ids are valid until the zombie leaves the scene. */
+    function enemy(id: number): EnemyHandle;
     /** Enemies in the current scene. */
     namespace enemies {
         /** One object per enemy: { id: int, class: int, x: float, y: float, z: float, hp: float }. Only zombies are listed in this version. [implemented] */
@@ -145,6 +159,10 @@ declare function on(event: "on_settings_changed", handler: (payload: any) => voi
 declare function on(event: "on_weapon_fired", handler: (payload: any) => void): void;
 declare function on(event: "on_damage_taken", handler: (payload: any) => void): void;
 declare function on(event: "on_reload", handler: (payload: any) => void): void;
+declare function on(event: "on_player_died", handler: (payload: any) => void): void;
+declare function on(event: "on_enemy_spawned", handler: (payload: any) => void): void;
+declare function on(event: "on_enemy_killed", handler: (payload: any) => void): void;
+declare function on(event: "on_enemy_headshot", handler: (payload: any) => void): void;
 declare function on(event: string, handler: (payload: any) => void): void;
 
 /** Free drawing in the mod's settings window (the gear button of the mod in the Mods tab of the Insert menu). Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod. */

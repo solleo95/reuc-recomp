@@ -19,6 +19,12 @@
 ---@field reload_time number Reload duration in seconds of game time (1.0 for the handgun, 2.3 for a shotgun); 0.2 makes a handgun reload about seven times faster. [implemented]
 ---@field fire_mode string 'semi' (one shot per press), 'auto' (shots repeat while the button is held) or 'burst'. 'auto' on the handgun was checked in the game (a held trigger fires about every 22 frames instead of once); 'burst' is the value the game's record 3 uses and its effect on other weapons is untested. Reading a value the table holds that has no name gives 'mode <number>'. [implemented]
 
+---@class UcEnemyHandle
+---@field hp number Health: zombies start with 10 to 30 and lose the weapon's damage per hit; 0 or less is dead (the actor stays in the scene until the wave ends). -1000 to 100000. [implemented]
+---@field alive boolean True while hp is above 0. [implemented]
+---@field head boolean True while the head is on (it comes off with a head shot). [implemented]
+---@field position number[] World position [x, y, z] in units of 10 cm, y up. Writing moves the zombie at once; the game moves it on from there. [implemented]
+
 ---@class Uc
 uc = {}
 
@@ -43,7 +49,7 @@ function settings.get(key) end
 ---@return boolean
 function settings.set(key, value) end
 
----@alias UcEvent "on_load"|"on_unload"|"on_step"|"on_settings_changed"|"on_weapon_fired"|"on_damage_taken"|"on_reload"
+---@alias UcEvent "on_load"|"on_unload"|"on_step"|"on_settings_changed"|"on_weapon_fired"|"on_damage_taken"|"on_reload"|"on_player_died"|"on_enemy_spawned"|"on_enemy_killed"|"on_enemy_headshot"
 
 ---Registers a handler for an event.
 ---@param event UcEvent
@@ -283,6 +289,11 @@ uc.camera.right = nil
 ---@type number[]
 ---The camera's up direction, a unit vector. [implemented]
 uc.camera.up = nil
+
+---One enemy, addressed by the id uc.enemies.list() gives (uc.enemy(10)). Only zombies are supported in this version; another id or an actor of another kind is an error. Ids are valid until the zombie leaves the scene.
+---@param id integer
+---@return UcEnemyHandle
+function uc.enemy(id) end
 
 ---Enemies in the current scene.
 uc.enemies = {}

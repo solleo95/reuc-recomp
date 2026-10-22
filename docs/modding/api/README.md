@@ -12,7 +12,7 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 |---|---|---|---|
 | [log](log.md) | context | 1 | 1 |
 | [settings](settings.md) | context | 2 | 2 |
-| [events](events.md) | context | 8 | 8 |
+| [events](events.md) | context | 12 | 12 |
 | [ui](ui.md) | context | 13 | 13 |
 | [hook](hook.md) | context | 4 | 4 |
 | [mem](mem.md) | registry | 18 | 18 |
@@ -20,6 +20,7 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 | [player](player.md) | registry | 9 | 9 |
 | [weapon](weapon.md) | registry | 5 | 5 |
 | [camera](camera.md) | registry | 5 | 5 |
+| [enemy](enemy.md) | registry | 4 | 4 |
 | [enemies](enemies.md) | registry | 1 | 1 |
 | [input](input.md) | registry | 6 | 6 |
 

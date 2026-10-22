@@ -21,7 +21,7 @@ constexpr uint32_t kPlayerSize = 0x7A0;         // bytes of a player object the 
 constexpr uint32_t kWeaponId = 0x4C8, kWeaponKey = 0x4CC, kMagazine = 0x4D4, kWeaponState = 0x4D8;   // player + 0x48 is the weapon object: +0x480, +0x484, +0x48C, +0x490
 constexpr uint32_t kReloading = 2;              // weapon state while a reload runs
 constexpr uint32_t kSceneSize = 0x6C18, kDamage = 0x6C00, kDamageStride = 0x14;   // damage meter of player 1 at scene+6C00, player 2 at +6C14 (0 unhurt .. 50 dead)
-constexpr uint32_t kZombieClass = 0x803F2B60, kEnemyPosition = 0xF48, kEnemyHealth = 0x3A4, kActorClass = 0x10;
+constexpr uint32_t kZombieClass = 0x803F2B60, kEnemyPosition = 0xF48, kEnemyHealth = 0x3A4, kEnemyHead = 0x1058, kActorClass = 0x10;
 constexpr uint32_t kMaxMagazine = 65535;
 // Spare ammo: u16 counts per ammo key (21 keys, 42 bytes per player), found through fn_801BD014 and confirmed by a reload taking one off the count. Key 0 is the
 // handgun's infinite reserve. (The two words after the table's start hold the grenades at 8056F338: key 3.)
@@ -37,7 +37,7 @@ constexpr long long kMaxCapacity = 999;
 
 struct SlotState {
     bool invulnerable = false, infinite_ammo = false;
-    bool known = false, has_damage = false;
+    bool known = false, has_damage = false, dead = false;
     uint32_t weapon = 0, state = 0, magazine = 0, max_magazine = 0;
     float damage = 0;
 };
@@ -164,6 +164,34 @@ public:
         };
         add_camera_vector("position", 0); add_camera_vector("forward", 1); add_camera_vector("right", 2); add_camera_vector("up", 3);
 
+        const auto add_enemy = [&](const char* name, std::function<Value(PlayerWeaponApi&, uint32_t)> get, std::function<void(PlayerWeaponApi&, uint32_t, const Value&)> set) {
+            Member member;
+            member.path = std::string("enemy.") + name;
+            member.scope = "id";
+            member.get = [self, get](const Value& args) { return get(*self, self->find_enemy(args)); };
+            if (set) member.set = [self, set](const Value& args, const Value& value) { set(*self, self->find_enemy(args), value); };
+            api.add(std::move(member));
+        };
+        add_enemy("hp", [](PlayerWeaponApi& s, uint32_t a) { return Value(double(s.read_float(a + kEnemyHealth))); },
+            [](PlayerWeaponApi& s, uint32_t a, const Value& v) {
+                if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() < -1000 || v.get<double>() > 100000) throw ApiError("hp must be a number from -1000 to 100000 (zombies start with 10 to 30; 0 or less is dead)");
+                s.write_float_direct(a + kEnemyHealth, float(v.get<double>()));
+            });
+        add_enemy("alive", [](PlayerWeaponApi& s, uint32_t a) { return Value(s.read_float(a + kEnemyHealth) > 0.f); }, nullptr);
+        add_enemy("head", [](PlayerWeaponApi& s, uint32_t a) { return Value(s.read_float(a + kEnemyHead) > 0.5f); }, nullptr);
+        add_enemy("position", [](PlayerWeaponApi& s, uint32_t a) {
+                return Value::array({double(s.read_float(a + kEnemyPosition)), double(s.read_float(a + kEnemyPosition + 4)), double(s.read_float(a + kEnemyPosition + 8))});
+            },
+            [](PlayerWeaponApi& s, uint32_t a, const Value& v) {
+                if (!v.is_array() || v.size() != 3) throw ApiError("position must be a list of three numbers {x, y, z} (units of 10 cm, y up)");
+                float p[3];
+                for (int i = 0; i < 3; ++i) {
+                    if (!v[size_t(i)].is_number() || !std::isfinite(v[size_t(i)].get<double>()) || std::abs(v[size_t(i)].get<double>()) > 1e6) throw ApiError("position must be a list of three numbers {x, y, z} (units of 10 cm, y up)");
+                    p[i] = float(v[size_t(i)].get<double>());
+                }
+                for (int i = 0; i < 3; ++i) s.write_float_direct(a + kEnemyPosition + 4 * uint32_t(i), p[i]);
+            });
+
         Member enemies;
         enemies.path = "enemies.list";
         enemies.call = [self](const Value&) { return self->list_enemies(); };
@@ -208,6 +236,7 @@ public:
             const float rate = memory_.read_f32(kWeaponTable + id * kWeaponStride + kRecordFireRate).value_or(0.f);
             if (rate > 0) memory_.write_f32(*object + kWeaponInterval, 1.f / rate);
         }
+        enemies_known_ = false;
         for (auto& slot : state_) slot.known = false;   // the ticker may have been idle: the next tick starts from a fresh baseline, not from stale values
     }
 
@@ -216,6 +245,7 @@ private:
         const auto emit = [&](const char* event, Value payload) { events.emplace_back(event, std::move(payload)); };
         reapply_weapon_overrides();
         refresh_intervals_locked();
+        track_enemies(emit);
         const auto scene_address = scene();
         for (int slot = 1; slot <= 2; ++slot) {
             SlotState& s = state_[size_t(slot - 1)];
@@ -229,6 +259,7 @@ private:
                 if (weapon == s.weapon && state != kReloading && magazine < s.magazine) emit("on_weapon_fired", Value{{"slot", slot}});
                 if (state == kReloading && s.state != kReloading) emit("on_reload", Value{{"slot", slot}});
                 if (damage_at && s.has_damage && std::isfinite(damage) && damage > s.damage) emit("on_damage_taken", Value{{"slot", slot}, {"amount", double(damage - s.damage)}});
+                if (damage_at && std::isfinite(damage) && damage >= kDamageDead && !s.dead) emit("on_player_died", Value{{"slot", slot}});
             }
             if (s.invulnerable && damage_at && memory_.write_f32(damage_at, 0.f)) damage = 0.f;
             if (s.infinite_ammo) {
@@ -236,8 +267,31 @@ private:
                 if (!s.known || weapon != s.weapon) s.max_magazine = magazine; else s.max_magazine = std::max(s.max_magazine, magazine);
                 if (magazine < s.max_magazine && memory_.write_u32(*object + kMagazine, s.max_magazine)) magazine = s.max_magazine;
             }
+            s.dead = damage_at != 0 && std::isfinite(damage) && damage >= kDamageDead;
             s.known = true; s.weapon = weapon; s.state = state; s.magazine = magazine; s.damage = damage; s.has_damage = damage_at != 0;
         }
+    }
+
+    // Spawned / killed / headshot events from the zombies in the scene, compared with the previous tick. The first tick of a scene is only the baseline.
+    struct EnemySeen { bool alive; bool head; };
+    void track_enemies(const std::function<void(const char*, Value)>& emit) {
+        if (!player_object(1)) { enemies_known_ = false; enemies_seen_.clear(); return; }   // no scene: the next one starts from a fresh baseline
+        std::map<uint32_t, EnemySeen> now;
+        for_each_actor([&](uint32_t id, uint32_t address) {
+            const auto zombie = read_zombie(address);
+            if (!zombie) return true;
+            const EnemySeen state{zombie->hp > 0.f, memory_.read_f32(address + kEnemyHead).value_or(0.f) > 0.5f};
+            now[id] = state;
+            if (!enemies_known_) return true;
+            const auto before = enemies_seen_.find(id);
+            const Value where{{"id", id}, {"x", double(zombie->x)}, {"y", double(zombie->y)}, {"z", double(zombie->z)}};
+            if (before == enemies_seen_.end()) { Value payload = where; payload["hp"] = double(zombie->hp); emit("on_enemy_spawned", std::move(payload)); return true; }
+            if (before->second.head && !state.head) emit("on_enemy_headshot", where);
+            if (before->second.alive && !state.alive) emit("on_enemy_killed", where);
+            return true;
+        });
+        enemies_seen_ = std::move(now);
+        enemies_known_ = true;
     }
 
     // A switch is on while any mod has it on; each mod's own setting is kept so that switching one mod off leaves the others' alone.
@@ -271,6 +325,9 @@ private:
         const std::string& owner = OwnerScope::current();
         entry.stack.erase(std::remove_if(entry.stack.begin(), entry.stack.end(), [&](const auto& e) { return e.first == owner; }), entry.stack.end());
         entry.stack.emplace_back(owner, word);   // the latest setter is in force; when it goes, the one before it is
+    }
+    void write_float_direct(uint32_t address, float value) {   // a plain write (not kept: the game owns these fields)
+        if (!memory_.write_f32(address, value)) throw ApiError("game memory is not writable right now");
     }
     void write_float(uint32_t address, float value) {
         uint32_t word;
@@ -370,23 +427,18 @@ private:
         return Value::array({result[0], result[1], result[2]});
     }
 
-    // Zombies from the actor table, plus actors with ids of 200 and up, which are only in the actor list (object+8 holds the next object + 8).
-    Value list_enemies() const {
-        Value list = Value::array();
+    // Every actor the game keeps: the 200-entry table, then the actors with ids of 200 and up that are only in the linked list from player 1 (object+8 holds
+    // the next object + 8). visit(id, address) returns false to stop.
+    template <class F> void for_each_actor(F&& visit) const {
         std::vector<uint32_t> seen;
         const auto consider = [&](uint32_t id, uint32_t address) {
-            if (!address || list.size() >= 512 || !memory_.valid(address, 0x1060) || std::find(seen.begin(), seen.end(), address) != seen.end()) return;
+            if (!address || !memory_.valid(address, 0x1060) || std::find(seen.begin(), seen.end(), address) != seen.end()) return true;
             seen.push_back(address);
-            if (memory_.read_u32(address + kActorClass) != kZombieClass) return;
-            const auto x = memory_.read_f32(address + kEnemyPosition), y = memory_.read_f32(address + kEnemyPosition + 4), z = memory_.read_f32(address + kEnemyPosition + 8);
-            const auto hp = memory_.read_f32(address + kEnemyHealth);
-            if (!x || !y || !z || !hp || !std::isfinite(*x) || !std::isfinite(*y) || !std::isfinite(*z) || !std::isfinite(*hp)) return;
-            if (std::abs(*x) > 1e6f || std::abs(*y) > 1e6f || std::abs(*z) > 1e6f) return;
-            list.push_back({{"id", id}, {"class", kZombieClass}, {"x", double(*x)}, {"y", double(*y)}, {"z", double(*z)}, {"hp", double(*hp)}});
+            return visit(id, address);
         };
         for (uint32_t i = 0; i < 200; ++i) {
             const auto id = memory_.read_u32(kActorTable + i * 8), pointer = memory_.read_u32(kActorTable + i * 8 + 4);
-            if (id && pointer) consider(*id, *pointer);
+            if (id && pointer && !consider(*id, *pointer)) return;
         }
         if (const auto first = player_object(1)) {
             std::vector<uint32_t> visited{*first};
@@ -396,14 +448,52 @@ private:
                 object = *link - 8;
                 if (std::find(visited.begin(), visited.end(), object) != visited.end() || !memory_.valid(object, 12)) break;
                 visited.push_back(object);
-                if (const auto id = memory_.read_u32(object)) consider(*id, object);
+                if (const auto id = memory_.read_u32(object)) if (!consider(*id, object)) return;
             }
         }
+    }
+
+    // A zombie with a sane position and health, or nullopt.
+    struct Zombie { float x, y, z, hp; };
+    std::optional<Zombie> read_zombie(uint32_t address) const {
+        if (memory_.read_u32(address + kActorClass) != kZombieClass) return std::nullopt;
+        const auto x = memory_.read_f32(address + kEnemyPosition), y = memory_.read_f32(address + kEnemyPosition + 4), z = memory_.read_f32(address + kEnemyPosition + 8);
+        const auto hp = memory_.read_f32(address + kEnemyHealth);
+        if (!x || !y || !z || !hp || !std::isfinite(*x) || !std::isfinite(*y) || !std::isfinite(*z) || !std::isfinite(*hp)) return std::nullopt;
+        if (std::abs(*x) > 1e6f || std::abs(*y) > 1e6f || std::abs(*z) > 1e6f) return std::nullopt;
+        return Zombie{*x, *y, *z, *hp};
+    }
+
+    Value list_enemies() const {
+        Value list = Value::array();
+        for_each_actor([&](uint32_t id, uint32_t address) {
+            if (list.size() >= 512) return false;
+            if (const auto zombie = read_zombie(address))
+                list.push_back({{"id", id}, {"class", kZombieClass}, {"x", double(zombie->x)}, {"y", double(zombie->y)}, {"z", double(zombie->z)}, {"hp", double(zombie->hp)}});
+            return true;
+        });
         return list;
+    }
+
+    // The address of the zombie with this id (the id enemies.list() gives).
+    uint32_t find_enemy(const Value& args) const {
+        if (!args.is_object() || !args.contains("id") || !args["id"].is_number_integer() || args["id"].get<long long>() < 0 || args["id"].get<long long>() > 0xFFFFFFFFll)
+            throw ApiError("the enemy id must be a whole number: uc.enemy(10)");
+        const uint32_t wanted = uint32_t(args["id"].get<long long>());
+        uint32_t found = 0;
+        for_each_actor([&](uint32_t id, uint32_t address) {
+            if (id != wanted || !read_zombie(address)) return true;
+            found = address;
+            return false;
+        });
+        if (!found) throw ApiError("there is no enemy with id " + std::to_string(wanted) + " right now (ids come from uc.enemies.list(); only zombies are supported)");
+        return found;
     }
 
     GuestMemory& memory_;
     struct WeaponOverride { uint32_t original = 0; std::vector<std::pair<std::string, uint32_t>> stack; };   // stack: (owner, word) in the order set; never empty while the entry exists
+    std::map<uint32_t, EnemySeen> enemies_seen_;
+    bool enemies_known_ = false;
     std::mutex mutex_;   // guards everything below: mods call in from the game thread and the menu thread
     SlotState state_[2];
     std::set<std::string> invulnerable_by_[2], infinite_ammo_by_[2];

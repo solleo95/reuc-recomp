@@ -656,6 +656,40 @@ def input_block(g, args):
     return result
 
 
+def enemy_api(g, args):
+    """uc.enemy(id).hp = 0 on the nearest living zombie: the mod reads alive = false at once and the game keeps the zombie at hp 0 (dead, as after a kill); the
+    capture shows the scene a moment later."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("enemy_killed"):
+        line = ""
+        for _ in range(40):
+            g.advance(30)
+            text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+            lines = [l for l in text.splitlines() if "enemy killed id=" in l]
+            if lines:
+                line = lines[-1]
+                break
+        if not line:
+            g.fail("the mod never found a living zombie to kill", "enemy api")
+        if "alive_after=false" not in line:
+            g.fail(f"the mod still sees the zombie alive: {line}", "enemy api")
+        enemy_id = int(line.split("id=")[1].split()[0])
+    with g.step("stays_dead"):
+        g.advance(60)
+        hp = [e["hp"] for e in g.state().get("enemies") or [] if e["id"] == enemy_id]
+        result["hp_after"] = hp
+        if hp and hp[0] > 0:
+            g.fail(f"the zombie came back to hp {hp[0]}", "enemy api")
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        result["spawn_events"] = text.count("event spawned id=")
+        if f"event killed id={enemy_id}" not in text:
+            g.fail(f"no on_enemy_killed event for zombie {enemy_id}", "enemy api")
+        result["capture"] = g.capture()
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

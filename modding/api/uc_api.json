@@ -47,7 +47,15 @@
         { "name": "on_damage_taken", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A player's damage meter rose. Payload: { slot: int, amount: float }.",
           "example": { "lua": "on('on_damage_taken', function(e) log.write(e.amount) end)", "js": "on('on_damage_taken', (e) => log.write(e.amount));" } },
         { "name": "on_reload", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A player started reloading. Payload: { slot: int }.",
-          "example": { "lua": "on('on_reload', function(e) log.write('reload ' .. e.slot) end)", "js": "on('on_reload', (e) => log.write('reload ' + e.slot));" } }
+          "example": { "lua": "on('on_reload', function(e) log.write('reload ' .. e.slot) end)", "js": "on('on_reload', (e) => log.write('reload ' + e.slot));" } },
+        { "name": "on_player_died", "kind": "event", "type": "object", "status": "implemented", "since": "1.1", "doc": "A player's damage meter reached its maximum (the player is dead). Once per death. Payload: { slot: int }.",
+          "example": { "lua": "on('on_player_died', function(e) log.write('died ' .. e.slot) end)", "js": "on('on_player_died', (e) => log.write('died ' + e.slot));" } },
+        { "name": "on_enemy_spawned", "kind": "event", "type": "object", "status": "implemented", "since": "1.1", "doc": "A zombie appeared in the scene. Zombies already present when the mod starts or a scene begins do not count. Payload: { id: int, x: float, y: float, z: float, hp: float }.",
+          "example": { "lua": "on('on_enemy_spawned', function(e) log.write('zombie ' .. e.id) end)", "js": "on('on_enemy_spawned', (e) => log.write('zombie ' + e.id));" } },
+        { "name": "on_enemy_killed", "kind": "event", "type": "object", "status": "implemented", "since": "1.1", "doc": "A zombie's hit points dropped to 0 or below. Once per zombie. Payload: { id: int, x: float, y: float, z: float }.",
+          "example": { "lua": "on('on_enemy_killed', function(e) log.write('killed ' .. e.id) end)", "js": "on('on_enemy_killed', (e) => log.write('killed ' + e.id));" } },
+        { "name": "on_enemy_headshot", "kind": "event", "type": "object", "status": "implemented", "since": "1.1", "doc": "A zombie's head was shot off. Once per zombie. Payload: { id: int, x: float, y: float, z: float }.",
+          "example": { "lua": "on('on_enemy_headshot', function(e) log.write('head ' .. e.id) end)", "js": "on('on_enemy_headshot', (e) => log.write('head ' + e.id));" } }
       ]
     },
     {
@@ -170,6 +178,16 @@
         { "name": "forward", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The direction the camera looks in, a unit vector [x, y, z]. Throws when there is no scene.", "example": { "lua": "local f = uc.camera.forward", "js": "const f = uc.camera.forward;" } },
         { "name": "right", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The camera's right direction, a unit vector.", "example": { "lua": "local r = uc.camera.right", "js": "const r = uc.camera.right;" } },
         { "name": "up", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The camera's up direction, a unit vector.", "example": { "lua": "local u = uc.camera.up", "js": "const u = uc.camera.up;" } }
+      ]
+    },
+    {
+      "name": "enemy", "provider": "registry", "scope": "id",
+      "doc": "One enemy, addressed by the id uc.enemies.list() gives (uc.enemy(10)). Only zombies are supported in this version; another id or an actor of another kind is an error. Ids are valid until the zombie leaves the scene.",
+      "members": [
+        { "name": "hp", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.1", "doc": "Health: zombies start with 10 to 30 and lose the weapon's damage per hit; 0 or less is dead (the actor stays in the scene until the wave ends). -1000 to 100000.", "example": { "lua": "uc.enemy(10).hp = 1", "js": "uc.enemy(10).hp = 1;" } },
+        { "name": "alive", "kind": "property", "type": "bool", "access": "r", "status": "implemented", "since": "1.1", "doc": "True while hp is above 0.", "example": { "lua": "if uc.enemy(10).alive then log.write('up') end", "js": "if (uc.enemy(10).alive) log.write('up');" } },
+        { "name": "head", "kind": "property", "type": "bool", "access": "r", "status": "implemented", "since": "1.1", "doc": "True while the head is on (it comes off with a head shot).", "example": { "lua": "local h = uc.enemy(10).head", "js": "const h = uc.enemy(10).head;" } },
+        { "name": "position", "kind": "property", "type": "array<float>", "access": "rw", "status": "implemented", "since": "1.1", "doc": "World position [x, y, z] in units of 10 cm, y up. Writing moves the zombie at once; the game moves it on from there.", "example": { "lua": "uc.enemy(10).position = { 0, 0, 0 }", "js": "uc.enemy(10).position = [0, 0, 0];" } }
       ]
     },
     {

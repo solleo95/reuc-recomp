@@ -14,6 +14,10 @@ Events are delivered to handlers registered with on(). Handlers run on the game 
 | `on_weapon_fired` | event | `object` | implemented | 1.0 |
 | `on_damage_taken` | event | `object` | implemented | 1.0 |
 | `on_reload` | event | `object` | implemented | 1.0 |
+| `on_player_died` | event | `object` | implemented | 1.1 |
+| `on_enemy_spawned` | event | `object` | implemented | 1.1 |
+| `on_enemy_killed` | event | `object` | implemented | 1.1 |
+| `on_enemy_headshot` | event | `object` | implemented | 1.1 |
 
 ## `on`
 
@@ -176,4 +180,84 @@ JavaScript:
 
 ```js
 on('on_reload', (e) => log.write('reload ' + e.slot));
+```
+
+## `on_player_died`
+
+`on("on_player_died", handler)`
+
+Status: **implemented**, since API 1.1.
+
+A player's damage meter reached its maximum (the player is dead). Once per death. Payload: { slot: int }.
+
+Lua:
+
+```lua
+on('on_player_died', function(e) log.write('died ' .. e.slot) end)
+```
+
+JavaScript:
+
+```js
+on('on_player_died', (e) => log.write('died ' + e.slot));
+```
+
+## `on_enemy_spawned`
+
+`on("on_enemy_spawned", handler)`
+
+Status: **implemented**, since API 1.1.
+
+A zombie appeared in the scene. Zombies already present when the mod starts or a scene begins do not count. Payload: { id: int, x: float, y: float, z: float, hp: float }.
+
+Lua:
+
+```lua
+on('on_enemy_spawned', function(e) log.write('zombie ' .. e.id) end)
+```
+
+JavaScript:
+
+```js
+on('on_enemy_spawned', (e) => log.write('zombie ' + e.id));
+```
+
+## `on_enemy_killed`
+
+`on("on_enemy_killed", handler)`
+
+Status: **implemented**, since API 1.1.
+
+A zombie's hit points dropped to 0 or below. Once per zombie. Payload: { id: int, x: float, y: float, z: float }.
+
+Lua:
+
+```lua
+on('on_enemy_killed', function(e) log.write('killed ' .. e.id) end)
+```
+
+JavaScript:
+
+```js
+on('on_enemy_killed', (e) => log.write('killed ' + e.id));
+```
+
+## `on_enemy_headshot`
+
+`on("on_enemy_headshot", handler)`
+
+Status: **implemented**, since API 1.1.
+
+A zombie's head was shot off. Once per zombie. Payload: { id: int, x: float, y: float, z: float }.
+
+Lua:
+
+```lua
+on('on_enemy_headshot', function(e) log.write('head ' .. e.id) end)
+```
+
+JavaScript:
+
+```js
+on('on_enemy_headshot', (e) => log.write('head ' + e.id));
 ```

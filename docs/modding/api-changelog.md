@@ -8,6 +8,8 @@ The API is versioned `major.minor`. A new minor version only adds members or mak
 - `weapon.fire_rate` and a confirmed `weapon.damage` (both were announced for 1.0 but only checked later).
 - `input.held`, `input.fire_held`, `input.aim` (what the game sees on player 1's pad) and `input.force_held`, `input.block_held`, `input.aim_override` (add to or take away from it).
 - `player.weapon` (held weapon id), `player.health` (0 to 1), `player.reserve` (spare ammo of the held weapon; nil for the handgun).
+- `uc.enemy(id)` with `hp` (read and write), `alive`, `head`, `position` (read and write); zombies only.
+- Events `on_enemy_spawned`, `on_enemy_killed`, `on_enemy_headshot`, `on_player_died`, derived from state changes between ticks.
 - `camera.position`, `camera.forward`, `camera.right`, `camera.up`, computed from the view matrix. `player.position` is not offered: the game is on rails and both players share the camera, so the camera is the player's viewpoint.
 
 ## 1.0

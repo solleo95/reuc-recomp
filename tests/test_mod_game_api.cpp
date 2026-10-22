@@ -151,6 +151,69 @@ static void events_from_changes_between_ticks() {
     CHECK(f.events.empty());
 }
 
+// Enemy and player events come from comparing the scene between ticks: spawned (a new id), killed (hp from above 0 to 0 or less), headshot (the head comes off), died.
+static void enemy_and_death_events() {
+    Fixture f;
+    const auto zombie = [&](uint32_t address, uint32_t id, float hp) {
+        f.memory.write_u32(address, id); f.memory.write_u32(address + 0x10, kZombieClass);
+        f.memory.write_f32(address + 0xF48, 1.f); f.memory.write_f32(address + 0xF4C, 2.f); f.memory.write_f32(address + 0xF50, 3.f);
+        f.memory.write_f32(address + 0x3A4, hp); f.memory.write_f32(address + 0x1058, 1.f);
+    };
+    const auto place = [&](uint32_t address, uint32_t id) { f.memory.write_u32(kActorTable + id * 8, id); f.memory.write_u32(kActorTable + id * 8 + 4, address); };
+    const auto named = [&](const char* name) { std::vector<json> found; for (const auto& e : f.events) if (e.first == name) found.push_back(e.second); return found; };
+    zombie(kZombie1, 10, 20.f); place(kZombie1, 10);
+    f.tick();
+    CHECK(f.events.empty());                                  // the first tick is the baseline: the zombies that are already there did not "spawn"
+    zombie(kZombie2, 11, 30.f); place(kZombie2, 11);
+    f.tick();
+    CHECK(named("on_enemy_spawned").size() == 1 && named("on_enemy_spawned")[0]["id"] == 11 && named("on_enemy_spawned")[0]["hp"] == 30.0 && named("on_enemy_spawned")[0]["x"] == 1.0);
+    f.events.clear();
+    f.memory.write_f32(kZombie1 + 0x3A4, 10.f);               // hurt, not dead
+    f.tick();
+    CHECK(f.events.empty());
+    f.memory.write_f32(kZombie1 + 0x1058, 0.1f);              // the head is shot off
+    f.tick();
+    CHECK(named("on_enemy_headshot").size() == 1 && named("on_enemy_headshot")[0]["id"] == 10 && named("on_enemy_killed").empty());
+    f.events.clear();
+    f.memory.write_f32(kZombie1 + 0x3A4, -5.f);               // and it dies; the head event does not repeat
+    f.tick();
+    CHECK(named("on_enemy_killed").size() == 1 && named("on_enemy_killed")[0]["id"] == 10 && named("on_enemy_headshot").empty());
+    f.events.clear();
+    f.tick();
+    CHECK(f.events.empty());                                  // a corpse that stays in the table is not killed again
+    f.memory.write_f32(kZombie2 + 0x3A4, 0.f); f.memory.write_f32(kZombie2 + 0x1058, 0.1f);   // one shot to the head kills at once: both events, the kill carries the id
+    f.tick();
+    CHECK(named("on_enemy_killed").size() == 1 && named("on_enemy_headshot").size() == 1);
+    f.events.clear();
+    f.memory.write_u32(kActorTable + 11 * 8, 0); f.memory.write_u32(kActorTable + 11 * 8 + 4, 0);   // the wave ends: a zombie leaves quietly
+    f.tick();
+    CHECK(f.events.empty());
+    zombie(kZombie2, 11, 25.f); place(kZombie2, 11);          // the same id comes back (a new wave): a spawn again
+    f.tick();
+    CHECK(named("on_enemy_spawned").size() == 1);
+    f.events.clear();
+    f.memory.write_f32(kScene + 0x6C00, 49.f);                // 49 of 50: alive
+    f.tick();
+    CHECK(named("on_player_died").empty());
+    f.memory.write_f32(kScene + 0x6C00, 50.f);
+    f.tick();
+    CHECK(named("on_player_died").size() == 1 && named("on_player_died")[0]["slot"] == 1);
+    f.events.clear();
+    f.tick();
+    CHECK(named("on_player_died").empty());                   // once per death
+    f.memory.write_f32(kScene + 0x6C00, 0.f);
+    f.tick();
+    f.memory.write_f32(kScene + 0x6C00, 50.f);
+    f.tick();
+    CHECK(named("on_player_died").size() == 1);               // revived (continue), dead again
+    f.events.clear();
+    f.memory.write_u32(kPlayerTable, 0);                      // no scene (menu): the baseline resets, nothing spawns when the next scene starts
+    f.tick();
+    f.memory.write_u32(kPlayerTable, kP1);
+    f.tick();
+    CHECK(named("on_enemy_spawned").empty() && named("on_enemy_killed").empty());
+}
+
 static void camera_view() {
     Fixture f;
     for (int i = 0; i < 12; ++i) f.memory.write_f32(kCamera + 4u * uint32_t(i), float(i) * 0.5f);
@@ -228,6 +291,40 @@ static void enemies_list_parses_actor_table() {
     CHECK(by_id[11]["hp"] == -10.0 && by_id[604]["z"] == 9.0);
     f.memory.write_f32(kZombie1 + 0xF48, std::nanf(""));   // a non-finite position is a broken object: skipped
     CHECK(f.call("enemies.list").size() == 2);
+}
+
+// uc.enemy(id): read and change one zombie by the id enemies.list() gives. Only zombies (the class with a known layout); anything else is refused.
+static void enemy_members() {
+    Fixture f;
+    const auto zombie = [&](uint32_t address, uint32_t id, float hp) {
+        f.memory.write_u32(address, id); f.memory.write_u32(address + 0x10, kZombieClass);
+        f.memory.write_f32(address + 0xF48, 1.f); f.memory.write_f32(address + 0xF4C, 2.f); f.memory.write_f32(address + 0xF50, 3.f);
+        f.memory.write_f32(address + 0x3A4, hp); f.memory.write_f32(address + 0x1058, 1.f);
+    };
+    zombie(kZombie1, 10, 20.f);
+    f.memory.write_u32(kActorTable + 10 * 8, 10); f.memory.write_u32(kActorTable + 10 * 8 + 4, kZombie1);
+    f.memory.write_u32(kPool + 0x10, 0x803F1A40);
+    f.memory.write_u32(kActorTable + 12 * 8, 12); f.memory.write_u32(kActorTable + 12 * 8 + 4, kPool);   // not a zombie
+    zombie(kLinked, 604, 30.f);                                                                          // outside the table, reached through the player's list
+    f.memory.write_u32(kP1 + 8, kLinked + 8);
+    const auto id = [](int n) { return json{{"id", n}}; };
+    CHECK(f.get("enemy.hp", id(10)) == 20.0 && f.get("enemy.alive", id(10)) == true && f.get("enemy.head", id(10)) == true);
+    CHECK(f.get("enemy.position", id(10)) == json::array({1.0, 2.0, 3.0}) && f.get("enemy.hp", id(604)) == 30.0);
+    f.set("enemy.hp", id(10), 0);
+    CHECK(f.memory.read_f32(kZombie1 + 0x3A4) == 0.f && f.get("enemy.alive", id(10)) == false);
+    f.set("enemy.hp", id(604), 500.5);
+    CHECK(f.memory.read_f32(kLinked + 0x3A4) == 500.5f);
+    f.set("enemy.position", id(10), json::array({4.5, 0.0, -7.25}));
+    CHECK(f.memory.read_f32(kZombie1 + 0xF48) == 4.5f && f.memory.read_f32(kZombie1 + 0xF50) == -7.25f);
+    f.memory.write_f32(kZombie1 + 0x1058, 0.1f);
+    CHECK(f.get("enemy.head", id(10)) == false);
+    CHECK(f.throws([&] { f.get("enemy.hp", id(99)); }) && f.throws([&] { f.set("enemy.hp", id(99), 1); }));          // no such actor
+    CHECK(f.throws([&] { f.get("enemy.hp", id(12)); }) && f.throws([&] { f.set("enemy.hp", id(12), 1); }));          // an actor of another class
+    CHECK(f.throws([&] { f.get("enemy.hp", json::object()); }) && f.throws([&] { f.get("enemy.hp", json{{"id", "x"}}); }));
+    CHECK(f.throws([&] { f.set("enemy.hp", id(10), -5000); }) && f.throws([&] { f.set("enemy.hp", id(10), 1e9); }) && f.throws([&] { f.set("enemy.hp", id(10), "dead"); }));
+    CHECK(f.throws([&] { f.set("enemy.position", id(10), json::array({1.0, 2.0})); }) && f.throws([&] { f.set("enemy.position", id(10), json::array({1e9, 0.0, 0.0})); }));
+    CHECK(f.memory.read_f32(kZombie1 + 0xF48) == 4.5f);   // refused writes change nothing
+    CHECK(!f.api.find("enemy.alive")->set && !f.api.find("enemy.head")->set);
 }
 
 static void enemies_list_survives_a_loop_in_the_actor_list() {
@@ -385,6 +482,8 @@ static void fire_rate_sets_the_live_interval() {
 }
 
 int main() {
+    enemy_and_death_events();
+    enemy_members();
     weapon_health_and_reserve();
     camera_position_and_axes_from_the_view_matrix();
     camera_position_and_axes_from_the_view_matrix();
