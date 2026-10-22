@@ -44,8 +44,8 @@ struct Rig {
         return mods.back();
     }
     std::vector<const ModEntry*> active() const { std::vector<const ModEntry*> v; for (const auto& m : mods) v.push_back(&m); return v; }
-    TextBase base = [](const std::string& lang) -> std::optional<std::vector<uint8_t>> {
-        if (lang == "us" || lang == "en") return make_txtres(sample());
+    TextBase base = [](const std::string& lang) -> std::optional<TextBaseFile> {
+        if (lang == "us" || lang == "en") return TextBaseFile{make_txtres(sample()), ""};
         return std::nullopt;
     };
     TextBuild build() const { return build_text_mods(cache, active(), base); }
@@ -125,7 +125,8 @@ static void limits() {
     for (int i = 0; i < 31; ++i) lines32 += "\\nz";
     write(e.root / "text" / "us.json", R"({"1":")" + longest + R"(","2":")" + lines32 + R"("})");
     const auto ok = edge.build();
-    CHECK(ok.problems.empty() && Rig::records(ok.root, "us")[0].lines[0].size() == 2048 && Rig::records(ok.root, "us")[1].lines.size() == 32);
+    CHECK(Rig::records(ok.root, "us")[0].lines[0].size() == 2048 && Rig::records(ok.root, "us")[1].lines.size() == 32);   // at the limits: accepted
+    CHECK(ok.problems.at("e").size() == 2 && ok.problems.at("e")[0].find("longer") != std::string::npos);   // ... with a note each: far beyond what the original file has
 }
 
 static void same_input_reuses_the_folder_and_changed_input_makes_a_new_one() {
@@ -178,6 +179,93 @@ static void placeholders_must_match_the_original() {
     CHECK(fixed.problems.at("one").size() == 1);
 }
 
+static void unknown_ids_are_summarised_keys_truncated_and_problems_capped() {
+    Rig rig;
+    const auto& mod = rig.add("one");
+    std::string json = "{";
+    for (int i = 0; i < 10; ++i) json += (i ? "," : "") + std::string("\"") + std::to_string(500 + i) + "\":\"x\"";   // ten ids the file does not have
+    json += "}";
+    write(mod.root / "text" / "us.json", json);
+    const auto summary = rig.build();
+    CHECK(summary.problems.at("one").size() == 1 && summary.problems.at("one")[0].find("10 ids") != std::string::npos && summary.problems.at("one")[0].find("500") != std::string::npos);
+    CHECK(summary.problems.at("one")[0].size() < 200);   // not one line per id
+    Rig loud;
+    const auto& noisy = loud.add("noisy");
+    std::string bad = "{\"!" + std::string(100, 'k') + "\":\"x\"";   // a key far too long to print whole (it sorts first: "!" comes before digits)
+    for (int i = 0; i < 30; ++i) bad += ",\"" + std::to_string(i + 20) + "\":5";   // thirty values that are not text
+    write(noisy.root / "text" / "us.json", bad + "}");
+    const auto capped = loud.build();
+    const auto& lines = capped.problems.at("noisy");
+    CHECK(lines.size() == 21 && lines.back().find("more") != std::string::npos);   // twenty problems and a note that more exist
+    CHECK(lines[0].size() < 160 && lines[0].find(std::string(33, 'k')) == std::string::npos);
+}
+
+static void an_earlier_mods_all_json_unknown_id_is_reported_too() {
+    Rig rig;
+    write(rig.add("a").root / "text" / "all.json", R"({"555":"a"})");
+    write(rig.add("b").root / "text" / "all.json", R"({"555":"b"})");   // the same id: the second setter must not hide the first
+    const auto build = rig.build();
+    CHECK(build.problems.count("a") == 1 && build.problems.count("b") == 1);
+    Rig partial;   // English is damaged: the languages that could be patched decide
+    write(partial.add("one").root / "text" / "all.json", R"({"555":"x"})");
+    partial.base = [](const std::string& lang) -> std::optional<TextBaseFile> {
+        if (lang == "us") return TextBaseFile{make_txtres(sample()), ""};
+        if (lang == "en") return TextBaseFile{std::vector<uint8_t>(50, 1), ""};
+        return std::nullopt;
+    };
+    const auto result = partial.build();
+    const auto& problems = result.problems.at("one");
+    const auto has = [&](const char* word) { for (const auto& p : problems) if (p.find(word) != std::string::npos) return true; return false; };
+    CHECK(has("555") && has("mes_en"));   // the unknown id (unknown in the one language that worked) and the damaged file
+}
+
+static void a_damaged_base_a_mod_ships_is_blamed_on_that_mod() {
+    Rig rig;
+    write(rig.add("words").root / "text" / "us.json", R"({"1":"x"})");
+    rig.add("shipper");
+    rig.base = [](const std::string& lang) -> std::optional<TextBaseFile> {
+        if (lang == "us") return TextBaseFile{std::vector<uint8_t>(100, 7), "shipper"};
+        return std::nullopt;
+    };
+    const auto build = rig.build();
+    CHECK(build.problems.count("shipper") == 1 && build.problems.at("shipper")[0].find("mes_us") != std::string::npos);
+    CHECK(build.problems.count("words") == 1);
+}
+
+static void too_many_entries_and_leading_zeros_and_line_endings() {
+    Rig rig;
+    const auto& mod = rig.add("one");
+    std::string many = "{";
+    for (int i = 0; i < 100001; ++i) many += (i ? ",\"" : "\"") + std::to_string(1000 + i) + "\":\"\"";
+    write(mod.root / "text" / "en.json", many + "}");
+    write(mod.root / "text" / "us.json", R"({"007":"zero","7":"Seven %s now","1":"a\r\nb"})");
+    const auto build = rig.build();
+    const auto& problems = build.problems.at("one");
+    const auto has = [&](const char* file, const char* word) { for (const auto& p : problems) if (p.find(file) != std::string::npos && p.find(word) != std::string::npos) return true; return false; };
+    CHECK(has("en.json", "100000") && has("us.json", "007"));
+    const auto us = Rig::records(build.root, "us");
+    CHECK(us[2].lines[0] == "Seven %s now" && (us[0].lines == std::vector<std::string>{"a", "b"}));   // no stray CR; "007" did not override "7"
+    CHECK(!fs::exists(build.root / "Data" / "message" / "mes_en.txtres"));
+}
+
+static void two_mods_setting_one_id_are_a_conflict_and_long_lines_are_noted() {
+    Rig rig;
+    write(rig.add("modone").root / "text" / "us.json", R"({"12":"from one","1":"x"})");
+    write(rig.add("modtwo").root / "text" / "us.json", R"({"12":"from two"})");
+    const auto build = rig.build();
+    CHECK(build.conflicts.size() == 1 && build.conflicts[0].find("12") != std::string::npos && build.conflicts[0].find("modone") != std::string::npos && build.conflicts[0].find("modtwo") != std::string::npos);
+    CHECK(Rig::records(build.root, "us")[3].lines[0] == "from two");
+    Rig same;   // all.json and us.json of one mod are not a conflict
+    write(same.add("solo").root / "text" / "all.json", R"({"12":"x"})");
+    write(same.mods[0].root / "text" / "us.json", R"({"12":"y"})");
+    CHECK(same.build().conflicts.empty());
+    Rig wide;   // the longest original line here is 8 bytes: a longer one is applied but noted
+    write(wide.add("one").root / "text" / "us.json", R"({"1":"a line that is much longer than any original one"})");
+    const auto noted = wide.build();
+    CHECK(Rig::records(noted.root, "us")[0].lines[0].size() > 20);
+    CHECK(noted.problems.at("one").size() == 1 && noted.problems.at("one")[0].find("longer") != std::string::npos);
+}
+
 static void no_text_means_empty_root() {
     Rig rig;
     rig.add("plain");
@@ -192,9 +280,9 @@ static void missing_base_is_a_problem() {
     Rig rig;
     const auto& mod = rig.add("one");
     write(mod.root / "text" / "us.json", R"({"1":"x"})");
-    const auto none = build_text_mods(rig.cache, rig.active(), [](const std::string&) { return std::optional<std::vector<uint8_t>>(); });
+    const auto none = build_text_mods(rig.cache, rig.active(), [](const std::string&) { return std::optional<TextBaseFile>(); });
     CHECK(none.root.empty() && none.problems.at("one").size() == 1 && none.problems.at("one")[0].find("no text file") != std::string::npos);
-    const auto damaged = build_text_mods(rig.cache, rig.active(), [](const std::string&) { return std::optional<std::vector<uint8_t>>(std::vector<uint8_t>(100, 7)); });
+    const auto damaged = build_text_mods(rig.cache, rig.active(), [](const std::string&) { return std::optional<TextBaseFile>(TextBaseFile{std::vector<uint8_t>(100, 7), ""}); });
     CHECK(damaged.root.empty() && damaged.problems.at("one").size() == 1);
 }
 
@@ -229,6 +317,11 @@ int main() {
     same_input_reuses_the_folder_and_changed_input_makes_a_new_one();
     a_damaged_cache_folder_is_rebuilt();
     placeholders_must_match_the_original();
+    unknown_ids_are_summarised_keys_truncated_and_problems_capped();
+    an_earlier_mods_all_json_unknown_id_is_reported_too();
+    a_damaged_base_a_mod_ships_is_blamed_on_that_mod();
+    too_many_entries_and_leading_zeros_and_line_endings();
+    two_mods_setting_one_id_are_a_conflict_and_long_lines_are_noted();
     no_text_means_empty_root();
     missing_base_is_a_problem();
     all_json_unknown_id_is_reported_once_when_no_language_has_it();

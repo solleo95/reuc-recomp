@@ -99,6 +99,17 @@ static void rejects_hostile_layouts() {
     CHECK(patch_txtres(make_txtres(sample()), {{1, {"x"}}}, error).has_value());                   // an honest file with a shared string is fine
 }
 
+static void a_patched_file_has_a_size_limit() {   // the game reads the whole file into memory in one piece
+    std::vector<Rec> big;
+    for (uint32_t i = 1; i <= 300; ++i) big.push_back({i, "", {"x"}});
+    TextChanges changes;
+    for (uint32_t i = 1; i <= 300; ++i) changes[i] = std::vector<std::string>(32, std::string(1000, 'y'));   // 300 x 32 x 1 KB: about 9.6 MB
+    std::string error;
+    CHECK(!patch_txtres(make_txtres(big), changes, error) && error.find("larger than") != std::string::npos);
+    changes.erase(changes.find(101), changes.end());   // 100 x 32 KB: about 3.2 MB is fine
+    CHECK(patch_txtres(make_txtres(big), changes, error).has_value());
+}
+
 static void patched_file_reads_back_with_read_txtres() {
     std::string error;
     TextChanges changes;
@@ -118,6 +129,7 @@ int main() {
     shared_strings_are_not_disturbed();
     rejects_damaged_files();
     rejects_hostile_layouts();
+    a_patched_file_has_a_size_limit();
     patched_file_reads_back_with_read_txtres();
     std::puts("test_txtres: ok");
     return 0;

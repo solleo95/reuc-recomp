@@ -5,6 +5,7 @@
 namespace uc::mods {
 namespace {
 constexpr uint32_t kVersion = 0x00010000, kMaxRecords = 100000, kRecordSize = 20, kMaxLinesPerRecord = 1000;
+constexpr uint64_t kMaxPatchedBytes = 8u << 20;   // the game reads the whole file into memory in one piece; the real files are a quarter of a megabyte
 
 uint32_t be32(std::span<const uint8_t> d, size_t at) { return uint32_t(d[at]) << 24 | uint32_t(d[at + 1]) << 16 | uint32_t(d[at + 2]) << 8 | d[at + 3]; }
 void put_be32(std::vector<uint8_t>& d, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) d[at + size_t(i)] = uint8_t(v >> (24 - 8 * i)); }
@@ -79,15 +80,15 @@ std::optional<TextPatch> patch_txtres(std::span<const uint8_t> file, const TextC
     patch.file.assign(file.begin(), file.end());
     uint64_t grown = file.size();
     for (const auto& [id, lines] : changes) {
-        size_t index = parsed.records.size();
-        for (size_t i = 0; i < parsed.records.size(); ++i) if (parsed.records[i].id == id) { index = i; break; }
-        if (index == parsed.records.size()) { patch.unknown_ids.push_back(id); continue; }
+        const auto found = std::lower_bound(parsed.records.begin(), parsed.records.end(), id, [](const TextRecord& r, uint32_t wanted) { return r.id < wanted; });   // ids ascend
+        if (found == parsed.records.end() || found->id != id) { patch.unknown_ids.push_back(id); continue; }
+        const size_t index = size_t(found - parsed.records.begin());
         if (lines.empty() || lines.size() > kMaxLinesPerRecord) { error = "record " + std::to_string(id) + ": the number of lines is not valid"; return std::nullopt; }
         const uint32_t text_at = uint32_t(patch.file.size());
         for (const auto& line : lines) {
             if (line.find('\0') != std::string::npos) { error = "record " + std::to_string(id) + ": a line holds a NUL character"; return std::nullopt; }
             grown += line.size() + 1;
-            if (grown > 0x7FFFFFFFull) { error = "the text file would grow past 2 GB"; return std::nullopt; }
+            if (grown > kMaxPatchedBytes) { error = "the changed text file would be larger than " + std::to_string(kMaxPatchedBytes >> 20) + " MB (the game reads it into memory in one piece)"; return std::nullopt; }
             patch.file.insert(patch.file.end(), line.begin(), line.end());
             patch.file.push_back(0);
         }

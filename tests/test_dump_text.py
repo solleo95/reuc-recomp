@@ -60,6 +60,10 @@ class DumpTextTests(unittest.TestCase):
             bad_pointer = bytearray(good)
             struct.pack_into(">I", bad_pointer, 0x10 + 4 * 2 + 12, len(good) + 100)   # text pointer of record 0 past the end
             cases["pointer"] = bytes(bad_pointer)
+            bad_voice = bytearray(good)
+            struct.pack_into(">I", bad_voice, 0x10 + 4 * 2 + 4, len(good) + 5)   # voice-name pointer of record 0 past the end (the port refuses such a file too)
+            cases["voice"] = bytes(bad_voice)
+            cases["utf8"] = txtres([(1, "", ["ok"]), (2, "", ["bad XX"])]).replace(b"bad XX", b"bad \xff\xfe")   # not UTF-8: it would not survive the round trip
             for name, content in cases.items():
                 path = Path(folder) / f"{name}.txtres"
                 path.write_bytes(content)

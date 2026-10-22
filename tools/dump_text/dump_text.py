@@ -28,7 +28,9 @@ def read_texts(data):
         (at,) = struct.unpack_from(">I", data, table + 4 * i)
         if at + 20 > len(data):
             raise ValueError(f"record {i} is outside the file")
-        rid, _voice, lines, text, _ = struct.unpack_from(">5I", data, at)
+        rid, voice, lines, text, _ = struct.unpack_from(">5I", data, at)
+        if voice and (voice >= len(data) or data.find(b"\0", voice) < 0):
+            raise ValueError(f"the voice name of record {i} is outside the file")
         if rid <= previous:
             raise ValueError(f"the record ids are not ascending at record {i}")
         previous = rid
@@ -39,7 +41,10 @@ def read_texts(data):
             end = data.find(b"\0", cursor) if cursor < len(data) else -1
             if end < 0:
                 raise ValueError(f"a line of record {i} is outside the file or has no end")
-            found.append(data[cursor:end].decode("utf-8", errors="replace"))
+            try:
+                found.append(data[cursor:end].decode("utf-8"))
+            except UnicodeDecodeError:
+                raise ValueError(f"a line of record {i} is not valid UTF-8 (it would not survive a round trip through JSON)") from None
             cursor = end + 1
         records.append((rid, found))
     return records

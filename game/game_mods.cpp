@@ -96,7 +96,7 @@ void GameMods::refresh_files(bool initial) {
     for (const auto& mod : active_) active.push_back(&mod);
     if (audio_) audio_->set_active(active);   // starts converting
     {   // the text of the active mods, applied to the base files (a mod's own files/Data/message/mes_<lang>.txtres is that mod's base; the last one wins)
-        const auto base = [&](const std::string& lang) -> std::optional<std::vector<uint8_t>> {
+        const auto base = [&](const std::string& lang) -> std::optional<mods::TextBaseFile> {
             const std::string name = "mes_" + lang + ".txtres";
             for (auto it = active.rbegin(); it != active.rend(); ++it) {
                 const fs::path file = (*it)->root / "files" / "Data" / "message" / name;
@@ -105,14 +105,15 @@ void GameMods::refresh_files(bool initial) {
                 if (size == 0 || size > (64u << 20)) continue;
                 std::vector<uint8_t> bytes(size);
                 std::ifstream in(file, std::ios::binary);
-                if (in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size))) return bytes;
+                if (in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size))) return mods::TextBaseFile{std::move(bytes), (*it)->manifest.id};
             }
             const auto disc = text_bases_.find(lang);
-            return disc == text_bases_.end() ? std::nullopt : std::optional<std::vector<uint8_t>>(disc->second);
+            return disc == text_bases_.end() ? std::nullopt : std::optional<mods::TextBaseFile>(mods::TextBaseFile{disc->second, ""});
         };
         auto built = mods::build_text_mods(mods_dir_ / ".cache", active, base);
         text_root_ = std::move(built.root);
         text_problems_ = std::move(built.problems);
+        for (const auto& conflict : built.conflicts) std::fprintf(stderr, "[mods] %s\n", conflict.c_str());
     }
     const std::vector<fs::path> files_roots = overlay_roots();
     std::vector<fs::path> texture_roots;

@@ -824,16 +824,37 @@ def _find_in_guest_memory(g, needle, start=0x80400000, size=2 << 20):
     return None
 
 
+def _record_500_bytes(g):
+    """The first line of record 500 of the game's own mes_us.txtres as UTF-8 bytes (what the unpatched file holds), or None when the file cannot be found."""
+    import importlib.util
+    import os
+    from pathlib import Path
+    candidates = [os.environ.get("UC_GAME_DIR"), r"S:\Games\Umbrella Chronicles\game", str(g.exe.parent / "game")]
+    for folder in candidates:
+        path = Path(folder or "") / "DATA" / "files" / "Data" / "message" / "mes_us.txtres"
+        if folder and path.exists():
+            spec = importlib.util.spec_from_file_location("dump_text", Path(__file__).resolve().parents[2] / "tools" / "dump_text" / "dump_text.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            for record_id, lines in module.read_texts(path.read_bytes()):
+                if record_id == 500 and lines:
+                    return lines[0].encode("utf-8")[:24]
+    return None
+
+
 def text_replace(g, args):
     """The text_marker mod sets records 500, 550 and 553 (the handgun's name in the HUD, which shows UCTEXTMARKER in the capture) for every language. The game reads the whole text file into MEM2
     (around 0x91240000): the scenario finds the original text of record 500 in that window (which proves the window holds the file) and requires the marker
     in it exactly when the mod is on (text_replace_plain runs without the mod)."""
+    needle = _record_500_bytes(g)
+    if needle is None:
+        return {"skipped": "the game's mes_us.txtres was not found (set UC_GAME_DIR to the game folder that holds DATA)"}
     reach_gameplay(g)
     g.advance(60)
     window = {"start": 0x91000000, "size": 8 << 20}
     capture = g.capture()   # before the scan: the player is not defended while the game runs on
     with g.step("scan_memory"):
-        original = _find_in_guest_memory(g, "Kvu".encode() + bytes([0xC3, 0xA8]) + b"ok cawypa", **window)   # "Samurai Edge" in the owner's Russian mes_us (font code points)
+        original = _find_in_guest_memory(g, needle, **window)
         marker = _find_in_guest_memory(g, b"UCTEXTMARKER" + bytes([0]), **window)
     if original is None:
         g.fail("the game's text file was not found in memory (is mes_us the Russian one? the scan window may be wrong)", "text replace")

@@ -7,6 +7,7 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <tuple>
 #include <system_error>
 
 namespace uc::mods {
@@ -67,6 +68,25 @@ struct Parsed {
     TextChanges changes;
 };
 
+constexpr size_t kMaxEntries = 100000, kMaxProblemsPerMod = 20, kShownKey = 32;
+
+// A JSON key as it is printed in a message: cut at 32 bytes (never inside a UTF-8 character), so a hostile key cannot fill the Mods tab.
+std::string shown(const std::string& key) {
+    if (key.size() <= kShownKey) return key;
+    size_t cut = kShownKey;
+    while (cut > 0 && (static_cast<unsigned char>(key[cut]) & 0xC0) == 0x80) --cut;
+    return key.substr(0, cut) + "...";
+}
+
+// "a, b, c, d, e, ..." for the first five of a list of ids.
+std::string some(const std::vector<uint32_t>& ids) {
+    std::string text;
+    for (size_t i = 0; i < ids.size() && i < 5; ++i) text += (i ? ", " : "") + std::to_string(ids[i]);
+    return ids.size() > 5 ? text + ", ..." : text;
+}
+
+std::string ids_phrase(size_t count) { return count == 1 ? "1 id" : std::to_string(count) + " ids"; }
+
 // One text/<name>.json; problems are appended as "text: <file>: ...". Bad entries are skipped, the rest is kept.
 Parsed parse_file(const fs::path& path, std::vector<std::string>& problems) {
     Parsed parsed{utf8(path.filename()), {}};
@@ -80,10 +100,12 @@ Parsed parse_file(const fs::path& path, std::vector<std::string>& problems) {
     const nlohmann::json json = nlohmann::json::parse(text, nullptr, false);
     if (json.is_discarded()) { problem("not valid JSON"); return parsed; }
     if (!json.is_object()) { problem("must be a JSON object of record ids to text"); return parsed; }
+    if (json.size() > kMaxEntries) { problem("more than " + std::to_string(kMaxEntries) + " entries"); return parsed; }
     for (const auto& [key, value] : json.items()) {
-        const std::string id_text = "id \"" + key + "\"";
+        const std::string id_text = "id \"" + shown(key) + "\"";
         const bool digits = !key.empty() && key.size() <= 10 && std::all_of(key.begin(), key.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
         if (!digits || std::stoull(key) > 0xFFFFFFFFull) { problem(id_text + " is not a record id (a whole number)"); continue; }
+        if (key.size() > 1 && key[0] == '0') { problem(id_text + " has leading zeros: write the id without them"); continue; }   // "007" and "7" would be one record
         if (!value.is_string()) { problem(id_text + " must be text"); continue; }
         const std::string& s = value.get_ref<const std::string&>();
         if (s.find('\0') != std::string::npos) { problem(id_text + ": the text holds a NUL character"); continue; }
@@ -91,6 +113,7 @@ Parsed parse_file(const fs::path& path, std::vector<std::string>& problems) {
         size_t start = 0;
         for (size_t at; (at = s.find('\n', start)) != std::string::npos; start = at + 1) lines.push_back(s.substr(start, at - start));
         lines.push_back(s.substr(start));
+        for (auto& line : lines) if (!line.empty() && line.back() == '\r') line.pop_back();   // Windows line ends: the game's texts have none
         if (lines.size() > kMaxLines) { problem(id_text + ": more than " + std::to_string(kMaxLines) + " lines"); continue; }
         if (std::any_of(lines.begin(), lines.end(), [](const std::string& l) { return l.size() > kMaxLineBytes; })) { problem(id_text + ": a line is longer than " + std::to_string(kMaxLineBytes) + " bytes"); continue; }
         parsed.changes[uint32_t(std::stoull(key))] = std::move(lines);
@@ -99,23 +122,49 @@ Parsed parse_file(const fs::path& path, std::vector<std::string>& problems) {
 }
 
 struct Origin { std::string mod, file; };
+
+// What the base file says about its records: the printf conversions of each text, and the largest line and line count (to notice a text far beyond them).
+struct OriginalInfo {
+    std::map<uint32_t, std::string> conversions;
+    size_t max_line = 0, max_lines = 0;
+};
 }  // namespace
 
 TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const ModEntry*>& mods, const TextBase& base) {
     TextBuild build;
-    std::map<std::string, TextChanges> changes;                    // language -> merged changes of all mods
-    std::map<std::string, std::map<uint32_t, Origin>> origin;      // language -> id -> who set it last
-    std::map<std::string, std::set<std::string>> contributors;     // language -> mods
-    std::map<std::string, std::set<std::string>> seen_problems;    // mod -> problems already listed (the same text is not listed twice)
-    const auto add_problem = [&](const std::string& mod, const std::string& text) { if (seen_problems[mod].insert(text).second) build.problems[mod].push_back(text); };
+    std::map<std::string, TextChanges> changes;                                  // language -> merged changes of all mods
+    std::map<std::string, std::map<uint32_t, std::vector<Origin>>> origin;       // language -> id -> everybody who set it, in order
+    std::map<std::string, std::set<std::string>> contributors;                   // language -> mods
+    std::map<std::string, std::set<std::string>> seen_problems;                  // mod -> problems already listed (the same text is not listed twice)
+    std::set<std::string> seen_conflicts;
+    const auto add_problem = [&](const std::string& mod, const std::string& text) {
+        if (!seen_problems[mod].insert(text).second) return;
+        auto& list = build.problems[mod];
+        if (list.size() < kMaxProblemsPerMod) list.push_back(text);
+        else if (list.size() == kMaxProblemsPerMod) list.push_back("text: more problems are not listed");   // the Mods tab is not a log
+    };
     const auto add_problems = [&](const std::string& mod, const std::vector<std::string>& texts) { for (const auto& t : texts) add_problem(mod, t); };
 
-    std::map<std::string, std::optional<std::vector<uint8_t>>> bases;   // looked up once per language
-    std::map<std::string, std::map<uint32_t, std::string>> placeholders;   // language -> record id -> printf conversions of the original
-    const auto base_of = [&](const std::string& lang) -> const std::optional<std::vector<uint8_t>>& {
+    std::map<std::string, std::optional<TextBaseFile>> bases;   // looked up once per language
+    std::map<std::string, OriginalInfo> originals;
+    const auto base_of = [&](const std::string& lang) -> const std::optional<TextBaseFile>& {
         auto it = bases.find(lang);
         if (it == bases.end()) it = bases.emplace(lang, base(lang)).first;
         return it->second;
+    };
+    const auto original_of = [&](const std::string& lang) -> const OriginalInfo& {
+        auto it = originals.find(lang);
+        if (it != originals.end()) return it->second;
+        OriginalInfo info;
+        std::string ignored;   // a damaged base is reported when it is patched
+        if (const auto records = read_txtres(base_of(lang)->bytes, ignored)) {
+            for (const auto& r : *records) {
+                info.conversions[r.id] = conversions(joined(r.lines));
+                info.max_lines = std::max(info.max_lines, r.lines.size());
+                for (const auto& line : r.lines) info.max_line = std::max(info.max_line, line.size());
+            }
+        }
+        return originals.emplace(lang, std::move(info)).first->second;
     };
 
     for (const ModEntry* mod : mods) {
@@ -132,27 +181,35 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
         std::vector<std::string> problems;
         for (const auto& path : files) {
             const std::string stem = lower(utf8(path.stem()));
-            if (stem != "all" && !is_language(stem)) { problems.push_back("text: " + utf8(path.filename()) + ": '" + stem + "' is not a language (us, en, fr, ge, it, jp, sp, du) or 'all'"); continue; }
+            if (stem != "all" && !is_language(stem)) { problems.push_back("text: " + utf8(path.filename()) + ": '" + shown(stem) + "' is not a language (us, en, fr, ge, it, jp, sp, du) or 'all'"); continue; }
             Parsed parsed = parse_file(path, problems);
             if (stem == "all") all = std::move(parsed); else by_language[stem] = std::move(parsed);
         }
         add_problems(id, problems);
         const auto apply = [&](const std::string& lang, const Parsed& parsed) {
-            auto original = placeholders.find(lang);   // the printf conversions of each record of the base, read once per language
-            if (original == placeholders.end()) {
-                std::map<uint32_t, std::string> found;
-                std::string ignored;
-                if (const auto records = read_txtres(*base_of(lang), ignored)) for (const auto& r : *records) found[r.id] = conversions(joined(r.lines));
-                original = placeholders.emplace(lang, std::move(found)).first;
-            }
+            const OriginalInfo& original = original_of(lang);
             bool any = false;
             for (const auto& [record, lines] : parsed.changes) {
-                const auto expected = original->second.find(record);
-                if (expected != original->second.end() && conversions(joined(lines)) != expected->second) {
-                    add_problem(id, "text: " + parsed.file + ": id \"" + std::to_string(record) + "\": the placeholders (%s, %d, ...) must match the original's, which has \"" + expected->second + "\" (write %% for a percent sign); the original text is kept");
-                    continue;
+                const std::string where = "text: " + parsed.file + ": id \"" + std::to_string(record) + "\"";
+                const auto expected = original.conversions.find(record);
+                if (expected != original.conversions.end()) {
+                    if (conversions(joined(lines)) != expected->second) {
+                        add_problem(id, where + ": the placeholders (%s, %d, ...) must match the original's, which has \"" + expected->second + "\" (write %% for a percent sign); the original text is kept");
+                        continue;
+                    }
+                    size_t longest = 0;
+                    for (const auto& line : lines) longest = std::max(longest, line.size());
+                    if ((original.max_line && longest > 2 * original.max_line) || (original.max_lines && lines.size() > 2 * original.max_lines))   // applied, but the game's text boxes were made for the original's sizes
+                        add_problem(id, where + ": much longer than the original text file has (a line of " + std::to_string(longest) + " bytes and " + std::to_string(lines.size()) + " lines against at most " + std::to_string(original.max_line) + " and " + std::to_string(original.max_lines) + "): it may not fit the game's text boxes");
                 }
-                changes[lang][record] = lines; origin[lang][record] = {id, parsed.file}; any = true;
+                auto& setters = origin[lang][record];
+                if (!setters.empty() && setters.back().mod != id) {
+                    const std::string conflict = "text id " + std::to_string(record) + " is set by " + setters.back().mod + " and " + id + " (the last one wins)";
+                    if (seen_conflicts.insert(conflict).second) build.conflicts.push_back(conflict);
+                }
+                setters.push_back({id, parsed.file});
+                changes[lang][record] = lines;
+                any = true;
             }
             if (any) contributors[lang].insert(id);
         };
@@ -171,23 +228,33 @@ TextBuild build_text_mods(const fs::path& cache_root, const std::vector<const Mo
 
     std::map<std::string, std::vector<uint8_t>> produced;   // language -> patched file
     std::map<std::pair<std::string, uint32_t>, size_t> all_unknown;   // (mod, id) set by all.json -> languages where it does not exist
+    std::map<std::tuple<std::string, std::string, std::string>, std::vector<uint32_t>> unknown_in_file;   // (mod, file, language) -> ids of that file the language lacks
+    size_t patched_languages = 0;
     for (auto& [lang, merged] : changes) {
         std::string error;
-        const auto patch = patch_txtres(*base_of(lang), merged, error);
+        const auto patch = patch_txtres(base_of(lang)->bytes, merged, error);
         if (!patch) {
             for (const auto& mod : contributors[lang]) add_problem(mod, "text: mes_" + lang + ".txtres cannot be changed: " + error);
+            if (!base_of(lang)->from_mod.empty())   // the base is a mod's own file: that mod gets the blame too
+                add_problem(base_of(lang)->from_mod, "text: files/Data/message/mes_" + lang + ".txtres cannot be used as the base for text changes: " + error);
             continue;
         }
+        ++patched_languages;
         for (uint32_t unknown : patch->unknown_ids) {
-            const Origin& from = origin[lang][unknown];
-            if (lower(from.file) == "all.json") ++all_unknown[{from.mod, unknown}];
-            else add_problem(from.mod, "text: " + from.file + ": id " + std::to_string(unknown) + " does not exist in mes_" + lang + ".txtres");
+            for (const Origin& from : origin[lang][unknown]) {
+                if (lower(from.file) == "all.json") ++all_unknown[{from.mod, unknown}];
+                else unknown_in_file[{from.mod, from.file, lang}].push_back(unknown);
+            }
         }
         if (patch->unknown_ids.size() == merged.size()) continue;   // nothing of it applies: no file
         produced[lang] = patch->file;
     }
-    for (const auto& [key, languages] : all_unknown)   // an id of all.json is only a problem when no language has it
-        if (languages == changes.size()) add_problem(key.first, "text: all.json: id " + std::to_string(key.second) + " does not exist in any language");
+    for (const auto& [key, ids] : unknown_in_file)
+        add_problem(std::get<0>(key), "text: " + std::get<1>(key) + ": " + ids_phrase(ids.size()) + (ids.size() == 1 ? " does" : " do") + " not exist in mes_" + std::get<2>(key) + ".txtres (" + some(ids) + ")");
+    std::map<std::string, std::vector<uint32_t>> nowhere;   // mod -> ids of all.json that no language has
+    for (const auto& [key, languages] : all_unknown) if (languages == patched_languages) nowhere[key.first].push_back(key.second);
+    for (const auto& [mod, ids] : nowhere)
+        add_problem(mod, "text: all.json: " + ids_phrase(ids.size()) + (ids.size() == 1 ? " does" : " do") + " not exist in any language (" + some(ids) + ")");
     if (produced.empty()) return build;
 
     uint64_t hash = 1469598103934665603ull;

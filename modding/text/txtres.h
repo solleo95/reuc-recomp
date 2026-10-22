@@ -27,7 +27,7 @@ struct TextPatch {
 };
 
 // The file with the records of `changes` repointed to their new lines, which are appended at the end of the file: nothing else moves, so no changes
-// give the same bytes. nullopt with `error` set when the file is damaged or would grow past 2 GB.
+// give the same bytes. nullopt with `error` set when the file is damaged or would grow past 8 MB.
 std::optional<TextPatch> patch_txtres(std::span<const uint8_t> file, const TextChanges& changes, std::string& error);
 
 }  // namespace uc::mods

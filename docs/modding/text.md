@@ -35,8 +35,12 @@ Cut the entries you do not want to change and edit the rest. The files are in `g
 ## Rules
 
 - Order: for each mod, `all.json` first and then the language file; later mods win per id. A mod that ships its own `files/Data/message/mes_<lang>.txtres` gives the base the patches are applied to (the last such mod wins); otherwise the game's own file is the base.
-- A line may hold at most 2048 bytes and a record at most 32 lines; text may not contain a NUL character.
-- Problems do not stop the mod: a bad entry (unknown id, not text, too long), a file that is not valid JSON, or a language the game has no file for is listed under the mod in the Mods tab as `text: <file>: ...`, and the other entries still apply.
+- A line may hold at most 2048 bytes and a record at most 32 lines; text may not contain a NUL character; one file may hold at most 100000 entries; ids are written without leading zeros (`7`, not `007`). A Windows line end (`
+`) in a text is read as `
+`. The changed text file may not grow past 8 MB.
+- The game's own texts are at most 252 bytes per line and 12 lines per record. A text far beyond that (more than twice the longest line or twice the most lines) is applied but listed in the Mods tab: the game's text boxes were made for the original sizes, and only a look in the game tells whether yours fits.
+- Problems do not stop the mod: a bad entry (not text, too long), a file that is not valid JSON, or a language the game has no file for is listed under the mod in the Mods tab as `text: <file>: ...`, and the other entries still apply. Ids the file does not have are summarised in one line per file (`10 ids do not exist in mes_us.txtres (500, 501, ...)`), and at most 20 problems per mod are shown.
+- Two mods that change the same id are not an error (the later one wins); the game's log (`debug/` next to the exe, the console) says `text id N is set by A and B`.
 - The game reads its text file once, when it starts, so a text change needs a restart of the game (a change made in the Mods tab while the game runs is prepared at once and used the next time the game opens the file).
 - The placeholders (`%s`, `%d`, `%c`) of a record must match the original's, in the same order: the game passes some texts to `printf`, and a missing or extra one would crash it or print garbage. An entry that does not match is refused (the original text stays) and the Mods tab says so. Write `%%` for a percent sign: `100% damage` is read as the conversion `% d`.
 
