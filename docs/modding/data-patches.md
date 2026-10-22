@@ -28,6 +28,6 @@ Keys that do not work are skipped and logged with the file name and the reason, 
 
 Files in `data/` apply in name order; keys apply in the order they appear in the file; mods apply in load order. When two patches set the same value, the last one wins. Patches apply once when the mod starts, after its script's `on_load`.
 
-A mod may consist of data files only: it needs no `script`. Such a mod that changes gameplay still sets `"touches_gameplay": true` (see [saves.md](saves.md)).
+A mod may consist of data files only: it needs no `script`. Such a mod that changes gameplay still sets `"touches_gameplay": true`.
 
 Files over 1 MiB, files that are not valid JSON and files whose root is not an object are skipped with a message.

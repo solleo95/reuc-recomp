@@ -1,6 +1,6 @@
 # Lua mods
 
-Set `"script": "scripts/main.lua"` in `mod.json`. The file runs once when the mod starts; it registers handlers and may draw a tab. Lua 5.4 runs in a sandbox.
+Set `"script": "scripts/main.lua"` in `mod.json`. The file runs once when the mod starts; it registers handlers and may draw into its settings window. Lua 5.4 runs in a sandbox.
 
 ```lua
 log.write('hello from ' .. 'my mod')

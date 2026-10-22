@@ -3,6 +3,7 @@
 #include "overlay.h"
 #include "registry.h"
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <thread>
@@ -122,6 +123,7 @@ static void overlays_change_while_the_game_reads() {
             const int64_t n = dvd.read(a, buffer, sizeof buffer, 0);
             if (n != 3 && n != 9) { std::puts("torn read"); std::abort(); }   // always one whole version of the file
             dvd.entry_of("DATA/more/m.bin");
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
     });
     for (int i = 0; i < 300; ++i) { dvd.overlay(files); dvd.clear_overlays(); }
@@ -140,7 +142,10 @@ static void set_overlays_is_atomic() {
     std::atomic<bool> stop{false};
     std::thread reader([&] {
         char buffer[16];
-        while (!stop) if (dvd.read(a, buffer, sizeof buffer, 0) != 9) { std::puts("saw the disc file or a torn read"); std::abort(); }
+        while (!stop) {
+            if (dvd.read(a, buffer, sizeof buffer, 0) != 9) { std::puts("saw the disc file or a torn read"); std::abort(); }
+            std::this_thread::sleep_for(std::chrono::microseconds(50));   // a real reader is not a tight loop (SRW locks do not promise writers a turn against one)
+        }
     });
     for (int i = 0; i < 300; ++i) dvd.set_overlays({i % 2 ? files : other});
     stop = true;

@@ -19,7 +19,7 @@ on('on_settings_changed', apply)
 
 ## God mode (JavaScript) — `god_mode`
 
-Invulnerability per player through `uc.player(n).invulnerable`, and a free-drawing tab: the damage meter of player 1 and a **Heal now** button (`ui.draw`). Shows: an ES-module entry file, settings plus free drawing in one tab, checking `present` before reading a player.
+Invulnerability per player through `uc.player(n).invulnerable`, and a free-drawing settings window: the damage meter of player 1 and a **Heal now** button (`ui.draw`). Shows: an ES-module entry file, settings plus free drawing in one window, checking `present` before reading a player.
 
 ## Pistol auto-fire (Lua) — `pistol_autofire`
 
@@ -39,4 +39,4 @@ No script: `data/handgun.json` sets a 30-round magazine and a 0.3 s reload for w
 
 ## Hello native (C++ DLL) — `hello_native`
 
-A DLL with its own ImGui tab. Built by the project's CMake (`mods-examples/hello_native/CMakeLists.txt`) into `dist/mods-examples/hello_native/native/hello_native.dll`. Enable "Allow native mods" in the Mods tab, enable the mod, confirm its native code. It starts at once. See [native-dll.md](native-dll.md).
+A DLL with its own ImGui settings window. Built by the project's CMake (`mods-examples/hello_native/CMakeLists.txt`) into `dist/mods-examples/hello_native/native/hello_native.dll`. Enable "Allow native mods" in the Mods tab, enable the mod, confirm its native code. It starts at once. See [native-dll.md](native-dll.md).

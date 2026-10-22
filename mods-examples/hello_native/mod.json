@@ -3,7 +3,7 @@
   "name": "Hello Native",
   "version": "1.0",
   "author": "Umbrella Chronicles PC port",
-  "description": "A native (DLL) mod with its own tab drawn with Dear ImGui. Needs \"Allow native mods\" and a confirmation in the Mods tab.",
+  "description": "A native (DLL) mod with its own settings window drawn with Dear ImGui. Needs \"Allow native mods\" and a confirmation in the Mods tab.",
   "api": "1.0",
   "native": "native/hello_native.dll",
   "names": { "ru": "Привет, нативный мод" }

@@ -1,6 +1,6 @@
-# Settings and the mod's tab
+# Settings and the mod's settings window
 
-Every enabled mod that declares settings or draws something gets its own tab in the Insert menu, after the built-in tabs. Two ways to fill it, usable together in one mod.
+A mod that declares settings or draws something gets a **gear button** in the Mods tab of the Insert menu, left of its load-order arrows. The button opens the mod's own settings window (a modal window titled with the mod's name). Mods do not get tabs of their own. Two ways to fill the window, usable together in one mod.
 
 ## Declared settings (no code)
 
@@ -48,7 +48,7 @@ on('on_settings_changed', (p) => log.write(p.key));
 
 ## Free drawing
 
-Register one function with `ui.draw`; it is called every frame the tab is visible, after the declared settings.
+Register one function with `ui.draw`; it is called every frame the settings window is open, after the declared settings.
 
 ```lua
 ui.draw(function()

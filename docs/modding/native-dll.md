@@ -44,7 +44,7 @@ The port refuses the DLL when `uc_mod_get_info` is missing or reports another AP
 | `settings_get_json`, `settings_set_json` | The mod's declared settings. |
 | `on(event, callback, user)` | Events (`on_step`, `on_load`, ...). The payload is JSON text. |
 | `hook_pre(name, callback, user)` | Run `callback(regs, user)` before a hookable game function; changes to `regs->r[]` (r3..r10) and `regs->f[]` (f1..f8) go back into the game. |
-| `set_ui(draw, user)` | A function called every frame the mod's tab is visible, inside an ImGui window. |
+| `set_ui(draw, user)` | A function called every frame the mod's settings window is open (the gear button of the mod in the Mods tab), inside an ImGui window. |
 | `imgui_context`, `imgui_alloc`, `imgui_free`, `imgui_alloc_user` | For drawing with Dear ImGui. The port fills them in right before each call of your draw function; they are empty when the DLL loads. |
 
 Strings the port returns stay valid until your next API call. Call the API only from `uc_mod_init` and from your callbacks, on the thread the port calls you on (the game thread for events and hooks, the menu thread for drawing).

@@ -34,7 +34,7 @@ The examples in [`mods-examples/`](../../mods-examples) are complete mods; [reci
 ## Good to know before you ship
 
 - Mods run in a sandbox (scripts) or with full rights (DLLs): read [safety.md](safety.md).
-- Mods that change gameplay use a separate save folder: [saves.md](saves.md).
+- Mods that change gameplay say so with `"touches_gameplay": true` ([manifest.md](manifest.md)). They write to the game's normal saves like any play, so tell players to back up `saves/` before trying them.
 - State the API version you wrote the mod for (`"api": "1.0"`). Minor versions only add; a major version change may break mods. [api-changelog.md](api-changelog.md) lists changes.
 - The game runs at its own step rate; do per-step work in `on_step`, not by counting frames yourself.
 
@@ -47,4 +47,4 @@ Players switch mods on and off in the Mods tab at any moment, including in the m
 - **Order and neighbours:** mods start in load order. When a mod is switched on or off, or moved, the mods after it in the list restart (off, then on again, in order), so the result is the same as a fresh start. Keep no state you cannot rebuild in `on_load`.
 - **Reload scripts** restarts the scripts of running mods the same way. DLLs stay loaded until their mod is switched off.
 - A mod that fails to start, or is switched off after repeated errors, starts clean when it is switched off and on again, and a failed start is retried whenever the manager changes (for example after you confirm a DLL).
-- Replaced files and textures show up when the game next loads them, see [files-and-textures.md](files-and-textures.md). The first gameplay mod switched on in a session moves the game to the modded saves, see [saves.md](saves.md).
+- Replaced files and textures show up when the game next loads them, see [files-and-textures.md](files-and-textures.md).

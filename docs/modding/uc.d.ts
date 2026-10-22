@@ -125,7 +125,7 @@ declare function on(event: "on_damage_taken", handler: (payload: any) => void): 
 declare function on(event: "on_reload", handler: (payload: any) => void): void;
 declare function on(event: string, handler: (payload: any) => void): void;
 
-/** Free drawing in the mod's tab of the Insert menu. Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod. */
+/** Free drawing in the mod's settings window (the gear button of the mod in the Mods tab of the Insert menu). Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod. */
 declare namespace ui {
     /** Plain text. [implemented] */
     function text(text: string): void;
@@ -151,7 +151,7 @@ declare namespace ui {
     function tooltip(text: string): void;
     /** A colour picker; returns the new four numbers. [implemented] */
     function color_edit(label: string, rgba: number[]): number[];
-    /** Registers the function that draws the mod's tab below the declared settings (Lua and JavaScript; a DLL draws through ImGui directly). [implemented] */
+    /** Registers the function that draws the mod's settings window below the declared settings (Lua and JavaScript; a DLL draws through ImGui directly). [implemented] */
     function draw(callback: (...args: any[]) => any): void;
 }
 

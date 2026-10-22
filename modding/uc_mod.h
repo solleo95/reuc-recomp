@@ -83,7 +83,7 @@ typedef struct UcApi {
 
     /* Events of the game API ("on_step", "on_load", ...). The payload is JSON text. */
     void (*on)(const char* event, void (*callback)(const char* payload_json, void* user), void* user);
-    /* Called every frame the mod's tab of the Insert menu is visible, inside an ImGui window. */
+    /* Called every frame the mod's settings window (gear button in the Mods tab of the Insert menu) is open, inside an ImGui window. */
     void (*set_ui)(void (*draw)(void* user), void* user);
 
     /* Runs callback before the hookable game function `name` (docs/modding/api/README.md lists them). regs holds the argument registers;

@@ -19,6 +19,17 @@ FetchContent_Declare(imgui URL "${imgui_archive}"
   URL_HASH SHA256=e1c46d676c2bcb7ced847ba27f50553e33a19db97b3cadaec7f8be64449139f8
   DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(imgui)
+# The scroll arrows of a tab bar (they appear when the tabs do not fit): ImGui draws them narrow, as tall as the bar, so their background covers the bar's
+# bottom line and they touch the last tab. Wider, two pixels shorter (the line stays visible) and a gap before them.
+file(READ ${imgui_SOURCE_DIR}/imgui_widgets.cpp uc_imgui_widgets)
+if(NOT uc_imgui_widgets MATCHES "uc_tab_scroll_buttons")
+  string(REPLACE "const ImVec2 arrow_button_size(g.FontSize - 2.0f, g.FontSize + g.Style.FramePadding.y * 2.0f);" "const ImVec2 arrow_button_size(g.FontSize + 10.0f, g.FontSize + g.Style.FramePadding.y * 2.0f - 2.0f); /* uc_tab_scroll_buttons */" uc_imgui_patched "${uc_imgui_widgets}")
+  string(REPLACE "tab_bar->BarRect.Max.x -= scrolling_buttons_width + 1.0f;" "tab_bar->BarRect.Max.x -= scrolling_buttons_width + 8.0f;" uc_imgui_patched "${uc_imgui_patched}")
+  if(uc_imgui_patched STREQUAL uc_imgui_widgets OR NOT uc_imgui_patched MATCHES "scrolling_buttons_width \\+ 8.0f")
+    message(FATAL_ERROR "imgui_widgets.cpp: the tab bar scrolling buttons were not found, the patch cannot be applied")
+  endif()
+  file(WRITE ${imgui_SOURCE_DIR}/imgui_widgets.cpp "${uc_imgui_patched}")
+endif()
 add_library(uc_imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)

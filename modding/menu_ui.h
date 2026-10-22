@@ -20,17 +20,14 @@ public:
     using SaveSection = std::function<void(const nlohmann::ordered_json& mods_section)>;
 
     ModMenuUi(GetRegistry registry, GetHost host, std::string language);
-    // After a manager change has been saved: makes the running game follow (GameMods::apply). Returns notes: "modded_saves" or a warning text.
-    using Apply = std::function<std::vector<std::string>()>;
-    // `pending` (optional) says the game finished something that needs another apply (a save-folder switch): checked every commit().
-    void set_apply(Apply apply, std::function<bool()> pending = {}) { apply_ = std::move(apply); pending_ = std::move(pending); }
+    // After a manager change has been saved: makes the running game follow at once (GameMods::apply).
+    using Apply = std::function<void()>;
+    void set_apply(Apply apply) { apply_ = std::move(apply); }
     void set_save(SaveSection save) { save_ = std::move(save); }   // the config's "mods" section writer (LiveSettings::apply_mods); may arrive after construction
 
     // ModMenu
     std::string manager_title() override;
     void manager_tab(float unit) override;
-    std::vector<ModTab> tabs() override;
-    void draw_tab(const std::string& id, float unit) override;
     void commit() override;
 
     // UiApi: valid only while draw_tab runs a mod's drawing function; outside it they return their input and draw nothing.
@@ -54,6 +51,8 @@ public:
 private:
     const char* tr(const char* key) const;
     std::string localized(const std::map<std::string, std::string>& texts, const std::string& fallback) const;
+    void draw_mod_window(const std::string& id, float unit);   // the body of a mod's settings window: declared settings, then what the mod draws
+    bool gear_button(const char* id, float size);
     void draw_declared_settings(const std::string& id, ModSettings& settings, const std::vector<SettingDecl>& declared);
     void mark_changed();   // the registry changed: save it, refresh the conflict list
     void remember(const std::string& key);   // records the rectangle of the item just drawn (rect_of)
@@ -68,10 +67,10 @@ private:
     using Clock = std::chrono::steady_clock;
     Clock::time_point editing_until_{};   // an item of a mod tab was active until shortly before this: commit() waits for the edit to end
     bool open_confirm_ = false;
+    std::string settings_id_;   // the mod whose settings window is open (empty: none)
+    bool open_settings_ = false;
     std::vector<Conflict> conflicts_;
     Apply apply_;
-    std::function<bool()> pending_;
-    std::vector<std::string> notes_;                               // what the last apply() reported, shown in the manager
     std::map<std::string, std::string> hash_cache_;                // id -> sha256 of its DLL (computed once)
     std::map<std::string, nlohmann::ordered_json> saved_settings_; // the settings of each mod that changed this session, as last written to the config
     std::map<std::string, std::string> text_buffers_, last_text_;  // input_text state per (mod, label): the edit buffer and what the script was given last

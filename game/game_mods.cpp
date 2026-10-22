@@ -1,5 +1,4 @@
 #include "game_mods.h"
-#include "profile.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -8,8 +7,8 @@ namespace fs = std::filesystem;
 
 namespace uc {
 
-GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_section, DvdFs& dvd, std::string game_id, bool disabled, bool explicit_save_root)
-    : exe_dir_(exe_dir), mods_dir_(exe_dir / "mods"), section_(mods_section.is_object() ? mods_section : nlohmann::ordered_json::object()), dvd_(&dvd), explicit_save_root_(explicit_save_root) {
+GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_section, DvdFs& dvd, std::string game_id, bool disabled)
+    : exe_dir_(exe_dir), mods_dir_(exe_dir / "mods"), section_(mods_section.is_object() ? mods_section : nlohmann::ordered_json::object()), dvd_(&dvd) {
     std::error_code error;
     if (disabled || !fs::is_directory(mods_dir_, error)) return;
     registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 0}, game_id));
@@ -18,23 +17,13 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
         if (entry.state == mods::ModState::disabled) continue;
         for (const auto& message : entry.messages) std::fprintf(stderr, "[mods] %s: %s\n", entry.manifest.id.c_str(), message.c_str());
     }
-    // Which saves this run uses is decided before anything of a mod is applied: if the modded saves cannot be prepared, mods that change gameplay do
-    // not run at all (not even their files), so they can never touch the normal saves.
-    const auto candidates = registry_->active();
-    const auto choice = mods::resolve_save_root(exe_dir_, explicit_save_root_, candidates);
-    save_root_ = choice.root;
-    gameplay_mods_allowed_ = choice.gameplay_mods_allowed;
-    if (!choice.warning.empty()) std::fprintf(stderr, "[mods] %s\n", choice.warning.c_str());
-    modded_saves_in_use_ = !explicit_save_root_ && gameplay_mods_allowed_ && std::any_of(candidates.begin(), candidates.end(), [](const mods::ModEntry* mod) { return mod->manifest.touches_gameplay; });
-    save_ready_ = true;   // at startup the game opens the right folder from the start
     refresh_files(true);
 }
 
 GameMods::~GameMods() { shutdown(); }
 
-// Which enabled mods run now: gameplay ones only once the game is on the modded saves, and native ones only while native code is allowed.
+// Which enabled mods run now: native ones only while native code is allowed.
 bool GameMods::runs(const mods::ModEntry& mod) const {
-    if (mod.manifest.touches_gameplay && (!gameplay_mods_allowed_ || !save_ready_)) return false;
     return mod.manifest.native.empty() || registry_->allow_native();
 }
 
@@ -44,7 +33,7 @@ void GameMods::refresh_files(bool initial) {
     active_.clear();
     for (const auto* mod : registry_->active()) {
         if (!runs(*mod)) {
-            if (initial || !(mod->manifest.touches_gameplay && gameplay_mods_allowed_)) std::fprintf(stderr, "[mods] %s is not started (%s)\n", mod->manifest.id.c_str(), mod->manifest.touches_gameplay && !gameplay_mods_allowed_ ? "it changes gameplay" : mod->manifest.touches_gameplay ? "waiting for the modded saves" : "native code is off");
+            if (initial) std::fprintf(stderr, "[mods] %s is not started (native code is off)\n", mod->manifest.id.c_str());
             continue;
         }
         active_.push_back(*mod);
@@ -76,29 +65,11 @@ void GameMods::refresh_files(bool initial) {
     }
 }
 
-// The manager changed something while the game runs: save folder, files, textures, then the scripts and DLLs. Returns notes for the player.
-std::vector<std::string> GameMods::apply() {
-    std::vector<std::string> notes;
-    if (!registry_) return notes;
-    resync_.store(false);
-    const auto candidates = registry_->active();
-    const bool wants_gameplay = std::any_of(candidates.begin(), candidates.end(), [&](const mods::ModEntry* mod) {
-        return mod->manifest.touches_gameplay && (mod->manifest.native.empty() || registry_->allow_native());   // one that cannot run anyway does not move the saves
-    });
-    if (wants_gameplay && !explicit_save_root_ && gameplay_mods_allowed_ && !modded_saves_in_use_) {
-        const auto choice = mods::resolve_save_root(exe_dir_, false, candidates);   // the modded copy of the saves is made now, from the saves as they are
-        if (!choice.warning.empty()) { std::fprintf(stderr, "[mods] %s\n", choice.warning.c_str()); notes.push_back(choice.warning); }
-        if (choice.gameplay_mods_allowed) {
-            modded_saves_in_use_ = true;
-            save_root_ = choice.root;
-            notes.push_back("modded_saves");   // translated by the menu: the game now saves to the separate modded folder, until it is restarted
-            // Gameplay mods start only when the game thread has really switched (no save file open): save_ready_ is set by `done`, then sync() runs again.
-            if (save_handler_) { save_ready_ = false; save_handler_(choice.root, [this] { save_ready_ = true; resync_.store(true); }); }
-        } else gameplay_mods_allowed_ = false;
-    }
+// The manager changed something while the game runs: files, textures, then the scripts and DLLs.
+void GameMods::apply() {
+    if (!registry_) return;
     refresh_files(false);
     if (host_) host_->sync();
-    return notes;
 }
 
 size_t GameMods::load_textures(gx::TextureReplacements& table) {
@@ -140,7 +111,6 @@ void GameMods::start(uint8_t* guest_memory, mods::UiApi* ui) {
     config.on_mod_dropped = [this](const std::string& id) { ticker_->drop_owner(id); };
     config.ui = ui;
     config.memory = memory_.get();
-    config.include = [this](const mods::ModEntry& mod) { return (gameplay_mods_allowed_ && save_ready_) || !mod.manifest.touches_gameplay; };
     config.native.allow_native = registry_->allow_native();
     config.allow_native_now = [this] { return registry_->allow_native(); };
     config.native.confirmed = [this](const std::string& id, const std::string& hash) { return !hash.empty() && registry_->native_hash(id) == hash; };

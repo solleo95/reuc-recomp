@@ -84,7 +84,7 @@ struct World {
         host->start();
         host_ptr = host.get();
         ui->set_save([this](const json& section) { saved.push_back(section); });
-        ui->set_apply([this] { ++applies; host->sync(); return std::vector<std::string>(); });   // what GameMods::apply does for the host
+        ui->set_apply([this] { ++applies; host->sync(); });   // what GameMods::apply does for the host
         // The settings menu around it, in a headless ImGui context (the same arrangement as tests/test_settings_menu.cpp).
         config_path = dir / "config.json";
         uc::ConfigDocument document; uc::Options options;
@@ -136,6 +136,15 @@ struct World {
         io.AddMouseButtonEvent(0, false); frame(); frame();
         std::this_thread::sleep_for(std::chrono::milliseconds(150));   // commit() waits a moment after a widget was active
     }
+    // The Mods tab, then the gear of one mod: its settings open in a modal window (rect_of keys "setting/..." and "ui/..." exist while it is open).
+    bool open_settings(const std::string& id) {
+        select(3);
+        if (!click("manager/settings/" + id)) return false;
+        frames(3);
+        return true;
+    }
+    bool settings_window_open() { auto& popups = ImGui::GetCurrentContext()->OpenPopupStack; return popups.Size > 0 && std::string(popups.back().Window ? popups.back().Window->Name : "").find("###mod_settings") != std::string::npos; }
+    std::string settings_window_title() { auto& popups = ImGui::GetCurrentContext()->OpenPopupStack; std::string name = popups.Size > 0 && popups.back().Window ? popups.back().Window->Name : ""; return name.substr(0, name.find("###")); }
     bool click(const std::string& key) {
         const auto rect = ui->rect_of(key);
         if (!rect) return false;
@@ -147,28 +156,33 @@ struct World {
 
 static const char* kSettings = R"("settings":[{"key":"on","type":"bool","default":false,"label":{"en":"Switch"}},{"key":"scale","type":"number","default":1.5,"min":0,"max":10,"label":{"en":"Scale","ru":"Масштаб"}}])";
 
-static void tabs_appear_after_builtins() {
+// Mods have no tabs of their own: one manager tab, and per mod a gear (when it has settings or something to draw) in a fixed column left of the order arrows.
+static void mods_have_one_tab_and_a_gear_each() {
     World w("menu_tabs", {{"alpha", kSettings}, {"beta", "", true, true}, {"gamma", kSettings, true, true}, {"quiet", ""}, {"off", kSettings, false}});
-    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1 + 3);   // Main, Effects, Controls (DLSS 5 only when enabled), Mods, then the mods with settings or a drawing function
-    CHECK(w.tab_name(3) == "Mods" && w.tab_name(4) == "alpha" && w.tab_name(5) == "beta" && w.tab_name(6) == "gamma");
+    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1);   // Main, Effects, Controls (DLSS 5 only when enabled), Mods
+    CHECK(w.tab_name(3) == "Mods");
+    w.select(3);
+    const auto gear = [&](const char* id) { return w.ui->rect_of(std::string("manager/settings/") + id); };
+    CHECK(gear("alpha") && gear("beta") && gear("gamma") && gear("off") && !gear("quiet"));   // "off" has declared settings: reachable while switched off
+    CHECK((*gear("alpha"))[0] == (*gear("gamma"))[0] && (*gear("beta"))[0] == (*gear("off"))[0] && (*gear("alpha"))[0] == (*gear("beta"))[0]);   // one column
+    const auto up = w.ui->rect_of("manager/up/alpha");
+    CHECK(up && (*gear("alpha"))[2] < (*up)[0] && (*gear("alpha"))[3] - (*gear("alpha"))[1] == (*up)[3] - (*up)[1]);   // left of the arrows, the same size
+    const auto up_quiet = w.ui->rect_of("manager/up/quiet");
+    CHECK(up_quiet && (*up_quiet)[0] == (*up)[0]);   // the arrows do not move when the gear is missing
 }
 
-static void tab_bar_scrolls_with_many_mods() {
+static void many_mods_do_not_add_tabs() {
     std::vector<ModSpec> specs;
     for (int i = 0; i < 12; ++i) specs.push_back({"mod" + std::string(i < 10 ? "0" : "") + std::to_string(i), kSettings});
     World w("menu_many", specs);
-    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1 + 12);
-    CHECK((w.tabs->Flags & ImGuiTabBarFlags_FittingPolicyScroll) != 0);
-    CHECK(w.tabs->WidthAllTabs > w.tabs->BarRect.GetWidth());   // they do not fit ...
-    const int last = w.tabs->Tabs.Size - 1;
-    w.select(last);                                              // ... and the last one can still be reached
-    CHECK(w.tabs->ScrollingTarget > 0 || w.tabs->ScrollingAnim > 0);
-    CHECK(w.tab_name(last) == "mod11");
+    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1 && (w.tabs->Flags & ImGuiTabBarFlags_FittingPolicyScroll) != 0);
+    w.select(3);
+    CHECK(w.ui->rect_of("manager/settings/mod11").has_value());
 }
 
 static void declared_setting_click_and_commit() {
     World w("menu_setting", {{"alpha", kSettings}});
-    w.select(4);
+    CHECK(w.open_settings("alpha") && w.settings_window_open());
     CHECK(!w.host->settings_of("alpha")->dirty() && w.host->settings_of("alpha")->get("on") == false);
     CHECK(w.click("setting/alpha/on"));
     CHECK(w.host->settings_of("alpha")->get("on") == true && w.host->settings_of("alpha")->dirty());
@@ -189,7 +203,7 @@ static void declared_setting_click_and_commit() {
 // Dragging a slider changes the value every frame; config.json is written (and the mod told) once, when the drag ends.
 static void commit_waits_for_the_end_of_a_drag() {
     World w("menu_drag", {{"alpha", kSettings}});
-    w.select(4);
+    CHECK(w.open_settings("alpha"));
     const auto rect = w.ui->rect_of("setting/alpha/scale");
     CHECK(rect);
     auto& io = ImGui::GetIO();
@@ -211,24 +225,29 @@ static void commit_waits_for_the_end_of_a_drag() {
 }
 
 static void language_fallback_for_names_and_labels() {
-    World w("menu_language", {{"alpha", R"("names":{"ru":"Альфа"},)" + std::string(kSettings)}, {"beta", ""}}, "ru");
-    const auto tabs = w.ui->tabs();
-    CHECK(tabs.size() == 1 && tabs[0].title == "Альфа");   // the Russian name; a mod without one shows its English name (see below)
-    World en("menu_language_en", {{"alpha", R"("names":{"ru":"Альфа"},)" + std::string(kSettings)}}, "en");
-    CHECK(en.ui->tabs()[0].title == "alpha");
-    World de("menu_language_de", {{"alpha", R"("names":{"ru":"Альфа"},)" + std::string(kSettings)}}, "de");
-    CHECK(de.ui->tabs()[0].title == "alpha");   // an unknown language falls back to English
+    const std::string names = R"("names":{"ru":"Альфа"},)" + std::string(kSettings);
+    const auto title_in = [&](const char* folder, const char* language) {   // the settings window's title, one world at a time (each has its own ImGui context)
+        World w(folder, {{"alpha", names}, {"beta", ""}}, language);
+        CHECK(w.open_settings("alpha") && w.settings_window_open());
+        return w.settings_window_title();
+    };
+    CHECK(title_in("menu_language", "ru") == "Альфа");   // the Russian name; a mod without one shows its English name
+    CHECK(title_in("menu_language_en", "en") == "alpha");
+    CHECK(title_in("menu_language_de", "de") == "alpha");   // an unknown language falls back to English
 }
 
 static void free_draw_ids_unique_between_mods() {
     World w("menu_draw", {{"one", "", true, true}, {"two", "", true, true}});
-    w.select(4);
+    CHECK(w.open_settings("one"));
     w.frames(2);
     CHECK(w.click("ui/one/OK"));
     CHECK(!w.behavior("one")->presses.empty() && w.behavior("one")->presses.front() == false);   // not pressed before the click
     CHECK(std::count(w.behavior("one")->presses.begin(), w.behavior("one")->presses.end(), true) == 1);
-    CHECK(std::count(w.behavior("two")->events.begin(), w.behavior("two")->events.end(), "draw") == 0);   // the other mod's tab is not drawn
-    w.select(5);
+    CHECK(std::count(w.behavior("two")->events.begin(), w.behavior("two")->events.end(), "draw") == 0);   // the other mod is not drawn
+    CHECK(w.click("popup/settings_close"));
+    w.frames(3);
+    CHECK(!w.settings_window_open());
+    CHECK(w.open_settings("two"));
     w.frames(2);
     CHECK(std::count(w.behavior("two")->presses.begin(), w.behavior("two")->presses.end(), true) == 0);   // the click went to one's button only
     CHECK(w.ui->rect_of("ui/two/OK").has_value());
@@ -297,12 +316,11 @@ static void no_mods_menu_is_harmless() {
     World w("menu_empty", {});
     CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1);   // just the manager tab, which says there are no mods
     w.select(3);
-    CHECK(w.ui->tabs().empty());
 }
 
 int main() {
     const std::pair<const char*, void (*)()> tests[] = {
-        {"tabs_appear_after_builtins", tabs_appear_after_builtins}, {"tab_bar_scrolls_with_many_mods", tab_bar_scrolls_with_many_mods},
+        {"mods_have_one_tab_and_a_gear_each", mods_have_one_tab_and_a_gear_each}, {"many_mods_do_not_add_tabs", many_mods_do_not_add_tabs},
         {"declared_setting_click_and_commit", declared_setting_click_and_commit}, {"commit_waits_for_the_end_of_a_drag", commit_waits_for_the_end_of_a_drag},
         {"language_fallback_for_names_and_labels", language_fallback_for_names_and_labels},
         {"free_draw_ids_unique_between_mods", free_draw_ids_unique_between_mods}, {"manager_toggle_switches_mods_live", manager_toggle_switches_mods_live},

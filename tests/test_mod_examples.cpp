@@ -61,7 +61,7 @@ struct World {
         ordered_json section = {{"enabled", {id}}};
         if (!settings.empty()) section[id] = {{"settings", settings}};
         CHECK(dvd.open_root(exe / "disc"));
-        mods = std::make_unique<uc::GameMods>(exe, section, dvd, "RBUE08", false, true);
+        mods = std::make_unique<uc::GameMods>(exe, section, dvd, "RBUE08", false);
         CHECK(mods->active());
         mods->start(memory, &ui);
         CHECK(mods->host() && !mods->host()->status().empty() && !mods->host()->status()[0].disabled_for_session);

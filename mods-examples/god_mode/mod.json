@@ -3,7 +3,7 @@
   "name": "God Mode",
   "version": "1.0",
   "author": "Umbrella Chronicles PC port",
-  "description": "Players take no damage. The tab also has a button that heals player 1 on demand.",
+  "description": "Players take no damage. Its settings window also has a button that heals player 1 on demand.",
   "api": "1.0",
   "touches_gameplay": true,
   "script": "scripts/main.js",

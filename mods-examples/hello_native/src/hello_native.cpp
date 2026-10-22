@@ -1,4 +1,4 @@
-// A native mod: its own tab in the Insert menu, drawn with Dear ImGui, reading the game API through JSON.
+// A native mod: its own settings window (gear button in the Mods tab of the Insert menu), drawn with Dear ImGui, reading the game API through JSON.
 // Build it as in CMakeLists.txt (a 64-bit DLL with its own copy of the ImGui version the port uses) and put it at native/hello_native.dll.
 #include "uc_mod.h"
 #include <imgui.h>

@@ -60,17 +60,15 @@ void SettingsMenu::build() {
     ImGui::SetNextWindowBgAlpha(.94f);
     ImGui::PushFont(fonts_.sans,font_size);
     ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushFont(fonts_.serif,std::round(32*font_scale));ImGui::TextWrapped("%s",tr("graphics_title"));ImGui::PopFont();
+    ImGui::PushFont(fonts_.serif,std::round(32*font_scale));ImGui::TextWrapped("%s",tr("menu_title"));ImGui::PopFont();
     ImGui::Dummy({0,6*unit});
     if(ImGui::BeginTabBar("tabs",ImGuiTabBarFlags_FittingPolicyScroll)) {   // tabs that do not fit (mods add more) scroll with arrow buttons
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
         if(current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
-        if(mod_menu_) {   // mods: their manager, then one tab each (the ### part keeps a tab's identity when its title changes)
+        if(mod_menu_) {   // mods: one manager tab; each mod's settings open in a window from there
             if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
-            for(const auto& tab:mod_menu_->tabs())
-                if(ImGui::BeginTabItem((tab.title+"###mod:"+tab.id).c_str())) { mod_menu_->draw_tab(tab.id,unit); ImGui::EndTabItem(); }
         }
         ImGui::EndTabBar();
     }

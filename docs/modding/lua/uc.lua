@@ -48,7 +48,7 @@ function settings.set(key, value) end
 ---@param handler fun(payload: table)
 function on(event, handler) end
 
----Free drawing in the mod's tab of the Insert menu. Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod.
+---Free drawing in the mod's settings window (the gear button of the mod in the Mods tab of the Insert menu). Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod.
 ui = {}
 
 ---Plain text. [implemented]
@@ -116,8 +116,8 @@ function ui.tooltip(text) end
 ---@return number[]
 function ui.color_edit(label, rgba) end
 
----Registers the function that draws the mod's tab below the declared settings (Lua and JavaScript; a DLL draws through ImGui directly). [implemented]
----@param callback function Called every menu frame while the mod's tab is visible.
+---Registers the function that draws the mod's settings window below the declared settings (Lua and JavaScript; a DLL draws through ImGui directly). [implemented]
+---@param callback function Called every menu frame while the mod's settings window is open.
 function ui.draw(callback) end
 
 ---Callbacks on selected game functions. Only the functions listed under 'Hookable functions' accept hooks (the list grows with releases); each hook point costs nothing while no mod uses it.

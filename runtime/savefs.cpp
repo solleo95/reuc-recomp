@@ -167,37 +167,11 @@ int SaveFs::backup(const fs::path& path) {
     if (auto result=file_info(source,info)) return result;
     return backup(source);
 }
-void SaveFs::request_root(fs::path root, std::function<void()> done) {
-    std::lock_guard lock(pending_mutex_);
-    pending_root_=fs::absolute(root).lexically_normal();
-    pending_done_=std::move(done);
-}
-void SaveFs::adopt_pending() {
-    if (adopting_depth_++ > 0) { --adopting_depth_; return; }   // nested operations (usage -> attributes, remove -> read_dir) never switch the root mid-operation
-    struct Reset { int& depth; ~Reset() { --depth; } } reset{adopting_depth_};
-    std::optional<fs::path> next;
-    std::function<void()> done;
-    {
-        std::lock_guard lock(pending_mutex_);
-        if (!pending_root_ || !files_.empty()) return;   // wait until no save file is open
-        next=std::move(pending_root_); pending_root_.reset();
-        done=std::move(pending_done_); pending_done_=nullptr;
-    }
-    const auto previous=std::move(root_);
-    root_=std::move(*next);
-    if (const int result=initialize()) {   // the new folder could not be used: stay on the old one
-        std::fprintf(stderr,"[save] cannot switch to %s (error %d); staying on the previous folder\n",root_.string().c_str(),result);
-        root_=previous; return;
-    }
-    if (done) done();
-}
 int SaveFs::create_dir(const std::string& path) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     return CreateDirectoryW(host.c_str(),nullptr) ? 0 : error(GetLastError());
 }
 int SaveFs::create_file(const std::string& path) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     HANDLE file=CreateFileW(host.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     if (file==INVALID_HANDLE_VALUE) return error(GetLastError());
@@ -205,7 +179,6 @@ int SaveFs::create_file(const std::string& path) {
 }
 int SaveFs::open(const std::string& path,uint32_t mode) {
     if (mode<1 || mode>3 || next_fd_==INT_MAX) return -101;
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     HANDLE file=CreateFileW(host.c_str(),GENERIC_READ|(mode&2 ? GENERIC_WRITE : 0),FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     if (file==INVALID_HANDLE_VALUE) return error(GetLastError());
@@ -253,7 +226,6 @@ SaveFs::Stats SaveFs::stats(int fd) {
     return {0,uint32_t(size.QuadPart),uint32_t(position.QuadPart)};
 }
 int SaveFs::attributes(const std::string& path,bool& directory) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     auto attributes=GetFileAttributesW(host.c_str());
     if (attributes==INVALID_FILE_ATTRIBUTES) return error(GetLastError());
@@ -261,7 +233,6 @@ int SaveFs::attributes(const std::string& path,bool& directory) {
     directory=(attributes&FILE_ATTRIBUTE_DIRECTORY)!=0; return 0;
 }
 SaveFs::Directory SaveFs::read_dir(const std::string& path) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return {result};
     bool directory; if (auto result=attributes(path,directory)) return {result};
     if (!directory) return {-101};
@@ -276,7 +247,6 @@ SaveFs::Directory SaveFs::read_dir(const std::string& path) {
     std::sort(result.names.begin(),result.names.end()); return result;
 }
 SaveFs::Usage SaveFs::usage(const std::string& path) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return {result};
     bool directory; if (auto result=attributes(path,directory)) return {result};
     Usage result{0}; std::error_code ec;
@@ -308,7 +278,6 @@ SaveFs::Usage SaveFs::usage(const std::string& path) {
     return {0,uint32_t(blocks),uint32_t(entries)};
 }
 int SaveFs::rename(const std::string& from,const std::string& to) {
-    adopt_pending();
     Pins pins; fs::path source,target; if (auto result=resolve(to,target,pins)) return result; if (auto result=resolve(from,source,pins)) return result;
     if (source==root_ || target==root_) return -102;
     if (source==target) return GetFileAttributesW(source.c_str())==INVALID_FILE_ATTRIBUTES ? error(GetLastError()) : 0;
@@ -316,7 +285,6 @@ int SaveFs::rename(const std::string& from,const std::string& to) {
     return move(source,target,true,pins);
 }
 int SaveFs::remove(const std::string& path) {
-    adopt_pending();
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     if (host==root_) return -102;
     auto attr=GetFileAttributesW(host.c_str()); if (attr==INVALID_FILE_ATTRIBUTES) return error(GetLastError());

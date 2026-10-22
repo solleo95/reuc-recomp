@@ -298,7 +298,7 @@ static int real_main(int argc, char** argv) {
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
     // Mods: their file overlays go into the disc tree now, before the game opens anything; the scripts start once the guest is about to run.
     uc::GameMods mods(exe_dir(), input_config.properties.contains("mods") ? input_config.properties["mods"] : nlohmann::ordered_json::object(), dvd,
-                      std::string(reinterpret_cast<const char*>(hdr), 6), options.no_mods, !options.save_root.empty());
+                      std::string(reinterpret_cast<const char*>(hdr), 6), options.no_mods);
     uc::Sched sched(boot.mem);
     std::unique_ptr<uc::DetTrace> det_trace;
     const bool deterministic = options.deterministic || !options.det_out.empty();
@@ -322,7 +322,7 @@ static int real_main(int argc, char** argv) {
             } else std::fprintf(stderr,"guest CPU %d unavailable; using Windows scheduling\n",options.guest_cpu);
         }
     }
-    uc::SaveFs saves(!options.save_root.empty() ? options.save_root : mods.save_root().empty() ? exe_dir()/"saves" : mods.save_root());   // saves-modded while a gameplay mod runs
+    uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
@@ -457,9 +457,8 @@ static int real_main(int argc, char** argv) {
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
     uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
-    mods.set_save_root_handler([&saves](const std::filesystem::path& root, std::function<void()> done) { saves.request_root(root, std::move(done)); });   // a gameplay mod switched on live: the game moves to the modded saves
     mods.set_texture_handler([] { uc::gx_set_texture_budget(size_t(2) << 30); });   // textures of a mod switched on live need the larger cache too
-    mod_menu.set_apply([&mods] { return mods.apply(); }, [&mods] { return mods.needs_apply(); });   // the manager's changes (on, off, order, native code) reach the running game
+    mod_menu.set_apply([&mods] { mods.apply(); });   // the manager's changes (on, off, order, native code) reach the running game
     mods.start(boot.mem,options.headless ? nullptr : &mod_menu);   // on_load runs here; the guest starts right below
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);

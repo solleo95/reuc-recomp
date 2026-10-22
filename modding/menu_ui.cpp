@@ -4,6 +4,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 
@@ -15,9 +16,7 @@ constexpr Text kTexts[] = {
     {"intro", "Mods live in the mods folder next to the game. Switch them on and off at any time, also during the game. Replaced files and textures show up the next time the game loads them (for example in the next area).",
               "Моды лежат в папке mods рядом с игрой. Включать и выключать их можно в любой момент, в том числе во время игры. Подменённые файлы и текстуры видны, когда игра загрузит их в следующий раз (например, в следующей локации)."},
     {"none", "No mods found. Put a mod folder (or .zip) into the mods folder next to the game.", "Модов нет. Положите папку мода (или .zip) в папку mods рядом с игрой."},
-    {"modded_saves", "A mod that changes gameplay was switched on: the game now saves to the separate modded saves and stays there until it is restarted.",
-                     "Включён мод, меняющий игровой процесс: теперь игра сохраняется в отдельные сохранения для модов и остаётся в них до перезапуска."},
-    {"waiting", "switched on, but not running (see the notes above)", "включён, но не работает (см. заметки выше)"},
+    {"waiting", "switched on, but not running: native code is off (see \"Allow native mods\" above)", "включён, но не работает: нативный код выключен (см. «Разрешить нативные моды» выше)"},
     {"allow_native", "Allow native (DLL) mods", "Разрешить нативные (DLL) моды"},
     {"native_title", "Native mods", "Нативные моды"},
     {"native_warning", "A native mod runs with full access to your computer, like any program. Only enable them from sources you trust. Each DLL must also be confirmed separately.",
@@ -33,12 +32,13 @@ constexpr Text kTexts[] = {
     {"dep_off", "dependency is off", "зависимость выключена"},
     {"stopped", "switched off for this session", "отключён до перезапуска"},
     {"has_native", "contains native code", "содержит нативный код"},
-    {"gameplay_note", "Changes how the game plays: the game uses the separate modded saves while this mod is on.", "Меняет игровой процесс: пока мод включён, игра использует отдельные сохранения для модов."},
     {"confirmed", "native code confirmed", "нативный код подтверждён"},
     {"confirm", "Confirm native code…", "Подтвердить нативный код…"},
     {"confirm_title", "Confirm native code", "Подтверждение нативного кода"},
     {"confirm_text", "This DLL can do anything on your computer. Confirm only if you trust where the mod comes from. The file's SHA-256 is:", "Эта DLL может делать на компьютере что угодно. Подтверждайте, только если доверяете источнику мода. SHA-256 файла:"},
     {"conflicts", "Files provided by more than one mod (the last mod in the list wins):", "Файлы, которые дают несколько модов (побеждает нижний в списке):"},
+    {"settings", "Settings", "Настройки"},
+    {"close", "Close", "Закрыть"},
     {"up", "Load earlier", "Грузить раньше"},
     {"down", "Load later", "Грузить позже"},
     {"restart_setting", "(restart needed)", "(нужен перезапуск)"},
@@ -89,11 +89,6 @@ void ModMenuUi::manager_tab(float unit) {
     ImGui::Dummy({0, 6 * unit});
     ImGui::TextWrapped("%s", tr("intro"));
     if (!r) { ImGui::Spacing(); ImGui::TextWrapped("%s", tr("none")); return; }
-    for (const auto& note : notes_) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .78f, .35f, 1.f));
-        ImGui::TextWrapped("%s", note == "modded_saves" ? tr("modded_saves") : note.c_str());
-        ImGui::PopStyleColor();
-    }
     ImGui::Separator();
 
     bool allow = r->allow_native();
@@ -143,7 +138,18 @@ void ModMenuUi::manager_tab(float unit) {
         ImGui::PopStyleVar();
         remember("manager/enable/" + id);
         ImGui::EndDisabled();
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, right_edge - 2 * arrow - gap));   // never on top of the name
+        const auto status_of = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == id; });
+        const bool has_window = !e->manifest.settings.empty() || (status_of != status.end() && status_of->running && !status_of->disabled_for_session && status_of->has_ui);
+        // Fixed columns from the right edge, the same in every row: gear, up, down. The gear's place stays empty for a mod without settings.
+        const float down_x = right_edge - arrow, up_x = down_x - gap - arrow, gear_x = up_x - gap - arrow;
+        const float row_min = ImGui::GetCursorPosX() + gap;
+        if (has_window) {
+            ImGui::SameLine(std::max(row_min, gear_x));
+            if (gear_button("##gear", arrow)) { settings_id_ = id; open_settings_ = true; }   // opened after the loop: a popup's id depends on the id stack it is opened in
+            remember("manager/settings/" + id);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("settings"));
+            ImGui::SameLine(0, gap);
+        } else ImGui::SameLine(std::max(row_min, up_x));
         if (ImGui::ArrowButton("##up", ImGuiDir_Up)) { r->move(id, -1); mark_changed(); }
         remember("manager/up/" + id);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("up"));
@@ -157,14 +163,9 @@ void ModMenuUi::manager_tab(float unit) {
         if (!e->manifest.author.empty()) line += "  ·  " + e->manifest.author;
         const auto running = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == id; });
         if (running != status.end() && running->disabled_for_session) line = std::string(tr("stopped")) + ": " + running->last_error;
-        else if (e->state == ModState::enabled && running != status.end() && !running->running) line = tr("waiting");   // enabled, but the game does not run it (gameplay saves unavailable, native code off)
+        else if (e->state == ModState::enabled && running != status.end() && !running->running) line = tr("waiting");   // enabled, but the game does not run it: native code is off
         ImGui::TextDisabled("%s", line.c_str());
         if (!e->manifest.description.empty()) ImGui::TextWrapped("%s", e->manifest.description.c_str());
-        if (e->manifest.touches_gameplay) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("%s", tr("gameplay_note"));
-            ImGui::PopStyleColor();
-        }
         for (const auto& message : e->messages) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .52f, .52f, 1.f)); ImGui::TextWrapped("%s", message.c_str()); ImGui::PopStyleColor(); }
         if (!e->manifest.native.empty()) {
             ImGui::TextDisabled("%s", tr("has_native"));
@@ -195,6 +196,24 @@ void ModMenuUi::manager_tab(float unit) {
         if (ImGui::Button(tr("cancel"))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    if (open_settings_) { ImGui::OpenPopup("###mod_settings"); open_settings_ = false; }
+    {
+        const ModEntry* shown = settings_id_.empty() ? nullptr : entry(settings_id_);
+        bool open = true;
+        ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 26, 0), ImVec2(FLT_MAX, FLT_MAX));
+        if (ImGui::BeginPopupModal(((shown ? localized(shown->manifest.names, shown->manifest.name) : std::string()) + "###mod_settings").c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::PushID("window");
+            ImGui::Spacing();
+            draw_mod_window(settings_id_, unit);
+            ImGui::Spacing();
+            ImGui::Separator();
+            if (ImGui::Button(tr("close"))) open = false;
+            remember("popup/settings_close");
+            ImGui::PopID();
+            if (!open) { ImGui::CloseCurrentPopup(); settings_id_.clear(); }
+            ImGui::EndPopup();
+        }
+    }
     if (!conflicts_.empty()) {
         ImGui::TextWrapped("%s", tr("conflicts"));
         for (const auto& c : conflicts_) {
@@ -205,18 +224,22 @@ void ModMenuUi::manager_tab(float unit) {
     }
 }
 
-std::vector<ModTab> ModMenuUi::tabs() {
-    std::vector<ModTab> result;
-    auto* host = host_();
-    auto* r = registry_();
-    if (!host || !r) return result;
-    const auto status = host->status();
-    for (const auto& e : r->entries()) {
-        const auto it = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == e.manifest.id; });
-        if (it == status.end() || !it->running || it->disabled_for_session || !(it->has_ui || it->has_settings)) continue;
-        result.push_back({e.manifest.id, localized(e.manifest.names, e.manifest.name)});
+// A button with a gear drawn on it (no icon font needed): the same look as the arrow buttons next to it.
+bool ModMenuUi::gear_button(const char* id, float size) {
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+    auto* list = ImGui::GetWindowDrawList();
+    list->AddRectFilled(at, ImVec2(at.x + size, at.y + size), ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button), ImGui::GetStyle().FrameRounding);
+    const ImVec2 c(at.x + size * 0.5f, at.y + size * 0.5f);
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+    list->AddCircle(c, size * 0.19f, color, 24, size * 0.11f);   // the ring
+    for (int tooth = 0; tooth < 8; ++tooth) {
+        const float angle = float(tooth) * 3.14159265f / 4.f;
+        const ImVec2 direction(std::cos(angle), std::sin(angle));
+        list->AddLine(ImVec2(c.x + direction.x * size * 0.2f, c.y + direction.y * size * 0.2f), ImVec2(c.x + direction.x * size * 0.33f, c.y + direction.y * size * 0.33f), color, size * 0.15f);
     }
-    return result;
+    return pressed;
 }
 
 void ModMenuUi::draw_declared_settings(const std::string&, ModSettings& settings, const std::vector<SettingDecl>& declared) {
@@ -262,12 +285,12 @@ void ModMenuUi::draw_declared_settings(const std::string&, ModSettings& settings
     }
 }
 
-void ModMenuUi::draw_tab(const std::string& id, float unit) {
+void ModMenuUi::draw_mod_window(const std::string& id, float unit) {
     auto* host = host_();
     if (!host) return;
     ImGui::PushID(id.c_str());
     current_mod_ = id;
-    ImGui::Dummy({0, 6 * unit});
+    (void)unit;
     const auto declared = entry(id) ? entry(id)->manifest.settings : std::vector<SettingDecl>();
     if (!declared.empty()) host->edit_settings(id, [&](ModSettings& settings) { draw_declared_settings(id, settings, declared); });
     const auto status = host->status();
@@ -295,12 +318,11 @@ void ModMenuUi::commit() {
     auto* r = registry_();
     if (!r) return;
     auto* host = host_();
-    const bool pending = pending_ && pending_();
-    if (!host && !dirty_ && !pending) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
+    if (!host && !dirty_) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
     // While a widget of a mod's tab is being edited the value changes every frame: write it (and tell the mod) once, when the edit ends.
     // (Wall-clock time, not ImGui state: commit() runs in the main loop, where the menu's ImGui context is not current.)
     if (Clock::now() < editing_until_) return;
-    const bool manager_changed = dirty_ || pending;
+    const bool manager_changed = dirty_;
     bool changed = dirty_;
     std::vector<std::pair<std::string, std::string>> notify;   // (mod id, setting key) to tell the mods about, after the locks are released
     if (host) {
@@ -328,7 +350,7 @@ void ModMenuUi::commit() {
         save_(section);
     }
     dirty_ = false;
-    if (manager_changed && apply_) for (auto& note : apply_()) if (std::find(notes_.begin(), notes_.end(), note) == notes_.end()) notes_.push_back(std::move(note));   // notes stay until the game restarts   // the running game follows what was just saved: mods start and stop, files and textures swap
+    if (manager_changed && apply_) apply_();   // the running game follows what was just saved: mods start and stop, files and textures swap
     if (host) for (const auto& [id, key] : notify) host->settings_changed(id, key);
 }
 
