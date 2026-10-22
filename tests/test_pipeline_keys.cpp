@@ -27,6 +27,13 @@ int main() {
     CHECK(uc::uber_key(c)[0]==0x1234 && uc::uber_key(c)[68]==9 && uc::uber_key(c)[69]==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST && uc::uber_key(c)[1]==0 && uc::uber_key(c)[67]==0);
     CHECK(uc::uber_key(c)!=uc::uber_key([&]{ auto e=c; e[0]^=1; return e; }()));
 
+    // Cull and the depth state are dynamic: keys differing only there share a pipeline; whether the draw writes depth stays in it.
+    uc::PipelineKey s=a; s[0]=1|(1u<<14); s[68]=17|(3<<1);
+    uc::PipelineKey t=s; t[0]=1|(2u<<14); t[68]=17|(6<<1);
+    CHECK(uc::static_key(s)==uc::static_key(t) && uc::static_key(s)[68]==17 && (uc::static_key(s)[0]>>14)==0 && (uc::static_key(s)[0]&0x3FFF)==1);
+    t[68]=1|(6<<1); CHECK(uc::static_key(t)[68]==0 && uc::static_key(s)!=uc::static_key(t));
+    CHECK(uc::cull_mode(s)==VK_CULL_MODE_BACK_BIT && uc::cull_mode(a)==VK_CULL_MODE_NONE && uc::static_key(uc::static_key(s))==uc::static_key(s));
+
     // The ubershader closure combines every blend/cull word, depth word and topology seen, so a new TEV key never needs a synchronous compile.
     uc::PipelineKey f=a, g=a, h=a; f[0]=1; f[68]=1; g[0]=2; g[68]=17; h[0]=1; h[68]=1; h[69]=VK_PRIMITIVE_TOPOLOGY_LINE_LIST; h[1]=5;
     const auto closure=uc::uber_key_closure({f,g,h});

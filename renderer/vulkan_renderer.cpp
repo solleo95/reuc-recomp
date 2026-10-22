@@ -522,7 +522,8 @@ PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_p
     }
     return key;
 }
-VulkanRenderer::PipelineChoice VulkanRenderer::pipeline_for(const PipelineKey& key) {
+VulkanRenderer::PipelineChoice VulkanRenderer::pipeline_for(const PipelineKey& requested) {
+    const auto key=static_key(requested);
     const auto fixed=uber_key(key);
     PipelineChoice choice;
     bool fresh=false;
@@ -710,8 +711,7 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
-        constexpr VkCullModeFlags culls[]={VK_CULL_MODE_NONE,VK_CULL_MODE_BACK_BIT,VK_CULL_MODE_FRONT_BIT,VK_CULL_MODE_FRONT_AND_BACK};
-        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode = VK_POLYGON_MODE_FILL; raster.cullMode = culls[(key[0]>>14)&3]; raster.frontFace = VK_FRONT_FACE_CLOCKWISE; raster.lineWidth = 1;
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode = VK_POLYGON_MODE_FILL; raster.cullMode = cull_mode(key); raster.frontFace = VK_FRONT_FACE_CLOCKWISE; raster.lineWidth = 1;
         VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState blend{};
         blend.colorWriteMask=(mode.color_write ? VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT : 0)|(mode.alpha_write ? VK_COLOR_COMPONENT_A_BIT : 0);
@@ -729,8 +729,8 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         blends[4].colorWriteMask=rt_writes ? gbuffer_write_mask(key) : 0;    // albedo
         VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = scene_color_attachments(); blending.pAttachments = blends;
         blending.logicOpEnable=mode.mode==2; blending.logicOp=VkLogicOp(mode.logic);
-        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = 2; dynamic.pDynamicStates = dynamic_states;
+        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};   // the last four: set_draw_state
+        VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = uint32_t(std::size(dynamic_states)); dynamic.pDynamicStates = dynamic_states;
         const VkFormat formats[5] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat, kGBufferFormat, kMaterialFormat, kAlbedoFormat};
         VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachmentFormats = formats;
         rendering.depthAttachmentFormat=VK_FORMAT_D32_SFLOAT;
@@ -756,8 +756,8 @@ void VulkanRenderer::load_pipeline_cache() {
     vk_check(vkCreatePipelineCache(device,&info,nullptr,&pipeline_cache_),"pipeline cache");   // the driver ignores data from another driver or version
     pipeline_cache_loaded_=data.size();
     for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"})
-        for (const auto& key:load_pipeline_keys(cache_dir_/name))
-            if (valid_pipeline_key(key,logic_ops_) && known_keys_.insert(key).second) warm_keys_.push_back(key);
+        for (const auto& recorded:load_pipeline_keys(cache_dir_/name))
+            if (const auto key=static_key(recorded); valid_pipeline_key(key,logic_ops_) && known_keys_.insert(key).second) warm_keys_.push_back(key);
 }
 void VulkanRenderer::save_pipeline_cache() {
     static std::mutex saving;   // compile threads and shutdown may save concurrently
@@ -2123,6 +2123,16 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     vkCmdSetViewport(slot.command, 0, 1, &viewport); vkCmdSetScissor(slot.command, 0, 1, &scissor);
     if (!gpu_draws.empty()) {
         const Buffer* bound_vertices=nullptr; const Buffer* bound_indices=nullptr; VkDeviceSize bound_vertex_offset=0, bound_index_offset=0;
+        uint32_t bound_state=~0u;   // cull and depth state last set on this command buffer (every pipeline bound below leaves them dynamic)
+        const auto set_draw_state=[&](const PipelineKey& key) {
+            const uint32_t state=((key[0]>>14)&3)|((key[68]&31)<<2);
+            if (state==bound_state) return;
+            bound_state=state;
+            vkCmdSetCullMode(slot.command,cull_mode(key));
+            vkCmdSetDepthTestEnable(slot.command,key[68]&1);
+            vkCmdSetDepthWriteEnable(slot.command,(key[68]>>4)&1);
+            vkCmdSetDepthCompareOp(slot.command,VkCompareOp((key[68]>>1)&7));
+        };
         for (size_t d=first; d<last; ++d) {
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
             const size_t set_index=d;
@@ -2157,6 +2167,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (&vertex_buffer!=bound_vertices || info.vertex_offset!=bound_vertex_offset) { VkDeviceSize offset=info.vertex_offset; vkCmdBindVertexBuffers(slot.command,0,1,&vertex_buffer.buffer,&offset); bound_vertices=&vertex_buffer; bound_vertex_offset=info.vertex_offset; }
             if (&index_buffer!=bound_indices || info.index_offset!=bound_index_offset) { vkCmdBindIndexBuffer(slot.command,index_buffer.buffer,info.index_offset,VK_INDEX_TYPE_UINT32); bound_indices=&index_buffer; bound_index_offset=info.index_offset; }
             vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,info.choice.pipeline);
+            set_draw_state(info.key);
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[set_index],0,nullptr);
             DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0,info.bank};
             push.viewport[0]=draw_viewport.x; push.viewport[1]=draw_viewport.y; push.viewport[2]=draw_viewport.width; push.viewport[3]=draw_viewport.height;
@@ -2174,8 +2185,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const auto depth=draw.uniforms->pixel[1]&31;
             if((draw.uniforms->pixel[2]&256) && draw.blend.alpha_write && !(depth&1 && ((depth>>1)&7)==0)) {
                 // GX destination alpha replaces stored alpha after RGB blending.
-                const auto alpha=pipeline_for(pipeline_key(draw,true));
+                const auto alpha_key=pipeline_key(draw,true);
+                const auto alpha=pipeline_for(alpha_key);
                 vkCmdBindPipeline(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,alpha.pipeline);
+                set_draw_state(alpha_key);
                 if (alpha.uber) { push.alpha_pass=1; vkCmdPushConstants(slot.command,layout_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,uint32_t(sizeof push),&push); }
                 vkCmdDrawIndexed(slot.command,info.index_count,1,info.first_index,info.first_vertex,0);
             }

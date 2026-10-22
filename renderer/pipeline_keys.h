@@ -21,6 +21,19 @@ inline bool valid_pipeline_key(const PipelineKey& key,bool logic_ops) {
     return topology && key[1]<=16 && key[67]<=1 && key[68]<32 && (key[0]>>16)==0 && ((key[0]&3)!=2 || logic_ops);
 }
 
+// Cull mode and the depth test, write and compare op are dynamic state (Vulkan 1.3), set from the draw's full key; a pipeline only keeps
+// whether the draw writes depth (the motion and G-buffer masks follow it). Pipelines, the seed's closure and the recorded file use this form.
+inline PipelineKey static_key(PipelineKey key) {
+    key[0]&=~(3u<<14);
+    key[68]=(key[68]&17)==17 ? 17u : 0u;
+    return key;
+}
+
+inline VkCullModeFlags cull_mode(const PipelineKey& key) {
+    constexpr VkCullModeFlags culls[]={VK_CULL_MODE_NONE,VK_CULL_MODE_BACK_BIT,VK_CULL_MODE_FRONT_BIT,VK_CULL_MODE_FRONT_AND_BACK};
+    return culls[(key[0]>>14)&3];
+}
+
 // The part of a key the ubershader still needs a separate pipeline for (blend/cull, depth, topology); the TEV words and the
 // destination-alpha pass are read from the draw at run time.
 inline PipelineKey uber_key(PipelineKey key) {
