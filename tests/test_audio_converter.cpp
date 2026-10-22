@@ -67,17 +67,22 @@ struct Rig {
     std::mutex mutex;
     std::condition_variable cv;
     int changes = 0;
+    std::string lookup_failure;   // set: the lookup refuses every stream with this reason
     std::map<std::string, StreamOriginal> originals{{"tone", {32000, 1}}, {"good", {32000, 1}}, {"title", {48000, 2}}, {"loopy", {32000, 1}}, {"long", {32000, 1}}};
     std::unique_ptr<AudioConverter> make() {
-        return std::make_unique<AudioConverter>(cache, [this](const std::string& stem) -> std::optional<StreamOriginal> {
+        return std::make_unique<AudioConverter>(cache, [this](const std::string& stem, std::string& why) -> std::optional<StreamOriginal> {
+            if (!lookup_failure.empty()) { why = lookup_failure; return std::nullopt; }
             const auto it = originals.find(stem);
-            return it == originals.end() ? std::nullopt : std::optional<StreamOriginal>(it->second);
+            if (it == originals.end()) { why = "the game has no stream named '" + stem + "'"; return std::nullopt; }
+            return std::optional<StreamOriginal>(it->second);
         }, [this] { { std::lock_guard lock(mutex); ++changes; } cv.notify_all(); });
     }
     bool wait_changes(int n) {
         std::unique_lock lock(mutex);
         return cv.wait_for(lock, 20s, [&] { return changes >= n; });
     }
+    fs::path audio_cache() const { return cache / "_audio" / "mymod" / "audio"; }
+    size_t cached_files() const { size_t n = 0; std::error_code e; for (fs::directory_iterator it(audio_cache(), e), end; !e && it != end; it.increment(e)) n += it->path().extension() == ".brstm"; return n; }
     fs::path generated(const AudioConverter& c, const char* stem) const { return c.generated_root("mymod") / "Data" / "sound" / "stream" / (std::string(stem) + ".brstm"); }
 };
 }  // namespace
@@ -107,7 +112,7 @@ static void cache_hit_does_not_reconvert() {
         first->wait_idle();
         CHECK(first->conversions() == 1);
     }
-    fs::remove_all(rig.cache / "mymod" / "generated");   // as after a restart that lost the generated tree but kept the cache
+    fs::remove_all(rig.cache / "_audio" / "mymod" / "generated");   // as after a restart that lost the generated tree but kept the cache
     auto second = rig.make();
     second->set_active({&mod});
     CHECK(rig.wait_changes(2));
@@ -265,7 +270,82 @@ static void stereo_original_gets_stereo() {
     CHECK(audio && audio->rate == 48000 && audio->channels.size() == 2 && audio->channels[0] == audio->channels[1]);
 }
 
+static void the_reason_of_a_failed_lookup_is_shown() {
+    Rig rig;
+    rig.lookup_failure = "its header says 6 channels";
+    write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.1, 440));
+    const ModEntry mod = make_mod(rig.mod_root, "mymod");
+    auto converter = rig.make();
+    converter->set_active({&mod});
+    converter->wait_idle();
+    const std::string status = converter->status("mymod");
+    CHECK(status.find("6 channels") != std::string::npos && status.find("tone.wav") != std::string::npos && converter->conversions() == 0);
+}
+
+static void a_mods_own_brstm_wins_and_nothing_is_converted() {
+    Rig rig;
+    write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.1, 440));
+    write_file(rig.mod_root / "audio" / "good.wav", wav(32000, 0.1, 440));
+    write_file(rig.mod_root / "files" / "Data" / "sound" / "stream" / "Tone.BRSTM", std::vector<uint8_t>(64, 1));
+    const ModEntry mod = make_mod(rig.mod_root, "mymod");
+    auto converter = rig.make();
+    converter->set_active({&mod});
+    CHECK(rig.wait_changes(1));
+    converter->wait_idle();
+    const std::string status = converter->status("mymod");
+    CHECK(converter->conversions() == 1 && !fs::exists(rig.generated(*converter, "tone")) && fs::exists(rig.generated(*converter, "good")));
+    CHECK(status.find("tone.wav") != std::string::npos && status.find("files/") != std::string::npos);
+}
+
+// The source's size and time are the quick check: an apply that finds both unchanged does not read the file again (a file edited without changing either is
+// taken for unchanged; the author touches it or changes its size).
+static void an_unchanged_source_is_not_read_again() {
+    Rig rig;
+    const fs::path source = rig.mod_root / "audio" / "tone.wav";
+    write_file(source, wav(32000, 0.3, 440));
+    const ModEntry mod = make_mod(rig.mod_root, "mymod");
+    auto converter = rig.make();
+    converter->set_active({&mod});
+    CHECK(rig.wait_changes(1));
+    converter->wait_idle();
+    const auto before = read_file(rig.generated(*converter, "tone"));
+    const auto stamp = fs::last_write_time(source);
+    auto edited = wav(32000, 0.3, 880);   // the same size, other samples
+    write_file(source, edited);
+    fs::last_write_time(source, stamp);
+    converter->set_active({&mod});
+    converter->wait_idle();
+    CHECK(read_file(rig.generated(*converter, "tone")) == before && converter->status("mymod").empty() && converter->conversions() == 1);
+}
+
+static void old_converted_versions_are_pruned_and_unknown_mods_forgotten() {
+    Rig rig;
+    write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.2, 440));
+    const ModEntry mod = make_mod(rig.mod_root, "mymod");
+    {
+        auto converter = rig.make();
+        converter->set_active({&mod});
+        CHECK(rig.wait_changes(1));
+        converter->wait_idle();
+        CHECK(rig.cached_files() == 1);
+    }
+    write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.4, 523));   // edited between two runs
+    write_file(rig.cache / "_audio" / "gone" / "generated" / "Data" / "x.brstm", std::vector<uint8_t>(8, 1));
+    write_file(rig.cache / "_audio" / "mymod" / "audio" / "stale.tmp", std::vector<uint8_t>(8, 1));
+    auto converter = rig.make();
+    converter->forget_except({"mymod"});
+    CHECK(!fs::exists(rig.cache / "_audio" / "gone") && fs::exists(rig.cache / "_audio" / "mymod"));
+    converter->set_active({&mod});
+    CHECK(rig.wait_changes(2));
+    converter->wait_idle();
+    CHECK(rig.cached_files() == 1 && !fs::exists(rig.cache / "_audio" / "mymod" / "audio" / "stale.tmp"));   // only the version the stamp names stays
+}
+
 int main() {
+    the_reason_of_a_failed_lookup_is_shown();
+    a_mods_own_brstm_wins_and_nothing_is_converted();
+    an_unchanged_source_is_not_read_again();
+    old_converted_versions_are_pruned_and_unknown_mods_forgotten();
     converts_and_publishes_generated_file();
     cache_hit_does_not_reconvert();
     changed_source_waits_for_the_next_start();

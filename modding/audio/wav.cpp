@@ -13,7 +13,7 @@ DecodeResult fail(std::string message) { return {std::nullopt, std::move(message
 
 DecodeResult read_wav(std::span<const uint8_t> file) {
     if (file.size() < 12 || std::memcmp(file.data(), "RIFF", 4) != 0 || std::memcmp(&file[8], "WAVE", 4) != 0) return fail("not a WAV file (no RIFF/WAVE header)");
-    uint32_t format = 0, channels = 0, rate = 0, bits = 0;
+    uint32_t format = 0, channels = 0, rate = 0, bits = 0, block_align = 0;
     bool have_format = false;
     std::span<const uint8_t> data;
     bool have_data = false;
@@ -34,7 +34,7 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
         }
         if (is_fmt) {
             if (size < 16) return fail("the fmt chunk is too small");
-            format = le16(&file[body]); channels = le16(&file[body + 2]); rate = le32(&file[body + 4]); bits = le16(&file[body + 14]);
+            format = le16(&file[body]); channels = le16(&file[body + 2]); rate = le32(&file[body + 4]); block_align = le16(&file[body + 12]); bits = le16(&file[body + 14]);
             if (format == 0xFFFE && size >= 26) format = le16(&file[body + 24]);   // WAVE_FORMAT_EXTENSIBLE: the sub-format starts with the real tag
             have_format = true;
         } else if (is_data) {
@@ -53,7 +53,10 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
     const bool is_float = format == 3;
     if (!(format == 1 && (bits == 8 || bits == 16 || bits == 24 || bits == 32)) && !(is_float && bits == 32))
         return fail("unsupported sample format (tag " + std::to_string(format) + ", " + std::to_string(bits) + " bits): use 8/16/24/32-bit PCM or 32-bit float");
-    const size_t bytes = bits / 8, frames = data.size() / (bytes * channels);
+    const size_t bytes = bits / 8;
+    if (block_align == 0) block_align = uint32_t(bytes * channels);   // a writer that left it out
+    if (block_align < bytes * channels) return fail("the block alignment " + std::to_string(block_align) + " is smaller than one sample frame");   // wider containers (24 bits in 4 bytes) are fine
+    const size_t frames = data.size() / block_align;
     if (frames == 0) return fail("the data chunk holds no samples");
 
     PcmAudio audio;
@@ -61,7 +64,7 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
     audio.channels.assign(channels, std::vector<int16_t>(frames));
     for (size_t i = 0; i < frames; ++i) {
         for (uint32_t c = 0; c < channels; ++c) {
-            const uint8_t* p = &data[(i * channels + c) * bytes];
+            const uint8_t* p = &data[i * block_align + c * bytes];
             int16_t v = 0;
             if (is_float) {
                 float f;

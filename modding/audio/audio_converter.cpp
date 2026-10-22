@@ -88,7 +88,28 @@ AudioConverter::~AudioConverter() {
     if (worker_.joinable()) worker_.join();
 }
 
-fs::path AudioConverter::generated_root(const std::string& mod_id) const { return cache_root_ / mod_id / "generated"; }
+fs::path AudioConverter::generated_root(const std::string& mod_id) const { return mod_cache(mod_id) / "generated"; }
+
+void AudioConverter::forget_except(const std::set<std::string>& known_ids) {
+    std::error_code error;
+    std::vector<fs::path> remove;
+    for (fs::directory_iterator it(cache_root_ / "_audio", error), end; !error && it != end; it.increment(error))
+        if (!known_ids.count(utf8(it->path().filename()))) remove.push_back(it->path());
+    for (const auto& path : remove) fs::remove_all(path, error);
+}
+
+void AudioConverter::prune_cache(const std::string& mod_id) {
+    std::set<std::string> keep;   // the keys the stamps name (the last word of each stamp)
+    std::error_code error;
+    for (fs::directory_iterator it(mod_cache(mod_id) / "keys", error), end; !error && it != end; it.increment(error)) {
+        const std::string stamp = read_text(it->path());
+        keep.insert(stamp.substr(stamp.rfind(' ') + 1) + ".brstm");   // rfind gives npos for a one-word stamp: npos + 1 is 0, the whole text
+    }
+    std::vector<fs::path> remove;
+    for (fs::directory_iterator it(mod_cache(mod_id) / "audio", error), end; !error && it != end; it.increment(error))
+        if (!keep.count(utf8(it->path().filename()))) remove.push_back(it->path());
+    for (const auto& path : remove) fs::remove(path, error);
+}
 
 void AudioConverter::set_active(const std::vector<const ModEntry*>& mods) {
     struct Scan { const ModEntry* mod; std::vector<Source> sources; std::vector<std::pair<fs::path, std::string>> ignored; };
@@ -129,10 +150,10 @@ void AudioConverter::set_active(const std::vector<const ModEntry*>& mods) {
             }
             std::error_code remove_error;
             fs::remove(it->path(), remove_error);
-            fs::remove(cache_root_ / id / "keys" / it->path().stem(), remove_error);
+            fs::remove(mod_cache(id) / "keys" / it->path().stem(), remove_error);
         }
         for (const auto& source : scan.sources) {
-            Job job{id, source.path, source.stem, std::nullopt, state.generation};
+            Job job{id, scan.mod->root, source.path, source.stem, std::nullopt, state.generation};
             const auto loop = scan.mod->manifest.audio.find(source.stem);
             if (loop != scan.mod->manifest.audio.end()) job.loop = loop->second;
             queue_.push_back(std::move(job));
@@ -180,9 +201,15 @@ void AudioConverter::run() {
         lock.unlock();
         process(job);
         lock.lock();
-        busy_ = false;
         const auto it = mods_.find(job.mod_id);
         if (it != mods_.end() && it->second.generation == job.generation) ++it->second.done;
+        const bool last_of_mod = std::none_of(queue_.begin(), queue_.end(), [&](const Job& j) { return j.mod_id == job.mod_id; });
+        if (last_of_mod && !stop_) {   // every stamp of this mod is written now: what no stamp names is an old version
+            lock.unlock();
+            prune_cache(job.mod_id);
+            lock.lock();
+        }
+        busy_ = false;
         idle_.notify_all();
     }
     idle_.notify_all();
@@ -194,21 +221,46 @@ void AudioConverter::process(const Job& job) {
         const uintmax_t size = fs::file_size(job.source, error);
         if (error) return add_problem(job, "cannot read the file");
         if (size > kMaxSourceBytes) return add_problem(job, "the file is larger than 512 MB");
-        const std::optional<StreamOriginal> original = lookup_(job.stem);
-        if (!original) return add_problem(job, "the game has no stream named '" + job.stem + "' (sound/stream/" + job.stem + ".brstm), the file is ignored");
+        if (fs::exists(job.mod_root / "files" / "Data" / "sound" / "stream" / (job.stem + ".brstm"), error))   // the mod's own ready stream wins in the overlay: converting would be wasted
+            return add_problem(job, "ignored: the mod's own files/Data/sound/stream/" + job.stem + ".brstm is used instead");
+        std::string why;
+        const std::optional<StreamOriginal> original = lookup_(job.stem, why);
+        if (!original) return add_problem(job, (why.empty() ? "the game has no usable stream named '" + job.stem + "'" : why) + "; the file is ignored");
         const fs::path generated = generated_root(job.mod_id) / "Data" / "sound" / "stream" / (job.stem + ".brstm");
-        const fs::path stamp = cache_root_ / job.mod_id / "keys" / job.stem;   // outside the generated root: that folder is laid over the disc as it is
+        const fs::path stamp = mod_cache(job.mod_id) / "keys" / job.stem;   // outside the generated root: that folder is laid over the disc as it is
         const std::string served_key = job.mod_id + "/" + job.stem;
 
-        std::ifstream in(job.source, std::ios::binary);
-        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), {});
-        if (bytes.size() != size) return add_problem(job, "cannot read the file");
-        if (stale(job)) return;
-
-        uint64_t hash = fnv1a(1469598103934665603ull, bytes.data(), bytes.size());
+        // The stamp holds "<size> <time> <parameters> <key>": size and time of the source and the target (rate, channels, loop, converter version) are the quick
+        // check, so an apply that finds all three unchanged does not read the file again.
         const uint32_t parameters[] = {original->rate, original->channels, job.loop ? job.loop->loop_start : 0xFFFFFFFFu, job.loop ? job.loop->loop_end : 0xFFFFFFFFu};
-        hash = fnv1a(hash, parameters, sizeof parameters);
-        hash = fnv1a(hash, kConverterVersion, std::char_traits<char>::length(kConverterVersion));
+        const uint64_t parameter_hash = fnv1a(fnv1a(1469598103934665603ull, parameters, sizeof parameters), kConverterVersion, std::char_traits<char>::length(kConverterVersion));
+        const auto written = fs::last_write_time(job.source, error);
+        const std::string source_stamp = std::to_string(size) + " " + std::to_string(error ? 0 : int64_t(written.time_since_epoch().count())) + " " + hex(parameter_hash);
+        const std::string old_stamp = read_text(stamp);
+        const bool published_before = fs::exists(generated, error);
+        if (published_before && old_stamp.rfind(source_stamp + " ", 0) == 0) {
+            std::lock_guard lock(mutex_);
+            served_.insert(job.mod_id + "/" + job.stem);
+            return;
+        }
+
+        std::vector<uint8_t> bytes;   // read in pieces: a long read can be abandoned (switch-off, exit)
+        bytes.reserve(size_t(size));
+        uint64_t hash = 1469598103934665603ull;
+        {
+            std::ifstream in(job.source, std::ios::binary);
+            std::vector<uint8_t> piece(4 << 20);
+            while (in) {
+                in.read(reinterpret_cast<char*>(piece.data()), std::streamsize(piece.size()));
+                const size_t got = size_t(in.gcount());
+                if (got == 0) break;
+                hash = fnv1a(hash, piece.data(), got);
+                bytes.insert(bytes.end(), piece.begin(), piece.begin() + std::streamsize(got));
+                if (stale(job)) return;
+            }
+        }
+        if (bytes.size() != size) return add_problem(job, "cannot read the file");
+        hash = fnv1a(hash, &parameter_hash, sizeof parameter_hash);
         const std::string key = hex(hash);
         if (stale(job)) return;
 
@@ -217,15 +269,16 @@ void AudioConverter::process(const Job& job) {
             std::lock_guard lock(mutex_);
             serving = served_.count(served_key) != 0;
         }
-        const bool published = fs::exists(generated, error);
-        if (published && read_text(stamp) == key) {   // already published for exactly this source and these parameters
+        const bool published = published_before;
+        if (published && old_stamp.substr(old_stamp.rfind(' ') + 1) == key) {   // the same content and parameters as the published file: only the file's time changed
+            std::ofstream(stamp, std::ios::binary | std::ios::trunc) << source_stamp << ' ' << key;
             std::lock_guard lock(mutex_);
             served_.insert(served_key);
             return;
         }
         if (published && serving) return add_problem(job, "the file changed: the game may be playing the old converted stream, the new one is used at the next start of the game");
 
-        const fs::path cached = cache_root_ / job.mod_id / "audio" / (key + ".brstm");
+        const fs::path cached = mod_cache(job.mod_id) / "audio" / (key + ".brstm");
         if (!fs::exists(cached, error)) {
             DecodeResult decoded;
             if (lower(utf8(job.source.extension())) == ".ogg") {
@@ -280,7 +333,7 @@ void AudioConverter::process(const Job& job) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         if (error) { std::error_code ignore; fs::remove(temp, ignore); return add_problem(job, "cannot replace the converted file (is the game using it?): " + error.message()); }
-        std::ofstream(stamp, std::ios::binary | std::ios::trunc) << key;
+        std::ofstream(stamp, std::ios::binary | std::ios::trunc) << source_stamp << ' ' << key;
         {
             std::lock_guard lock(mutex_);
             served_.insert(served_key);

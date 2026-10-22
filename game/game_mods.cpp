@@ -15,16 +15,22 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
     if (disabled || !fs::is_directory(mods_dir_, error)) return;
     registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 1}, game_id));
     // Audio replacement: the converter learns each original stream's rate and channel count from its BRSTM header on the disc.
-    audio_ = std::make_unique<mods::AudioConverter>(mods_dir_ / ".cache", [this](const std::string& stem) -> std::optional<mods::StreamOriginal> {
-        const int entry = dvd_->entry_of("Data/sound/stream/" + stem + ".brstm");
-        if (entry < 0) return std::nullopt;
+    audio_ = std::make_unique<mods::AudioConverter>(mods_dir_ / ".cache", [this](const std::string& stem, std::string& why) -> std::optional<mods::StreamOriginal> {
+        const std::string name = "sound/stream/" + stem + ".brstm";
+        const int entry = dvd_->entry_of("Data/" + name);
+        if (entry < 0) { why = "the game has no stream named '" + stem + "' (" + name + ")"; return std::nullopt; }
         uint8_t head[0x100];
         const int64_t got = dvd_->read(entry, head, sizeof head, 0);
-        if (got < 0x40) return std::nullopt;
-        const auto header = mods::read_brstm_header(std::span<const uint8_t>(head, size_t(got)));
-        if (!header || header->channels < 1 || header->channels > 2 || header->rate == 0) return std::nullopt;
+        const auto header = got < 0x40 ? std::nullopt : mods::read_brstm_header(std::span<const uint8_t>(head, size_t(got)));
+        if (!header) { why = "the game's stream '" + stem + "' is not a BRSTM this port can read"; return std::nullopt; }
+        if (header->channels < 1 || header->channels > 2 || header->rate == 0) { why = "the game's stream '" + stem + "' has " + std::to_string(header->channels) + " channels and " + std::to_string(header->rate) + " Hz, which the conversion cannot match"; return std::nullopt; }
         return mods::StreamOriginal{header->rate, header->channels};
     }, [this] { audio_changed(); });
+    {   // the converted files of mods that were removed since the last run
+        std::set<std::string> known;
+        for (const auto& entry : registry_->entries()) known.insert(entry.manifest.id);
+        audio_->forget_except(known);
+    }
     // Text replacement: the unpatched text files are read now, before the first overlay hides them.
     bool any_text = false;
     for (const auto& entry : registry_->entries()) any_text = any_text || fs::is_directory(entry.root / "text", error);

@@ -12,12 +12,12 @@ void le16(std::vector<uint8_t>& d, uint32_t v) { d.push_back(uint8_t(v)); d.push
 void le32(std::vector<uint8_t>& d, uint32_t v) { for (int i = 0; i < 4; ++i) d.push_back(uint8_t(v >> (8 * i))); }
 void tag(std::vector<uint8_t>& d, const char* t) { d.insert(d.end(), t, t + 4); }
 
-struct WavSpec { uint32_t format = 1, channels = 1, rate = 32000, bits = 16; std::vector<uint8_t> data; std::vector<uint8_t> before_data, after_data; };
+struct WavSpec { uint32_t format = 1, channels = 1, rate = 32000, bits = 16, block_align = 0; std::vector<uint8_t> data; std::vector<uint8_t> before_data, after_data; };
 
 std::vector<uint8_t> make_wav(const WavSpec& s) {
     std::vector<uint8_t> d;
     tag(d, "RIFF"); le32(d, 0); tag(d, "WAVE");
-    tag(d, "fmt "); le32(d, 16); le16(d, s.format); le16(d, s.channels); le32(d, s.rate); le32(d, s.rate * s.channels * s.bits / 8); le16(d, s.channels * s.bits / 8); le16(d, s.bits);
+    tag(d, "fmt "); le32(d, 16); le16(d, s.format); le16(d, s.channels); le32(d, s.rate); le32(d, s.rate * s.channels * s.bits / 8); le16(d, s.block_align ? s.block_align : s.channels * s.bits / 8); le16(d, s.bits);
     d.insert(d.end(), s.before_data.begin(), s.before_data.end());
     tag(d, "data"); le32(d, uint32_t(s.data.size())); d.insert(d.end(), s.data.begin(), s.data.end());
     if (s.data.size() % 2) d.push_back(0);
@@ -72,6 +72,14 @@ static void wav_8bit_24bit_32bit_and_float_scale_to_int16() {
     CHECK(r.audio && r.audio->channels[0].size() == 5);
     CHECK(std::abs(r.audio->channels[0][0] - 16384) <= 1 && std::abs(r.audio->channels[0][1] + 16384) <= 1);
     CHECK(r.audio->channels[0][2] == 32767 && r.audio->channels[0][3] == -32767 && r.audio->channels[0][4] == 0);   // clamped to [-1, 1]
+}
+
+static void wav_block_align_wins_over_the_bit_depth() {   // 24-bit samples in 4-byte containers (WAVE_FORMAT_PCM written by some tools)
+    WavSpec s; s.bits = 24; s.block_align = 4; s.data = {0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0xC0, 0x00};
+    const auto r = read_wav(make_wav(s));
+    CHECK(r.audio && r.audio->frames() == 2 && r.audio->channels[0][0] == 16384 && r.audio->channels[0][1] == -16384);
+    WavSpec bad; bad.block_align = 1; bad.data = pcm16({1, 2});   // smaller than one sample: not usable
+    CHECK(!read_wav(make_wav(bad)).audio);
 }
 
 static void wav_skips_unknown_chunks_and_pads_odd_sizes() {
@@ -175,6 +183,7 @@ int main() {
     wav_pcm16_mono();
     wav_stereo_deinterleaves();
     wav_8bit_24bit_32bit_and_float_scale_to_int16();
+    wav_block_align_wins_over_the_bit_depth();
     wav_skips_unknown_chunks_and_pads_odd_sizes();
     wav_smpl_loop_is_read();
     wav_loop_past_the_data_is_returned_as_is();
