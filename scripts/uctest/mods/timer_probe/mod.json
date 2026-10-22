@@ -1,0 +1,1 @@
+{ "id": "timer-probe", "name": "Timer probe", "version": "1.0", "api": "1.1", "script": "scripts/main.js" }

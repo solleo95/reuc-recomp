@@ -1,8 +1,11 @@
-// JavaScript runtime for mods on QuickJS-ng. No std/os modules and no timers are created: the only host objects are the mod API globals.
+// JavaScript runtime for mods on QuickJS-ng. No std/os modules are created: the host objects are the mod API globals and the four timer functions.
+// Timers run on game time: each on_step the host delivers (30 per game second) advances them unless the game is paused, and their callbacks share that step's budget.
 // Entry files and everything they import are ES modules loaded from inside the mod folder only.
 #include "mod_paths.h"
 #include "runtime.h"
 #include <quickjs.h>
+#include <algorithm>
+#include <cmath>
 #include <deque>
 #include <map>
 
@@ -15,6 +18,15 @@ constexpr size_t kMemoryCap = 64u << 20;
 constexpr size_t kStackCap = 256u << 10;   // measured from where the callback starts; the threads that call in have at least 1 MiB
 constexpr auto kLoadBudget = std::chrono::seconds(2);
 constexpr size_t kMaxJsonBytes = 1u << 20;
+constexpr double kStepsPerSecond = 30;   // the nominal step rate the host delivers on_step at
+constexpr size_t kMaxTimers = 1000;
+
+struct Timer {
+    JSValue fn = JS_UNDEFINED;
+    std::vector<JSValue> args;
+    int64_t due = 0;     // the step it runs at
+    int64_t every = 0;   // steps between runs of an interval; 0 for a timeout
+};
 
 struct DomainInfo {
     std::string name;
@@ -47,7 +59,7 @@ std::string to_text(JSContext* ctx, JSValueConst v) {
 // An error value as one line plus its stack (file:line of the script).
 std::string describe_error(JSContext* ctx, JSValueConst error) {
     std::string text = to_text(ctx, error);
-    if (text == "InternalError") text = "InternalError: out of memory";   // the engine raises it without a message when the memory cap is hit (a message would need memory)
+    if (text == "InternalError" || JS_IsNull(error)) text = "InternalError: out of memory" + std::string(JS_IsNull(error) ? " (or the script threw null)" : "");   // when the memory cap is hit the engine raises the error without a message, or none at all (an exception value of null): a message would need memory
     if (JS_IsObject(error)) {
         Val stack(ctx, JS_GetPropertyStr(ctx, error, "stack"));
         if (JS_IsString(stack.get())) text += "\n" + to_text(ctx, stack.get());
@@ -97,6 +109,7 @@ public:
     ~JsRuntime() override {
         for (auto& [event, list] : handlers_) for (auto& f : list) JS_FreeValue(js_, f);
         for (auto& f : hook_fns_) JS_FreeValue(js_, f);
+        while (!timers_.empty()) erase_timer(timers_.begin());
         JS_FreeValue(js_, draw_);
         JS_FreeContext(js_);
         JS_FreeRuntime(rt_);
@@ -119,10 +132,13 @@ public:
     }
 
     CallResult fire(std::string_view event, const Value& payload, Budget budget) override {
+        const bool step = event == "on_step" && !timers_.empty() && !game_paused();   // the pause menu still delivers steps, but game time stands still
+        if (step) ++steps_;
         const auto at = handlers_.find(std::string(event));
-        if (at == handlers_.end() || at->second.empty()) return {};
+        const bool has_handlers = at != handlers_.end() && !at->second.empty();
+        if (!has_handlers && !step) return {};
         std::vector<JSValue> handlers;   // a handler may register more handlers; keep our own references
-        for (const auto& f : at->second) handlers.push_back(JS_DupValue(js_, f));
+        if (has_handlers) for (const auto& f : at->second) handlers.push_back(JS_DupValue(js_, f));
         CallResult out;
         enter();
         deadline_ = Clock::now() + budget.limit;
@@ -132,6 +148,11 @@ public:
             Val result(js_, JS_Call(js_, f, JS_UNDEFINED, 1, argv));
             out = finish(result.get(), false);
             if (!out.ok) break;
+        }
+        if (step && !out.budget_exceeded) {
+            CallResult timed = run_timers();
+            if (out.ok) out = std::move(timed);
+            else if (timed.budget_exceeded) out.budget_exceeded = true;   // the handler's error stays the reported one
         }
         deadline_ = Clock::time_point::max();
         for (const auto& f : handlers) JS_FreeValue(js_, f);
@@ -155,6 +176,53 @@ private:
     void enter() {
         JS_UpdateStackTop(rt_);
         over_budget_ = false;
+    }
+
+    // uc.game.paused (the game's pause menu is open); false when the API has no such member or cannot be read, so timers keep running.
+    bool game_paused() {
+        if (!pause_member_) pause_member_ = ctx_.api.find("game.paused");
+        if (!pause_member_ || !pause_member_->get) return false;
+        try {
+            const Value paused = pause_member_->get(Value::object());
+            return paused.is_boolean() && paused.get<bool>();
+        } catch (const std::exception&) { return false; }
+    }
+
+    void erase_timer(std::map<int64_t, Timer>::iterator it) {
+        JS_FreeValue(js_, it->second.fn);
+        for (auto& a : it->second.args) JS_FreeValue(js_, a);
+        timers_.erase(it);
+    }
+
+    // Runs the timers that are due at this step, in the order they were made. A timer made meanwhile waits for the next step. One failing timer does not stop
+    // the others; the first error is the result, except that an exhausted budget ends the run (and a timeout it cut short is tried again next step, like a
+    // handler: the host does not always count that overrun as the mod's failure).
+    CallResult run_timers() {
+        std::vector<int64_t> due;
+        for (const auto& [id, timer] : timers_) if (timer.due <= steps_) due.push_back(id);
+        CallResult first;
+        for (const int64_t id : due) {
+            const auto it = timers_.find(id);
+            if (it == timers_.end()) continue;   // cleared by an earlier timer of this step
+            Timer& timer = it->second;
+            Timer call;   // our own references: the callback may clear its timer or make new ones
+            call.fn = JS_DupValue(js_, timer.fn);
+            for (const auto& a : timer.args) call.args.push_back(JS_DupValue(js_, a));
+            call.every = timer.every;
+            if (timer.every) timer.due = steps_ + timer.every; else erase_timer(it);   // re-armed first so the callback can clear its own interval
+            Val result(js_, JS_Call(js_, call.fn, JS_UNDEFINED, int(call.args.size()), call.args.data()));
+            CallResult out = finish(result.get(), false);
+            if (out.budget_exceeded && !call.every) {
+                call.due = steps_ + 1;
+                timers_.emplace(id, std::move(call));   // hands the references back to the timer
+            } else {
+                JS_FreeValue(js_, call.fn);
+                for (auto& a : call.args) JS_FreeValue(js_, a);
+            }
+            if (out.budget_exceeded) return out;
+            if (!out.ok && first.ok) first = std::move(out);
+        }
+        return first;
     }
 
     // The value a call or evaluation returned: an exception, a rejected promise (module evaluation) or fine. Also drains the promise jobs it started.
@@ -316,6 +384,36 @@ private:
         return JS_UNDEFINED;
     }
 
+    // setTimeout(fn, ms, ...args) / setInterval: magic 0 / 1. The delay counts game steps (rounded up, at least one), so 0 means the next step.
+    static JSValue set_timer(JSContext* c, JSValueConst, int argc, JSValueConst* argv, int magic) {
+        JsRuntime* self = me(c);
+        if (argc < 1 || !JS_IsFunction(c, argv[0])) return JS_ThrowTypeError(c, "%s(callback, delay) needs a function", magic ? "setInterval" : "setTimeout");
+        if (self->timers_.size() >= kMaxTimers) return JS_ThrowRangeError(c, "too many active timers (at most %d)", int(kMaxTimers));
+        double ms = 0;
+        if (argc > 1 && JS_ToFloat64(c, &ms, argv[1]) < 0) return JS_EXCEPTION;
+        if (self->timers_.size() >= kMaxTimers) return JS_ThrowRangeError(c, "too many active timers (at most %d)", int(kMaxTimers));   // again: converting the delay may run script that makes timers
+        if (!(ms > 0)) ms = 0;   // NaN and negative delays mean "as soon as possible"
+        const int64_t steps = std::max<int64_t>(1, int64_t(std::ceil(std::min(ms, 1e9) * kStepsPerSecond / 1000.0)));
+        Timer timer;
+        timer.fn = JS_DupValue(c, argv[0]);
+        for (int i = 2; i < argc; ++i) timer.args.push_back(JS_DupValue(c, argv[i]));
+        timer.due = self->steps_ + steps;
+        timer.every = magic ? steps : 0;
+        const int64_t id = ++self->last_timer_;
+        self->timers_.emplace(id, std::move(timer));
+        return JS_NewInt64(c, id);
+    }
+    // clearTimeout and clearInterval are the same function; an unknown or invalid id is ignored.
+    static JSValue clear_timer(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+        JsRuntime* self = me(c);
+        double id = 0;
+        if (argc > 0 && JS_IsNumber(argv[0]) && JS_ToFloat64(c, &id, argv[0]) == 0 && id >= 1 && id <= double(self->last_timer_)) {
+            const auto it = self->timers_.find(int64_t(id));
+            if (it != self->timers_.end() && double(it->first) == id) self->erase_timer(it);
+        }
+        return JS_UNDEFINED;
+    }
+
     // hook.pre(name, fn): fn gets an object with r3..r10 (integers) and f1..f8 (numbers) and may change them.
     CallResult call_hook(size_t index, HookRegs& regs, Budget budget) {
         enter();
@@ -423,6 +521,10 @@ private:
         object_with("log", {{"write", &JsRuntime::log_write}});
         object_with("settings", {{"get", &JsRuntime::settings_get}, {"set", &JsRuntime::settings_set}});
         JS_SetPropertyStr(js_, global, "on", JS_NewCFunction(js_, &JsRuntime::on, "on", 2));
+        JS_SetPropertyStr(js_, global, "setTimeout", JS_NewCFunctionMagic(js_, &JsRuntime::set_timer, "setTimeout", 2, JS_CFUNC_generic_magic, 0));
+        JS_SetPropertyStr(js_, global, "setInterval", JS_NewCFunctionMagic(js_, &JsRuntime::set_timer, "setInterval", 2, JS_CFUNC_generic_magic, 1));
+        JS_SetPropertyStr(js_, global, "clearTimeout", JS_NewCFunction(js_, &JsRuntime::clear_timer, "clearTimeout", 1));
+        JS_SetPropertyStr(js_, global, "clearInterval", JS_NewCFunction(js_, &JsRuntime::clear_timer, "clearInterval", 1));
         object_with("hook", {{"pre", &JsRuntime::hook_pre}, {"list", &JsRuntime::hook_list}, {"post", &JsRuntime::hook_post}, {"replace", &JsRuntime::hook_replace}});
         JSValue ui = JS_NewObject(js_);
         JS_SetPropertyStr(js_, ui, "draw", JS_NewCFunction(js_, &JsRuntime::ui_draw, "draw", 1));
@@ -471,6 +573,10 @@ private:
     JSValue draw_ = JS_UNDEFINED;
     std::map<std::string, std::vector<JSValue>> handlers_;
     std::vector<JSValue> hook_fns_;
+    std::map<int64_t, Timer> timers_;   // by id, so they run in the order they were made
+    const Member* pause_member_ = nullptr;
+    int64_t last_timer_ = 0;
+    int64_t steps_ = 0;             // on_step events delivered so far: the timers' clock
     std::deque<DomainInfo> domains_;
     std::vector<const Member*> members_;                         // magic of an api_call: index here
     std::vector<std::pair<size_t, size_t>> property_refs_;       // magic of a property accessor: (domain index, member index)

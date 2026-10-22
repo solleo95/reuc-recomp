@@ -778,6 +778,41 @@ def game_api(g, args):
     return result
 
 
+def timers_api(g, args):
+    """setTimeout / setInterval in the real game: an interval of one game second ticks about once per second of play, the timeout fires once, and the
+    game's pause menu stops them (they count game steps)."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+
+    def lines():
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        return [l for l in text.splitlines() if "timer " in l]
+
+    result = {}
+    with g.step("ticks"):
+        start = g.frame["retraces"]
+        before = len(lines())
+        g.advance(600)   # ten seconds at 60 retraces a second
+        seconds = (g.frame["retraces"] - start) / 60
+        got = lines()[before:]
+        ticks = [l for l in got if "tick=" in l]
+        result["seconds"], result["ticks"], result["once"] = seconds, len(ticks), sum("timer once" in l for l in got)
+        if not (0.6 * seconds <= len(ticks) <= 1.2 * seconds):
+            g.fail(f"{len(ticks)} ticks in {seconds:.1f} s of play", "timers api")
+        if "every" not in ticks[-1]:
+            g.fail("the extra argument did not reach the callback", "timers api")
+    with g.step("pause"):
+        steps._toggle_pause(g, 2, 10)
+        g.advance(60)
+        count = len(lines())
+        g.advance(240)   # four seconds in the pause menu
+        result["ticks_in_pause"] = len(lines()) - count
+        result["capture"] = g.capture()
+        if result["ticks_in_pause"]:
+            g.fail(f"{result['ticks_in_pause']} timer lines while the game was paused", "timers api")
+    return result
+
+
 def _title_audio(g, ticks):
     """Seconds of the title screen; returns the 'audio stats' of the exit log: (frames, nonzero samples). The title screen plays only 00_Title.brstm, so
     the nonzero count is that stream's (the original music gives about a million in 900 ticks)."""
@@ -906,5 +941,5 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

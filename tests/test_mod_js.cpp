@@ -19,7 +19,7 @@ void write(const fs::path& path, const std::string& text) {
 
 static void no_std_os() {
     Rig rig(fresh(u8"js_sandbox"));
-    const auto r = rig.run("const names = ['std','os','require','process','fetch','XMLHttpRequest','setTimeout','importScripts','Deno','Bun','scriptArgs'];\n"
+    const auto r = rig.run("const names = ['std','os','require','process','fetch','XMLHttpRequest','importScripts','Deno','Bun','scriptArgs'];\n"
                            "log.write('present:' + names.filter(n => typeof globalThis[n] !== 'undefined').join(','));\n"
                            "log.write('has:' + [typeof uc, typeof log, typeof settings, typeof on, typeof ui, typeof JSON, typeof Math.floor].join(','));\n"
                            "log.write('eval:' + eval('1 + 2'));");
@@ -216,7 +216,194 @@ static void hook_pre_regs_round_trip() {
     CHECK(!thrown.ok && thrown.error.find("hook failed") != std::string::npos);
 }
 
+// Timers run on the game's own clock: one nominal step (the on_step the host delivers 30 times per game second) is 1/30 s, so a delay is rounded up to whole
+// steps and nothing fires while the game is paused (no on_step is delivered).
+static void step(Rig& rig, int count = 1) {
+    for (int i = 0; i < count; ++i) CHECK(rig.runtime->fire("on_step", json::object(), kBudget).ok);
+}
+
+static void timers_follow_game_steps() {
+    Rig rig(fresh(u8"js_timers"));
+    CHECK(rig.run("const id = setTimeout(() => log.write('one second'), 1000);\n"
+                  "setTimeout(() => log.write('zero'), 0);\n"
+                  "setTimeout((a, b) => log.write('args ' + a + b), 100, 'x', 'y');\n"
+                  "setTimeout(() => log.write('33 ms'), 33);\n"
+                  "setTimeout(() => log.write('34 ms'), 34);\n"
+                  "log.write(typeof id + ':' + (id > 0));").ok);
+    CHECK((rig.log == std::vector<std::string>{"number:true"}));
+    rig.log.clear();
+    step(rig);                                                  // step 1: zero and 33 ms (33 ms is less than one step)
+    CHECK((rig.log == std::vector<std::string>{"zero", "33 ms"}));
+    step(rig);                                                  // step 2: 34 ms needs a second step
+    CHECK((rig.log == std::vector<std::string>{"zero", "33 ms", "34 ms"}));
+    step(rig);                                                  // step 3: 100 ms is three steps
+    CHECK(rig.log.size() == 4 && rig.log[3] == "args xy");
+    step(rig, 26);                                              // step 29: not yet
+    CHECK(rig.log.size() == 4);
+    step(rig);                                                  // step 30: one second of game time
+    CHECK(rig.log.size() == 5 && rig.log[4] == "one second");
+    step(rig, 100);                                             // a timeout fires once
+    CHECK(rig.log.size() == 5);
+}
+
+static void intervals_repeat_until_cleared() {
+    Rig rig(fresh(u8"js_intervals"));
+    CHECK(rig.run("let n = 0;\n"
+                  "const id = setInterval(() => { n++; log.write('tick ' + n); if (n === 3) clearInterval(id); }, 100);\n"
+                  "let every = 0; setInterval(() => { every++; }, 0);\n"
+                  "on('on_unload', () => log.write('every ' + every));").ok);
+    step(rig, 2);
+    CHECK(rig.log.empty());
+    step(rig);                                                  // step 3
+    CHECK((rig.log == std::vector<std::string>{"tick 1"}));
+    step(rig, 6);                                               // steps 6 and 9
+    CHECK((rig.log == std::vector<std::string>{"tick 1", "tick 2", "tick 3"}));
+    step(rig, 30);                                              // cleared: no more
+    CHECK(rig.log.size() == 3);
+    CHECK(rig.runtime->fire("on_unload", json::object(), kBudget).ok);
+    CHECK(rig.log.size() == 4 && rig.log[3] == "every 39");     // an interval of 0 runs once per step, never more
+}
+
+static void timers_can_be_cleared() {
+    Rig rig(fresh(u8"js_clear_timers"));
+    CHECK(rig.run("const a = setTimeout(() => log.write('a'), 100);\n"
+                  "const b = setTimeout(() => log.write('b'), 100);\n"
+                  "const c = setInterval(() => log.write('c'), 100);\n"
+                  "log.write((new Set([a, b, c]).size) + ' ids');\n"
+                  "clearTimeout(a); clearInterval(c);\n"                       // either clear function clears either kind of timer
+                  "clearTimeout(a); clearTimeout(99999); clearTimeout(); clearTimeout(null); clearTimeout('x'); clearInterval({});").ok);
+    step(rig, 10);
+    CHECK((rig.log == std::vector<std::string>{"3 ids", "b"}));
+    Rig early(fresh(u8"js_clear_early"));
+    CHECK(early.run("const id = setTimeout(() => log.write('never'), 0); clearTimeout(id);").ok);
+    step(early, 5);
+    CHECK(early.log.empty());
+}
+
+static void a_timer_made_in_a_timer_waits_for_the_next_step() {
+    Rig rig(fresh(u8"js_nested_timers"));
+    CHECK(rig.run("setTimeout(() => { log.write('a'); setTimeout(() => log.write('b'), 0); }, 0);").ok);
+    step(rig);
+    CHECK((rig.log == std::vector<std::string>{"a"}));
+    step(rig);
+    CHECK((rig.log == std::vector<std::string>{"a", "b"}));
+    Rig loop(fresh(u8"js_timer_loop"));   // a timer that always sets another one cannot hang a step
+    CHECK(loop.run("let n = 0; const again = () => { n++; setTimeout(again, 0); }; setTimeout(again, 0); on('on_unload', () => log.write('n ' + n));").ok);
+    step(loop, 10);
+    CHECK(loop.runtime->fire("on_unload", json::object(), kBudget).ok && loop.log.size() == 1 && loop.log[0] == "n 10");
+}
+
+static void timers_run_after_the_step_handlers_and_drain_promises() {
+    Rig rig(fresh(u8"js_timer_order"));
+    CHECK(rig.run("setTimeout(() => { log.write('timer'); Promise.resolve().then(() => log.write('microtask')); }, 0);\n"
+                  "on('on_step', () => log.write('handler'));").ok);
+    step(rig);
+    CHECK((rig.log == std::vector<std::string>{"handler", "timer", "microtask"}));
+}
+
+static void timer_errors_are_failures_of_the_call() {
+    Rig rig(fresh(u8"js_timer_errors"));
+    CHECK(rig.run("setTimeout(() => { throw new Error('boom'); }, 0);\n"
+                  "setTimeout(() => log.write('after'), 0);\n"
+                  "let k = 0; setInterval(() => { if (++k === 2) throw new Error('second'); }, 0);").ok);
+    auto r = rig.runtime->fire("on_step", json::object(), kBudget);
+    CHECK(!r.ok && r.error.find("boom") != std::string::npos && !r.budget_exceeded);
+    r = rig.runtime->fire("on_step", json::object(), kBudget);       // the failed timeout is gone; the interval and the other timeout were not lost
+    CHECK(!r.ok && r.error.find("second") != std::string::npos);
+    CHECK(rig.log.size() == 1 && rig.log[0] == "after");
+    CHECK(rig.runtime->fire("on_step", json::object(), kBudget).ok);   // the interval keeps running
+}
+
+static void timer_arguments_are_checked() {
+    Rig rig(fresh(u8"js_timer_arguments"));
+    CHECK(rig.run("const tries = [() => setTimeout('log.write(1)', 0), () => setTimeout(), () => setTimeout(42), () => setInterval(null, 10), () => setTimeout({}, 5)];\n"
+                  "log.write(tries.map(f => { try { f(); return 'ok'; } catch (e) { return e.name; } }).join(','));\n"
+                  "for (const delay of [NaN, -5, undefined, 'abc', Infinity, 1e300, '50', 2.5]) setTimeout(() => {}, delay);\n"
+                  "setTimeout(() => log.write('negative delay runs at once'), -100);").ok);
+    CHECK((rig.log == std::vector<std::string>{"TypeError,TypeError,TypeError,TypeError,TypeError"}));
+    step(rig);
+    CHECK(rig.log.size() == 2 && rig.log[1] == "negative delay runs at once");
+}
+
+static void there_is_a_timer_limit() {
+    Rig rig(fresh(u8"js_timer_limit"));
+    CHECK(rig.run("let made = 0, error = '';\n"
+                  "try { for (let i = 0; i < 2000; i++) { setTimeout(() => {}, 100000); made++; } } catch (e) { error = e.name; }\n"
+                  "log.write(made + ' ' + error);").ok);
+    CHECK((rig.log == std::vector<std::string>{"1000 RangeError"}));
+    Rig freed(fresh(u8"js_timer_limit_frees"));   // a timer that has fired (or was cleared) gives its place back
+    CHECK(freed.run("for (let i = 0; i < 1000; i++) setTimeout(() => {}, 0);\n"
+                    "let steps = 0; on('on_step', () => { if (++steps !== 2) return; for (let i = 0; i < 1000; i++) setTimeout(() => {}, 0); log.write('again'); });").ok);
+    step(freed, 3);   // the first 1000 ran in step 1, so step 2 has room for 1000 more
+    CHECK((freed.log == std::vector<std::string>{"again"}));
+}
+
+static void a_timer_cannot_run_for_ever() {
+    Rig rig(fresh(u8"js_timer_budget"));
+    CHECK(rig.run("setTimeout(() => { for (;;) {} }, 0);").ok);
+    const auto begin = std::chrono::steady_clock::now();
+    const auto r = rig.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(5)});
+    CHECK(!r.ok && r.budget_exceeded && std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(200));
+    Rig shared(fresh(u8"js_timer_shared_budget"));   // handlers and timers of one step share its budget
+    CHECK(shared.run("on('on_step', () => { const end = Date.now() + 30; while (Date.now() < end) {} });\nsetTimeout(() => log.write('late'), 0);").ok);
+    const auto s = shared.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(10)});
+    CHECK(!s.ok && s.budget_exceeded && shared.log.empty());
+}
+
+static void timers_survive_odd_cases() {
+    Rig a(fresh(u8"js_timer_clear_later"));   // a timer clears another one that is due in the same step
+    CHECK(a.run("let later; setTimeout(() => clearTimeout(later), 0); later = setTimeout(() => log.write('never'), 0);").ok);
+    step(a, 3);
+    CHECK(a.log.empty());
+
+    Rig b(fresh(u8"js_timer_cut_short"));   // a timeout cut short by the budget is tried again in the next step
+    CHECK(b.run("let first = true; setTimeout(() => { if (first) { first = false; for (;;) {} } log.write('second try'); }, 0);").ok);
+    const auto cut = b.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(5)});
+    CHECK(!cut.ok && cut.budget_exceeded);
+    step(b);
+    CHECK((b.log == std::vector<std::string>{"second try"}));
+
+    Rig c(fresh(u8"js_timer_error_kept"));   // the handler's own error is not replaced by a timer overrunning afterwards
+    CHECK(c.run("on('on_step', () => { throw new Error('handler broke'); }); setTimeout(() => { for (;;) {} }, 0);").ok);
+    const auto r = c.runtime->fire("on_step", json::object(), Budget{std::chrono::milliseconds(5)});
+    CHECK(!r.ok && r.error.find("handler broke") != std::string::npos);
+
+    Rig d(fresh(u8"js_timer_cap_valueof"));   // converting the delay runs script: the cap holds anyway
+    CHECK(d.run("let made = 0; const make = (depth) => { try { setTimeout(() => {}, { valueOf() { if (depth < 1500) make(depth + 1); return 0; } }); made++; } catch (e) {} };\n"
+                "make(0); log.write(made <= 1000 ? 'capped' : 'over ' + made);").ok);
+    CHECK((d.log == std::vector<std::string>{"capped"}));
+}
+
+static void timers_wait_while_the_game_is_paused() {
+    Rig rig(fresh(u8"js_timer_pause"));   // the pause menu still delivers steps; game time (uc.game.paused) stands still
+    CHECK(rig.run("setTimeout(() => log.write('timeout'), 100); on('on_step', () => log.write('step'));").ok);
+    step(rig, 2);
+    rig.game_paused = true;
+    step(rig, 100);
+    CHECK(rig.log.size() == 102);   // the handler still runs on every step, the timer does not
+    rig.game_paused = false;
+    step(rig);                      // the third step of game time
+    CHECK(rig.log.size() == 104 && rig.log[103] == "timeout");
+}
+
+static void timers_belong_to_their_runtime() {
+    const auto folder = fresh(u8"js_timer_owner");
+    {
+        Rig first(folder);
+        CHECK(first.run("setInterval(() => log.write('first'), 0); setTimeout(() => log.write('first once'), 1000);").ok);
+        step(first, 2);
+        CHECK(first.log.size() == 2);
+    }   // destroyed with its timers (and the functions they hold)
+    Rig second(folder);
+    CHECK(second.run("setTimeout(() => log.write('second'), 0);").ok);
+    step(second, 3);
+    CHECK((second.log == std::vector<std::string>{"second"}));
+}
+
 int main() {
+    timers_follow_game_steps(); intervals_repeat_until_cleared(); timers_can_be_cleared(); a_timer_made_in_a_timer_waits_for_the_next_step();
+    timers_run_after_the_step_handlers_and_drain_promises(); timer_errors_are_failures_of_the_call(); timer_arguments_are_checked(); there_is_a_timer_limit();
+    a_timer_cannot_run_for_ever(); timers_survive_odd_cases(); timers_wait_while_the_game_is_paused(); timers_belong_to_their_runtime();
     hook_pre_regs_round_trip();
     no_std_os(); import_confined(); non_ascii_mod_root(); events(); promise_jobs_run(); api_read_write(); api_error_is_exception(); settings_get(); budget_endless_loop();
     stack_limit_follows_the_calling_thread(); builtin_loops_are_interrupted(); memory_cap(); syntax_error_reported(); runtime_error_has_location(); ui_calls_forwarded();

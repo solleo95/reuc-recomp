@@ -54,6 +54,7 @@ struct Rig {
     std::unique_ptr<ModContext> context;
     std::unique_ptr<ModRuntime> runtime;
     int magazine = 15;
+    bool game_paused = false;
     json last_set_args;
 
     Rig(const fs::path& folder, Factory make, std::string ext) : root(folder), extension(std::move(ext)), settings(decls(), json::object()) {
@@ -62,6 +63,7 @@ struct Rig {
         api.add({"player.magazine", {}, [this](const json& a) { return json(a["slot"].get<int>() * 100 + magazine); },
                  [this](const json& a, const json& v) { last_set_args = a; magazine = v.get<int>(); }, nullptr, "slot"});
         api.add({"camera.view", {}, [](const json&) { return json::array({1.0, 2.5, 3.0}); }, nullptr, nullptr, ""});
+        api.add({"game.paused", {}, [this](const json&) { return json(game_paused); }, nullptr, nullptr, ""});
         context = std::make_unique<ModContext>(ModContext{api, settings, "testmod", [this](std::string_view line) { log.emplace_back(line); }, &ui, nullptr, &hooks});
         runtime = make(*context);
     }

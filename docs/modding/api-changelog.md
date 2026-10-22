@@ -12,6 +12,7 @@ The API is versioned `major.minor`. A new minor version only adds members or mak
 - Events `on_enemy_spawned`, `on_enemy_killed`, `on_enemy_headshot`, `on_player_died`, derived from state changes between ticks.
 - `game.time` (mission clock, seconds), `game.paused`, `game.stars`, and the per-player result counters `player.hits`, `player.critical_hits`, `player.objects_destroyed`. Not offered yet: chapter or mission id, difficulty, score and rank (their places in memory are not found).
 - `uc.guest.call(address, args)`: runs a translated game function with integer arguments and returns r3. Works only from the game's own events (on_step, the game events, hook handlers). `uc.game.give_weapon(slot, id, key, magazine)` and `uc.game.select_weapon(slot, index)` on top of it (checked in the game: a mod gave the player a submachine gun and switched to it). Not offered yet: spawning enemies and items (no spawn function identified).
+- JavaScript only: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval` on game time (steps, paused with the game); see [JavaScript](javascript.md#timers).
 - `camera.position`, `camera.forward`, `camera.right`, `camera.up`, computed from the view matrix. `player.position` is not offered: the game is on rails and both players share the camera, so the camera is the player's viewpoint.
 
 ## 1.0

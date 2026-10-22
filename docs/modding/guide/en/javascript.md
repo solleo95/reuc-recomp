@@ -14,6 +14,7 @@ How to write mods in JavaScript (or TypeScript). A JavaScript mod can do everyth
 - [Everything a script can use](#everything-a-script-can-use)
 - [Reading and changing the game](#reading-and-changing-the-game)
 - [Errors and promises](#errors-and-promises)
+- [Timers](#timers)
 - [TypeScript](#typescript)
 - [Examples](#examples)
 - [What is not available](#what-is-not-available)
@@ -75,7 +76,7 @@ Rules for `import` (and `import()`):
 
 ## Everything a script can use
 
-The same globals as in Lua: `on`, `uc`, `hook`, `settings`, `ui`, `log`.
+The same globals as in Lua: `on`, `uc`, `hook`, `settings`, `ui`, `log`, plus the [timers](#timers) `setTimeout`, `setInterval`, `clearTimeout` and `clearInterval`.
 
 | Name | What |
 |---|---|
@@ -108,15 +109,29 @@ Everything in the Lua guide about **waiting for the player**, **remembering orig
 
 - Errors from the API are thrown as exceptions: `try { ... } catch (e) { log.write(e.message); }`.
 - An uncaught exception in a handler counts as a failure; after three the mod is switched off until it is unticked and ticked again.
-- **Promises** work, and their callbacks run right after the handler that created them. There are **no timers**: no `setTimeout`, no `setInterval`. To wait, count steps in `on_step`.
+- **Promises** work, and their callbacks run right after the handler that created them. Timers are described in the next section.
+
+## Timers
+
+`setTimeout`, `setInterval`, `clearTimeout` and `clearInterval` work as in a browser, with one difference: they run on **game time**.
 
 ```js
-let steps = 0;
-on('on_step', () => {
-  steps += 1;
-  if (steps % 300 === 0) log.write('ten seconds passed');   // 30 steps per second
-});
+setTimeout(() => log.write('two seconds passed'), 2000);
+
+const id = setInterval((who) => log.write(`hello ${who}`), 500, 'world');   // extra arguments reach the callback
+setTimeout(() => clearInterval(id), 5000);
 ```
+
+- A delay is counted in game steps (30 per second) and rounded **up**, with a minimum of one step: `0` means "at the next step", `100` ms means 3 steps. Timers are not precise below 33 ms.
+- **Time stops when the game is paused**, including the game's own pause menu (`uc.game.paused`), although `on_step` handlers keep running there. A timer made while paused starts counting when the game resumes.
+- Timer callbacks run right after the `on_step` handlers and share their time budget (1 ms per step for all handlers and timers of all mods together). An interval fires at most once per step and does not catch up after a slow step.
+- Timers follow the steps the game really delivers. If the game is so slow that steps are dropped, or other mods use up the step's time, timers fall behind with it. Delays above about 11 days are capped.
+- A timeout cut short by the time budget is tried again at the next step.
+- A timer made inside a timer waits for the next step, so `setTimeout(again, 0)` in a loop cannot hang the game.
+- `setTimeout` and `setInterval` return a positive number. `clearTimeout` and `clearInterval` are interchangeable and ignore ids that are unknown or already finished.
+- An error in a callback counts as a failure like any other (three switch the mod off). A failed timeout is gone; a failed interval keeps running.
+- At most **1000** active timers per mod; the next call throws a `RangeError`. The callback must be a function (a string is not evaluated and throws a `TypeError`).
+- Timers die with the mod: **Reload scripts** or unticking the mod cancels all of them.
 
 ## TypeScript
 
@@ -175,7 +190,7 @@ More in the [mods-examples](../../../../mods-examples) folder (`god_mode` is a J
 
 ## What is not available
 
-No `std`, `os`, `require`, `process`, `fetch`, `XMLHttpRequest`, `setTimeout`, `setInterval`, `Deno` or `Bun`. A script cannot read or write files, start programs or use the network.
+No `std`, `os`, `require`, `process`, `fetch`, `XMLHttpRequest`, `Deno` or `Bun`. A script cannot read or write files, start programs or use the network.
 
 ## Limits
 
@@ -193,6 +208,7 @@ Stack traces name the file; the line of the failing frame inside a function is a
 | Log | `log.write('x ' .. n)` | ``log.write(`x ${n}`)`` |
 | Catch an error | `local ok, err = pcall(f)` | `try { f(); } catch (e) { ... }` |
 | Other file | `require('lib.util')` | `import { x } from './lib/util.js'` |
+| Run later | count steps in `on_step` | `setTimeout(fn, ms)` |
 | Bit test | `held & 0x400 ~= 0` | `(held & 0x400) !== 0` |
 | Not equal | `~=` | `!==` |
 | Arrays start at | 1 (in your own tables) | 0 |
@@ -202,7 +218,8 @@ Stack traces name the file; the line of the failing frame inside a function is a
 | Mistake | Fix |
 |---|---|
 | `Cannot use import statement` or a variable of another file is missing | The entry file must be an ES module: use `import`, not `require`. |
-| `setTimeout is not defined` | There are no timers. Count steps in `on_step`. |
+| A timer never fires | The game is paused or not delivering steps, or the mod was reloaded (that cancels timers). Timers count game time, not wall-clock time. |
+| `setTimeout('code', 100)` throws a `TypeError` | Pass a function, not a string. |
 | An `import` fails | The path must be relative, inside the mod, and end in `.js`. |
 | The same as in Lua: reading a player in `on_load`, forgetting `touches_gameplay`, slow handlers | See the [Lua guide](lua.md#common-mistakes). |
 

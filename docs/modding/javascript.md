@@ -16,7 +16,7 @@ TypeScript users get editor completion from [`uc.d.ts`](uc.d.ts) (add it to the 
 
 ## What a script can use
 
-The same globals as in Lua ([lua.md](lua.md)): `on`, `uc`, `hook`, `settings`, `ui`, `log`. API calls take positional arguments; objects and arrays are converted through JSON (so `NaN` and `Infinity` become `null`).
+The same globals as in Lua ([lua.md](lua.md)): `on`, `uc`, `hook`, `settings`, `ui`, `log`, plus the [timers](#timers) below. API calls take positional arguments; objects and arrays are converted through JSON (so `NaN` and `Infinity` become `null`).
 
 ```js
 const p = uc.player(1);        // a handle with accessor properties
@@ -25,7 +25,11 @@ for (const e of uc.enemies.list()) log.write(e.hp);
 on('on_weapon_fired', (event) => log.write('slot ' + event.slot));
 ```
 
-Errors from the API are thrown as exceptions (`try { ... } catch (e) { e.message }`). Promises work and their callbacks run right after the handler that created them; there are no timers.
+Errors from the API are thrown as exceptions (`try { ... } catch (e) { e.message }`). Promises work and their callbacks run right after the handler that created them.
+
+## Timers
+
+`setTimeout(fn, ms, ...args)`, `setInterval(fn, ms, ...args)`, `clearTimeout(id)` and `clearInterval(id)` run on **game time**: the delay is counted in `on_step` steps (30 per second), rounded up, minimum one step (`0` means the next step). Time stands still while the game is paused (also in its pause menu, `uc.game.paused`). Callbacks run right after the `on_step` handlers and share their 1 ms budget. An interval fires at most once per step and does not catch up; a timer made inside a timer waits for the next step. The ids are positive numbers; the two clear functions are interchangeable and ignore unknown ids. At most 1000 active timers per mod (`RangeError`); a non-function callback throws a `TypeError`. A failed timeout is removed, a failed interval keeps running. Reloading or switching the mod off cancels all of its timers.
 
 ## Imports
 
@@ -35,7 +39,7 @@ Errors from the API are thrown as exceptions (`try { ... } catch (e) { e.message
 
 ## Not available
 
-`std`, `os`, `require`, `process`, `fetch`, `XMLHttpRequest`, `setTimeout`/`setInterval`, `Deno` and `Bun` do not exist. A script cannot read or write files, start programs or use the network.
+`std`, `os`, `require`, `process`, `fetch`, `XMLHttpRequest`, `Deno` and `Bun` do not exist. A script cannot read or write files, start programs or use the network.
 
 ## Limits
 
