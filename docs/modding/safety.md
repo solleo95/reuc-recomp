@@ -2,6 +2,10 @@
 
 Mods come from the internet. What the port does, and what it cannot do.
 
+## Audio files
+
+A mod's `audio/*.ogg` and `.wav` files are decoded by the port (stb_vorbis for Ogg) in the game process, with no sandbox of their own. A hostile or damaged file can crash the game, even for a mod that has no script or DLL. The port limits size (512 MB, 30 minutes) and checks every length it reads, but the Vorbis decoder is third-party code written for trusted input: see [audio.md](audio.md).
+
 ## Scripts (Lua, JavaScript)
 
 Scripts run in a sandbox: no files, no processes, no network, no loading code from outside the mod folder (see [lua.md](lua.md) and [javascript.md](javascript.md) for the exact lists). They can only use the game API, their own settings, the log and the menu widgets.

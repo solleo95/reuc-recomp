@@ -96,6 +96,26 @@ static void wav_smpl_loop_is_read() {
     CHECK(r.audio && r.audio->loop && r.audio->loop->first == 1u && r.audio->loop->second == 4u);   // the end is exclusive
 }
 
+static void wav_loop_past_the_data_is_returned_as_is() {   // the converter, not the reader, drops a loop that does not fit and says so
+    std::vector<uint8_t> body;
+    for (int i = 0; i < 7; ++i) le32(body, 0);
+    le32(body, 1); le32(body, 0);
+    le32(body, 0); le32(body, 0); le32(body, 2); le32(body, 900); le32(body, 0); le32(body, 0);
+    WavSpec s; s.data = pcm16({1, 2, 3, 4}); s.before_data = chunk("smpl", body);
+    const auto r = read_wav(make_wav(s));
+    CHECK(r.audio && r.audio->frames() == 4 && r.audio->loop && r.audio->loop->first == 2u && r.audio->loop->second == 901u);
+}
+
+static void wav_with_an_unknown_data_length_runs_to_the_end() {   // ffmpeg writing to a pipe leaves the size as 0xFFFFFFFF
+    WavSpec s; s.data = pcm16({5, 6, 7});
+    auto file = make_wav(s);
+    const size_t at = 12 + 8 + 16;   // after RIFF header and fmt chunk: "data", size
+    CHECK(std::memcmp(&file[at], "data", 4) == 0);
+    for (int i = 0; i < 4; ++i) file[at + 4 + size_t(i)] = 0xFF;
+    const auto r = read_wav(file);
+    CHECK(r.audio && (r.audio->channels[0] == std::vector<int16_t>{5, 6, 7}));
+}
+
 static void wav_errors_name_the_problem() {
     CHECK(!read_wav({}).audio && !read_wav({}).error.empty());
     std::vector<uint8_t> not_riff(64, 0);
@@ -136,6 +156,16 @@ static void ogg_garbage_is_an_error() {
     CHECK(!cut.audio && !cut.error.empty());
 }
 
+static void ogg_decode_can_be_cancelled() {
+    DecodeLimits limits;
+    limits.cancel = [] { return true; };
+    const auto r = read_ogg(std::span<const uint8_t>(kToneOgg, sizeof kToneOgg), limits);
+    CHECK(!r.audio && r.error == "cancelled");
+    DecodeLimits roomy;
+    roomy.max_seconds = 60;
+    CHECK(read_ogg(std::span<const uint8_t>(kToneOgg, sizeof kToneOgg), roomy).audio);   // a short file is within any limit
+}
+
 static void ogg_loop_comments() {
     const auto r = read_ogg(std::span<const uint8_t>(kLoopOgg, sizeof kLoopOgg));
     CHECK(r.audio && r.audio->loop && r.audio->loop->first == 100u && r.audio->loop->second == 600u);
@@ -147,9 +177,12 @@ int main() {
     wav_8bit_24bit_32bit_and_float_scale_to_int16();
     wav_skips_unknown_chunks_and_pads_odd_sizes();
     wav_smpl_loop_is_read();
+    wav_loop_past_the_data_is_returned_as_is();
+    wav_with_an_unknown_data_length_runs_to_the_end();
     wav_errors_name_the_problem();
     ogg_decodes_tone_length_and_rate();
     ogg_garbage_is_an_error();
+    ogg_decode_can_be_cancelled();
     ogg_loop_comments();
     std::puts("test_audio_decode: ok");
     return 0;

@@ -9,8 +9,10 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -27,6 +29,17 @@ std::deque<std::function<void()>> g_jobs;
 std::thread g_thread;
 bool g_stopping = true;
 std::set<uint32_t> g_cancelled;   // command blocks whose in-flight read was cancelled (baton holder only)
+std::map<uint32_t, DvdFs::Snapshot> g_open;   // file info address -> the version of the file that was opened there (guarded by g_m)
+
+// The version of the file a command block opened, or, for a block this layer never opened (a guest-built file info), what the entry holds now.
+std::optional<DvdFs::Snapshot> open_version(uint32_t file_info, int entry) {
+    {
+        std::lock_guard lock(g_m);
+        const auto it = g_open.find(file_info);
+        if (it != g_open.end() && it->second.entry == entry) return it->second;
+    }
+    return g_fs->snapshot(entry);
+}
 
 void enqueue(std::function<void()> job) {   // one worker keeps requests in order, like the drive
     std::lock_guard<std::mutex> lk(g_m);
@@ -48,11 +61,12 @@ bool guest_range_ok(uint32_t a, uint32_t len) {   // MEM1 or MEM2 only
 
 // Reads len bytes at offset into dst; the tail past the end of the file (at most 31 bytes) is zero.
 // The bounds are the SDK's own (DVDReadAsyncPrio): offset <= length and offset + len < length + 32.
-int64_t read_padded(int entry, std::vector<uint8_t>& dst, uint32_t len, uint32_t offset) {
-    uint32_t length = g_fs->length(entry);
-    if (g_fs->is_dir(entry) || offset > length || uint64_t(offset) + len >= uint64_t(length) + 32) return -1;
+int64_t read_padded(const std::optional<DvdFs::Snapshot>& file, std::vector<uint8_t>& dst, uint32_t len, uint32_t offset) {
+    if (!file) return -1;   // a bad entry or a directory
+    const uint32_t length = file->size;
+    if (offset > length || uint64_t(offset) + len >= uint64_t(length) + 32) return -1;
     dst.assign(len, 0);
-    int64_t n = g_fs->read(entry, dst.data(), len, offset);
+    int64_t n = g_fs->read(*file, dst.data(), len, offset);
     return n < 0 ? -1 : int64_t(len);
 }
 }  // namespace
@@ -71,6 +85,7 @@ void dvd_hle_shutdown() {
 void dvd_hle_init(DvdFs& fs) {
     dvd_hle_shutdown();
     g_fs = &fs; g_cancelled.clear();
+    { std::lock_guard lock(g_m); g_open.clear(); }
     { std::lock_guard lock(g_m); g_stopping = false; g_stats = {}; }
     g_thread = std::thread([] {
         for (;;) {
@@ -94,8 +109,11 @@ void hle_DVDInit(ppc::Ctx&) {}
 void hle_DVDConvertPathToEntrynum(ppc::Ctx& c) { c.r[3] = uint32_t(g_fs->entry_of(cstr(c, c.r[3]))); }
 static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
     if (e < 0 || e >= int(g_fs->entry_count()) || g_fs->is_dir(e)) { c.r[3] = 0; return; }
+    const auto version = g_fs->snapshot(e);                 // the file as it is now: a later overlay swap does not change what this handle reads
+    if (!version) { c.r[3] = 0; return; }
+    { std::lock_guard lock(g_m); g_open[fi] = *version; }
     ppc::wr32(c, fi + layout::kFiStart, uint32_t(e));       // the disc offset is replaced by the entry number
-    ppc::wr32(c, fi + layout::kFiLength, g_fs->length(e));
+    ppc::wr32(c, fi + layout::kFiLength, version->size);
     ppc::wr32(c, fi + layout::kFiCallback, 0);
     ppc::wr32(c, fi + layout::kCbState, 0);                 // DVD_STATE_END
     { std::lock_guard lock(g_m); ++g_stats.opens; }
@@ -104,7 +122,10 @@ static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
 }
 void hle_DVDFastOpen(ppc::Ctx& c) { open_entry(c, int(c.r[3]), c.r[4]); }
 void hle_DVDOpen(ppc::Ctx& c) { open_entry(c, g_fs->entry_of(cstr(c, c.r[3])), c.r[4]); }
-void hle_DVDClose(ppc::Ctx& c) { c.r[3] = 1; }
+void hle_DVDClose(ppc::Ctx& c) {
+    { std::lock_guard lock(g_m); g_open.erase(c.r[3]); }
+    c.r[3] = 1;
+}
 
 // DVDReadPrio(fileInfo, buf, len, offset, prio) -> bytes read or -1
 void hle_DVDReadPrio(ppc::Ctx& c) {
@@ -112,7 +133,7 @@ void hle_DVDReadPrio(ppc::Ctx& c) {
     int e = int(ppc::rd32(c, fi + layout::kFiStart));
     if (!guest_range_ok(buf, len)) fatal("DVDReadPrio into an invalid guest buffer %08X+%u", buf, len);
     std::vector<uint8_t> data;
-    int64_t n = read_padded(e, data, len, off);
+    int64_t n = read_padded(open_version(fi, e), data, len, off);
     if (n < 0) { c.r[3] = uint32_t(-1); return; }
     std::memcpy(ppc::hp(c, buf), data.data(), len);
     { std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
@@ -125,12 +146,13 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
     int e = int(ppc::rd32(c, fi + layout::kFiStart));
     if (!guest_range_ok(buf, len)) fatal("DVDReadAsyncPrio into an invalid guest buffer %08X+%u", buf, len);
     ppc::wr32(c, fi + layout::kCbState, 1);                 // DVD_STATE_BUSY
+    const auto version = open_version(fi, e);
     Sched& s = os_sched();
     uint8_t* mem = c.mem;
     s.async_begin();   // deterministic mode: the idle scheduler waits for this read's completion event
     enqueue([=, &s] {
         auto data = std::make_shared<std::vector<uint8_t>>();
-        int64_t n = read_padded(e, *data, len, off);
+        int64_t n = read_padded(version, *data, len, off);
         s.post_external([=, &s] {                           // runs on the baton holder, with interrupts enabled
             ppc::Ctx& ic = s.irq_ctx();
             if (g_cancelled.erase(fi)) return;               // DVDCancel already answered for this command block

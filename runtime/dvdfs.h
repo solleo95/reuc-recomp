@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -31,6 +32,11 @@ public:
     bool is_dir(int e) const { std::shared_lock lock(m_); return valid(e) && e_[size_t(e)].dir; }
     uint32_t length(int e) const { std::shared_lock lock(m_); return valid(e) ? e_[size_t(e)].size : 0; }
     int64_t read(int entry, void* dst, uint32_t len, uint32_t offset) const;   // bytes read (short at EOF), -1 on a bad entry
+    // What an entry holds at this moment. A game that opened a file keeps reading this version while a mod's overlay swaps the entry (a stream that is
+    // playing must not change its bytes under the player); the backing file must stay on disk for as long as the handle is open.
+    struct Snapshot { int entry = -1; std::filesystem::path full; uint32_t size = 0; };
+    std::optional<Snapshot> snapshot(int entry) const;   // nullopt for a bad entry or a directory
+    int64_t read(const Snapshot& file, void* dst, uint32_t len, uint32_t offset) const;   // like read(entry...) on the version the snapshot names
     size_t entry_count() const { std::shared_lock lock(m_); return e_.size(); }
     std::string path_of(int e) const { std::shared_lock lock(m_); return valid(e) ? e_[size_t(e)].rel : std::string(); }
 private:

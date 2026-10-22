@@ -146,6 +146,22 @@ int DvdFs::entry_of(std::string path) const {
     return it == index_.end() ? -1 : it->second;
 }
 
+std::optional<DvdFs::Snapshot> DvdFs::snapshot(int entry) const {
+    std::shared_lock lock(m_);
+    if (!valid(entry) || e_[size_t(entry)].dir) return std::nullopt;
+    return Snapshot{entry, e_[size_t(entry)].full, e_[size_t(entry)].size};
+}
+
+int64_t DvdFs::read(const Snapshot& file, void* dst, uint32_t len, uint32_t offset) const {
+    if (len == 0 || offset >= file.size) return 0;
+    const uint32_t n = std::min<uint32_t>(len, file.size - offset);
+    std::ifstream f(file.full, std::ios::binary);
+    if (!f) return -1;
+    f.seekg(offset);
+    f.read(static_cast<char*>(dst), n);
+    return int64_t(f.gcount());
+}
+
 int64_t DvdFs::read(int entry, void* dst, uint32_t len, uint32_t offset) const {
     std::shared_lock lock(m_);   // held across the file read: a swap of the overlays waits for the read in flight, so a read sees one whole version
     if (!valid(entry) || e_[size_t(entry)].dir) return -1;

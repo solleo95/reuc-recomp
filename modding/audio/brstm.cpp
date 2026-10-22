@@ -172,7 +172,7 @@ std::optional<PcmAudio> read_brstm(std::span<const uint8_t> file) {
             if (!r.has(start, stride)) return std::nullopt;
             auto& out = audio.channels[c];
             if (p.header.codec == 1) {
-                if (samples * 2 > stride) return std::nullopt;
+                if (uint64_t(samples) * 2 > stride) return std::nullopt;
                 for (uint32_t i = 0; i < samples; ++i) out.push_back(int16_t(r.u16(start + 2 * i)));
                 continue;
             }

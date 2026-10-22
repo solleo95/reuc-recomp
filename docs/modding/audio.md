@@ -27,7 +27,7 @@ Not supported: MP3, FLAC, more than two channels, files longer than 30 minutes o
 
 The game's stream has a fixed sample rate (32 or 48 kHz) and channel count (mostly mono for voices, stereo for music). The port resamples your file to that rate and converts the channels: a stereo file for a mono stream is mixed down, a mono file for a stereo stream plays on both channels. It stores the result as a 16-bit PCM stream, about 3.5 times larger than the original (a 16 MB song becomes about 56 MB in `mods/.cache/<id>/`). Converted files are cached; changing the source converts it again.
 
-Conversion runs in the background when the game starts or the mod is switched on, and the Mods tab shows `converting audio (1 of 3)`. Until a file is done the original plays. The game opens a stream when it starts it, so a stream that is already playing keeps the original until it starts again (for music: the next time the track begins).
+Conversion runs in the background when the game starts or the mod is switched on, and the Mods tab shows `converting audio (1 of 3)`. Until a file is done the original plays. The game opens a stream when it starts it and keeps reading the version it opened, so a stream that is already playing keeps the original until it starts again (for music: the next time the track begins).
 
 ## Looping
 
@@ -39,6 +39,12 @@ A BRSTM loop always runs from the loop start to the end of the stream, so the po
 
 A loop that does not fit the file (start not before end, end beyond the file) is ignored and the Mods tab says so.
 
-## Switching off
+## Switching off and changing files
 
-Switching the mod off, or removing a file from `audio/`, removes the converted stream; the original plays again from the next time the game opens it.
+Switching the mod off puts the original stream back from the next time the game opens it. Converted files stay on disk (a stream that is playing keeps reading its file, and switching the mod on again needs no new conversion).
+
+A converted file the game may already have opened is never replaced or removed in place. If you change or delete a file in `audio/` while the game runs, the Mods tab says so and the change takes effect at the next start of the game. Converted files that no longer have a source are cleaned up at start; the cache in `mods/.cache/<id>/` is not pruned otherwise, so delete the folder to reclaim space.
+
+## Safety
+
+Audio files are decoded inside the game process. A damaged or hostile `.ogg` can crash the game even though an audio-only mod contains no code; take mods from people you trust, as with any mod.

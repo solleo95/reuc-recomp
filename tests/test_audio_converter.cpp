@@ -120,7 +120,8 @@ static void cache_hit_does_not_reconvert() {
     CHECK(rig.changes == before && second->conversions() == 0);
 }
 
-static void changed_source_is_reconverted() {
+// A generated file the game may have open is never replaced under it: a changed source is converted (cached) but published at the next start.
+static void changed_source_waits_for_the_next_start() {
     Rig rig;
     write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.3, 440));
     const ModEntry mod = make_mod(rig.mod_root, "mymod");
@@ -131,10 +132,15 @@ static void changed_source_is_reconverted() {
     const auto first = read_file(rig.generated(*converter, "tone"));
     write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.4, 523));
     converter->set_active({&mod});
-    CHECK(rig.wait_changes(2));
     converter->wait_idle();
-    const auto second = read_file(rig.generated(*converter, "tone"));
-    CHECK(first != second && converter->conversions() == 2);
+    CHECK(read_file(rig.generated(*converter, "tone")) == first && rig.changes == 1);   // the served file is untouched
+    CHECK(converter->status("mymod").find("next start") != std::string::npos);
+    converter.reset();   // the game exits; the next start
+    auto restarted = rig.make();
+    restarted->set_active({&mod});
+    CHECK(rig.wait_changes(2));
+    restarted->wait_idle();
+    CHECK(read_file(rig.generated(*restarted, "tone")) != first && restarted->status("mymod").empty());
 }
 
 static void unknown_stream_is_reported_and_ignored() {
@@ -162,26 +168,48 @@ static void bad_file_reports_error_and_others_still_convert() {
     CHECK(fs::exists(rig.generated(*converter, "good")) && !fs::exists(rig.generated(*converter, "tone")));
 }
 
-static void switching_a_mod_off_removes_its_generated_files() {
+// Switching a mod off stops its work but keeps its files: a stream the game opened keeps reading its file, and the mod can come back without converting.
+static void switching_a_mod_off_keeps_the_files_and_removed_sources_wait_for_the_next_start() {
     Rig rig;
     write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.2, 440));
+    write_file(rig.mod_root / "audio" / "good.wav", wav(32000, 0.2, 523));
     const ModEntry mod = make_mod(rig.mod_root, "mymod");
     auto converter = rig.make();
     converter->set_active({&mod});
-    CHECK(rig.wait_changes(1));
+    CHECK(rig.wait_changes(2));
     converter->wait_idle();
     CHECK(fs::exists(rig.generated(*converter, "tone")));
     converter->set_active({});
     converter->wait_idle();
-    CHECK(!fs::exists(converter->generated_root("mymod")) && converter->status("mymod").empty());
-    // a removed source file takes its generated file with it
-    converter->set_active({&mod});
-    CHECK(rig.wait_changes(2));
+    CHECK(fs::exists(rig.generated(*converter, "tone")) && converter->status("mymod").empty());
+    converter->set_active({&mod});   // back on: nothing to convert again, nothing to announce
     converter->wait_idle();
-    fs::remove(rig.mod_root / "audio" / "tone.wav");
+    CHECK(rig.changes == 2 && converter->conversions() == 2 && converter->status("mymod").empty());
+    fs::remove(rig.mod_root / "audio" / "tone.wav");   // a removed source: the served file stays until the next start
     converter->set_active({&mod});
     converter->wait_idle();
-    CHECK(!fs::exists(rig.generated(*converter, "tone")));
+    CHECK(fs::exists(rig.generated(*converter, "tone")) && converter->status("mymod").find("next start") != std::string::npos);
+    converter.reset();
+    auto restarted = rig.make();
+    restarted->set_active({&mod});
+    restarted->wait_idle();
+    CHECK(!fs::exists(rig.generated(*restarted, "tone")) && fs::exists(rig.generated(*restarted, "good")));
+}
+
+static void odd_file_names_are_reported_not_fatal() {
+    Rig rig;
+    const fs::path japanese = rig.mod_root / "audio" / fs::path(u8"音楽.wav");   // outside the ANSI code page
+    write_file(japanese, wav(32000, 0.1, 440));
+    write_file(rig.mod_root / "audio" / "has space.wav", wav(32000, 0.1, 440));
+    write_file(rig.mod_root / "audio" / "tone.wav", wav(32000, 0.1, 440));
+    const ModEntry mod = make_mod(rig.mod_root, "mymod");
+    auto converter = rig.make();
+    converter->set_active({&mod});   // must not throw
+    CHECK(rig.wait_changes(1));
+    converter->wait_idle();
+    CHECK(fs::exists(rig.generated(*converter, "tone")));   // the usable one still converts
+    const std::string status = converter->status("mymod");
+    CHECK(status.find("has space.wav") != std::string::npos && status.find("音楽.wav") != std::string::npos && status.find("letters, digits") != std::string::npos);
 }
 
 static void destructor_stops_a_long_conversion_and_publishes_nothing_half_written() {
@@ -240,10 +268,11 @@ static void stereo_original_gets_stereo() {
 int main() {
     converts_and_publishes_generated_file();
     cache_hit_does_not_reconvert();
-    changed_source_is_reconverted();
+    changed_source_waits_for_the_next_start();
+    odd_file_names_are_reported_not_fatal();
     unknown_stream_is_reported_and_ignored();
     bad_file_reports_error_and_others_still_convert();
-    switching_a_mod_off_removes_its_generated_files();
+    switching_a_mod_off_keeps_the_files_and_removed_sources_wait_for_the_next_start();
     destructor_stops_a_long_conversion_and_publishes_nothing_half_written();
     manifest_loop_wins_over_file_loop();
     file_loop_is_used_without_a_manifest_entry();

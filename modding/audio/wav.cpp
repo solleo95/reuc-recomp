@@ -22,6 +22,11 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
         const uint8_t* header = &file[at];
         const size_t size = le32(header + 4), body = at + 8;
         const bool is_data = std::memcmp(header, "data", 4) == 0, is_fmt = std::memcmp(header, "fmt ", 4) == 0;
+        if (is_data && size == 0xFFFFFFFFu) {   // a stream written without knowing its length (ffmpeg to a pipe): the data runs to the end of the file
+            data = file.subspan(body);
+            have_data = true;
+            break;
+        }
         if (size > file.size() - body) {
             if (is_data) return fail("the data chunk is longer than the file (cut short)");
             if (is_fmt) return fail("the fmt chunk is cut short");
@@ -37,7 +42,7 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
             have_data = true;
         } else if (std::memcmp(header, "smpl", 4) == 0 && size >= 60 && le32(&file[body + 28]) >= 1) {
             const uint32_t start = le32(&file[body + 44]), end = le32(&file[body + 48]);
-            if (start <= end && end < 0xFFFFFFFFu) loop = {{start, end + 1}};   // the chunk's end is the last sample of the loop
+            if (end < 0xFFFFFFFFu) loop = {{start, end + 1}};   // the chunk's end is the last sample of the loop; convert_audio drops one that does not fit and says so
         }
         at = body + size + (size & 1);
     }
@@ -74,7 +79,7 @@ DecodeResult read_wav(std::span<const uint8_t> file) {
             audio.channels[c][i] = v;
         }
     }
-    if (loop && loop->first < frames) audio.loop = {{loop->first, uint32_t(std::min<size_t>(loop->second, frames))}};
+    audio.loop = loop;
     return {std::move(audio), {}};
 }
 

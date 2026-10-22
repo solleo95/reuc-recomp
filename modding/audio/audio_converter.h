@@ -10,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,7 +28,9 @@ public:
     AudioConverter(const AudioConverter&) = delete;
     AudioConverter& operator=(const AudioConverter&) = delete;
 
-    // The mods whose audio should be converted from now on. Work for mods no longer listed is dropped and their generated files are removed.
+    // The mods whose audio should be converted from now on. Work for mods no longer listed is dropped; their generated files stay on disk (a stream the
+    // game opened keeps reading its file, and the mod may come back). A generated file the game may already have opened this session is never replaced or
+    // removed in place: the change waits for the next start, and the mod's status says so.
     void set_active(const std::vector<const ModEntry*>& mods);
     std::filesystem::path generated_root(const std::string& mod_id) const;   // <cache_root>/<id>/generated
     // "" when idle and fine; "converting audio (2 of 5)"; error lines "audio: <file>: <reason>" joined with "; " (also while converting).
@@ -51,6 +54,7 @@ private:
     std::condition_variable wake_, idle_;
     std::deque<Job> queue_;
     std::map<std::string, ModState> mods_;
+    std::set<std::string> served_;   // "<mod id>/<stem>": generated files that were put in front of the game this session
     bool busy_ = false, stop_ = false;
     std::atomic<size_t> conversions_{0};
     std::thread worker_;   // last: starts after everything above exists

@@ -803,10 +803,10 @@ def audio_replace(g, args):
 
 
 def audio_replace_silent(g, args):
-    """Control for audio_replace: the audio_silent mod replaces the title music with silence, so nothing at all may sound (proves the title audio is the
-    converted file and not the original)."""
+    """Control for audio_replace: the audio_silent mod replaces the title music with silence, so (almost) nothing may sound (proves the title music is the
+    converted file and not the original; audio_replace alone could not tell, the original gives a similar count)."""
     frames, nonzero = _title_audio(g, 900)
-    if nonzero != 0:
+    if nonzero > 100_000:   # the original music gives about 1 000 000; what is left is the opening movie's sound before it is skipped, a few thousand to tens of thousands
         g.fail(f"the original title music still plays: {nonzero} nonzero samples", "audio replace", capture=False)
     return {"audio_frames": frames, "nonzero_samples": nonzero}
 

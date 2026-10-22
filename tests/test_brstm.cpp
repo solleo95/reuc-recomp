@@ -80,6 +80,11 @@ static void rejects_bad_input() {
     auto file = write_brstm_pcm16(ramp(5000, 1));
     file.resize(file.size() - 100);
     CHECK(!read_brstm(file));                                     // cut short
+    auto wrapped = write_brstm_pcm16(ramp(100, 1));
+    const uint32_t stream = be32(wrapped, 0x10) + 8 + be32(wrapped, be32(wrapped, 0x10) + 12);
+    wrapped[stream + 0x24] = 0x80;                                // last block "samples" of 0x80000000: samples * 2 wraps in 32 bits
+    wrapped[stream + 0x25] = wrapped[stream + 0x26] = wrapped[stream + 0x27] = 0;
+    CHECK(!read_brstm(wrapped));
 }
 
 static void adpcm_decode_matches_reference() {

@@ -87,10 +87,9 @@ ConvertResult convert_audio(PcmAudio source, const ConvertOptions& options) {
         for (size_t i = 0; i < frames; ++i) mono[i] = int16_t((int(channels[0][i]) + int(channels[1][i])) >> 1);
         channels = {std::move(mono)};
         result.notes.push_back("the audio is stereo and the game's stream is mono: mixed down to mono");
-    } else if (channels.size() == 1 && options.target_channels == 2) {
-        channels.push_back(channels[0]);
-        result.notes.push_back("the audio is mono and the game's stream is stereo: played on both channels (stereo)");
     }
+    const bool duplicate = channels.size() == 1 && options.target_channels == 2;   // done after resampling: one channel is filtered, not two
+    if (duplicate) result.notes.push_back("the audio is mono and the game's stream is stereo: played on both channels (stereo)");
 
     PcmAudio out;
     out.rate = options.target_rate;
@@ -105,6 +104,8 @@ ConvertResult convert_audio(PcmAudio source, const ConvertOptions& options) {
             if (!resample(channels[c], source.rate, options.target_rate, out_frames, out.channels[c], options.cancel)) return fail("cancelled");
         result.notes.push_back("resampled from " + std::to_string(source.rate) + " Hz to " + std::to_string(options.target_rate) + " Hz");
     }
+
+    if (duplicate) out.channels.push_back(out.channels[0]);
 
     if (loop) {
         const double ratio = double(out_frames) / double(frames);

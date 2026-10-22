@@ -18,7 +18,7 @@ namespace fs = std::filesystem;
 using namespace ppc;
 
 void hle_DVDConvertPathToEntrynum(Ctx&); void hle_DVDFastOpen(Ctx&); void hle_DVDOpen(Ctx&);
-void hle_DVDReadPrio(Ctx&); void hle_DVDReadAsyncPrio(Ctx&); void hle_DVDCancel(Ctx&); void hle_DVDCancelAsync(Ctx&);
+void hle_DVDClose(Ctx&); void hle_DVDReadPrio(Ctx&); void hle_DVDReadAsyncPrio(Ctx&); void hle_DVDCancel(Ctx&); void hle_DVDCancelAsync(Ctx&);
 
 static void write_file(const fs::path& p, size_t n) {
     fs::create_directories(p.parent_path());
@@ -90,6 +90,27 @@ int main() {
         CHECK(int(t.r[3]) == -1);
         t.r[3] = 0x80361000; t.r[4] = 0x80362000; t.r[5] = 32; t.r[6] = 128; t.r[7] = 2; hle_DVDReadPrio(t);
         CHECK(int(t.r[3]) == -1);                                                 // starts past the end of the file (128 > 100)
+        // A file the game holds open keeps the version it opened when an overlay swaps the entry (a mod switched on or off while a stream plays); a file
+        // opened afterwards gets the new one, and a read through the old handle after the overlay is gone still sees what it opened.
+        {
+            const fs::path mod = fs::temp_directory_path() / ("uc_dvd_mod_" + std::to_string(uc::now_ticks()));
+            fs::create_directories(mod / "Data");
+            { std::ofstream f(mod / "Data" / "a.bin", std::ios::binary); for (int i = 0; i < 300; ++i) f.put(char(0xAA)); }
+            CHECK(d.set_overlays({mod}) == 1);
+            t.r[3] = 0x80361000; t.r[4] = 0x80362000; t.r[5] = 32; t.r[6] = 64; t.r[7] = 2; hle_DVDReadPrio(t);      // still the 100-byte original
+            CHECK(t.r[3] == 32 && rd8(t, 0x80362000) == pat(64) && rd8(t, 0x80362000 + 31) == pat(95));
+            t.r[3] = 0x80360000; t.r[4] = 0x80361300; hle_DVDOpen(t);                                                   // opened now: the 300-byte replacement
+            CHECK(t.r[3] == 1 && rd32(t, 0x80361300 + uc::layout::kFiLength) == 300);
+            t.r[3] = 0x80361300; t.r[4] = 0x80362000; t.r[5] = 32; t.r[6] = 250; t.r[7] = 2; hle_DVDReadPrio(t);
+            CHECK(t.r[3] == 32 && rd8(t, 0x80362000) == 0xAA);
+            d.set_overlays({});
+            fs::remove_all(mod);
+            t.r[3] = 0x80361000; t.r[4] = 0x80362000; t.r[5] = 32; t.r[6] = 0; t.r[7] = 2; hle_DVDReadPrio(t);          // the open original is the disc file: unchanged
+            CHECK(t.r[3] == 32 && rd8(t, 0x80362000) == pat(0));
+            t.r[3] = 0x80361300; t.r[4] = 0x80362000; t.r[5] = 32; t.r[6] = 250; t.r[7] = 2; hle_DVDReadPrio(t);        // the open replacement lost its file: the read fails
+            CHECK(int(t.r[3]) == -1);
+            t.r[3] = 0x80361300; hle_DVDClose(t);
+        }
         // asynchronous read: completes while this thread is blocked; the callback runs in interrupt context
         for (int i = 0; i < 64; ++i) wr8(t, 0x80363000 + uint32_t(i), 0xEE);
         t.r[3] = 0x80361000; t.r[4] = 0x80363000; t.r[5] = 32; t.r[6] = 0; t.r[7] = 0x80100000; t.r[8] = 2;

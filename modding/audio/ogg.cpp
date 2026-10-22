@@ -42,7 +42,7 @@ std::optional<uint32_t> number_after_equals(const char* comment) {
 }
 }  // namespace
 
-DecodeResult read_ogg(std::span<const uint8_t> file) {
+DecodeResult read_ogg(std::span<const uint8_t> file, const DecodeLimits& limits) {
     if (file.size() < 4 || file.size() > 0x7FFFFFFFu) return {std::nullopt, "not an Ogg Vorbis file"};
     int error = 0;
     stb_vorbis* v = stb_vorbis_open_memory(file.data(), int(file.size()), &error, nullptr);
@@ -56,10 +56,12 @@ DecodeResult read_ogg(std::span<const uint8_t> file) {
     audio.rate = info.sample_rate;
     audio.channels.assign(size_t(info.channels), {});
     std::vector<short> buffer(4096 * size_t(info.channels));
+    const uint64_t max_frames = limits.max_seconds ? std::min<uint64_t>(kMaxFrames, uint64_t(limits.max_seconds) * info.sample_rate) : kMaxFrames;
     for (;;) {
+        if (limits.cancel && limits.cancel()) return {std::nullopt, "cancelled"};
         const int frames = stb_vorbis_get_samples_short_interleaved(v, info.channels, buffer.data(), int(buffer.size()));
         if (frames <= 0) break;
-        if (audio.channels[0].size() + uint64_t(frames) > kMaxFrames) return {std::nullopt, "the audio is far too long"};
+        if (audio.channels[0].size() + uint64_t(frames) > max_frames) return {std::nullopt, limits.max_seconds ? "the audio is longer than " + std::to_string(limits.max_seconds / 60) + " minutes" : "the audio is far too long"};
         for (int i = 0; i < frames; ++i)
             for (int c = 0; c < info.channels; ++c) audio.channels[size_t(c)].push_back(buffer[size_t(i) * size_t(info.channels) + size_t(c)]);
     }
@@ -75,7 +77,7 @@ DecodeResult read_ogg(std::span<const uint8_t> file) {
     }
     if (start && (length || end)) {
         const uint64_t stop = length ? uint64_t(*start) + *length : *end;
-        if (*start < stop && stop <= audio.frames()) audio.loop = {{*start, uint32_t(stop)}};
+        if (stop <= 0xFFFFFFFFull) audio.loop = {{*start, uint32_t(stop)}};   // not checked here: convert_audio drops a loop that does not fit and says so
     }
     return {std::move(audio), {}};
 }

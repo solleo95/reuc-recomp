@@ -8,6 +8,9 @@ project/hle.cfg
 /build-*/
 build-trace.log
 __pycache__/
+
+# Scratch folders the unit tests make in the folder they run from
+/gm_*/
 project/pgo/
 project/dlss5/
 cpu-profile.json
