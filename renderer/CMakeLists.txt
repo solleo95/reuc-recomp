@@ -131,7 +131,19 @@ foreach(blur_pass tile blur)
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/motion_blur.slang -entry ${blur_pass}Main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/motion_blur.${blur_pass}.spv
     DEPENDS shaders/motion_blur.slang VERBATIM)
 endforeach()
-set(UC_SHADER_FILES ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv
+# HDR10 output: the encode of the finished frame into the PQ swapchain.
+foreach(stage vert frag)
+  if(stage STREQUAL "vert")
+    set(hdr_args -entry vertexMain -stage vertex)
+  else()
+    set(hdr_args -entry fragmentMain -stage fragment)
+  endif()
+  add_custom_command(OUTPUT ${shader_dir}/hdr.${stage}.spv
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hdr.slang ${hdr_args} -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/hdr.${stage}.spv
+    DEPENDS shaders/hdr.slang VERBATIM)
+endforeach()
+set(UC_SHADER_FILES ${shader_dir}/hdr.vert.spv ${shader_dir}/hdr.frag.spv ${shader_dir}/smoke.vert.spv ${shader_dir}/smoke.frag.spv ${shader_dir}/smoke.uber.spv
   ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv
   ${shader_dir}/smaa.edges.spv ${shader_dir}/smaa.weights.spv ${shader_dir}/smaa.blend.spv
   ${shader_dir}/smoke.shadow.vert.spv ${shader_dir}/gtao.ao.spv ${shader_dir}/gtao.denoise.spv ${shader_dir}/gtao.contact.spv ${shader_dir}/gtao.composite.spv
@@ -146,7 +158,7 @@ target_link_libraries(uc_dlss5 PUBLIC Vulkan::Vulkan)
 add_library(uc_prompt_icons STATIC prompt_icons.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp dlss5_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp hdr_pass.cpp dlss5_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
 target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
 target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_icons uc_dlss5 PRIVATE uc_streamline_sdk uc_fidelityfx_sdk uc_ngx_sdk)
 add_dependencies(uc_vulkan uc_smoke_shaders)

@@ -85,6 +85,8 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     if (maintenance_khr) extensions.push_back("VK_KHR_surface_maintenance1");
     if (maintenance_ext) extensions.push_back("VK_EXT_surface_maintenance1");
+    colorspace_ext_ = has(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 surface formats; without it HDR stays off
+    if (colorspace_ext_) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     std::vector<std::string> dlss5_instance_names;   // DLSS 5: what NGX asks of the instance (nothing without nvngx_dlssnr.dll next to the exe)
     for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
         if (has(name.c_str()) && std::none_of(extensions.begin(), extensions.end(), [&](const char* have) { return name == have; })) dlss5_instance_names.push_back(name);
@@ -1004,6 +1006,12 @@ void VulkanRenderer::set_crosshair_scale(uint32_t percent) {
     owner();
     crosshair_scale_=std::min(percent,100u)/100.f;
 }
+void VulkanRenderer::set_hdr(const HdrSettings& settings) {
+    if (instance_) owner();
+    if (!valid_hdr_settings(settings)) throw std::invalid_argument("invalid HDR settings");
+    if (settings.enabled!=hdr_settings_.enabled) resized_=true;   // a new swapchain format; the brightness sliders apply from the next frame
+    hdr_settings_=settings;
+}
 void VulkanRenderer::set_prompt_style(PromptStyle style) {
     owner();
     if(style!=PromptStyle::monochrome && style!=PromptStyle::sculpted)throw std::invalid_argument("invalid native prompt style");
@@ -1019,12 +1027,18 @@ void VulkanRenderer::retire_for_resize() {
     old_swapchain_ = swapchain_;
     retired_.push_back({swapchain_, std::move(images_)});
     images_.clear(); swapchain_ = VK_NULL_HANDLE;
+    hdr_pass_.forget();   // its sets name the slot images destroyed below; every slot's fence was waited for above
     for (auto& slot : slots_) {   // the output-sized images are the only per-slot resources that depend on the window
-        if (slot.view) vkDestroyImageView(device, slot.view, nullptr);
-        if (slot.image) vkDestroyImage(device, slot.image, nullptr);
-        if (slot.memory) vkFreeMemory(device, slot.memory, nullptr);
-        slot.view = VK_NULL_HANDLE; slot.image = VK_NULL_HANDLE; slot.memory = VK_NULL_HANDLE;
+        destroy_slot_images(slot);
         slot.initialized = slot.copied = false;
+    }
+}
+void VulkanRenderer::destroy_slot_images(Slot& slot) {
+    for (auto [view,image,memory] : {std::tuple{&slot.view,&slot.image,&slot.memory},std::tuple{&slot.ui_view,&slot.ui_image,&slot.ui_memory}}) {
+        if (*view) vkDestroyImageView(device, *view, nullptr);
+        if (*image) vkDestroyImage(device, *image, nullptr);
+        if (*memory) vkFreeMemory(device, *memory, nullptr);
+        *view = VK_NULL_HANDLE; *image = VK_NULL_HANDLE; *memory = VK_NULL_HANDLE;
     }
 }
 void VulkanRenderer::reap_retired(bool wait) {
@@ -1038,6 +1052,7 @@ void VulkanRenderer::reap_retired(bool wait) {
         }
         if (!done) { ++it; continue; }
         for (auto& image : it->images) {
+            if (image.view) vkDestroyImageView(device, image.view, nullptr);
             if (image.ready) vkDestroySemaphore(device, image.ready, nullptr);
             if (image.fence) vkDestroyFence(device, image.fence, nullptr);
         }
@@ -1057,27 +1072,26 @@ void VulkanRenderer::retire_images(bool keep_buffers) {
             if (image.pending) vk_check(vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull), "presentation retirement fence");
     }
     for (auto& image : images_) {
+        if (image.view) vkDestroyImageView(device, image.view, nullptr);
         if (image.ready) vkDestroySemaphore(device, image.ready, nullptr);
         if (image.fence) vkDestroyFence(device, image.fence, nullptr);
     }
     images_.clear();
     if (swapchain_) present_.destroy(device, swapchain_, nullptr);
     swapchain_ = VK_NULL_HANDLE;
+    hdr_pass_.forget();   // the device is idle: the sets of the slot images below can go
     for (auto& slot : slots_) {
         if (!keep_buffers) {
             retire_textures(slot);
             destroy_buffer(slot.vertices); destroy_buffer(slot.indices); destroy_buffer(slot.pixels); destroy_buffer(slot.uniforms); destroy_buffer(slot.palettes); destroy_buffer(slot.banks); destroy_buffer(slot.motions); slot.mesh_refs.clear();
         }
-        if (slot.view) vkDestroyImageView(device, slot.view, nullptr);
-        if (slot.image) vkDestroyImage(device, slot.image, nullptr);
-        if (slot.memory) vkFreeMemory(device, slot.memory, nullptr);
-        slot.view = VK_NULL_HANDLE; slot.image = VK_NULL_HANDLE; slot.memory = VK_NULL_HANDLE;
+        destroy_slot_images(slot);
         slot.submitted = slot.reported = slot.initialized = slot.copied = false; slot.serial = 0;
     }
 }
 UpscaleImage VulkanRenderer::hudless_image() const {   // this frame's HUD-less copy (alternating: the interpolation of the previous frame may still read the other one)
     const auto slot=frame_index_&1;
-    return {hudless_[slot],hudless_view_[slot],VK_FORMAT_R8G8B8A8_UNORM,hudless_extent_,
+    return {hudless_[slot],hudless_view_[slot],hudless_format_,hudless_extent_,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT};
 }
 void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) {
@@ -1494,7 +1508,7 @@ void VulkanRenderer::sync_rt_material_targets() {
 void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkImageView& target_view,VkExtent2D extent,bool depth,VkFormat format) {
     VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; image.imageType = VK_IMAGE_TYPE_2D; image.format = format!=VK_FORMAT_UNDEFINED ? format : depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
     image.extent = {extent.width, extent.height, 1}; image.mipLevels = image.arrayLayers = 1; image.samples = VK_SAMPLE_COUNT_1_BIT;
-    image.tiling = VK_IMAGE_TILING_OPTIMAL; image.usage = (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL; image.usage = (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;   // sampled: the HDR encode reads the EFB and the slot images
     if (motion_outputs_) image.usage |= VK_IMAGE_USAGE_SAMPLED_BIT | (depth ? 0 : VK_IMAGE_USAGE_STORAGE_BIT);   // upscaler inputs and outputs
     vk_check(vkCreateImage(device, &image, nullptr, &target), "native attachment image");
     VkMemoryRequirements requirements; vkGetImageMemoryRequirements(device, target, &requirements);
@@ -1517,17 +1531,24 @@ void VulkanRenderer::rebuild() {
     uint32_t count = 0; vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &count, nullptr), "surface format count");
     std::vector<VkSurfaceFormatKHR> formats(count); vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &count, formats.data()), "surface formats");
     VkSurfaceFormatKHR chosen{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
-    for (const auto& format : formats) {
+    // HDR10 when asked for and possible; SDL reads Windows' "Use HDR" of the window's display (DXGI), the surface may list HDR10 either way.
+    const bool windows_hdr = SDL_GetBooleanProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false);
+    const bool hdr10_format = colorspace_ext_ && std::any_of(formats.begin(), formats.end(), [](const auto& format) { return format.format == HdrPass::kFormat && format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT; });
+    hdr_active_ = hdr_settings_.enabled && windows_hdr && hdr10_format;
+    if (hdr_active_) chosen = {HdrPass::kFormat, VK_COLOR_SPACE_HDR10_ST2084_EXT};
+    else for (const auto& format : formats) {
         if (format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) continue;
         if (format.format == VK_FORMAT_UNDEFINED) { chosen = {VK_FORMAT_B8G8R8A8_UNORM, format.colorSpace}; break; }
         if (format.format == VK_FORMAT_B8G8R8A8_UNORM || format.format == VK_FORMAT_R8G8B8A8_UNORM) { chosen = format; break; }
         if (format.format == VK_FORMAT_B8G8R8A8_SRGB || format.format == VK_FORMAT_R8G8B8A8_SRGB) chosen = format;
     }
     if (chosen.format == VK_FORMAT_UNDEFINED) throw std::runtime_error("8-bit SDR swapchain format unavailable");
+    const char* hdr_status = hdr_active_ ? "on (HDR10 PQ)" : !hdr_settings_.enabled ? "off" : !windows_hdr ? "off (HDR is off in Windows for this display), SDR" : "off (no HDR10 swapchain format), SDR";
+    if (!hdr_status_ || std::strcmp(hdr_status, hdr_status_) != 0) { std::fprintf(stderr, "HDR output: %s\n", hdr_status); hdr_status_ = hdr_status; }
     VkFormatProperties source_properties, target_properties;
     vkGetPhysicalDeviceFormatProperties(physical_, VK_FORMAT_R8G8B8A8_UNORM, &source_properties); vkGetPhysicalDeviceFormatProperties(physical_, chosen.format, &target_properties);
     VkFormatFeatureFlags source_features = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-    VkFormatFeatureFlags target_features = VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+    VkFormatFeatureFlags target_features = hdr_active_ ? VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT : VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;   // HDR: drawn by the encode pass
     if ((source_properties.optimalTilingFeatures & source_features) != source_features || (target_properties.optimalTilingFeatures & target_features) != target_features)
         throw std::runtime_error("RGBA8 attachment/readback or swapchain blit format unsupported");
     uint32_t images = capabilities.minImageCount + 1;
@@ -1556,7 +1577,12 @@ void VulkanRenderer::rebuild() {
         images_[i].image = swapchain_images[i];
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &images_[i].ready), "per-image present semaphore");
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; vk_check(vkCreateFence(device, &fence, nullptr, &images_[i].fence), "per-image present fence");
+        if (hdr_active_) {
+            VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image = swapchain_images[i]; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = chosen.format; view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vk_check(vkCreateImageView(device, &view, nullptr, &images_[i].view), "swapchain image view");
+        }
     }
+    if (hdr_active_) hdr_pass_.initialize(device, shaders_);
     const auto scale=device_render_scale(configured_scale_,max_image_dimension_,render_aspect_);
     const auto visible=manual_render_extent(scale,render_aspect_);
     const VkExtent2D internal{visible.width,uint32_t(std::llround(960*scale))};
@@ -1606,24 +1632,28 @@ void VulkanRenderer::rebuild() {
     }
     sync_rt_material_targets();
     configure_generation();
-    for (auto& slot : slots_) make_attachment(slot.image,slot.memory,slot.view,extent_);
+    for (auto& slot : slots_) {
+        make_attachment(slot.image,slot.memory,slot.view,extent_);
+        if (hdr_active_) make_attachment(slot.ui_image,slot.ui_memory,slot.ui_view,extent_);
+    }
     resized_ = false;
 }
 void VulkanRenderer::configure_generation() {
     if (upscaler_ && frame_generation_ && upscaler_kind_==UpscalerKind::dlss && dlss_g_available_ && !dlss_g_)
         dlss_g_=std::make_unique<DlssFrameGeneration>(*streamline_,frame_generation_multiplier_);
     if (frame_generation_active() || (frame_generation_ && fsr_presentation_)) {
-        if (hudless_extent_.width!=extent_.width || hudless_extent_.height!=extent_.height) {
+        const VkFormat hudless_format=hdr_active_ ? HdrPass::kFormat : VK_FORMAT_R8G8B8A8_UNORM;   // as the back buffer
+        if (hudless_extent_.width!=extent_.width || hudless_extent_.height!=extent_.height || hudless_format_!=hudless_format) {
             for (int i=0;i<2;++i) {
                 if (hudless_view_[i]) vkDestroyImageView(device,hudless_view_[i],nullptr);
                 if (hudless_[i]) vkDestroyImage(device,hudless_[i],nullptr);
                 if (hudless_memory_[i]) vkFreeMemory(device,hudless_memory_[i],nullptr);
-                make_attachment(hudless_[i],hudless_memory_[i],hudless_view_[i],extent_);
+                make_attachment(hudless_[i],hudless_memory_[i],hudless_view_[i],extent_,false,hudless_format);
             }
-            hudless_extent_=extent_;
+            hudless_extent_=extent_; hudless_format_=hudless_format;
         }
         if (upscaler_ && fsr_presentation_ && !fsr_g_->has_context()) {
-            try { fsr_g_->create_context(extent_,scene_extent_,swapchain_format_); }
+            try { fsr_g_->create_context(extent_,scene_extent_,swapchain_format_,hdr_active_ ? float(hdr_settings_.peak_nits) : 0.f); }   // shortcut: a later peak change reaches FSR's motion estimate only with the next context
             catch (const std::exception& error) { std::fprintf(stderr,"FSR Frame Generation unavailable: %s\n",error.what()); }
         }
     }
@@ -2213,13 +2243,24 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     auto take_hudless=[&] {
         const auto viewport=boundary_.scene_viewport().value_or(std::array<float,6>{0,0,640,480,0,1});
         const auto hudless=hudless_image();
-        barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit blit{}; blit.srcSubresource=blit.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
         blit.srcOffsets[0]={int32_t(viewport[0]*efb_extent_.width/640),int32_t(viewport[1]*efb_extent_.height/480),0};
         blit.srcOffsets[1]={int32_t((viewport[0]+viewport[2])*efb_extent_.width/640),int32_t((viewport[1]+viewport[3])*efb_extent_.height/480),1};
         blit.dstOffsets[1]={int32_t(hudless_extent_.width),int32_t(hudless_extent_.height),1};
-        vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,hudless.image,VK_IMAGE_LAYOUT_GENERAL,1,&blit,VK_FILTER_NEAREST);   // as the present copies
-        barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
+        if (hudless_format_==HdrPass::kFormat) {   // HDR: encoded like the back buffer it is compared with
+            const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+            barrier(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
+            barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,all,any,all,any);
+            hdr_pass_.record(slot.command,efb_view_,{blit.srcOffsets[0].x,blit.srcOffsets[0].y},
+                             {uint32_t(std::max(1,blit.srcOffsets[1].x-blit.srcOffsets[0].x)),uint32_t(std::max(1,blit.srcOffsets[1].y-blit.srcOffsets[0].y))},
+                             VK_NULL_HANDLE,hudless.view,hudless_extent_,hdr_settings_);
+            barrier(slot.command,efb_,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,all,any);
+            barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,VK_ACCESS_2_MEMORY_READ_BIT);
+        } else {
+            barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,hudless.image,VK_IMAGE_LAYOUT_GENERAL,1,&blit,VK_FILTER_NEAREST);   // as the present copies
+            barrier(slot.command,hudless.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
+        }
         if (dlss_generation_enabled()) dlss_g_->tag_hudless(slot.command,hudless);
         hudless_taken_=true;
     };
@@ -2233,8 +2274,10 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if (copy_target && !packet.clear_after_copy) scene_restore_copy_=packet.texture_copy;
         else if (!packet.draws.empty() || (copy_target && packet.clear_after_copy)) scene_restore_copy_.reset();
     }
+    bool ui_layer=false;   // HDR: the overlays went to the slot's UI layer, the encode composites them
     if (packet.present) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
+        ui_layer=hdr_active_ && (prompts || menu);
         if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
         if(menu)menu_overlay_.initialize(window_,instance_,physical_,device,queue_,family_,uint32_t(slots_.size()),menu_setup_);
         if(!packet.black_output && dlss5_scene_.ready && dlss5_requested() && dlss5_settings_.hook==Dlss5Hook::present) {   // DLSS 5 on the finished frame, HUD included
@@ -2256,17 +2299,25 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const VkClearColorValue black{}; const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
             vkCmdClearColorImage(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&black,1,&range);
         } else vkCmdBlitImage(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_NEAREST);
-        if(prompts || menu) {
-            barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=slot.view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+        const auto record_overlays=[&](VkImageView view,VkAttachmentLoadOp load) {
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=load;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
             vkCmdBeginRendering(slot.command,&ui);
             if(prompts)prompt_overlay_.record(slot.command,packet.prompts,extent_,display,prompt_style_);
             if(menu)menu_overlay_.record(slot.command,extent_,menu_build_);
             vkCmdEndRendering(slot.command);
+        };
+        if((prompts || menu) && !ui_layer) {
+            barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            record_overlays(slot.view,VK_ATTACHMENT_LOAD_OP_LOAD);
             barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
         } else
         barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
+        if(ui_layer) {   // a transparent layer of its own: the ImGui blend over zero leaves premultiplied colour
+            barrier(slot.command,slot.ui_image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,0,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            record_overlays(slot.ui_view,VK_ATTACHMENT_LOAD_OP_CLEAR);
+            barrier(slot.command,slot.ui_image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
     }
     auto clear_region=[&](const PassTarget& active, bool with_motion) {   // after a copy: GX clears the copied EFB region when asked
             barrier(slot.command,active.depth,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -2307,18 +2358,28 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         if (packet.present && upscaler_ && !scene_only) scene_clear_={true,packet.display_source,packet.clear_color,packet.clear_depth};
     }
     if(present_image) {
-        barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = blit.dstOffsets[1] = {int32_t(extent_.width), int32_t(extent_.height), 1};
-        vkCmdBlitImage(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
         const auto present_layout=fsr_presentation_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : streamline_swapchain() ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,present_layout,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
+        if (hdr_active_) {   // the slot image stays SDR (captures, readback); the swapchain gets its HDR10 encoding
+            const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+            barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            barrier(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, all, any, all, any);
+            hdr_pass_.record(slot.command, slot.view, {0, 0}, extent_, ui_layer ? slot.ui_view : VK_NULL_HANDLE, present_image->view, extent_, hdr_settings_);
+            barrier(slot.command, slot.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, any, all, any);
+            barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, present_layout,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        } else {
+            barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1] = blit.dstOffsets[1] = {int32_t(extent_.width), int32_t(extent_.height), 1};
+            vkCmdBlitImage(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+            barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,present_layout,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT);
+        }
     }
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query + 1);
     vk_check(vkEndCommandBuffer(slot.command), "end frame"); vk_check(vkResetFences(device, 1, &slot.fence), "reset frame fence");
     VkSemaphoreSubmitInfo waits[2]{{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO},{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}}; uint32_t wait_count = 0;
-    if (present_image) { waits[wait_count].semaphore = slot.acquired; waits[wait_count].stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT; ++wait_count; }
+    if (present_image) { waits[wait_count].semaphore = slot.acquired; waits[wait_count].stageMask = hdr_active_ ? VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_2_TRANSFER_BIT; ++wait_count; }   // the first write of the swapchain image
     if (writes_scene && dlss_g_ && dlss_g_->inputs_fence() && dlss_g_->inputs_fence_value() > fg_waited_value_) {   // DLSS-G guide §15.1
         waits[wait_count].semaphore = dlss_g_->inputs_fence(); waits[wait_count].value = dlss_g_->inputs_fence_value(); waits[wait_count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         fg_waited_value_ = waits[wait_count].value; ++wait_count;
@@ -2384,7 +2445,7 @@ void VulkanRenderer::shutdown() {
         }
         hudless_extent_={};
         upscaler_.reset();
-        dlss5_pass_.shutdown(); rcas_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
+        dlss5_pass_.shutdown(); rcas_.shutdown(); hdr_pass_.shutdown(); occlusion_.shutdown(); motion_blur_.shutdown(); rt_shadow_.shutdown(); rt_shadow_denoiser_.shutdown(); rt_reflection_.shutdown(); rt_reflection_denoiser_.shutdown(); rt_lighting_.shutdown(); rt_lighting_denoiser_.shutdown(); rt_path_.shutdown(); rt_path_denoiser_.shutdown(); rr_inputs_.shutdown(); rt_.shutdown();
         destroy_scene_targets();
         for (auto& buffer:rt_records_) destroy_buffer(buffer);
         for (auto& buffer:rt_lights_) destroy_buffer(buffer);

@@ -16,7 +16,7 @@ inline bool reticle_texture(const TexturePixels& texture) {
     if (texture.levels.empty()) return false;
     const auto& level = texture.levels[0];
     const uint32_t width = texture.guest_width ? texture.guest_width : level.width, height = texture.guest_height ? texture.guest_height : level.height;
-    return width == height && (width == 100 || width == 120 || width == 154);
+    return width == height && (width == 100 || width == 120 || width == 154 || width == 178 || width == 200);   // 178: the red halo of the empty-magazine / reload state; 200: the four red arrows of the held A+B / grab prompt
 }
 // Centre of the draw's screen-space bounding box in Vulkan NDC (x right, y down, like aim units); the harness's draw summary negates y.
 inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw) {

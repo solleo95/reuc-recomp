@@ -31,11 +31,14 @@ struct FsrFrameGeneration::Impl {
     ffxQueryDescSwapchainReplacementFunctionsVK replacements{};
     VkExtent2D display{};
     bool active=false, reset=false;
+    float hdr_peak=0;   // HDR10 back buffer: its peak in nits (0: SDR)
     uint64_t rendered=0, reported=0;   // presented-frame statistics (the swapchain's present counter)
 
     static ffxReturnCode_t interpolate(ffxDispatchDescFrameGeneration* params, void* user) {
         auto* self=static_cast<Impl*>(user);
         params->reset=self->reset;   // the swapchain fills in everything else (command list, outputs, rectangle, frame id)
+        // Without HDR metadata the swapchain passes a peak of 0 and the optical flow divides PQ luminance by it.
+        if (self->hdr_peak>0 && params->minMaxLuminance[1]<=0) { params->minMaxLuminance[0]=0; params->minMaxLuminance[1]=self->hdr_peak; }
         return self->api.Dispatch(&self->context, &params->header);
     }
     void create_swapchain_context(const VkSwapchainCreateInfoKHR& info) {
@@ -119,20 +122,20 @@ PresentFunctions FsrFrameGeneration::present_functions() {
     functions.wait_idle=[impl](VkDevice device) { impl->wait_for_presents(); return vkDeviceWaitIdle(device); };
     return functions;
 }
-void FsrFrameGeneration::create_context(VkExtent2D display, VkExtent2D max_render, VkFormat backbuffer) {
+void FsrFrameGeneration::create_context(VkExtent2D display, VkExtent2D max_render, VkFormat backbuffer, float hdr_peak) {
     auto& i=*impl_;
     release_context();
-    i.display=display;
+    i.display=display; i.hdr_peak=hdr_peak;
     ffxCreateBackendVKDesc backend{};
     backend.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     backend.vkDevice=i.device; backend.vkPhysicalDevice=i.physical; backend.vkDeviceProcAddr=vkGetDeviceProcAddr;
     ffxCreateContextDescFrameGenerationHudless hudless{};
     hudless.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_HUDLESS;
-    hudless.hudlessBackBufferFormat=ffxApiGetSurfaceFormatVK(VK_FORMAT_R8G8B8A8_UNORM);
+    hudless.hudlessBackBufferFormat=ffxApiGetSurfaceFormatVK(hdr_peak>0 ? backbuffer : VK_FORMAT_R8G8B8A8_UNORM);   // HDR: the HUD-less copy is encoded like the back buffer
     ffxCreateContextDescFrameGeneration create{};
     create.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
     create.header.pNext=&backend.header; backend.header.pNext=&hudless.header;
-    create.flags=0;   // SDR, not inverted, finite far plane, vectors in render pixels
+    create.flags=hdr_peak>0 ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0;   // not inverted, finite far plane, vectors in render pixels
     create.displaySize={display.width,display.height};
     create.maxRenderSize={max_render.width,max_render.height};
     create.backBufferFormat=ffxApiGetSurfaceFormatVK(backbuffer);

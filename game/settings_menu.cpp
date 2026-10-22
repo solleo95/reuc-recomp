@@ -186,6 +186,21 @@ void SettingsMenu::main_tab(float unit) {
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
     bool no_bloom=!options.bloom;   // checked = no glow; graphics.bloom keeps true = glow
     if(compact_checkbox("##bloom",tr("bloom"),no_bloom,unit)) options.bloom=!no_bloom;
+    ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("hdr"));
+    compact_checkbox("##hdr",tr("hdr"),options.hdr.enabled,unit);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hdr_hint"));
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    ImGui::BeginDisabled(!options.hdr.enabled);
+    const auto nits_slider=[&](const char* id,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
+        ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr(title));
+        int nits=int(value);
+        if(ImGui::SliderInt(id,&nits,int(low),int(high),"%d nits",ImGuiSliderFlags_AlwaysClamp)) value=uint32_t(std::clamp(nits,int(low),int(high)));
+    };
+    nits_slider("##hdr_peak","hdr_peak",options.hdr.peak_nits,kHdrPeakMin,kHdrPeakMax);
+    nits_slider("##hdr_paper","hdr_paper_white",options.hdr.paper_white_nits,kHdrWhiteMin,kHdrWhiteMax);
+    nits_slider("##hdr_ui","hdr_ui",options.hdr.ui_nits,kHdrWhiteMin,kHdrWhiteMax);
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;
 }

@@ -10,8 +10,8 @@ void LiveSettings::apply(const Options& next) {
     const bool upscaling=next.upscaler!=was.upscaler || next.upscale_mode!=was.upscale_mode || next.sharpening!=was.sharpening || next.sharpness!=was.sharpness
         || next.frame_generation!=was.frame_generation || next.frame_generation_multiplier!=was.frame_generation_multiplier;
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom!=was.bloom, style=next.prompt_style!=was.prompt_style;
-    const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair) return;
+    const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale, hdr=next.hdr!=was.hdr;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -21,6 +21,7 @@ void LiveSettings::apply(const Options& next) {
     if(bloom) targets_.bloom(next.bloom);
     if(crosshair) targets_.crosshair_scale(next.crosshair_scale);
     if(style) targets_.prompt_style(next.prompt_style);
+    if(hdr) targets_.hdr(next.hdr);
     save();
 }
 void LiveSettings::apply(const Bindings& next) {

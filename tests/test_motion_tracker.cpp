@@ -64,6 +64,42 @@ int main() {
         CHECK(tracker.previous(next) && tracker.previous(next)->transforms->position_rows[0][3]==1);   // the kept record
         auto rolled=tracker.key(draw(1,mesh)); CHECK(!tracker.previous(rolled));            // the rolled-back one is gone
     }
+    {   // identical instances pair with the nearest previous one, not by order: the game reorders and culls them (seats in the train car)
+        gx::MotionTracker tracker;
+        tracker.begin_frame();
+        for(float x:{0.f,5.f,10.f}) tracker.record(tracker.key(draw(1,mesh)),at(x,0,-10),true);
+        tracker.end_frame();
+        const auto drawn_at=[&](float x) { auto d=draw(1,mesh); d.transforms=*at(x,0,-10); return d; };
+        tracker.begin_frame();
+        const auto ten=tracker.key(drawn_at(10)); const auto five=tracker.key(drawn_at(5));   // reversed, the one at 0 culled
+        CHECK(tracker.previous(ten) && tracker.previous(ten)->transforms->position_rows[0][3]==10);
+        CHECK(tracker.previous(five) && tracker.previous(five)->transforms->position_rows[0][3]==5);
+        const auto last=tracker.key(drawn_at(20)); CHECK(tracker.previous(last)->transforms->position_rows[0][3]==0);   // the one left
+        const auto extra=tracker.key(drawn_at(30)); CHECK(!tracker.previous(extra));   // one more than last frame: unpaired
+        CHECK(extra!=ten && extra!=five && extra!=last);
+        tracker.rollback(tracker.checkpoint()-1);   // a rolled-back draw frees nothing it did not take
+        tracker.rollback(tracker.checkpoint()-1);   // a rolled-back pairing frees its previous instance
+        CHECK(tracker.previous(tracker.key(drawn_at(0)))->transforms->position_rows[0][3]==0);
+        CHECK(!tracker.previous(tracker.key(drawn_at(30))));
+    }
+    {   // the nearest instance is searched where the camera's last motion predicts it: spacing 2, the camera moves 1.5 per frame
+        gx::MotionTracker tracker;
+        const auto frame=[&](std::initializer_list<float> xs) {
+            tracker.begin_frame();
+            std::vector<float> paired;
+            for(float x:xs) {
+                auto d=draw(1,mesh); d.transforms=*at(x,0,-10);
+                const auto key=tracker.key(d);
+                paired.push_back(tracker.previous(key) ? tracker.previous(key)->transforms->position_rows[0][3] : 1e9f);
+                tracker.record(key,at(x,0,-10),true);
+            }
+            tracker.end_frame();
+            return paired;
+        };
+        frame({0,2}); frame({-1.5f,0.5f});
+        const auto paired=frame({-1,-3});   // reversed: -1 was 0.5 and -3 was -1.5
+        CHECK(paired[0]==0.5f && paired[1]==-1.5f);
+    }
     {   // non-mesh draws pair by callsite and vertex count
         gx::MotionTracker tracker;
         gx::DrawPacket quad; quad.callsite=7; quad.vertices.resize(4);

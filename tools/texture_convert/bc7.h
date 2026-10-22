@@ -21,7 +21,8 @@ inline Endpoint quantize(const float target[4]) {
         for (int c = 0; c < 4; ++c) {
             e.q[c] = std::clamp(int(std::lround((target[c] - p) / 2)), 0, 127);
             e.value[c] = (e.q[c] << 1) | p;
-            error += (e.value[c] - target[c]) * (e.value[c] - target[c]);
+            // Alpha weighs 64x: the shared p-bit must not turn alpha 0 into 1 (white transparent texels) to save 1 in RGB.
+            error += (c == 3 ? 64.f : 1.f) * (e.value[c] - target[c]) * (e.value[c] - target[c]);
         }
         if (error < best_error) { best_error = error; best = e; }
     }
@@ -37,6 +38,9 @@ inline uint32_t assign(const uint8_t* px, const Endpoint& a, const Endpoint& b, 
         for (int k = 0; k < 16; ++k) {
             uint32_t error = 0;
             for (int c = 0; c < 4; ++c) { const int d = ramp[k][c] - px[i * 4 + c]; error += uint32_t(d * d); }
+            // Exact transparency/opacity wins over a closer colour: a transparent texel with alpha 1 shows as a faint box around sprites.
+            const int a = px[i * 4 + 3];
+            if ((a == 0 || a == 255) && ramp[k][3] != a) error += 1u << 20;
             if (error < best) { best = error; pick = k; }
         }
         index[i] = uint8_t(pick); total += best;
@@ -71,8 +75,14 @@ inline void bc7_encode_block(const uint8_t* px, uint8_t* out) {
     float target[2][4];
     for (int c = 0; c < 4; ++c) { target[0][c] = std::clamp(mean[c] + axis[c] * low, 0.f, 255.f); target[1][c] = std::clamp(mean[c] + axis[c] * high, 0.f, 255.f); }
 
+    int min_alpha = 255, max_alpha = 0;
+    for (int i = 0; i < 16; ++i) { min_alpha = std::min<int>(min_alpha, px[i * 4 + 3]); max_alpha = std::max<int>(max_alpha, px[i * 4 + 3]); }
     Endpoint best[2]{}; uint8_t best_index[16]; uint32_t best_error = ~0u;
     for (int round = 0; round < 4; ++round) {
+        // A block with an exactly transparent (opaque) texel keeps an end point at alpha 0 (255), so the ramp can hit it exactly.
+        const int low = target[0][3] <= target[1][3] ? 0 : 1;
+        if (min_alpha == 0) target[low][3] = 0;
+        if (max_alpha == 255) target[1 - low][3] = 255;
         const Endpoint a = quantize(target[0]), b = quantize(target[1]);
         uint8_t index[16]; const uint32_t error = assign(px, a, b, index);
         if (error >= best_error) break;

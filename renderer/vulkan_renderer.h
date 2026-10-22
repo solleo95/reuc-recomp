@@ -2,6 +2,7 @@
 #include "dlss5_pass.h"
 #include "graphics_effects.h"
 #include "gx_packets.h"
+#include "hdr_pass.h"
 #include "pipeline_keys.h"
 #include "prompt_overlay.h"
 #include "menu_overlay.h"
@@ -70,6 +71,11 @@ public:
     void set_prompt_style(PromptStyle);
     void set_bloom(bool);   // false skips the bloom composite draw (glow around lights)
     void set_crosshair_scale(uint32_t percent);   // aim reticle size 0..100 % of the game's (late_aim.h); 0 hides it
+    // HDR10 output (hdr_math.h): callable before or after initialize(). Active only while Windows reports HDR for the window's display and the
+    // surface offers HDR10; otherwise the SDR swapchain stays. hdr_state_changed(): SDL_EVENT_WINDOW_HDR_STATE_CHANGED, re-picks the mode.
+    void set_hdr(const HdrSettings& settings);
+    void hdr_state_changed() { owner(); resized_=true; }
+    bool hdr_active() const { return hdr_active_; }
     // Graphics effects (graphics_effects.h): callable before or after initialize(); a change of the anisotropy level swaps the samplers at once.
     void set_effects(const GraphicsEffects& effects);
     uint32_t effective_anisotropy() const;   // the level the device runs (requested, clamped to its limit)
@@ -176,6 +182,7 @@ private:
         VkImage image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
+        VkImage ui_image = VK_NULL_HANDLE; VkDeviceMemory ui_memory = VK_NULL_HANDLE; VkImageView ui_view = VK_NULL_HANDLE;   // HDR: the menu and prompts, composited at UI brightness
         Buffer vertices, indices, pixels, uniforms, palettes, banks, motions;   // vertices/indices: this frame's non-mesh draws; motions: MotionBlock per scene draw
         std::vector<std::shared_ptr<const gx::MeshBuffers>> mesh_refs;   // keeps the meshes this submission draws alive until its fence completed
         std::vector<std::shared_ptr<Texture>> textures;   // shared through texture_pool_: one GPU image per texture, not one per slot
@@ -192,10 +199,12 @@ private:
     struct GpuMesh { MeshSlab* slab=nullptr; VkDeviceSize vertex_offset=0, index_offset=0; uint32_t index_count=0; uint64_t rows=0; std::weak_ptr<const gx::MeshBuffers> owner; uint64_t id=0; };   // id: never reused; the ray tracing cache keys its BLAS by it
     struct PresentImage {
         VkImage image = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;   // HDR only: the encode pass renders into it
         VkSemaphore ready = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         bool pending = false;
     };
+    void destroy_slot_images(Slot& slot);
     static VKAPI_ATTR VkBool32 VKAPI_CALL debug(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* message, void* user);
     void owner() const;
     uint32_t memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const;
@@ -298,6 +307,12 @@ private:
     VkFormat swapchain_format_=VK_FORMAT_UNDEFINED;
     VkImage hudless_[2]{}; VkDeviceMemory hudless_memory_[2]{}; VkImageView hudless_view_[2]{};
     VkExtent2D hudless_extent_{};
+    VkFormat hudless_format_=VK_FORMAT_R8G8B8A8_UNORM;   // the back buffer's: HDR10 while HDR is active (frame generation compares the two)
+    HdrSettings hdr_settings_;
+    bool hdr_active_=false;       // this swapchain is HDR10 (settings on, Windows HDR on, surface offers it)
+    bool colorspace_ext_=false;   // VK_EXT_swapchain_colorspace enabled: HDR10 surface formats are usable
+    const char* hdr_status_=nullptr;   // the last logged mode (a string literal), printed when it changes
+    HdrPass hdr_pass_;
     bool hudless_taken_=false;
     uint32_t frame_index_=0;   // guest frames presented: the frame token index (must match at present)
     uint64_t fg_waited_value_=0;   // the frame-generation inputs fence value the scene targets were last released at

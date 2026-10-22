@@ -19,7 +19,7 @@ public:
     FsrFrameGeneration& operator=(const FsrFrameGeneration&)=delete;
     PresentFunctions present_functions();
     // The frame generation context for a swapchain of `display` pixels in `backbuffer` format and a scene of up to `max_render` pixels.
-    void create_context(VkExtent2D display, VkExtent2D max_render, VkFormat backbuffer);
+    void create_context(VkExtent2D display, VkExtent2D max_render, VkFormat backbuffer, float hdr_peak=0);   // hdr_peak: nits of an HDR10 back buffer, 0 = SDR
     void release_context();   // before the swapchain goes: waits for the queued presentations
     bool has_context() const;
     // Per guest frame, before its present: on for frames with a 3D scene (with the frame's HUD-less colour), off for menus, movies and black frames.

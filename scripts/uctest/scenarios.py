@@ -356,14 +356,15 @@ def overlay(g, args):
         g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
         g.advance(10)
         result["menu"] = g.capture()
-    changes = [dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x
+    changes = [dict(hdr=True), dict(hdr_peak_nits=600), dict(hdr_paper_white_nits=300), dict(hdr_ui_nits=120),   # HDR stays on for the switches below (SDR fallback when Windows HDR is off)
+               dict(render_scale=1), dict(render_scale=1.5),   # 1.5: neither the start value nor a 1440p monitor's 2x
                dict(bloom=False), dict(bloom=True), dict(prompt_style="sculpted"), dict(prompt_style="monochrome"),
                dict(fps_limit=60), dict(fps_limit=144), dict(fps_limit=0), dict(upscaler="fsr"), dict(upscale_mode="performance"), dict(upscale_mode="native"),
                dict(upscaler="dlss"), dict(sharpening=True), dict(sharpness=.75), dict(sharpening=False),
                dict(upscaler="off"), dict(upscaler="dlss"), dict(upscaler="off"), dict(upscaler="dlss"),
                dict(frame_generation=True), dict(frame_generation=False), dict(frame_generation=True),
                dict(upscaler="fsr"), dict(frame_generation=False), dict(frame_generation=True), dict(frame_generation=False),
-               dict(upscaler="off"), dict(upscaler="fsr"), dict(upscaler="off")]
+               dict(upscaler="off"), dict(upscaler="fsr"), dict(upscaler="off"), dict(hdr=False)]
     for change in changes:
         name = ",".join(f"{k}={v}" for k, v in change.items())
         with g.step(f"set_{name}"):
@@ -385,6 +386,11 @@ def overlay(g, args):
         renders = [line for line in (g.run_dir / "run.log").read_text(encoding="utf-8", errors="replace").splitlines() if line.startswith("Native render:")]
         if not renders or "multiplier 1.5x" not in renders[-1]:
             g.fail(f"render scale lost after the renderer restarts: {renders[-1] if renders else 'no render line'}", "settings")
+    with g.step("hdr_mode"):   # each HDR switch picked a mode: HDR10, or SDR with the reason
+        modes = [line for line in (g.run_dir / "run.log").read_text(encoding="utf-8", errors="replace").splitlines() if line.startswith("HDR output:")]
+        result["hdr_modes"] = modes
+        if not any(line != "HDR output: off" for line in modes) or modes[-1] != "HDR output: off":
+            g.fail(f"HDR switches not reflected in the log: {modes}", "settings")
     with g.step("close_menu"):
         g.host_key(g.ESCAPE)
         g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")

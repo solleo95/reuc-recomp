@@ -9,7 +9,8 @@
 
 namespace gx {
 // Identity of a draw across guest frames for motion vectors: callsite, mesh (stable while the guest keeps it) or vertex count, and the
-// order among draws with the same (callsite, mesh, vertices) in the frame.
+// instance among draws with the same (callsite, mesh, vertices): the previous frame's occurrence it pairs with (nearest predicted position),
+// or a fresh number past last frame's for an instance without a partner.
 struct DrawKey {
     uint32_t callsite=0;
     const void* mesh=nullptr;
@@ -38,6 +39,10 @@ public:
     const std::array<std::array<float,4>,3>& view_to_prev_view() const { return view_to_prev_; }
 private:
     struct Entry { PreviousDraw draw; std::array<std::array<float,4>,3> rows; bool z_write; bool mesh; };
+    // Last frame's instances sorted by key, one span per (callsite, mesh, vertices) identity; a draw claims the nearest unclaimed one.
+    struct Instance { DrawKey key; std::array<float,3> origin; bool claimed; };
+    struct Span { uint32_t first, count, next, cursor; };   // next: past the highest occurrence; cursor: first unclaimed (relative)
+    uint32_t claim(Span& span, const std::array<float,3>& origin);
     struct DrawKeyHash {
         size_t operator()(const DrawKey& key) const {
             size_t hash=std::hash<const void*>{}(key.mesh);
@@ -48,7 +53,9 @@ private:
     };
     std::pmr::unsynchronized_pool_resource pool_;
     std::pmr::unordered_map<DrawKey,Entry,DrawKeyHash> previous_, current_;
-    std::pmr::unordered_map<DrawKey,uint32_t,DrawKeyHash> occurrences_;
+    std::pmr::unordered_map<DrawKey,uint32_t,DrawKeyHash> occurrences_;   // instances without a partner handed out this frame
+    std::pmr::vector<Instance> instances_;
+    std::pmr::unordered_map<DrawKey,Span,DrawKeyHash> spans_;
     std::vector<DrawKey> journal_;   // keys handed out this frame, in order
     std::vector<float> moves_;
     bool cut_=false;

@@ -26,6 +26,8 @@ int main() {
     CHECK(gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 154), aim));
     CHECK(gx::is_reticle_draw(quad(0x8006D174, nx + 0.05f, ny, 100), aim));     // recoil moved it a little
     CHECK(!gx::is_reticle_draw(quad(0x80393B0C, 0.5f, 0.5f, 154), aim));        // the same ring far from the pointer is something else
+    CHECK(gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 178), aim));             // the reload halo
+    CHECK(gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 200), aim));             // the four arrows of the held A+B prompt
     CHECK(!gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 64), aim));             // not a reticle texture
     CHECK(!gx::is_reticle_draw(quad(0x80123456, nx, ny, 154), aim));            // not a reticle callsite
     CHECK(!gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 154, true), aim));      // still decoding: decided on a later frame

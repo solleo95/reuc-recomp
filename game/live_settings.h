@@ -15,6 +15,7 @@ struct SettingsTargets {
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects
     std::function<void(const Dlss5Settings&)> dlss5;           // DLSS 5 Neural Rendering
     std::function<void(PromptStyle)> prompt_style;
+    std::function<void(const HdrSettings&)> hdr;               // HDR output and its brightness sliders
     std::function<void(const Bindings&)> bindings;
 };
 // The in-game settings: the options saved in config.json (not the command-line overrides of a run). Every change goes to the targets

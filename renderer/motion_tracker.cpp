@@ -38,11 +38,37 @@ std::optional<std::array<float,2>> origin_ndc(const Projection& p, const std::ar
 }
 }
 MotionTracker::MotionTracker(std::pmr::memory_resource* upstream)
-    : pool_(upstream), previous_(&pool_), current_(&pool_), occurrences_(&pool_) {}
-void MotionTracker::begin_frame() { current_.clear(); occurrences_.clear(); journal_.clear(); }
+    : pool_(upstream), previous_(&pool_), current_(&pool_), occurrences_(&pool_), instances_(&pool_), spans_(&pool_) {}
+void MotionTracker::begin_frame() {
+    current_.clear(); occurrences_.clear(); journal_.clear();
+    for(auto& instance:instances_) instance.claimed=false;   // a frame begun again without end_frame starts its claims over
+    for(auto& [identity,span]:spans_) span.cursor=0;
+}
+// shortcut: a linear scan per draw, quadratic in the instances of one identity (about 20 seats per mesh in the train car); a spatial index if a group reaches thousands.
+uint32_t MotionTracker::claim(Span& span, const std::array<float,3>& origin) {
+    std::array<float,3> predicted{};   // where the camera's last motion puts this view-space point in the previous view
+    for(size_t r=0;r<3;++r) predicted[r]=view_to_prev_[r][0]*origin[0]+view_to_prev_[r][1]*origin[1]+view_to_prev_[r][2]*origin[2]+view_to_prev_[r][3];
+    uint32_t best=span.count; float best_distance=0;
+    for(uint32_t i=span.cursor;i<span.count;++i) {
+        const auto& instance=instances_[span.first+i];
+        if(instance.claimed) continue;
+        float distance=0;
+        for(size_t r=0;r<3;++r) distance+=(instance.origin[r]-predicted[r])*(instance.origin[r]-predicted[r]);
+        if(best==span.count || distance<best_distance) { best=i; best_distance=distance; }   // ties keep the earliest: identical matrices pair in order
+        if(distance==0) break;
+    }
+    instances_[span.first+best].claimed=true;
+    while(span.cursor<span.count && instances_[span.first+span.cursor].claimed) ++span.cursor;
+    return instances_[span.first+best].key.occurrence;
+}
 DrawKey MotionTracker::key(const DrawPacket& draw) {
     DrawKey k{draw.callsite,draw.mesh.get(),uint32_t(draw.vertex_view().size()),0};
-    k.occurrence=occurrences_[k]++;
+    const auto span=spans_.find(k);
+    if(span!=spans_.end() && span->second.cursor<span->second.count) {
+        const auto row=std::min<uint32_t>(draw.transforms->current,61);
+        const auto& rows=draw.transforms->position_rows;
+        k.occurrence=claim(span->second,{rows[row][3],rows[row+1][3],rows[row+2][3]});
+    } else k.occurrence=(span!=spans_.end() ? span->second.next : 0)+occurrences_[k]++;
     journal_.push_back(k);
     return k;
 }
@@ -51,7 +77,14 @@ void MotionTracker::rollback(size_t mark) {
         const auto& k=journal_.back();
         current_.erase(k);
         auto identity=k; identity.occurrence=0;
-        --occurrences_[identity];
+        const auto span=spans_.find(identity);
+        if(span!=spans_.end() && k.occurrence<span->second.next) {   // a claimed previous instance: free it
+            auto& s=span->second;
+            const auto first=instances_.begin()+s.first;
+            const auto found=std::lower_bound(first,first+s.count,k,[](const Instance& instance,const DrawKey& key) { return instance.key<key; });
+            found->claimed=false;
+            s.cursor=std::min(s.cursor,uint32_t(found-first));
+        } else --occurrences_[identity];
         journal_.pop_back();
     }
 }
@@ -101,5 +134,13 @@ void MotionTracker::end_frame() {
     }
     previous_.swap(current_);
     current_.clear(); journal_.clear();
+    instances_.clear(); spans_.clear();
+    for(const auto& [key,entry]:previous_) instances_.push_back({key,{entry.rows[0][3],entry.rows[1][3],entry.rows[2][3]},false});
+    std::sort(instances_.begin(),instances_.end(),[](const Instance& a,const Instance& b) { return a.key<b.key; });
+    for(uint32_t i=0;i<instances_.size();++i) {
+        auto identity=instances_[i].key; identity.occurrence=0;
+        auto& span=spans_.try_emplace(identity,Span{i,0,0,0}).first->second;
+        ++span.count; span.next=instances_[i].key.occurrence+1;
+    }
 }
 }

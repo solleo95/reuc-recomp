@@ -1,6 +1,7 @@
 #pragma once
 #include "dlss5_settings.h"
 #include "graphics_effects.h"
+#include "hdr_math.h"
 #include "input_prompts.h"
 #include "upscale_mode.h"
 #include <filesystem>
@@ -19,6 +20,7 @@ struct Options {
     PromptStyle prompt_style=PromptStyle::monochrome;
     bool bloom=true;   // the game's glow around lights (graphics.bloom); off skips the bloom composite draw
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
+    HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off
     UpscalerKind upscaler=UpscalerKind::off;
     UpscaleMode upscale_mode=UpscaleMode::quality;
     bool sharpening=false;   // RCAS after the upscale (graphics.sharpening, --sharpness / --no-sharpening)

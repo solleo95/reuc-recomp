@@ -119,7 +119,7 @@ std::string binding_name(const uc::Binding& binding) {
 bool same_options(const uc::Options& a,const uc::Options& b) {
     return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.hdr==b.hdr;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -537,6 +537,20 @@ int run(int argc,wchar_t** argv) {
             toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,(features_ready && !features.effects && !options.effects.contact_shadows) || rt.raster_replaced,rt.raster_replaced ? tr("replaced_by_rt") : tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
             bool no_bloom=!options.bloom;toggle("##bloom",tr("bloom"),no_bloom);options.bloom=!no_bloom;   // checked = no glow; graphics.bloom keeps true = glow
+            ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("hdr"));
+            toggle("##hdr",tr("hdr"),options.hdr.enabled);
+            ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("hdr_hint"));ImGui::PopStyleColor();
+            ImGui::BeginDisabled(!options.hdr.enabled);
+            const auto nits_slider=[&](const std::string& name,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
+                ImGui::Dummy({0,8*unit});ImGui::TextUnformatted(tr(title));
+                int nits=int(value);ImGui::SetNextItemWidth(-1);
+                if(ImGui::SliderInt(("##"+name).c_str(),&nits,int(low),int(high),"%d nits",ImGuiSliderFlags_AlwaysClamp))value=uint32_t(std::clamp(nits,int(low),int(high)));
+                track(name);
+            };
+            nits_slider("hdr-peak","hdr_peak",options.hdr.peak_nits,uc::kHdrPeakMin,uc::kHdrPeakMax);
+            nits_slider("hdr-paper","hdr_paper_white",options.hdr.paper_white_nits,uc::kHdrWhiteMin,uc::kHdrWhiteMax);
+            nits_slider("hdr-ui","hdr_ui",options.hdr.ui_nits,uc::kHdrWhiteMin,uc::kHdrWhiteMax);
+            ImGui::EndDisabled();
             ImGui::Dummy({0,20*unit});
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {

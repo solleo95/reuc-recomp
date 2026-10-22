@@ -22,6 +22,7 @@ int main() {
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
+    targets.hdr=[&](const uc::HdrSettings&){ calls.push_back("hdr"); };
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
     const auto saved=[&]{ return uc::options_from_config(uc::load_config(path)); };
@@ -33,6 +34,10 @@ int main() {
     {   // the crosshair size alone reaches only its target
         calls.clear(); auto next=live.options(); next.crosshair_scale=40; live.apply(next);
         CHECK((calls==std::vector<std::string>{"crosshair_scale"}) && saved().crosshair_scale==40 && !live.error());
+    }
+    {   // HDR and its sliders reach only the HDR target
+        calls.clear(); auto next=live.options(); next.hdr.enabled=true; next.hdr.peak_nits=800; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"hdr"}) && saved().hdr.enabled && saved().hdr.peak_nits==800 && !live.error());
     }
     {   // nothing changed: nothing called, the file is not rewritten
         calls.clear(); const auto before=fs::last_write_time(path);

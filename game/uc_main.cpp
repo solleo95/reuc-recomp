@@ -361,6 +361,7 @@ static int real_main(int argc, char** argv) {
         if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
+        renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom);
@@ -589,6 +590,15 @@ static int real_main(int argc, char** argv) {
                 try {
                     fs::create_directories(directory);
                     uc::save_png(pixels,path);
+                    static const bool with_motion=std::getenv("UC_CAPTURE_MOTION")!=nullptr;   // diagnostic: the last scene's colour and motion target next to the capture
+                    if (with_motion) {
+                        const auto motion=renderer.capture_motion();
+                        uc::save_png(renderer.capture_scene(),fs::path(path).replace_extension(".scene.png"));
+                        if (std::FILE* file=_wfopen(fs::path(path).replace_extension(".motion").c_str(),L"wb")) {
+                            std::fwrite(&motion.width,4,1,file); std::fwrite(&motion.height,4,1,file);
+                            std::fwrite(motion.rg.data(),sizeof(float),motion.rg.size(),file); std::fclose(file);
+                        }
+                    }
                     std::fprintf(stderr,"debug screenshot: %s\n",path.string().c_str());
                     if(test_server)test_server->captured(path.string());
                 } catch(const std::exception& error) {
@@ -648,6 +658,7 @@ static int real_main(int argc, char** argv) {
         };
         targets.bloom=[&](bool on) { options.bloom=on; renderer.set_bloom(on); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
+        targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
@@ -788,6 +799,7 @@ static int real_main(int argc, char** argv) {
                 ++frame_events;
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
+                if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
                 // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);

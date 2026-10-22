@@ -19,7 +19,7 @@ The launcher asks `uc.exe --features` (a JSON line: `dlss`, `dlss_g`, `fsr`, `fs
 ## How it renders
 
 * The 3D scene of a guest frame goes to internal targets (RGBA8 colour, D32 depth, RG16F vectors) at output size divided by the ratio; the first packet after a perspective draw that is followed by a copy covering the scene viewport ends it (`gx::SceneBoundary`, 54 recorded frames in `tests/data/scene_boundary`).
-* Motion vectors come from `gx::MotionTracker` (draws paired by callsite, mesh and occurrence; previous palettes and projection); jitter is Halton(2,3) added in the vertex shader of the `smoke.motion.*` variants.
+* Motion vectors come from `gx::MotionTracker` (draws paired by callsite and mesh, identical instances with the nearest one where the camera's last motion predicts it; previous palettes and projection); jitter is Halton(2,3) added in the vertex shader of the `smoke.motion.*` variants.
 * The upscaler (`renderer/dlss_upscaler.cpp`, `renderer/fsr_upscaler.cpp`) writes the output-size EFB, the post chain and the HUD draw on top at output resolution, so the HUD is never upscaled.
 * The last scene copy is refreshed from the reconstructed EFB at the boundary when no intervening draw or clear changed its pixels. The train's bloom chain saves the top-left 320x180 workspace before reconstruction and restores that exact texture at `80044340`; leaving it raw put low-resolution jittered pixels back over the reconstructed corner. Earlier scene copies keep their original contents.
 * DLSS-G (`dlss_frame_generation.cpp`) and FSR FG (`fsr_frame_generation.cpp`) get the HUD-less frame (blitted before the HUD packet at back-buffer size, two buffers for FSR) so the HUD is not interpolated. Menus, movies and black frames switch generation off.

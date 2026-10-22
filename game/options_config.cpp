@@ -47,6 +47,15 @@ Options options_from_config(const ConfigDocument& document) {
             if(!value.is_number_unsigned() || value.get<uint64_t>()>100)invalid("crosshair_scale must be 0..100");
             options.crosshair_scale=value.get<uint32_t>();
         }
+        if(graphics.contains("hdr"))options.hdr.enabled=boolean(graphics["hdr"]);
+        using Nits=uint32_t HdrSettings::*;
+        for(auto [key,field]:std::array<std::pair<const char*,Nits>,3>{{{"hdr_peak_nits",&HdrSettings::peak_nits},{"hdr_paper_white_nits",&HdrSettings::paper_white_nits},{"hdr_ui_nits",&HdrSettings::ui_nits}}}) {
+            if(!graphics.contains(key))continue;
+            const auto& value=graphics[key];
+            if(!value.is_number_unsigned() || value.get<uint64_t>()>kHdrPeakMax)invalid(std::string(key)+" out of range");
+            options.hdr.*field=value.get<uint32_t>();
+        }
+        if(!valid_hdr_settings(options.hdr))invalid("hdr_peak_nits must be 1..2000, hdr_paper_white_nits and hdr_ui_nits 80..500");
         if(graphics.contains("prompt_style")) {
             if(!graphics["prompt_style"].is_string())invalid("prompt_style must be a string");
             const auto style=graphics["prompt_style"].get<std::string>();
@@ -158,6 +167,10 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["unlock_60fps"]=options.unlock_60fps;
     graphics["bloom"]=options.bloom;
     graphics["crosshair_scale"]=options.crosshair_scale;
+    graphics["hdr"]=options.hdr.enabled;
+    graphics["hdr_peak_nits"]=options.hdr.peak_nits;
+    graphics["hdr_paper_white_nits"]=options.hdr.paper_white_nits;
+    graphics["hdr_ui_nits"]=options.hdr.ui_nits;
     if(options.fps_limit)graphics["fps_limit"]=*options.fps_limit;
     else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";

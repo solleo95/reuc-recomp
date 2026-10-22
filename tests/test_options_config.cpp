@@ -28,6 +28,11 @@ int main() {
     options.crosshair_scale=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
     options.crosshair_scale=100;uc::store_options(document,options);
+    CHECK((uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).hdr==uc::HdrSettings{}));   // absent: SDR, the defaults
+    options.hdr={true,1400,250,120};uc::store_options(document,options);
+    CHECK(document.properties["graphics"]["hdr"]==true && document.properties["graphics"]["hdr_peak_nits"]==1400 && document.properties["graphics"]["hdr_paper_white_nits"]==250 && document.properties["graphics"]["hdr_ui_nits"]==120);
+    CHECK((uc::options_from_config(uc::parse_config(uc::serialize_config(document))).hdr==uc::HdrSettings{true,1400,250,120}));
+    options.hdr={};uc::store_options(document,options);
     CHECK(!uc::options_from_config(document).fps_limit);   // absent: the previous behaviour
     options.fps_limit=165;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["fps_limit"]==165 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fps_limit==165u);
@@ -147,7 +152,9 @@ int main() {
         R"({"graphics":{"upscaler":"blit"}})",R"({"graphics":{"upscaler":1}})",R"({"graphics":{"upscale_mode":"dlaa"}})",R"({"graphics":{"sharpness":0}})",
         R"({"graphics":{"sharpness":1.5}})",R"({"graphics":{"sharpening":1}})",R"({"graphics":{"frame_generation":"on"}})",
         R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
-        R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})"}) {
+        R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",
+        R"({"graphics":{"hdr":1}})",R"({"graphics":{"hdr_peak_nits":0}})",R"({"graphics":{"hdr_peak_nits":2001}})",R"({"graphics":{"hdr_paper_white_nits":79}})",
+        R"({"graphics":{"hdr_paper_white_nits":"bright"}})",R"({"graphics":{"hdr_ui_nits":501}})",R"({"graphics":{"hdr_ui_nits":100.5}})"}) {
         bool caught=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){caught=true;}CHECK(caught);
     }
     return 0;

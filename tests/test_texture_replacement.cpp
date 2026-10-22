@@ -46,6 +46,35 @@ int main() {
         uc::bc7_encode_block(px, out); CHECK(uc::bc7_decode_block(out, back));
         int total = 0; for (int i = 0; i < 64; ++i) total += std::abs(int(back[i]) - px[i]);
         CHECK(total / 64 <= 4);
+        // Exact alpha 0 and 255 survive whatever the colour: white transparent texels (IA textures) once came back with alpha 1.
+        for (int i = 0; i < 16; ++i) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = 255; px[i * 4 + 3] = 0; }
+        uc::bc7_encode_block(px, out); CHECK(uc::bc7_decode_block(out, back));
+        for (int i = 0; i < 16; ++i) CHECK(back[i * 4 + 3] == 0 && back[i * 4] >= 253);
+        for (int i = 0; i < 16; ++i) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = 0; px[i * 4 + 3] = 255; }
+        uc::bc7_encode_block(px, out); CHECK(uc::bc7_decode_block(out, back));
+        for (int i = 0; i < 16; ++i) CHECK(back[i * 4 + 3] == 255 && back[i * 4] <= 2);
+        for (int i = 0; i < 16; ++i) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = 255; px[i * 4 + 3] = uint8_t(i < 8 ? 0 : 255); }   // white glyph edge
+        uc::bc7_encode_block(px, out); CHECK(uc::bc7_decode_block(out, back));
+        for (int i = 0; i < 16; ++i) CHECK(back[i * 4 + 3] == (i < 8 ? 0 : 255));
+        // Soft edge: transparent white texels next to faint ones keep alpha exactly 0 (no index with alpha 1 picked for a closer colour).
+        for (int i = 0; i < 16; ++i) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = uint8_t(i < 12 ? 255 : 120); px[i * 4 + 3] = uint8_t(i < 12 ? 0 : 6 + i); }
+        uc::bc7_encode_block(px, out); CHECK(uc::bc7_decode_block(out, back));
+        for (int i = 0; i < 12; ++i) CHECK(back[i * 4 + 3] == 0);
+        for (int i = 12; i < 16; ++i) CHECK(std::abs(int(back[i * 4 + 3]) - px[i * 4 + 3]) <= 4);
+        // A real dark glow edge from the texture pack: its four transparent texels once decoded with alpha 1.
+        const uint8_t glow[64] = {15,14,14,29, 6,6,6,8, 3,3,3,0, 3,3,3,0, 18,17,16,36, 9,9,9,16, 3,3,3,0, 3,3,3,0,
+                                  30,28,27,64, 18,17,16,36, 12,12,11,23, 9,9,9,16, 49,45,43,107, 37,34,32,79, 27,25,24,57, 22,20,19,44};
+        uc::bc7_encode_block(glow, out); CHECK(uc::bc7_decode_block(out, back));
+        for (int i = 0; i < 16; ++i) CHECK(glow[i * 4 + 3] != 0 || back[i * 4 + 3] == 0);
+        total = 0; for (int i = 0; i < 64; ++i) total += std::abs(int(back[i]) - glow[i]);
+        CHECK(total / 64 <= 3);
+        // A faint glow corner: one transparent texel among alpha 2..5, where the fitted end point used to land on alpha 1.
+        const uint8_t corner[64] = {1,1,1,0, 2,3,3,2, 5,6,6,3, 9,11,11,4, 2,3,3,2, 7,8,8,3, 9,11,11,4, 10,12,12,5,
+                                    6,7,7,3, 9,11,11,4, 10,12,12,5, 10,12,12,5, 10,11,11,4, 10,11,11,4, 10,12,12,5, 11,13,13,5};
+        uc::bc7_encode_block(corner, out); CHECK(uc::bc7_decode_block(out, back));
+        CHECK(back[3] == 0);
+        total = 0; for (int i = 0; i < 64; ++i) total += std::abs(int(back[i]) - corner[i]);
+        CHECK(total / 64 <= 2);
     }
 
     // A replacement on disk is found by the game's texture name, with or without "_m", and loads as BC7 with the guest size kept.
