@@ -38,6 +38,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             options.guest_cpu = cpu;
         }
         else if (arg == "--mute") options.mute = true;
+        else if (arg == "--no-mods") options.no_mods = true;
         else if (arg == "--deterministic") options.deterministic = true;
         else if (arg == "--no-vulkan-layers") options.no_vulkan_layers = true;
         else if (arg == "--profile") options.profile = true;
@@ -79,9 +80,10 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (!level || *level == EffectLevel::off) return "invalid value for --rt-quality";   // the switch is the off state
             options.effects.rt_quality = *level;
         }
-        else if (arg == "--dlss5") { if (!options.dlss5.enabled()) options.dlss5.hook = Dlss5Hook::upscaled; }   // after the upscaler, before the HUD; a hook chosen by --dlss5-option stays
+        else if (arg == "--dlss5") { options.dlss5_enabled = true; if (!options.dlss5.enabled()) options.dlss5.hook = Dlss5Hook::upscaled; }   // after the upscaler, before the HUD; a hook chosen by --dlss5-option stays
         else if (arg == "--dlss5-option") {   // key=value, the config's strict parser
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --dlss5-option";
+            options.dlss5_enabled = true;
             const auto separator = arguments[i].find('=');
             std::string error;
             if (separator == std::string_view::npos || !set_dlss5_field(options.dlss5, arguments[i].substr(0, separator), arguments[i].substr(separator + 1), error)) return error.empty() ? "invalid value for --dlss5-option" : error;

@@ -1,0 +1,186 @@
+{
+  "version": "1.0",
+  "doc": "The game API every mod runtime (Lua, JavaScript, native DLL) sees. Domains whose provider is 'registry' live under the global 'uc' (uc.mem, uc.player(1), ...); domains whose provider is 'context' are per-mod globals (log, settings, ui, on).",
+  "domains": [
+    {
+      "name": "log", "provider": "context",
+      "doc": "Writes to the port's log (mods.log next to the exe) and to stderr. Shown with the mod id.",
+      "members": [
+        { "name": "write", "kind": "function", "type": "void", "status": "implemented", "since": "1.0",
+          "args": [ { "name": "message", "type": "string", "doc": "Text to log." } ],
+          "doc": "Writes one line to the log.",
+          "example": { "lua": "log.write('hello from my mod')", "js": "log.write('hello from my mod');" } }
+      ]
+    },
+    {
+      "name": "settings", "provider": "context",
+      "doc": "The mod's own settings, the ones declared in mod.json. Values are saved with the port's settings.",
+      "members": [
+        { "name": "get", "kind": "function", "type": "any", "status": "implemented", "since": "1.0",
+          "args": [ { "name": "key", "type": "string", "doc": "A key declared in mod.json." } ],
+          "doc": "Current value of a declared setting; null for an unknown key.",
+          "example": { "lua": "local scale = settings.get('damage_scale')", "js": "const scale = settings.get('damage_scale');" } },
+        { "name": "set", "kind": "function", "type": "bool", "status": "implemented", "since": "1.0",
+          "args": [ { "name": "key", "type": "string", "doc": "A key declared in mod.json." }, { "name": "value", "type": "any", "doc": "New value; numbers are clamped to the declared range." } ],
+          "doc": "Changes a declared setting and saves it. Returns false (and changes nothing) for an unknown key or a value of the wrong type.",
+          "example": { "lua": "settings.set('damage_scale', 2.0)", "js": "settings.set('damage_scale', 2.0);" } }
+      ]
+    },
+    {
+      "name": "events", "provider": "context",
+      "doc": "Events are delivered to handlers registered with on(). Handlers run on the game thread (or the menu thread for ui callbacks) under a time budget; an error or an overrun counts as a failure of the mod.",
+      "members": [
+        { "name": "on", "kind": "function", "type": "void", "status": "implemented", "since": "1.0",
+          "args": [ { "name": "event", "type": "string", "doc": "One of the event names below." }, { "name": "handler", "type": "function", "doc": "Called with the event payload." } ],
+          "doc": "Registers a handler. Several handlers for one event run in registration order.",
+          "example": { "lua": "on('on_step', function() end)", "js": "on('on_step', () => {});" } },
+        { "name": "on_load", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "The mod was started. Payload: {}.",
+          "example": { "lua": "on('on_load', function() log.write('started') end)", "js": "on('on_load', () => log.write('started'));" } },
+        { "name": "on_unload", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "The mod is being stopped (game exit or script reload). Payload: {}.",
+          "example": { "lua": "on('on_unload', function() log.write('stopping') end)", "js": "on('on_unload', () => log.write('stopping'));" } },
+        { "name": "on_step", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "Once per nominal game frame (60 per second of game time, whatever the real step rate): a step shorter than a nominal frame skips it, a longer one runs it up to 4 times. Not delivered while the game is paused. Payload: {}.",
+          "example": { "lua": "on('on_step', function() uc.player(1).magazine = 15 end)", "js": "on('on_step', () => { uc.player(1).magazine = 15; });" } },
+        { "name": "on_settings_changed", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A setting of this mod changed in the menu. Payload: { key: string }.",
+          "example": { "lua": "on('on_settings_changed', function(e) log.write(e.key) end)", "js": "on('on_settings_changed', (e) => log.write(e.key));" } },
+        { "name": "on_weapon_fired", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A player fired. Payload: { slot: int }.",
+          "example": { "lua": "on('on_weapon_fired', function(e) log.write('shot by ' .. e.slot) end)", "js": "on('on_weapon_fired', (e) => log.write('shot by ' + e.slot));" } },
+        { "name": "on_damage_taken", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A player's damage meter rose. Payload: { slot: int, amount: float }.",
+          "example": { "lua": "on('on_damage_taken', function(e) log.write(e.amount) end)", "js": "on('on_damage_taken', (e) => log.write(e.amount));" } },
+        { "name": "on_reload", "kind": "event", "type": "object", "status": "implemented", "since": "1.0", "doc": "A player started reloading. Payload: { slot: int }.",
+          "example": { "lua": "on('on_reload', function(e) log.write('reload ' .. e.slot) end)", "js": "on('on_reload', (e) => log.write('reload ' + e.slot));" } }
+      ]
+    },
+    {
+      "name": "ui", "provider": "context",
+      "doc": "Free drawing in the mod's tab of the Insert menu. Call these from the function registered with ui_draw(); they work only there. Widgets are identified by their label within the mod.",
+      "members": [
+        { "name": "text", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "text", "type": "string", "doc": "Text to show." } ], "doc": "Plain text.",
+          "example": { "lua": "ui.text('hello')", "js": "ui.text('hello');" } },
+        { "name": "button", "kind": "function", "type": "bool", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Button text." } ], "doc": "A button; true on the frame it is clicked.",
+          "example": { "lua": "if ui.button('Heal') then uc.player(1).damage = 0 end", "js": "if (ui.button('Heal')) uc.player(1).damage = 0;" } },
+        { "name": "checkbox", "kind": "function", "type": "bool", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "value", "type": "bool", "doc": "Current state." } ], "doc": "A checkbox; returns the new state.",
+          "example": { "lua": "enabled = ui.checkbox('Enabled', enabled)", "js": "enabled = ui.checkbox('Enabled', enabled);" } },
+        { "name": "slider_int", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "value", "type": "int", "doc": "Current value." }, { "name": "min", "type": "int", "doc": "Lowest value." }, { "name": "max", "type": "int", "doc": "Highest value." } ], "doc": "An integer slider; returns the new value.",
+          "example": { "lua": "count = ui.slider_int('Count', count, 0, 10)", "js": "count = ui.slider_int('Count', count, 0, 10);" } },
+        { "name": "slider_float", "kind": "function", "type": "float", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "value", "type": "float", "doc": "Current value." }, { "name": "min", "type": "float", "doc": "Lowest value." }, { "name": "max", "type": "float", "doc": "Highest value." } ], "doc": "A float slider; returns the new value.",
+          "example": { "lua": "scale = ui.slider_float('Scale', scale, 0.5, 4.0)", "js": "scale = ui.slider_float('Scale', scale, 0.5, 4.0);" } },
+        { "name": "combo", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "selected", "type": "int", "doc": "Selected index (0-based)." }, { "name": "items", "type": "array<string>", "doc": "Choices." } ], "doc": "A drop-down list; returns the selected index.",
+          "example": { "lua": "mode = ui.combo('Mode', mode, {'slow', 'fast'})", "js": "mode = ui.combo('Mode', mode, ['slow', 'fast']);" } },
+        { "name": "input_text", "kind": "function", "type": "string", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "value", "type": "string", "doc": "Current text." } ], "doc": "A one-line text box; returns the text (at most 1024 bytes).",
+          "example": { "lua": "name = ui.input_text('Name', name)", "js": "name = ui.input_text('Name', name);" } },
+        { "name": "separator", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "doc": "A horizontal line.",
+          "example": { "lua": "ui.separator()", "js": "ui.separator();" } },
+        { "name": "same_line", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "doc": "Puts the next widget on the same line.",
+          "example": { "lua": "ui.same_line()", "js": "ui.same_line();" } },
+        { "name": "collapsing_header", "kind": "function", "type": "bool", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Header text." } ], "doc": "A foldable header; true while open (draw its content only then).",
+          "example": { "lua": "if ui.collapsing_header('Advanced') then ui.text('more') end", "js": "if (ui.collapsing_header('Advanced')) ui.text('more');" } },
+        { "name": "tooltip", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "text", "type": "string", "doc": "Tooltip text." } ], "doc": "Shows a tooltip while the previous widget is hovered.",
+          "example": { "lua": "ui.tooltip('Explains the widget above')", "js": "ui.tooltip('Explains the widget above');" } },
+        { "name": "color_edit", "kind": "function", "type": "array<float>", "status": "implemented", "since": "1.0", "args": [ { "name": "label", "type": "string", "doc": "Label." }, { "name": "rgba", "type": "array<float>", "doc": "Current colour, four numbers 0..1." } ], "doc": "A colour picker; returns the new four numbers.",
+          "example": { "lua": "tint = ui.color_edit('Tint', tint)", "js": "tint = ui.color_edit('Tint', tint);" } },
+        { "name": "draw", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "callback", "type": "function", "doc": "Called every menu frame while the mod's tab is visible." } ], "doc": "Registers the function that draws the mod's tab below the declared settings (Lua and JavaScript; a DLL draws through ImGui directly).",
+          "example": { "lua": "ui.draw(function()\n  if ui.button('Heal') then uc.player(1).damage = 0 end\nend)", "js": "ui.draw(() => {\n  if (ui.button('Heal')) uc.player(1).damage = 0;\n});" } }
+      ]
+    },
+    {
+      "name": "hook", "provider": "context",
+      "doc": "Callbacks on selected game functions. Only the functions listed under 'Hookable functions' accept hooks (the list grows with releases); each hook point costs nothing while no mod uses it.",
+      "members": [
+        { "name": "list", "kind": "function", "type": "array<string>", "status": "implemented", "since": "1.0", "doc": "Names of the hookable functions.",
+          "example": { "lua": "for _, name in ipairs(hook.list()) do log.write(name) end", "js": "for (const name of hook.list()) log.write(name);" } },
+        { "name": "pre", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Called before the function runs with a table of its registers: r3..r10 as integers, f1..f8 as floats." } ], "doc": "Runs a callback before the game function. The callback may change the registers it is given (they are written back).",
+          "example": { "lua": "hook.pre('GameWeaponUpdate', function(regs) log.write('r3=' .. regs.r3) end)", "js": "hook.pre('GameWeaponUpdate', (regs) => log.write('r3=' + regs.r3));" } },
+        { "name": "post", "kind": "function", "type": "void", "status": "planned", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Called after the function returned." } ], "doc": "Runs a callback after the game function returned (needs translator support; see hooks.md)." },
+        { "name": "replace", "kind": "function", "type": "void", "status": "planned", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Runs instead of the function." } ], "doc": "Replaces the game function (needs translator support; see hooks.md)." }
+      ]
+    },
+    {
+      "name": "mem", "provider": "registry",
+      "doc": "Guest (Wii) memory. Addresses are Wii virtual addresses: MEM1 0x80000000..0x817FFFFF, MEM2 0x90000000..0x93FFFFFF. Values are big-endian in the game; these functions convert. An address outside both ranges is an error (the script gets an exception), never a crash.",
+      "members": [
+        { "name": "read_u8", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads an unsigned 8-bit value.", "example": { "lua": "local v = uc.mem.read_u8(0x80400000)", "js": "const v = uc.mem.read_u8(0x80400000);" } },
+        { "name": "read_u16", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads an unsigned 16-bit value.", "example": { "lua": "local v = uc.mem.read_u16(0x80400000)", "js": "const v = uc.mem.read_u16(0x80400000);" } },
+        { "name": "read_u32", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads an unsigned 32-bit value.", "example": { "lua": "local v = uc.mem.read_u32(0x80400000)", "js": "const v = uc.mem.read_u32(0x80400000);" } },
+        { "name": "read_s8", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads a signed 8-bit value.", "example": { "lua": "local v = uc.mem.read_s8(0x80400000)", "js": "const v = uc.mem.read_s8(0x80400000);" } },
+        { "name": "read_s16", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads a signed 16-bit value.", "example": { "lua": "local v = uc.mem.read_s16(0x80400000)", "js": "const v = uc.mem.read_s16(0x80400000);" } },
+        { "name": "read_s32", "kind": "function", "type": "int", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads a signed 32-bit value.", "example": { "lua": "local v = uc.mem.read_s32(0x80400000)", "js": "const v = uc.mem.read_s32(0x80400000);" } },
+        { "name": "read_f32", "kind": "function", "type": "float", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads a 32-bit float.", "example": { "lua": "local v = uc.mem.read_f32(0x80400000)", "js": "const v = uc.mem.read_f32(0x80400000);" } },
+        { "name": "read_f64", "kind": "function", "type": "float", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Reads a 64-bit float.", "example": { "lua": "local v = uc.mem.read_f64(0x80400000)", "js": "const v = uc.mem.read_f64(0x80400000);" } },
+        { "name": "read_bytes", "kind": "function", "type": "array<int>", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "length", "type": "int", "doc": "Number of bytes, at most 4096." } ], "doc": "Reads raw bytes.", "example": { "lua": "local bytes = uc.mem.read_bytes(0x80400000, 16)", "js": "const bytes = uc.mem.read_bytes(0x80400000, 16);" } },
+        { "name": "write_u8", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes an unsigned 8-bit value.", "example": { "lua": "uc.mem.write_u8(0x80400000, 1)", "js": "uc.mem.write_u8(0x80400000, 1);" } },
+        { "name": "write_u16", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes an unsigned 16-bit value.", "example": { "lua": "uc.mem.write_u16(0x80400000, 1)", "js": "uc.mem.write_u16(0x80400000, 1);" } },
+        { "name": "write_u32", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes an unsigned 32-bit value.", "example": { "lua": "uc.mem.write_u32(0x80400000, 1)", "js": "uc.mem.write_u32(0x80400000, 1);" } },
+        { "name": "write_s8", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes a signed 8-bit value.", "example": { "lua": "uc.mem.write_s8(0x80400000, -1)", "js": "uc.mem.write_s8(0x80400000, -1);" } },
+        { "name": "write_s16", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes a signed 16-bit value.", "example": { "lua": "uc.mem.write_s16(0x80400000, -1)", "js": "uc.mem.write_s16(0x80400000, -1);" } },
+        { "name": "write_s32", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "int", "doc": "Value to store." } ], "doc": "Writes a signed 32-bit value.", "example": { "lua": "uc.mem.write_s32(0x80400000, -1)", "js": "uc.mem.write_s32(0x80400000, -1);" } },
+        { "name": "write_f32", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "float", "doc": "Value to store." } ], "doc": "Writes a 32-bit float.", "example": { "lua": "uc.mem.write_f32(0x80400000, 1.5)", "js": "uc.mem.write_f32(0x80400000, 1.5);" } },
+        { "name": "write_f64", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "value", "type": "float", "doc": "Value to store." } ], "doc": "Writes a 64-bit float.", "example": { "lua": "uc.mem.write_f64(0x80400000, 1.5)", "js": "uc.mem.write_f64(0x80400000, 1.5);" } },
+        { "name": "write_bytes", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." }, { "name": "bytes", "type": "array<int>", "doc": "Values 0..255, at most 4096." } ], "doc": "Writes raw bytes.", "example": { "lua": "uc.mem.write_bytes(0x80400000, {1, 2, 3})", "js": "uc.mem.write_bytes(0x80400000, [1, 2, 3]);" } }
+      ]
+    },
+    {
+      "name": "symbols", "provider": "registry",
+      "doc": "Names the project knows for guest addresses (project/symbols.txt and the verified GX names). Most game functions have no name.",
+      "members": [
+        { "name": "lookup", "kind": "function", "type": "int|null", "status": "implemented", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "Symbol name, e.g. 'OSInit'." } ], "doc": "Guest address of a named symbol, or null.",
+          "example": { "lua": "local addr = uc.symbols.lookup('OSInit')", "js": "const addr = uc.symbols.lookup('OSInit');" } },
+        { "name": "name_of", "kind": "function", "type": "string|null", "status": "implemented", "since": "1.0", "args": [ { "name": "address", "type": "int", "doc": "Guest address." } ], "doc": "Name of the symbol at exactly this address, or null.",
+          "example": { "lua": "local name = uc.symbols.name_of(0x80258AE8)", "js": "const name = uc.symbols.name_of(0x80258AE8);" } }
+      ]
+    },
+    {
+      "name": "player", "provider": "registry", "scope": "slot",
+      "doc": "A player. uc.player(1) is player 1, uc.player(2) player 2 (co-op). Reading or writing a slot that is not in the game is an error; check 'present' first.",
+      "members": [
+        { "name": "present", "kind": "property", "type": "bool", "access": "r", "status": "implemented", "since": "1.0", "doc": "True while the player exists in the current scene.", "example": { "lua": "if uc.player(2).present then log.write('co-op') end", "js": "if (uc.player(2).present) log.write('co-op');" } },
+        { "name": "magazine", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Rounds left in the loaded magazine of the current weapon.", "example": { "lua": "uc.player(1).magazine = 15", "js": "uc.player(1).magazine = 15;" } },
+        { "name": "grenades", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Grenades in stock.", "example": { "lua": "uc.player(1).grenades = 9", "js": "uc.player(1).grenades = 9;" } },
+        { "name": "damage", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.0", "doc": "The damage meter: 0 is unhurt, 50 is dead. Writing 0 heals.", "example": { "lua": "uc.player(1).damage = 0", "js": "uc.player(1).damage = 0;" } },
+        { "name": "invulnerable", "kind": "property", "type": "bool", "access": "rw", "status": "implemented", "since": "1.0", "doc": "While true the damage meter is reset to 0 every game step.", "example": { "lua": "uc.player(1).invulnerable = true", "js": "uc.player(1).invulnerable = true;" } },
+        { "name": "infinite_ammo", "kind": "property", "type": "bool", "access": "rw", "status": "implemented", "since": "1.0", "doc": "While true the magazine is refilled to its starting size every game step.", "example": { "lua": "uc.player(1).infinite_ammo = true", "js": "uc.player(1).infinite_ammo = true;" } },
+        { "name": "position", "kind": "property", "type": "vec3", "access": "r", "status": "planned", "since": "1.0", "doc": "World position (x, y, z) in game units (10 cm)." }
+      ]
+    },
+    {
+      "name": "weapon", "provider": "registry", "scope": "id",
+      "doc": "Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits.",
+      "members": [
+        { "name": "damage", "kind": "property", "type": "float", "access": "rw", "status": "unverified", "since": "1.0", "doc": "Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits.",
+          "example": { "lua": "uc.weapon(0).damage = uc.weapon(0).damage * 2", "js": "uc.weapon(0).damage *= 2;" } },
+        { "name": "fire_rate", "kind": "property", "type": "float", "access": "rw", "status": "planned", "since": "1.0", "doc": "Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now." },
+        { "name": "capacity", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Magazine size, 0 to 999. The game reads it when a reload ends: with 30 set for the handgun a reload refills 30 rounds.",
+          "example": { "lua": "uc.weapon(0).capacity = 30", "js": "uc.weapon(0).capacity = 30;" } },
+        { "name": "reload_time", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Reload duration in seconds of game time (1.0 for the handgun, 2.3 for a shotgun); 0.2 makes a handgun reload about seven times faster.",
+          "example": { "lua": "uc.weapon(0).reload_time = 0.3", "js": "uc.weapon(0).reload_time = 0.3;" } },
+        { "name": "fire_mode", "kind": "property", "type": "string", "access": "rw", "status": "implemented", "since": "1.0", "doc": "'semi' (one shot per press), 'auto' (shots repeat while the button is held) or 'burst'. 'auto' on the handgun was checked in the game (a held trigger fires about every 22 frames instead of once); 'burst' is the value the game's record 3 uses and its effect on other weapons is untested. Reading a value the table holds that has no name gives 'mode <number>'.",
+          "example": { "lua": "uc.weapon(0).fire_mode = 'auto'", "js": "uc.weapon(0).fire_mode = 'auto';" } }
+      ]
+    },
+    {
+      "name": "camera", "provider": "registry",
+      "doc": "The game camera.",
+      "members": [
+        { "name": "view", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.0", "doc": "The world-to-view matrix as 12 floats (3 rows of 4).", "example": { "lua": "local m = uc.camera.view", "js": "const m = uc.camera.view;" } }
+      ]
+    },
+    {
+      "name": "enemies", "provider": "registry",
+      "doc": "Enemies in the current scene.",
+      "members": [
+        { "name": "list", "kind": "function", "type": "array<object>", "status": "implemented", "since": "1.0", "doc": "One object per enemy: { id: int, class: int, x: float, y: float, z: float, hp: float }. Only zombies are listed in this version.",
+          "example": { "lua": "for _, e in ipairs(uc.enemies.list()) do log.write(e.hp) end", "js": "for (const e of uc.enemies.list()) log.write(e.hp);" } }
+      ]
+    },
+    {
+      "name": "input", "provider": "registry",
+      "doc": "Player input as the game sees it.",
+      "members": [
+        { "name": "fire_held", "kind": "function", "type": "bool", "status": "planned", "since": "1.0", "args": [ { "name": "slot", "type": "int", "doc": "Player slot, 1 or 2." } ], "doc": "True while the fire button of the slot is held." }
+      ]
+    }
+  ],
+  "hookable": [
+    { "name": "GameWeaponUpdate", "address": "8006C268", "status": "unverified", "doc": "Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag." },
+    { "name": "PlayerEventHandler", "address": "800676A0", "status": "unverified", "doc": "Player event handler (damage, firing and similar events)." }
+  ]
+}

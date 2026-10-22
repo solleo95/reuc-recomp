@@ -1,0 +1,10 @@
+{
+  "id": "faster-handgun",
+  "name": "Faster Handgun",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "A data-only mod: a 30-round handgun that reloads in 0.3 seconds. No script, just data/handgun.json.",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "names": { "ru": "Быстрый пистолет" }
+}

@@ -31,6 +31,16 @@ void LiveSettings::apply(const Bindings& next) {
     document_.input=next;
     save();
 }
+const nlohmann::ordered_json& LiveSettings::mods_section() const {
+    static const nlohmann::ordered_json none;
+    const auto at=document_.properties.find("mods");
+    return at==document_.properties.end() ? none : *at;
+}
+void LiveSettings::apply_mods(const nlohmann::ordered_json& section) {
+    if(mods_section()==section) return;
+    document_.properties["mods"]=section;
+    save();
+}
 void LiveSettings::save() {
     try {
         auto next=document_;store_options(next,options_);save_config(path_,next);

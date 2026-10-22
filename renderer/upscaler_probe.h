@@ -26,5 +26,5 @@ struct Dlss5DeviceNeeds { std::vector<std::string> extensions; std::string gap; 
 Dlss5DeviceNeeds dlss5_device_needs(VkInstance, VkPhysicalDevice, const std::filesystem::path& directory);
 // Why the device cannot ray trace (extensions, features), nullptr when it has everything; the renderer enables them under the same test.
 const char* ray_tracing_gap(VkPhysicalDevice physical);
-UpscalerSupport probe_upscalers(const std::filesystem::path& directory);
+UpscalerSupport probe_upscalers(const std::filesystem::path& directory, bool dlss5 = true);   // dlss5 false: nvngx_dlssnr.dll is not touched
 }

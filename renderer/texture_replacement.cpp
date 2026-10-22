@@ -57,16 +57,19 @@ std::string texture_key(const TextureDesc& desc, std::span<const std::byte> base
     return key + "_" + std::to_string(unsigned(format));
 }
 
-size_t TextureReplacements::load_index(const std::filesystem::path& dir) {
+size_t TextureReplacements::load_index(const std::filesystem::path& dir, bool replace_existing) {
     std::error_code error;
     for (std::filesystem::directory_iterator it(dir, error), last; !error && it != last; it.increment(error)) {
-        const auto name = it->path().filename().string();
+        const auto utf8_name = it->path().filename().u8string();   // string() throws for names outside the system code page
+        const std::string name(utf8_name.begin(), utf8_name.end());
         if (it->path().extension() != ".dds" || name.compare(0, 5, "tex1_") != 0) continue;
         std::string key = name.substr(5, name.size() - 9);
         // "_m" marks a mipmapped original; the hash covers the base level only, so both spellings map to the same replacement.
         if (const auto at = key.find("_m_"); at != std::string::npos && key.find('x') < at) key.erase(at, 2);
         std::error_code size_error;
-        files_.emplace(std::move(key), Found{it->path(), size_t(it->file_size(size_error))});
+        Found found{it->path(), size_t(it->file_size(size_error))};
+        if (replace_existing) files_.insert_or_assign(std::move(key), std::move(found));
+        else files_.emplace(std::move(key), std::move(found));
     }
     return files_.size();
 }

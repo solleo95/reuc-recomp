@@ -39,6 +39,7 @@ void SettingsMenu::capture_event(const SDL_Event& event) {
     else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) editor_.focus(false);
 }
 void SettingsMenu::commit() {
+    if(mod_menu_) mod_menu_->commit();   // every loop, menu open or not: a script may change its settings at any time
     if(pending_) { const auto next=*pending_; pending_.reset(); live_.apply(next); }
     if(!editor_.capturing() && editor_.bindings()!=live_.bindings()) live_.apply(editor_.bindings());
 }
@@ -61,11 +62,16 @@ void SettingsMenu::build() {
     ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings);
     ImGui::PushFont(fonts_.serif,std::round(32*font_scale));ImGui::TextWrapped("%s",tr("graphics_title"));ImGui::PopFont();
     ImGui::Dummy({0,6*unit});
-    if(ImGui::BeginTabBar("tabs")) {
+    if(ImGui::BeginTabBar("tabs",ImGuiTabBarFlags_FittingPolicyScroll)) {   // tabs that do not fit (mods add more) scroll with arrow buttons
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
+        if(current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
+        if(mod_menu_) {   // mods: their manager, then one tab each (the ### part keeps a tab's identity when its title changes)
+            if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
+            for(const auto& tab:mod_menu_->tabs())
+                if(ImGui::BeginTabItem((tab.title+"###mod:"+tab.id).c_str())) { mod_menu_->draw_tab(tab.id,unit); ImGui::EndTabItem(); }
+        }
         ImGui::EndTabBar();
     }
     if(const auto& error=live_.error()) {

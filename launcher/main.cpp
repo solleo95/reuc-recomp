@@ -119,7 +119,7 @@ std::string binding_name(const uc::Binding& binding) {
 bool same_options(const uc::Options& a,const uc::Options& b) {
     return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.hdr==b.hdr;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
 int run(int argc,wchar_t** argv) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
@@ -543,6 +543,11 @@ int run(int argc,wchar_t** argv) {
             if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(uc::kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(uc::kBloomStrengthMax)));
             track("bloom-strength");
             ImGui::EndDisabled();
+            std::error_code dlss5_ignored;const bool dlss5_runtime=fs::exists(directory/L"nvngx_dlssnr.dll",dlss5_ignored);   // the player puts it next to the exe
+            if(!dlss5_runtime)options.dlss5_enabled=false;
+            ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("dlss5"));
+            toggle("##dlss5",tr("dlss5_enable"),options.dlss5_enabled,!dlss5_runtime,tr("dlss5_runtime_missing"));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("dlss5_enable_hint"));ImGui::PopStyleColor();
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("hdr"));
             toggle("##hdr",tr("hdr"),options.hdr.enabled);
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("hdr_hint"));ImGui::PopStyleColor();

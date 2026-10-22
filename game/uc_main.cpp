@@ -32,6 +32,8 @@
 #include "options.h"
 #include "test_control.h"
 #include "test_server.h"
+#include "game_mods.h"
+#include "menu_ui.h"
 #include "test_state.h"
 #include "test_draws.h"
 #include "packet_dump.h"
@@ -206,15 +208,16 @@ static int real_main(int argc, char** argv) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
     const auto input_config=uc::load_config(config_path);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
     if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
     options=std::get<uc::Options>(std::move(parsed));
+    { std::error_code ignored; if(!std::filesystem::exists(exe_dir()/uc::kDlss5Runtime,ignored)) options.dlss5_enabled=false; }   // the player supplies nvngx_dlssnr.dll; without it DLSS 5 stays off
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
-        const auto support=uc::probe_upscalers(exe_dir());
+        const auto support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
         uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason,support.effects,support.effects_reason,support.anisotropy_max,support.ray_tracing,support.ray_reconstruction,support.ray_tracing_reason,support.ray_reconstruction_reason,support.dlss5,support.dlss5_reason};
         std::printf("%s\n",uc::to_json(report).c_str());
         return 0;
@@ -293,6 +296,9 @@ static int real_main(int argc, char** argv) {
     uc::dispatch_init(uc_functions, uc_function_count, uc_text_begin, uc_text_end);
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
+    // Mods: their file overlays go into the disc tree now, before the game opens anything; the scripts start once the guest is about to run.
+    uc::GameMods mods(exe_dir(), input_config.properties.contains("mods") ? input_config.properties["mods"] : nlohmann::ordered_json::object(), dvd,
+                      std::string(reinterpret_cast<const char*>(hdr), 6), options.no_mods, !options.save_root.empty());
     uc::Sched sched(boot.mem);
     std::unique_ptr<uc::DetTrace> det_trace;
     const bool deterministic = options.deterministic || !options.det_out.empty();
@@ -316,7 +322,7 @@ static int real_main(int argc, char** argv) {
             } else std::fprintf(stderr,"guest CPU %d unavailable; using Windows scheduling\n",options.guest_cpu);
         }
     }
-    uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
+    uc::SaveFs saves(!options.save_root.empty() ? options.save_root : mods.save_root().empty() ? exe_dir()/"saves" : mods.save_root());   // saves-modded while a gameplay mod runs
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
@@ -362,12 +368,13 @@ static int real_main(int argc, char** argv) {
         renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
+        renderer.allow_dlss5(options.dlss5_enabled);
         renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom_settings());
         renderer.set_crosshair_scale(options.crosshair_scale);
         renderer.set_effects(options.effects);
-        renderer.set_dlss5(options.dlss5);
+        renderer.set_dlss5(options.dlss5_enabled ? options.dlss5 : uc::Dlss5Settings{});
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
             renderer.warm_pipelines([&screen](size_t done,size_t total) { screen->update(done,total); });
         } else renderer.warm_pipelines([](size_t,size_t) {});   // a restart: the pipelines come from the disk cache
@@ -442,8 +449,15 @@ static int real_main(int argc, char** argv) {
             std::fprintf(stderr, "texture replacements: %zu files\n", count);
             uc::gx_set_texture_budget(size_t(2) << 30);
         }
+        if (const auto count = mods.load_textures()) {   // later mods win over earlier ones and over the base folder
+            std::fprintf(stderr, "texture replacements with mods: %zu files\n", count);
+            uc::gx_set_texture_budget(size_t(2) << 30);
+        }
     }
     sched.set_shutdown_hook([&packets] { packets.cancel(); });
+    const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
+    uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
+    mods.start(boot.mem,options.headless ? nullptr : &mod_menu);   // on_load runs here; the guest starts right below
     GuestRunner runner(sched, mt, packets);
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
     auto last_profile_time=start;
@@ -674,6 +688,8 @@ static int real_main(int argc, char** argv) {
             if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
             return features ? &*features : nullptr;
         },monitor_width,monitor_height);
+        settings_menu->set_mod_menu(&mod_menu);
+        mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
         settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
             const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
             ShellExecuteW(nullptr,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);

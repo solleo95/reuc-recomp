@@ -10,6 +10,10 @@ namespace uc {
 class DvdFs {
 public:
     bool open_root(const std::filesystem::path& root);
+    // Mod files: every regular file below files_root replaces the disc file with the same path (case-insensitive; the entry keeps its
+    // number) or is added with its parent folders. Symlinks and junctions are skipped. Returns files replaced + added.
+    // Call after open_root and before dvd_hle_init: the game must not hold entry numbers yet.
+    size_t overlay(const std::filesystem::path& files_root);
     int entry_of(std::string path) const;                 // -1 if absent; 0 is the root directory
     bool is_dir(int e) const { return valid(e) && e_[size_t(e)].dir; }
     uint32_t length(int e) const { return valid(e) ? e_[size_t(e)].size : 0; }

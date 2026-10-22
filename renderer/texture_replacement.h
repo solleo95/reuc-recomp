@@ -14,8 +14,9 @@ std::string texture_key(const TextureDesc& desc, std::span<const std::byte> base
 class TextureReplacements {
 public:
     struct Found { std::filesystem::path path; size_t bytes; };
-    // Returns how many files were indexed. Not thread safe against find(): call before the guest runs.
-    size_t load_index(const std::filesystem::path& dir);
+    // Returns how many files are indexed in total. A key that is already indexed keeps its file unless replace_existing (mod folders
+    // loaded after the base folder, in load order). Not thread safe against find(): call before the guest runs.
+    size_t load_index(const std::filesystem::path& dir, bool replace_existing = false);
     bool empty() const { return files_.empty(); }
     std::optional<Found> find(const TextureDesc& desc, std::span<const std::byte> encoded, PaletteView palette) const;
 private:

@@ -31,7 +31,8 @@ struct Options {
     bool frame_generation=false;   // DLSS-G with DLSS, FSR FG with FSR; forced off in deterministic runs
     uint32_t frame_generation_multiplier=2;   // presented frames per rendered frame, 2..6
     GraphicsEffects effects;   // graphics.anisotropy and the later effect options
-    Dlss5Settings dlss5;       // the "dlss5" object of config.json (DLSS 5 Neural Rendering tab)
+    bool dlss5_enabled=false;  // graphics.dlss5 (launcher "DLSS 5", --dlss5): off hides the in-game tab and keeps the DLL unloaded; the game clears it when nvngx_dlssnr.dll is missing
+    Dlss5Settings dlss5;       // the "dlss5" object of config.json (DLSS 5 Neural Rendering tab); only used while dlss5_enabled
     bool features=false;   // --features: print what DLSS/FSR/frame generation this machine supports (JSON, for the launcher) and exit
     bool headless = false, validation = false, log_dvd = false, log_sleep = false, gx_audit = false;
     bool skip_intro = false;
@@ -42,6 +43,7 @@ struct Options {
     std::filesystem::path demo_record, demo_play;   // every input the guest reads, recorded / played back (needs --deterministic to be repeatable)
     uint32_t stop_retrace = 0;    // deterministic runs: exit when the retrace counter reaches this
     bool mute = false;   // audio runs as usual but the output gain is 0 (test runs)
+    bool no_mods = false;   // do not look for or load mods (the test harness passes it unless a scenario needs mods)
     bool no_vulkan_layers = false;   // sets VK_LOADER_LAYERS_DISABLE=~implicit~: OBS/RTSS/ReShade/Steam layers stay out of the process (stable timing in tests)
     bool profile = false;
     bool capture_scene_passes = false;

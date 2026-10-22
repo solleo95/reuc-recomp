@@ -119,6 +119,8 @@ int main() {
         CHECK(options.dlss5.enabled() && options.dlss5.hook==uc::Dlss5Hook::present && options.dlss5.preset==uc::Dlss5Preset::h && options.dlss5.passes==3 && options.dlss5.intensity==0.5 && options.dlss5.resolution_scale==0.75 && options.dlss5.character_mask);
         CHECK(options.dlss5.tone==1 && options.dlss5.model==uc::Dlss5Model::a && options.dlss5.encoding==uc::Dlss5Encoding::automatic);
         CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).dlss5.enabled());
+        CHECK(!uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game"})")).dlss5_enabled);
+        CHECK(uc::options_from_config(uc::parse_config(R"({"game":"S:/Games/Test/game","graphics":{"dlss5":true}})")).dlss5_enabled);
         options.dlss5.exposure_value=uc::Dlss5ExposureValue::inverse; options.dlss5.exposure=2; options.dlss5.encoding=uc::Dlss5Encoding::hdr10; options.dlss5.diffuse_white_nits=1000; options.dlss5.scaling_domain=uc::Dlss5Domain::signed_pq;
         uc::store_options(document,options);
         const auto written=uc::serialize_config(document);

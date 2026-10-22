@@ -88,7 +88,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     colorspace_ext_ = has(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 surface formats; without it HDR stays off
     if (colorspace_ext_) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     std::vector<std::string> dlss5_instance_names;   // DLSS 5: what NGX asks of the instance (nothing without nvngx_dlssnr.dll next to the exe)
-    for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
+    if (dlss5_allowed_) for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
         if (has(name.c_str()) && std::none_of(extensions.begin(), extensions.end(), [&](const char* have) { return name == have; })) dlss5_instance_names.push_back(name);
     for (const auto& name : dlss5_instance_names) extensions.push_back(name.c_str());
     const char* layer = "VK_LAYER_KHRONOS_validation";
@@ -246,7 +246,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     }
     // DLSS 5 Neural Rendering: the extensions NGX asks of the device (the same on every NVIDIA RTX generation), only when the effects path exists and nvngx_dlssnr.dll is there.
     std::vector<std::string> dlss5_device_names;
-    {
+    if (dlss5_allowed_) {
         const auto needs = dlss5_device_needs(instance_, physical_, shaders.parent_path().parent_path());
         dlss5_gap_ = motion_outputs_ || !needs.gap.empty() ? needs.gap : "the effects path is unavailable on this GPU";
         if (dlss5_gap_.empty()) {
@@ -257,7 +257,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
             if (!features12_chained) { features12.pNext = features13.pNext; features13.pNext = &features12; features12_chained = true; }
             features12.bufferDeviceAddress = VK_TRUE;
         }
-    }
+    } else dlss5_gap_ = "DLSS 5 is off";
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; device_info.pNext = &features13;
     VkPhysicalDeviceFeatures core{}; vkGetPhysicalDeviceFeatures(physical_,&core);
     logic_ops_=core.logicOp;

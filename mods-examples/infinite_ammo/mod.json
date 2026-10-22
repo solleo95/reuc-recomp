@@ -1,0 +1,16 @@
+{
+  "id": "infinite-ammo",
+  "name": "Infinite Ammo",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "The magazine refills itself after every shot. Choose which player gets it.",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "script": "scripts/main.lua",
+  "names": { "ru": "Бесконечные патроны" },
+  "settings": [
+    { "key": "player1", "type": "bool", "default": true, "label": { "en": "Player 1", "ru": "Игрок 1" } },
+    { "key": "player2", "type": "bool", "default": false, "label": { "en": "Player 2", "ru": "Игрок 2" },
+      "tooltip": { "en": "The partner in co-op.", "ru": "Напарник в кооперативе." } }
+  ]
+}

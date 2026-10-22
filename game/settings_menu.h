@@ -3,6 +3,7 @@
 #include "feature_report.h"
 #include "binding_editor.h"
 #include "ui_fonts.h"
+#include "menu_bridge.h"
 #include <functional>
 #include <set>
 #include <string>
@@ -26,6 +27,7 @@ public:
     struct Dlss5Report { bool active=false; std::string reason; };
     void set_dlss5_status(std::function<Dlss5Report()> status) { dlss5_report_=std::move(status); }
     void set_open_debug(std::function<void()> open) { open_debug_=std::move(open); }   // the DLSS 5 tab's Open Debug button
+    void set_mod_menu(mods::ModMenu* menu) { mod_menu_=menu; }   // the Mods tab and one tab per mod after the built-in tabs; nullptr: none
 private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
@@ -43,5 +45,6 @@ private:
     std::set<UpscalerKind> failed_, failed_generation_;
     std::function<Dlss5Report()> dlss5_report_;
     std::function<void()> open_debug_;
+    mods::ModMenu* mod_menu_=nullptr;
 };
 }

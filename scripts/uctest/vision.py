@@ -6,6 +6,7 @@ Units: 1.0 = 10 cm, y up; a standing zombie is ~17 high (validated against captu
 AIM_PER_NDC = (0.8, 0.6)
 HEAD_HEIGHT = 15.0
 TORSO_HEIGHT = 9.0
+HEIGHT_OVERRIDE = {}   # actor class -> aim height above the root (set by probes)
 
 
 def project(view, projection, point):
@@ -29,8 +30,11 @@ def enrich(frame, projection):
         item = {"id": e["id"], "cls": e.get("cls"), "alive": e.get("hp") is None or e["hp"] > 0, "visible": False, "head": None, "body": None, "depth": None, "head_intact": e.get("head", True), "hp": e.get("hp")}
         if view and projection:
             root = e["root"]
-            aim_point = project(view, projection, (root[0], root[1] + (HEAD_HEIGHT if item["head_intact"] else TORSO_HEIGHT), root[2]))
-            body = project(view, projection, (root[0], root[1] + TORSO_HEIGHT, root[2]))
+            height = HEIGHT_OVERRIDE.get(e.get("cls"))   # classes whose aim point is not a zombie's head (sharks, bosses)
+            aim_point = project(view, projection, (root[0], root[1] + (HEAD_HEIGHT if item["head_intact"] else TORSO_HEIGHT if height is None else height), root[2]))
+            body = project(view, projection, (root[0], root[1] + (TORSO_HEIGHT if height is None else height), root[2]))
+            if height is not None:
+                aim_point = body
             if aim_point and body:
                 item.update(head=[aim_point[0], aim_point[1]], body=[body[0], body[1]], depth=aim_point[2],
                             visible=abs(aim_point[0]) <= 1 and abs(aim_point[1]) <= 1)

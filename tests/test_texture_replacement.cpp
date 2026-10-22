@@ -115,5 +115,31 @@ int main() {
     try { gx::load_dds(found->path); } catch (const gx::TextureError&) { rejected = true; }
     CHECK(rejected);
     std::filesystem::remove_all(dir);
+
+    // Mod packs: the same texture in two folders. By default the first file indexed stays; with replace_existing the later folder wins.
+    {
+        const auto first = std::filesystem::temp_directory_path() / "uc_texture_replacement_first", second = std::filesystem::temp_directory_path() / "uc_texture_replacement_second";
+        for (const auto& folder : {first, second}) { std::filesystem::remove_all(folder); std::filesystem::create_directories(folder); }
+        write_dds(first / "tex1_4x4_m_f7c67301db6713f0_6.dds", 8, 8, std::vector<uint8_t>(64), 1);
+        write_dds(second / "tex1_4x4_f7c67301db6713f0_6.dds", 4, 4, std::vector<uint8_t>(16), 1);   // another spelling of the same key
+        gx::TextureReplacements keep_first, take_later;
+        CHECK(keep_first.load_index(first) == 1 && keep_first.load_index(second) == 1);
+        CHECK(keep_first.find(desc, rgba, {})->bytes == 148 + 64);
+        CHECK(take_later.load_index(first) == 1 && take_later.load_index(second, true) == 1);
+        CHECK(take_later.find(desc, rgba, {})->bytes == 148 + 16);
+        for (const auto& folder : {first, second}) std::filesystem::remove_all(folder);
+    }
+
+    // A file whose name has no mapping in the system code page (std::filesystem::path::string() throws for it) is skipped, not fatal.
+    {
+        const auto folder = std::filesystem::temp_directory_path() / "uc_texture_replacement_names";
+        std::filesystem::remove_all(folder);
+        std::filesystem::create_directories(folder);
+        write_dds(folder / std::filesystem::path(u8"tex1_日本語_4x4_f7c67301db6713f0_6.dds"), 4, 4, std::vector<uint8_t>(16), 1);
+        write_dds(folder / "tex1_4x4_f7c67301db6713f0_6.dds", 4, 4, std::vector<uint8_t>(16), 1);
+        gx::TextureReplacements names;
+        CHECK(names.load_index(folder) >= 1);
+        std::filesystem::remove_all(folder);
+    }
     return 0;
 }

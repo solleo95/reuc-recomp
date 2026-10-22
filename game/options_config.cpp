@@ -52,6 +52,7 @@ Options options_from_config(const ConfigDocument& document) {
             if(!value.is_number_unsigned() || value.get<uint64_t>()>100)invalid("crosshair_scale must be 0..100");
             options.crosshair_scale=value.get<uint32_t>();
         }
+        if(graphics.contains("dlss5"))options.dlss5_enabled=boolean(graphics["dlss5"]);
         if(graphics.contains("hdr"))options.hdr.enabled=boolean(graphics["hdr"]);
         using Nits=uint32_t HdrSettings::*;
         for(auto [key,field]:std::array<std::pair<const char*,Nits>,3>{{{"hdr_peak_nits",&HdrSettings::peak_nits},{"hdr_paper_white_nits",&HdrSettings::paper_white_nits},{"hdr_ui_nits",&HdrSettings::ui_nits}}}) {
@@ -173,6 +174,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["bloom"]=options.bloom;
     graphics["bloom_strength"]=options.bloom_strength;
     graphics["crosshair_scale"]=options.crosshair_scale;
+    graphics["dlss5"]=options.dlss5_enabled;
     graphics["hdr"]=options.hdr.enabled;
     graphics["hdr_peak_nits"]=options.hdr.peak_nits;
     graphics["hdr_paper_white_nits"]=options.hdr.paper_white_nits;

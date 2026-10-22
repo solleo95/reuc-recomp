@@ -264,9 +264,9 @@ void probe_fsr(const std::filesystem::path& directory, UpscalerSupport& support)
     if (support.fsr) support.fsr_fg=probe_fsr_fg(support.fsr_fg_reason);
 }
 }
-UpscalerSupport probe_upscalers(const std::filesystem::path& directory) {
+UpscalerSupport probe_upscalers(const std::filesystem::path& directory, bool dlss5) {
     UpscalerSupport support;
-    probe_dlss5(directory, support);   // before Streamline: its shutdown leaves NGX in a state our own session crashes on
+    if (dlss5) probe_dlss5(directory, support); else support.dlss5_reason = "DLSS 5 is off (launcher checkbox)";   // an off feature never loads the player's DLL; before Streamline: its shutdown leaves NGX in a state our own session crashes on
     probe_dlss(directory, support);
     probe_fsr(directory, support);
     probe_effects(support);

@@ -1,0 +1,14 @@
+{
+  "id": "pistol-autofire",
+  "name": "Pistol Auto-fire",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "Hold the trigger and the handgun keeps shooting.",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "script": "scripts/main.lua",
+  "names": { "ru": "Автоогонь пистолета" },
+  "settings": [
+    { "key": "auto", "type": "bool", "default": true, "label": { "en": "Automatic fire", "ru": "Автоматический огонь" } }
+  ]
+}

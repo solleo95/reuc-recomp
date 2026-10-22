@@ -26,7 +26,7 @@ add_library(uc_ngx_sdk INTERFACE)
 target_include_directories(uc_ngx_sdk INTERFACE ${streamline_SOURCE_DIR}/external/ngx-sdk/include)
 target_link_libraries(uc_ngx_sdk INTERFACE ${streamline_SOURCE_DIR}/external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib)
 # The DLSS 5 runtime (nvngx_dlssnr.dll, including custom unsigned builds) is not in git: drop it into project/dlss5/ or point UC_DLSS5_RUNTIME (cache variable or
-# environment variable) at it. It is copied beside the build executable; deployment preserves the player's DLL, so place the selected copy beside dist/uc.exe too.
+# environment variable) at it. It is copied beside the build executable for development only and is never installed into dist: players supply their own.
 set(UC_DLSS5_RUNTIME "" CACHE FILEPATH "path of nvngx_dlssnr.dll (DLSS 5 Neural Rendering runtime)")
 if(NOT UC_DLSS5_RUNTIME AND DEFINED ENV{UC_DLSS5_RUNTIME})
   set(UC_DLSS5_RUNTIME "$ENV{UC_DLSS5_RUNTIME}")

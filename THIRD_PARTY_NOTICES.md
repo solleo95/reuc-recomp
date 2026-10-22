@@ -11,6 +11,9 @@ Their licence texts are in the `licenses` folder next to the game.
 | [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4 (`amd_fidelityfx_vk.dll`) | FSR 3.1 upscaling and frame generation | `licenses/FidelityFX/LICENSE.txt` |
 | [SMAA](https://github.com/iryoku/smaa) (commit 71c806a, `third_party/smaa/SOURCE.md` lists the files and hashes) | SMAA 1x anti-aliasing | `licenses/SMAA/LICENSE.txt` |
 | [SDL3](https://github.com/libsdl-org/SDL) | window, input | `licenses/SDL3/LICENSE.txt` |
-| [Dear ImGui](https://github.com/ocornut/imgui) | launcher | `licenses/imgui/LICENSE.txt` |
+| [Dear ImGui](https://github.com/ocornut/imgui) | launcher, in-game menu | `licenses/imgui/LICENSE.txt` |
+| [Lua](https://www.lua.org) 5.4.7 | Lua scripts of mods | `licenses/lua/license-and-readme.html` (the licence is at the end of the page) |
+| [QuickJS-ng](https://github.com/quickjs-ng/quickjs) 0.10.1 | JavaScript scripts of mods | `licenses/quickjs-ng/LICENSE` |
+| [miniz](https://github.com/richgel999/miniz) 3.0.2 | zip files of mods | `licenses/miniz/LICENSE` |
 
 NVIDIA, GeForce RTX, DLSS and Reflex are trademarks and/or registered trademarks of NVIDIA Corporation. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc.

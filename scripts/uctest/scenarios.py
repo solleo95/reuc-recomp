@@ -398,5 +398,55 @@ def overlay(g, args):
     return result
 
 
+MODS_SMOKE_MODS = ["infinite_ammo", "god_mode", "pistol_autofire", "faster_handgun"]
+
+
+def mods_smoke(g, args):
+    """Mods in the real game (the example mods, copied next to the exe for this run): the held trigger fires but the magazine never drops (infinite ammo),
+    the handgun record is automatic with the data patch's 30 rounds, the damage meter stays at zero (god mode), and the menu shows the Mods tab and the
+    mods' tabs. Nothing here uses system input."""
+    import struct
+    reach_gameplay(g)
+    g.advance(60)
+
+    def peek(addr, size):
+        return bytes.fromhex(g.request({"cmd": "peek", "addr": addr, "size": size})["hex"])
+
+    result = {}
+    with g.step("mods_loaded"):
+        log = (g.run_dir / "run.log").read_text(encoding="utf-8", errors="replace")
+        if "[mods] 4 enabled" not in log:
+            g.fail("the example mods were not loaded: " + [line for line in log.splitlines() if "[mods]" in line or "[mod " in line][:4].__repr__(), "mods")
+    with g.step("weapon_records"):
+        record = peek(0x8046A86C, 168)
+        mode, capacity = struct.unpack_from(">I", record, 0x10)[0], struct.unpack_from(">I", record, 0x14)[0]
+        result["handgun_record"] = {"mode": mode, "capacity": capacity}
+        if mode != 0 or capacity != 30:
+            g.fail(f"handgun record is mode {mode}, capacity {capacity}; the mods set automatic fire and 30 rounds", "weapon record")
+    with g.step("held_trigger"):
+        before = g.state()["player"]["magazine"]
+        g.press("B", 90)
+        g.advance(30)
+        after = g.state()["player"]["magazine"]
+        result["magazine"] = {"before": before, "after": after}
+        if after < before:
+            g.fail(f"the magazine dropped from {before} to {after} with infinite ammo on", "infinite ammo")
+    with g.step("god_mode"):
+        g.advance(240)
+        damage = g.state()["player"]["damage"]
+        result["damage_meter"] = damage
+        if damage != 0:
+            g.fail(f"the damage meter is {damage} with god mode on", "god mode")
+    with g.step("menu"):
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(10)
+        result["menu"] = g.capture()   # look at it: the Mods tab and the mods' tabs after Controls, with scroll arrows when they do not fit
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay}
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

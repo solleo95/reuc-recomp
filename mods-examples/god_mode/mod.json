@@ -1,0 +1,15 @@
+{
+  "id": "god-mode",
+  "name": "God Mode",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "Players take no damage. The tab also has a button that heals player 1 on demand.",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "script": "scripts/main.js",
+  "names": { "ru": "Бессмертие" },
+  "settings": [
+    { "key": "player1", "type": "bool", "default": true, "label": { "en": "Player 1", "ru": "Игрок 1" } },
+    { "key": "player2", "type": "bool", "default": true, "label": { "en": "Player 2", "ru": "Игрок 2" } }
+  ]
+}

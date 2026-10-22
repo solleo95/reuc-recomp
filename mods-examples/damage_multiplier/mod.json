@@ -1,0 +1,15 @@
+{
+  "id": "damage-multiplier",
+  "name": "Damage Multiplier",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "Multiplies the damage of every weapon. Needs weapon.damage, which is marked unverified in the API reference.",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "script": "scripts/main.lua",
+  "names": { "ru": "Множитель урона" },
+  "settings": [
+    { "key": "scale", "type": "number", "default": 2.0, "min": 0.5, "max": 10, "step": 0.5,
+      "label": { "en": "Damage multiplier", "ru": "Множитель урона" }, "tooltip": { "en": "Applied to all 20 weapon types.", "ru": "Применяется ко всем 20 типам оружия." } }
+  ]
+}

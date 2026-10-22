@@ -28,6 +28,9 @@ public:
     const std::optional<std::string>& error() const { return error_; }
     void apply(const Options& next);
     void apply(const Bindings& next);
+    // The "mods" section of config.json (enabled mods, load order, per-mod settings): kept as one JSON value, saved with the rest.
+    const nlohmann::ordered_json& mods_section() const;   // null while the config has none
+    void apply_mods(const nlohmann::ordered_json& section);
 private:
     void save();
     std::filesystem::path path_;

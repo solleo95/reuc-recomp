@@ -50,6 +50,10 @@ std::string symbol_name(uint32_t a) {
     std::snprintf(b, sizeof b, "+0x%X", a - it->first);
     return it->second + b;
 }
+std::optional<uint32_t> symbol_address(const std::string& name) {
+    for (const auto& [address, symbol] : g_syms) if (symbol == name) return address;
+    return std::nullopt;
+}
 void trace_dump(std::FILE* out, int count) { dump_ring(out, ring(), count); }
 void trace_dump_all(std::FILE* out, int count) {
     std::lock_guard<std::mutex> lk(g_rings_m);

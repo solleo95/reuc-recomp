@@ -21,6 +21,7 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     auto* tabs=context.TabBars.GetByIndex(0);
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
     CHECK(tabs->Tabs.Size==4);   // Main, Effects, DLSS 5, Controls
+    CHECK((tabs->Flags&ImGuiTabBarFlags_FittingPolicyScroll)!=0);   // more tabs than the width (mods) scroll instead of shrinking
     CHECK(tabs->Tabs[3].Offset+tabs->Tabs[3].Width<=tabs->BarRect.GetWidth());
     // Open the first combo through ImGui input, then inspect the actual popup geometry.
     ImGuiWindow* graphics=nullptr;
@@ -168,7 +169,7 @@ int main(int argc,char** argv) {
     const bool gpu=argc==4 && std::string_view(argv[1])=="--gpu";
     const auto folder=std::filesystem::temp_directory_path()/std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     std::filesystem::create_directories(folder);
-    uc::ConfigDocument document; uc::Options options; options.upscaler=uc::UpscalerKind::dlss;
+    uc::ConfigDocument document; uc::Options options; options.upscaler=uc::UpscalerKind::dlss; options.dlss5_enabled=true;
     uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};

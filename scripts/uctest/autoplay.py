@@ -18,22 +18,25 @@ ENEMY_CLASSES = {0x803F2B60}   # actor classes with a known position layout (tra
 CAPTURE_EVERY_TICKS = 1800
 
 
-def pick_target(frame, crosshair, ignore=()):
-    """Alive, visible, not ignored enemy whose aim point is nearest to the crosshair; closer enemies (smaller depth) are preferred."""
+def pick_target(frame, crosshair, ignore=(), aim_only=(), aim_min_id=0):
+    """Alive, visible, not ignored enemy whose aim point is nearest to the crosshair; closer enemies (smaller depth) are preferred.
+    aim_only: extra classes the bot may aim at (never fired at, see Autoplay); only actors with id >= aim_min_id count as aim-only."""
     best, best_key = None, None
     for e in frame.get("enemies") or []:
-        if not e.get("alive", True) or not e.get("visible") or not e.get("head") or e["id"] in ignore or e.get("cls") not in (None, *ENEMY_CLASSES):
+        if not e.get("alive", True) or not e.get("visible") or not e.get("head") or e["id"] in ignore or e.get("cls") not in (None, *ENEMY_CLASSES, *aim_only):
             continue
         dx, dy = e["head"][0] - crosshair[0], e["head"][1] - crosshair[1]
-        key = (e.get("depth") or 0) + DEPTH_WEIGHT * (dx * dx + dy * dy)
+        key = (e.get("depth") or 0) + DEPTH_WEIGHT * (dx * dx + dy * dy) - (1e6 if e.get("cls") in aim_only and e["id"] >= aim_min_id else 0)   # an aim-only class is the point of the run: it wins
         if best_key is None or key < best_key:
             best, best_key = e, key
     return best
 
 
 class Autoplay:
-    def __init__(self, game, log_path, *, stuck_seconds=300, max_failures=5, projection=None, god=False, speed=1):
+    def __init__(self, game, log_path, *, stuck_seconds=300, max_failures=5, projection=None, god=False, speed=1, aim_only=()):
         self.g, self.stuck_seconds, self.max_failures, self.god, self.speed = game, stuck_seconds, max_failures, god, speed
+        self.aim_min_id = 0   # actors below this id of an aim-only class are shot as usual
+        self.aim_only = frozenset(aim_only)   # classes the crosshair follows without firing (behaviour probes: the enemy reacts to being aimed at)
         self.log_path = log_path
         open(log_path, "w").close()
         self.projection = projection
@@ -143,13 +146,15 @@ class Autoplay:
             return
         tick = f.get("retraces", f["n"])
         ignore = {i for i, until in self.ignore_until.items() if until > tick}
-        target = pick_target(f, self.aim, ignore)
+        target = pick_target(f, self.aim, ignore, self.aim_only, self.aim_min_id)
         hold = max(2, round(self.rate * SHOT_HOLD_S))
         cycle = hold + max(1, round(self.rate * SHOT_GAP_S))
         if target:
             x, y = (max(-1.0, min(1.0, v)) for v in target["head"])
             self.aim = (x, y)
-            if f["n"] - self.last_shot_n >= cycle:   # one trigger pull per cycle; in between only the aim follows the target
+            if target.get("cls") in self.aim_only and target["id"] >= self.aim_min_id:
+                self.g.aim(x, y, wait=False)
+            elif f["n"] - self.last_shot_n >= cycle:   # one trigger pull per cycle; in between only the aim follows the target
                 self.last_shot_n = f["n"]
                 self.g.press("B", hold, x, y, wait=False)
                 self.shots += 1
@@ -164,6 +169,8 @@ class Autoplay:
                 self.event("shot", id=target["id"], aim=[round(x, 3), round(y, 3)])
             else:
                 self.g.aim(x, y, wait=False)
+        elif self.aim_only and any(e.get("cls") in self.aim_only and e["id"] >= self.aim_min_id and e.get("alive", True) for e in f.get("enemies") or []):
+            self.g.aim(0.0, 0.0, wait=False)   # an aim-only enemy exists but is off screen: no blind centre fire that would kill it
         elif f["n"] - self.last_shot_n >= cycle:   # no target we can see: keep firing at the screen centre (enemies the memory scan misses are usually there)
             self.last_shot_n = f["n"]
             self.aim = (0.0, 0.0)

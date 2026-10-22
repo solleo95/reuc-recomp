@@ -54,12 +54,12 @@ class StepFailed(Exception):
 class Game:
     BUTTONS = {"A": 0x0800, "B": 0x0400, "minus": 0x0010, "plus": 0x1000}
 
-    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=()):
+    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=(), mods=False):
         self.exe = (ROOT / exe).resolve()
         self.run_dir = Path(run_dir) if run_dir else ROOT / "build" / "autotest" / str(time.time_ns())
         self.name = re.sub(r"[^A-Za-z0-9_-]", "_", self.run_dir.name)[-32:] or "run"
         self.speed, self.skip_intro, self.seconds, self.launch, self.god = speed, skip_intro, seconds, launch, god
-        self.skip_tutorials = skip_tutorials
+        self.skip_tutorials, self.mods = skip_tutorials, mods
         self.transport_factory, self.saves, self.game_args = transport_factory, saves, list(game_args)
         self.process = None
         self.transport = None
@@ -112,6 +112,13 @@ class Game:
         config = self.run_dir / "config.json"   # the in-game menu saves settings: a run writes its own copy, never the dist config
         if not config.exists() and (self.exe.parent / "config.json").exists():
             shutil.copyfile(self.exe.parent / "config.json", config)
+        self._installed_mods = []
+        if isinstance(self.mods, (list, tuple)):
+            try:
+                self._install_mods(config)
+            except Exception:
+                self._cleanup()   # __exit__ does not run when __enter__ fails: take back the folders already copied
+                raise
         args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),
                 "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
         if "--config" not in self.game_args:   # no dist config: the game starts from defaults and saves its first change here
@@ -128,6 +135,8 @@ class Game:
             args.append("--mute")   # tests run silent: the owner is usually at the machine
         if not os.environ.get("UC_TEST_LAYERS"):   # UC_TEST_LAYERS=1 keeps the implicit Vulkan layers (RTSS, OBS, ReShade...) on, as a player runs the game
             args.append("--no-vulkan-layers")   # OBS/RTSS/ReShade layers cost ~3 FPS and add hitches: tests measure the game, not the overlays
+        if not self.mods:
+            args.append("--no-mods")   # a mods folder next to the exe must not change what a test measures; the mod scenarios pass mods=True
         if self.god:
             args.append("--god")
         if self.skip_tutorials:
@@ -160,6 +169,28 @@ class Game:
                 self.transport.close()
         except Exception:
             pass   # cleanup must never mask the step failure
+        for folder in getattr(self, "_installed_mods", []):   # the example mods this run copied next to the exe
+            shutil.rmtree(folder, ignore_errors=True)
+        self._installed_mods = []
+
+    def _install_mods(self, config):
+        """mods=[names]: copies those folders of mods-examples/ into <exe folder>/mods and enables them in this run's config copy; removed at cleanup."""
+        target = self.exe.parent / "mods"
+        ids = []
+        for name in self.mods:
+            source, folder = ROOT / "mods-examples" / name, target / name
+            marker = folder / ".uctest-installed"
+            if folder.exists():
+                if not marker.exists():   # the owner's own mod with this folder name: never delete it
+                    raise RuntimeError(f"{folder} already exists and was not installed by the harness; rename or remove it for the test run")
+                shutil.rmtree(folder, ignore_errors=True)   # left behind by an earlier harness run
+            shutil.copytree(source, folder)
+            marker.write_text("installed by uctest; removed at cleanup", encoding="utf-8")
+            self._installed_mods.append(folder)
+            ids.append(json.loads((source / "mod.json").read_text(encoding="utf-8"))["id"])
+        data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+        data["mods"] = {"enabled": ids}
+        config.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
     # events ----------------------------------------------------------
     def _read_loop(self):

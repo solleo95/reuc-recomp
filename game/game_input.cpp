@@ -1,4 +1,5 @@
 #include "game_input.h"
+#include "hooks.h"
 #include "test_state.h"
 #include "gx_vertices.h"
 #include "guest_call.h"
@@ -186,6 +187,7 @@ void hle_GameActionMask(ppc::Ctx& c) {
     c.r[3]=(ppc::rd8(c,c.r[3]+0x54+index)&1) ? 0 : ppc::rd32(c,c.r[3]+4+index*4);
 }
 void hle_GameWeaponUpdate(ppc::Ctx& c) {
+    uc::mods::hook_enter<0x8006C268u>(c);   // mod hook point: the guest's r3 (weapon object) and r4 are read after it
     const auto object=c.r[3],allow=c.r[4],expected_actor=actor;
     if(trace_actions && wrapper_records<8) { ++wrapper_records; std::fprintf(stderr,"[native-wrapper] weapon %08X expected %08X allow %u\n",object,actor ? actor+0x48 : 0,allow); }
     const bool player_weapon=actor && object==actor+0x48;

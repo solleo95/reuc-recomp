@@ -33,6 +33,44 @@ bool DvdFs::open_root(const fs::path& root) {
     return true;
 }
 
+size_t DvdFs::overlay(const fs::path& files_root) {
+    if (e_.empty()) return 0;
+    std::vector<std::pair<std::string, fs::path>> files;   // relative path (UTF-8, '/'), full path
+    std::error_code error;
+    for (fs::recursive_directory_iterator it(files_root, error), last; !error && it != last; it.increment(error)) {
+        std::error_code entry_error;
+        const auto type = it->symlink_status(entry_error).type();
+        if (type == fs::file_type::symlink || type == fs::file_type::junction) { it.disable_recursion_pending(); continue; }
+        if (type != fs::file_type::regular || it->file_size(entry_error) > UINT32_MAX) continue;
+        const auto rel = it->path().lexically_relative(files_root).generic_u8string();
+        files.emplace_back(std::string(rel.begin(), rel.end()), it->path());
+    }
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return lower(a.first) < lower(b.first); });
+    size_t count = 0;
+    for (const auto& [rel, full] : files) {
+        std::error_code size_error;
+        const auto measured = fs::file_size(full, size_error);
+        if (size_error || measured > UINT32_MAX) continue;   // the file changed or vanished since the scan
+        const uint32_t size = uint32_t(measured);
+        if (const auto at = index_.find(lower(rel)); at != index_.end()) {
+            Entry& entry = e_[size_t(at->second)];
+            if (entry.dir) continue;
+            entry.full = full; entry.size = size; ++count;
+            continue;
+        }
+        for (size_t slash = rel.find('/'); slash != std::string::npos; slash = rel.find('/', slash + 1)) {   // missing parent folders
+            const std::string folder = rel.substr(0, slash);
+            if (index_.count(lower(folder))) continue;
+            e_.push_back({folder, files_root / fs::path(std::u8string(folder.begin(), folder.end())), true, 0});
+            index_[lower(folder)] = int(e_.size()) - 1;
+        }
+        e_.push_back({rel, full, false, size});
+        index_[lower(rel)] = int(e_.size()) - 1;
+        ++count;
+    }
+    return count;
+}
+
 int DvdFs::entry_of(std::string path) const {
     for (char& c : path) if (c == '\\') c = '/';
     std::string norm;

@@ -6,11 +6,12 @@ import sys
 import time
 
 from .client import CHECKPOINTS, GUEST_CPU, Game, StepFailed, resolve_saves
-from .scenarios import SCENARIOS
+from .scenarios import SCENARIO_MODS, SCENARIOS
 
 
 def run_once(name, args):
-    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, skip_tutorials=args.skip_tutorials or name == "fight", saves=resolve_saves(args.saves_from), game_args=args.game_arg)
+    g = Game(**({"exe": args.exe} if args.exe else {}), speed=args.speed, god=args.god, skip_tutorials=args.skip_tutorials or name == "fight", saves=resolve_saves(args.saves_from), game_args=args.game_arg,
+             mods=SCENARIO_MODS.get(name, False))
     start = time.monotonic()
     report = {"scenario": name, "ok": False, "speed": args.speed, "god": args.god}
     try:

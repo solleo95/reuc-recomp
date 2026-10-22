@@ -105,5 +105,20 @@ int main() {
         CHECK(!uc::with_upscaler(fsr,uc::UpscalerKind::smaa).frame_generation);   // SMAA has no generator
         CHECK(uc::frame_generation_choice(fsr)==uc::FrameGenChoice::fsr && uc::frame_generation_choice(uc::Options{})==uc::FrameGenChoice::off);
     }
+    {   // the mods section: stored beside the options, saved at once, kept by later option saves, and a refused save is reported like the others
+        uc::LiveSettings mods_live(path,uc::load_config(path),targets);   // the block above left the file changed behind `live`'s back
+        CHECK(mods_live.mods_section().is_null());
+        const nlohmann::ordered_json section={{"enabled",{"a"}},{"a",{{"settings",{{"scale",2.5}}}}}};
+        calls.clear(); mods_live.apply_mods(section);
+        CHECK(calls.empty() && mods_live.mods_section()==section && !mods_live.error());
+        CHECK(uc::load_config(path).properties["mods"]==section);
+        auto next=mods_live.options(); next.crosshair_scale=55; mods_live.apply(next);   // an option save must not drop the section
+        CHECK(uc::load_config(path).properties["mods"]==section && saved().crosshair_scale==55 && !mods_live.error());
+        mods_live.apply_mods(section);   // unchanged: nothing to write
+        CHECK(!mods_live.error());
+        { auto other=uc::load_config(path); other.properties["mods_other_writer"]=1; uc::save_config(path,other); }
+        mods_live.apply_mods({{"enabled",nlohmann::ordered_json::array()}});   // a refused save is reported, the change stays applied
+        CHECK(mods_live.error() && mods_live.mods_section()["enabled"].empty());
+    }
     fs::remove(path);
 }
