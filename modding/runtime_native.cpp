@@ -207,12 +207,17 @@ private:
         api_.on = &NativeRuntime::c_on;
         api_.set_ui = &NativeRuntime::c_set_ui;
         api_.hook_pre = &NativeRuntime::c_hook_pre;
+        api_.hook_post = &NativeRuntime::c_hook_post;
+        api_.hook_replace = &NativeRuntime::c_hook_replace;
     }
 
-    static int c_hook_pre(const char* name, HookCallbackFn callback, void* user) {
+    static int c_hook_pre(const char* name, HookCallbackFn callback, void* user) { return add_hook(HookKind::pre, name, callback, user); }
+    static int c_hook_post(const char* name, HookCallbackFn callback, void* user) { return add_hook(HookKind::post, name, callback, user); }
+    static int c_hook_replace(const char* name, HookCallbackFn callback, void* user) { return add_hook(HookKind::replace, name, callback, user); }
+    static int add_hook(HookKind kind, const char* name, HookCallbackFn callback, void* user) {
         auto* self = current();
         if (!self || !name || !callback || !self->ctx_.hooks) return 1;
-        const bool added = self->ctx_.hooks->add_pre(self, name, [self, callback, user](HookRegs& regs, Budget budget) -> CallResult {
+        const bool added = self->ctx_.hooks->add_hook(kind, self, name, [self, callback, user](HookRegs& regs, Budget budget) -> CallResult {
             UcHookRegs native{};
             for (int i = 0; i < 8; ++i) { native.r[i] = regs.r[i]; native.f[i] = regs.f[i]; }
             const auto begin = Clock::now();

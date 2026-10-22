@@ -31,9 +31,11 @@ struct FakeUi : UiApi {
 struct FakeHooks : HookHost {
     std::vector<std::function<CallResult(HookRegs&, Budget)>> callbacks;
     std::vector<const void*> owners;
-    bool add_pre(const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) override {
+    std::vector<HookKind> kinds;   // of each callback, in install order
+    bool add_hook(HookKind kind, const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) override {
         if (name != "GameWeaponUpdate") return false;
         owners.push_back(owner);
+        kinds.push_back(kind);
         callbacks.push_back(std::move(callback));
         return true;
     }

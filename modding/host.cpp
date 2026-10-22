@@ -31,7 +31,7 @@ struct ModHost::Running {
 class ModHost::Hooks : public HookHost {
 public:
     Hooks(ModHost& host, Running& mod) : host_(host), mod_(mod) {}
-    bool add_pre(const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) override {
+    bool add_hook(HookKind kind, const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) override {
         const auto address = HookRegistry::address_of(name);
         if (!address) return false;
         auto& flag = mod_.hook_flags[owner];   // the caller (a runtime inside load/fire) holds the mod's lock
@@ -44,7 +44,7 @@ public:
             HookRegs regs = read_hook_regs(ctx);
             const CallResult result = callback(regs, host.config_.step_budget);
             if (result.ok) write_hook_regs(ctx, regs); else host.record(mod, result);
-        });
+        }, kind);
     }
     std::vector<std::string> names() const override { return HookRegistry::names(); }
 private:

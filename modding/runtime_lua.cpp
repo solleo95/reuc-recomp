@@ -407,26 +407,28 @@ private:
         luaL_unref(L_, LUA_REGISTRYINDEX, table);
         return result;
     }
-    static int l_hook_pre(lua_State* L) {
+    static int add_hook(lua_State* L, HookKind kind, const char* function) {
         const std::string name = luaL_checkstring(L, 1);
         luaL_checktype(L, 2, LUA_TFUNCTION);
         LuaRuntime* self = me(L);
         if (!self->ctx_.hooks) return luaL_error(L, "hooks are not available here (they need \"touches_gameplay\": true in mod.json)");
         lua_pushvalue(L, 2);
         const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-        if (!self->ctx_.hooks->add_pre(self, name, [self, ref](HookRegs& regs, Budget budget) { return self->call_hook(ref, regs, budget); })) {
+        if (!self->ctx_.hooks->add_hook(kind, self, name, [self, ref](HookRegs& regs, Budget budget) { return self->call_hook(ref, regs, budget); })) {
             luaL_unref(L, LUA_REGISTRYINDEX, ref);
-            return luaL_error(L, "'%s' is not a hookable function (see hook.list())", name.c_str());
+            return luaL_error(L, "hook.%s: '%s' is not a hookable function (see hook.list())", function, name.c_str());
         }
         return 0;
     }
+    static int l_hook_pre(lua_State* L) { return add_hook(L, HookKind::pre, "pre"); }
+    static int l_hook_post(lua_State* L) { return add_hook(L, HookKind::post, "post"); }
+    static int l_hook_replace(lua_State* L) { return add_hook(L, HookKind::replace, "replace"); }
     static int l_hook_list(lua_State* L) {
         const auto names = me(L)->ctx_.hooks ? me(L)->ctx_.hooks->names() : std::vector<std::string>();
         lua_createtable(L, int(names.size()), 0);
         for (size_t i = 0; i < names.size(); ++i) { lua_pushlstring(L, names[i].data(), names[i].size()); lua_rawseti(L, -2, lua_Integer(i + 1)); }
         return 1;
     }
-    static int l_hook_unavailable(lua_State* L) { return luaL_error(L, "hook.post and hook.replace are not available in this version (see the API reference)"); }
 
     static int l_ui_draw(lua_State* L) {
         luaL_checktype(L, 1, LUA_TFUNCTION);
@@ -557,8 +559,8 @@ void LuaRuntime::install_context_globals() {
     lua_newtable(L_);
     lua_pushcfunction(L_, &l_hook_pre); lua_setfield(L_, -2, "pre");
     lua_pushcfunction(L_, &l_hook_list); lua_setfield(L_, -2, "list");
-    lua_pushcfunction(L_, &l_hook_unavailable); lua_setfield(L_, -2, "post");
-    lua_pushcfunction(L_, &l_hook_unavailable); lua_setfield(L_, -2, "replace");
+    lua_pushcfunction(L_, &l_hook_post); lua_setfield(L_, -2, "post");
+    lua_pushcfunction(L_, &l_hook_replace); lua_setfield(L_, -2, "replace");
     lua_setglobal(L_, "hook");
     lua_newtable(L_);
     const std::pair<const char*, lua_CFunction> widgets[] = {

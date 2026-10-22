@@ -54,9 +54,11 @@ struct CallResult {
 class HookHost {
 public:
     virtual ~HookHost() = default;
-    // The callback gets the guest's argument registers and may change them; it runs on the game thread inside the budget.
-    // False when `name` is not a hookable function.
-    virtual bool add_pre(const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) = 0;
+    // The callback gets the guest's argument registers and may change them; it runs on the game thread inside the budget. pre: before the function
+    // (changes go into the function's arguments); replace: instead of it (the registers r3 / f1 are the return value); post: after it returned
+    // (r3 / f1 are the return value and may be changed). False when `name` is not a hookable function.
+    virtual bool add_hook(HookKind kind, const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) = 0;
+    bool add_pre(const void* owner, const std::string& name, std::function<CallResult(HookRegs&, Budget)> callback) { return add_hook(HookKind::pre, owner, name, std::move(callback)); }
     virtual std::vector<std::string> names() const = 0;
 };
 

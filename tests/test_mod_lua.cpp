@@ -206,7 +206,15 @@ static void hook_pre_regs_round_trip() {
     CHECK(regs.r[0] == 7 && regs.r[1] == 8 && regs.f[1] == 2.5 && regs.r[7] == 0xFFFFFFFFu && regs.r[2] == 99);   // untouched registers stay
     const auto unknown = rig.run("hook.pre('Nope', function() end)");
     CHECK(!unknown.ok && unknown.error.find("hookable") != std::string::npos);
-    CHECK(!rig.run("hook.post('GameWeaponUpdate', function() end)").ok && !rig.run("hook.replace('GameWeaponUpdate', function() end)").ok);
+    // post and replace take the same registers table and write it back (r3 / f1 are the return value there)
+    const size_t before = rig.hooks.callbacks.size();
+    CHECK(rig.run("hook.post('GameWeaponUpdate', function(regs) regs.r3 = regs.r3 + 1 end)\nhook.replace('GameWeaponUpdate', function(regs) regs.r3 = 123 end)").ok);
+    CHECK(rig.hooks.callbacks.size() == before + 2 && rig.hooks.kinds[before] == HookKind::post && rig.hooks.kinds[before + 1] == HookKind::replace && rig.hooks.kinds[0] == HookKind::pre);
+    HookRegs returned; returned.r[0] = 5;
+    CHECK(rig.hooks.callbacks[before](returned, kBudget).ok && returned.r[0] == 6);
+    CHECK(rig.hooks.callbacks[before + 1](returned, kBudget).ok && returned.r[0] == 123);
+    const auto bad_post = rig.run("hook.post('Nope', function() end)");
+    CHECK(!bad_post.ok && bad_post.error.find("hook.post") != std::string::npos && bad_post.error.find("hookable") != std::string::npos);
     CHECK(rig.run("hook.pre('GameWeaponUpdate', function(regs) while true do end end)").ok);
     const auto loop = rig.hooks.callbacks.back()(regs, Budget{std::chrono::milliseconds(5)});
     CHECK(!loop.ok && loop.budget_exceeded);   // a hook is under the same budget as any callback

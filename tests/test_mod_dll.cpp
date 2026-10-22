@@ -34,6 +34,8 @@ static void on_step(const char*, void*) {
 
 static void on_load(const char* payload, void*) { g_api->log(payload); }
 static void hook(UcHookRegs* regs, void*) { regs->r[1] = regs->r[0] + 1; regs->f[1] = regs->f[0] * 2; }
+static void post_hook(UcHookRegs* regs, void*) { regs->r[0] += 100; }      // the return value, seen after the function
+static void replace_hook(UcHookRegs* regs, void*) { regs->r[0] = 4242; }   // the return value of the replacement
 static void draw(void*) {
     write_u32(0x8000030C, read_u32(0x8000030C) + 1);
     write_u32(0x80000310, uint32_t(reinterpret_cast<uintptr_t>(g_api->imgui_context)));   // what a real mod passes to ImGui::SetCurrentContext
@@ -60,6 +62,8 @@ UC_MOD_EXPORT int uc_mod_init(const UcApi* api) {
     g_api->set_ui(draw, nullptr);
     if (g_api->hook_pre("GameWeaponUpdate", hook, nullptr) != 0) return 4;
     if (g_api->hook_pre("NoSuchFunction", hook, nullptr) == 0) return 5;   // an unknown name must be refused
+    if (g_api->hook_post("GameWeaponUpdate", post_hook, nullptr) != 0 || g_api->hook_replace("GameWeaponUpdate", replace_hook, nullptr) != 0) return 6;
+    if (g_api->hook_post("NoSuchFunction", post_hook, nullptr) == 0 || g_api->hook_replace("NoSuchFunction", replace_hook, nullptr) == 0) return 7;
     return 0;
 }
 

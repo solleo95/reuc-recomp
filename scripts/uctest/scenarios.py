@@ -539,6 +539,28 @@ def fire_rate(g, args):
     return result
 
 
+def hook_replace(g, args):
+    """hook.replace on GameWeaponUpdate with an empty function: the original weapon update does not run, so a held trigger does not fire (plain: 15 -> 14), and
+    hook.post still runs after each skipped call (it logs its call count)."""
+    reach_gameplay(g)
+    g.advance(120)
+    result = {}
+    with g.step("replaced"):
+        before = g.state()["player"]["magazine"]
+        g.press("B", 90)
+        g.advance(30)
+        after = g.state()["player"]["magazine"]
+        result["magazine"] = {"before": before, "after": after}
+        if after != before:
+            g.fail(f"the magazine went from {before} to {after} although the weapon update was replaced by nothing", "hook replace")
+    with g.step("post_ran"):
+        log_path = g.exe.parent / "debug" / "mods.log"
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        if "post calls=" not in text:
+            g.fail("the post hook never ran after the replaced function", "hook post")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

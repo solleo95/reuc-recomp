@@ -24,9 +24,9 @@ public:
     static std::optional<uint32_t> address_of(std::string_view name);   // hookable function name -> guest address
     static std::vector<std::string> names();
 
-    bool add(uint32_t address, const void* owner, Callback callback);   // false when the address is not hookable
+    bool add(uint32_t address, const void* owner, Callback callback, HookKind kind = HookKind::pre);   // false when the address is not hookable
     void remove_owner(const void* owner);
-    size_t count(uint32_t address) const;                                // callbacks installed at the address
+    size_t count(uint32_t address, HookKind kind = HookKind::pre) const;  // callbacks of that kind installed at the address
     void clear();                                                        // everything (tests)
     size_t retired_chains() const;                                       // replaced chains not freed yet (tests)
 };

@@ -36,6 +36,16 @@ A hook point is one load of a pointer that is null until a mod installs a hook, 
 - Three failures switch the mod off for the session; its hooks stop being called at once.
 - Reloading scripts or leaving the game removes the hooks of that runtime.
 
-## `hook.post` and `hook.replace`
+## `hook.post` and `hook.replace` (API 1.1)
 
-Not available in this version: running code after a function or in its place needs support in the translator that is not part of this release. Both functions exist and raise an error that says so; the API reference lists them as `planned`.
+```lua
+hook.replace('GameWeaponUpdate', function(regs) end)          -- the original update does not run
+hook.post('GameWeaponUpdate', function(regs) log.write(regs.r3) end)
+```
+
+- **Order** at one function: `pre` hooks, then `replace` hooks (if there is any, the original body is skipped), then the body, then `post` hooks. A `post` hook runs also when the body was replaced.
+- **`replace`:** the callback gets the argument registers. Whatever it leaves in `r3` and `f1` is the function's return value (PowerPC convention); other registers written back stay as the caller sees them. With several replacements installed all of them run, in install order, and the body is skipped. A mod that only wants to look or tweak arguments should use `pre`.
+- **`post`:** `r3` and `f1` hold the return value and may be changed; `r4` to `r10` and `f2` to `f8` are whatever the function left in them.
+- Both need `"touches_gameplay": true`, like `pre`, run on the game thread under the same time budget and failure rules, and disappear with the mod (switched off or script reloaded).
+- Native DLLs: `hook_replace` and `hook_post` in `UcApi` (API 1.1, `uc_mod.h`). A DLL built for 1.1 does not load in a game that offers only 1.0.
+- A game function that is not in the list above cannot be replaced either: there is no hook point in it.

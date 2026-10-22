@@ -340,28 +340,28 @@ private:
         }
         return out;
     }
-    static JSValue hook_pre(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
-        if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(c, argv[1])) return JS_ThrowTypeError(c, "hook.pre(name, callback) needs a function name and a function");
+    static JSValue add_hook(JSContext* c, HookKind kind, const char* function, int argc, JSValueConst* argv) {
+        if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(c, argv[1])) return JS_ThrowTypeError(c, "hook.%s(name, callback) needs a function name and a function", function);
         JsRuntime* self = me(c);
         if (!self->ctx_.hooks) return JS_ThrowInternalError(c, "hooks are not available here (they need \"touches_gameplay\": true in mod.json)");
         const std::string name = to_text(c, argv[0]);
         self->hook_fns_.push_back(JS_DupValue(c, argv[1]));
         const size_t index = self->hook_fns_.size() - 1;
-        if (!self->ctx_.hooks->add_pre(self, name, [self, index](HookRegs& regs, Budget budget) { return self->call_hook(index, regs, budget); })) {
+        if (!self->ctx_.hooks->add_hook(kind, self, name, [self, index](HookRegs& regs, Budget budget) { return self->call_hook(index, regs, budget); })) {
             JS_FreeValue(c, self->hook_fns_.back());
             self->hook_fns_.pop_back();
-            return JS_ThrowInternalError(c, "'%s' is not a hookable function (see hook.list())", name.c_str());
+            return JS_ThrowInternalError(c, "hook.%s: '%s' is not a hookable function (see hook.list())", function, name.c_str());
         }
         return JS_UNDEFINED;
     }
+    static JSValue hook_pre(JSContext* c, JSValueConst, int argc, JSValueConst* argv) { return add_hook(c, HookKind::pre, "pre", argc, argv); }
+    static JSValue hook_post(JSContext* c, JSValueConst, int argc, JSValueConst* argv) { return add_hook(c, HookKind::post, "post", argc, argv); }
+    static JSValue hook_replace(JSContext* c, JSValueConst, int argc, JSValueConst* argv) { return add_hook(c, HookKind::replace, "replace", argc, argv); }
     static JSValue hook_list(JSContext* c, JSValueConst, int, JSValueConst*) {
         const auto names = me(c)->ctx_.hooks ? me(c)->ctx_.hooks->names() : std::vector<std::string>();
         JSValue array = JS_NewArray(c);
         for (size_t i = 0; i < names.size(); ++i) JS_SetPropertyUint32(c, array, uint32_t(i), JS_NewStringLen(c, names[i].data(), names[i].size()));
         return array;
-    }
-    static JSValue hook_unavailable(JSContext* c, JSValueConst, int, JSValueConst*) {
-        return JS_ThrowInternalError(c, "hook.post and hook.replace are not available in this version (see the API reference)");
     }
 
     static JSValue ui_draw(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
@@ -423,7 +423,7 @@ private:
         object_with("log", {{"write", &JsRuntime::log_write}});
         object_with("settings", {{"get", &JsRuntime::settings_get}, {"set", &JsRuntime::settings_set}});
         JS_SetPropertyStr(js_, global, "on", JS_NewCFunction(js_, &JsRuntime::on, "on", 2));
-        object_with("hook", {{"pre", &JsRuntime::hook_pre}, {"list", &JsRuntime::hook_list}, {"post", &JsRuntime::hook_unavailable}, {"replace", &JsRuntime::hook_unavailable}});
+        object_with("hook", {{"pre", &JsRuntime::hook_pre}, {"list", &JsRuntime::hook_list}, {"post", &JsRuntime::hook_post}, {"replace", &JsRuntime::hook_replace}});
         JSValue ui = JS_NewObject(js_);
         JS_SetPropertyStr(js_, ui, "draw", JS_NewCFunction(js_, &JsRuntime::ui_draw, "draw", 1));
         const std::pair<const char*, int> widgets[] = {{"text", Text}, {"button", Button}, {"checkbox", Checkbox}, {"slider_int", SliderInt}, {"slider_float", SliderFloat},

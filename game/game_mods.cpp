@@ -11,7 +11,7 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
     : exe_dir_(exe_dir), mods_dir_(exe_dir / "mods"), section_(mods_section.is_object() ? mods_section : nlohmann::ordered_json::object()), dvd_(&dvd) {
     std::error_code error;
     if (disabled || !fs::is_directory(mods_dir_, error)) return;
-    registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 0}, game_id));
+    registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 1}, game_id));
     for (const auto& entry : registry_->entries()) {
         if (entry.state == mods::ModState::enabled) continue;
         if (entry.state == mods::ModState::disabled) continue;

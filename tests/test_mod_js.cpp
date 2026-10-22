@@ -200,7 +200,14 @@ static void hook_pre_regs_round_trip() {
     CHECK(regs.r[0] == 7 && regs.r[1] == 8 && regs.f[1] == 2.5 && regs.r[7] == 0xFFFFFFFFu && regs.r[2] == 99);
     const auto unknown = rig.run("hook.pre('Nope', () => {});");
     CHECK(!unknown.ok && unknown.error.find("hookable") != std::string::npos);
-    CHECK(!rig.run("hook.post('GameWeaponUpdate', () => {});").ok && !rig.run("hook.replace('GameWeaponUpdate', () => {});").ok);
+    const size_t before = rig.hooks.callbacks.size();
+    CHECK(rig.run("hook.post('GameWeaponUpdate', (regs) => { regs.r3 += 1; });").ok && rig.run("hook.replace('GameWeaponUpdate', (regs) => { regs.r3 = 123; });").ok);
+    CHECK(rig.hooks.callbacks.size() == before + 2 && rig.hooks.kinds[before] == HookKind::post && rig.hooks.kinds[before + 1] == HookKind::replace);
+    HookRegs returned; returned.r[0] = 5;
+    CHECK(rig.hooks.callbacks[before](returned, kBudget).ok && returned.r[0] == 6);
+    CHECK(rig.hooks.callbacks[before + 1](returned, kBudget).ok && returned.r[0] == 123);
+    const auto bad_replace = rig.run("hook.replace('Nope', () => {});");
+    CHECK(!bad_replace.ok && bad_replace.error.find("hook.replace") != std::string::npos);
     CHECK(rig.run("hook.pre('GameWeaponUpdate', () => { for (;;) {} });").ok);
     const auto loop = rig.hooks.callbacks.back()(regs, Budget{std::chrono::milliseconds(5)});
     CHECK(!loop.ok && loop.budget_exceeded);

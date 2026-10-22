@@ -134,11 +134,16 @@ static void native_memory_writes_need_the_gameplay_flag() {
 static void native_hook_pre() {
     NativeRig rig(true, true);
     CHECK(rig.runtime->load(mod_with(TEST_DLL_GOOD, u8"native_hook"), "native/mod.dll").ok);
-    CHECK(rig.hooks.callbacks.size() == 1 && rig.hooks.owners[0] != nullptr);
+    CHECK(rig.hooks.callbacks.size() == 3 && rig.hooks.owners[0] != nullptr);
+    CHECK(rig.hooks.kinds[0] == HookKind::pre && rig.hooks.kinds[1] == HookKind::post && rig.hooks.kinds[2] == HookKind::replace);
     HookRegs regs;
     regs.r[0] = 7; regs.f[0] = 1.5;
     CHECK(rig.hooks.callbacks[0](regs, kBudget).ok);
     CHECK(regs.r[1] == 8 && regs.f[1] == 3.0);
+    HookRegs returned;
+    returned.r[0] = 1;
+    CHECK(rig.hooks.callbacks[1](returned, kBudget).ok && returned.r[0] == 101);    // post
+    CHECK(rig.hooks.callbacks[2](returned, kBudget).ok && returned.r[0] == 4242);   // replace
 }
 
 static void api_major_mismatch_refused() {

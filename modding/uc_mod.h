@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #define UC_MOD_API_MAJOR 1
-#define UC_MOD_API_MINOR 0
+#define UC_MOD_API_MINOR 1
 /* The Dear ImGui version the port is built with. A DLL that draws with ImGui must be built with exactly this version. */
 #define UC_MOD_IMGUI_VERSION "1.92.9b"
 
@@ -89,6 +89,10 @@ typedef struct UcApi {
     /* Runs callback before the hookable game function `name` (docs/modding/api/README.md lists them). regs holds the argument registers;
      * changes written to it go back into the game. Returns 0, or non-zero when `name` is not hookable. */
     int (*hook_pre)(const char* name, void (*callback)(UcHookRegs* regs, void* user), void* user);
+    /* Since API 1.1. hook_replace runs callback instead of the game function: r[0] (r3) and f[0] (f1) of regs are its return value.
+     * hook_post runs callback after the function returned (r[0], f[0] hold the return value and may be changed). Same return values as hook_pre. */
+    int (*hook_replace)(const char* name, void (*callback)(UcHookRegs* regs, void* user), void* user);
+    int (*hook_post)(const char* name, void (*callback)(UcHookRegs* regs, void* user), void* user);
 } UcApi;
 
 #ifdef __cplusplus

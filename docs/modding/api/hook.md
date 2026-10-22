@@ -8,8 +8,8 @@ Callbacks on selected game functions. Only the functions listed under 'Hookable 
 |---|---|---|---|---|
 | `list` | function | `array<string>` | implemented | 1.0 |
 | `pre` | function | `void` | implemented | 1.0 |
-| `post` | function | `void` | planned | 1.0 |
-| `replace` | function | `void` | planned | 1.0 |
+| `post` | function | `void` | implemented | 1.1 |
+| `replace` | function | `void` | implemented | 1.1 |
 
 ## `list`
 
@@ -58,20 +58,44 @@ hook.pre('GameWeaponUpdate', (regs) => log.write('r3=' + regs.r3));
 
 `hook.post(name, callback)` returns `void`
 
-Status: **planned**, since API 1.0.
+Status: **implemented**, since API 1.1.
 
-Runs a callback after the game function returned (needs translator support; see hooks.md).
+Runs a callback after the game function returned, also after a replacement. Needs touches_gameplay.
 
 - `name` (`string`): A hookable function name.
-- `callback` (`function`): Called after the function returned.
+- `callback` (`function`): Called after the function returned with a table of its registers: r3 and f1 hold the return value and may be changed.
+
+Lua:
+
+```lua
+hook.post('GameWeaponUpdate', function(regs) log.write('returned ' .. regs.r3) end)
+```
+
+JavaScript:
+
+```js
+hook.post('GameWeaponUpdate', (regs) => log.write('returned ' + regs.r3));
+```
 
 ## `replace`
 
 `hook.replace(name, callback)` returns `void`
 
-Status: **planned**, since API 1.0.
+Status: **implemented**, since API 1.1.
 
-Replaces the game function (needs translator support; see hooks.md).
+Replaces the game function: the original body does not run (pre hooks still run before, post hooks after). Several replacements all run, in install order. Needs touches_gameplay.
 
 - `name` (`string`): A hookable function name.
-- `callback` (`function`): Runs instead of the function.
+- `callback` (`function`): Runs instead of the function, with a table of its argument registers; set r3 and f1 to the return value.
+
+Lua:
+
+```lua
+hook.replace('GameWeaponUpdate', function(regs) end)
+```
+
+JavaScript:
+
+```js
+hook.replace('GameWeaponUpdate', (regs) => {});
+```

@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "doc": "The game API every mod runtime (Lua, JavaScript, native DLL) sees. Domains whose provider is 'registry' live under the global 'uc' (uc.mem, uc.player(1), ...); domains whose provider is 'context' are per-mod globals (log, settings, ui, on).",
   "domains": [
     {
@@ -90,8 +90,10 @@
           "example": { "lua": "for _, name in ipairs(hook.list()) do log.write(name) end", "js": "for (const name of hook.list()) log.write(name);" } },
         { "name": "pre", "kind": "function", "type": "void", "status": "implemented", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Called before the function runs with a table of its registers: r3..r10 as integers, f1..f8 as floats." } ], "doc": "Runs a callback before the game function. The callback may change the registers it is given (they are written back).",
           "example": { "lua": "hook.pre('GameWeaponUpdate', function(regs) log.write('r3=' .. regs.r3) end)", "js": "hook.pre('GameWeaponUpdate', (regs) => log.write('r3=' + regs.r3));" } },
-        { "name": "post", "kind": "function", "type": "void", "status": "planned", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Called after the function returned." } ], "doc": "Runs a callback after the game function returned (needs translator support; see hooks.md)." },
-        { "name": "replace", "kind": "function", "type": "void", "status": "planned", "since": "1.0", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Runs instead of the function." } ], "doc": "Replaces the game function (needs translator support; see hooks.md)." }
+        { "name": "post", "kind": "function", "type": "void", "status": "implemented", "since": "1.1", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Called after the function returned with a table of its registers: r3 and f1 hold the return value and may be changed." } ], "doc": "Runs a callback after the game function returned, also after a replacement. Needs touches_gameplay.",
+          "example": { "lua": "hook.post('GameWeaponUpdate', function(regs) log.write('returned ' .. regs.r3) end)", "js": "hook.post('GameWeaponUpdate', (regs) => log.write('returned ' + regs.r3));" } },
+        { "name": "replace", "kind": "function", "type": "void", "status": "implemented", "since": "1.1", "args": [ { "name": "name", "type": "string", "doc": "A hookable function name." }, { "name": "callback", "type": "function", "doc": "Runs instead of the function, with a table of its argument registers; set r3 and f1 to the return value." } ], "doc": "Replaces the game function: the original body does not run (pre hooks still run before, post hooks after). Several replacements all run, in install order. Needs touches_gameplay.",
+          "example": { "lua": "hook.replace('GameWeaponUpdate', function(regs) end)", "js": "hook.replace('GameWeaponUpdate', (regs) => {});" } }
       ]
     },
     {

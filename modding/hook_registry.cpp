@@ -18,7 +18,7 @@ constexpr const char* kNames[] = {
 #undef UC_HOOKABLE
 };
 std::mutex g_mutex;
-std::unique_ptr<HookChain> g_current[kHookCount];   // the chain each slot points to
+std::unique_ptr<HookChain> g_current[kHookKinds][kHookCount];   // the chain each slot points to
 std::vector<std::unique_ptr<HookChain>> g_retired;   // replaced chains a guest thread may still be walking
 std::atomic<int> g_readers{0};                       // guest threads inside run_hook_slot
 
@@ -28,22 +28,23 @@ void reclaim() {
     if (g_readers.load(std::memory_order_seq_cst) == 0) g_retired.clear();
 }
 
-void publish(size_t index, std::unique_ptr<HookChain> chain) {
+void publish(HookKind kind, size_t index, std::unique_ptr<HookChain> chain) {
+    auto& current = g_current[size_t(kind)][index];
     if (chain && chain->entries.empty()) chain.reset();
     const HookChain* raw = chain.get();
-    if (g_current[index]) g_retired.push_back(std::move(g_current[index]));
-    g_current[index] = std::move(chain);
-    g_hook_slots[index].store(raw, std::memory_order_seq_cst);
+    if (current) g_retired.push_back(std::move(current));
+    current = std::move(chain);
+    g_hook_slots[size_t(kind)][index].store(raw, std::memory_order_seq_cst);
     reclaim();
 }
 }  // namespace
 
-void run_hook_slot(size_t index, ppc::Ctx& ctx) {
+void run_hook_slot(HookKind kind, size_t index, ppc::Ctx& ctx) {
     struct Reader {
         Reader() { g_readers.fetch_add(1, std::memory_order_seq_cst); }
         ~Reader() { g_readers.fetch_sub(1, std::memory_order_seq_cst); }
     } reader;
-    if (const HookChain* chain = g_hook_slots[index].load(std::memory_order_seq_cst))
+    if (const HookChain* chain = g_hook_slots[size_t(kind)][index].load(std::memory_order_seq_cst))
         for (const auto& entry : chain->entries) entry.second(ctx);
 }
 
@@ -56,43 +57,47 @@ std::vector<std::string> HookRegistry::names() {
     return std::vector<std::string>(std::begin(kNames), std::end(kNames));
 }
 
-bool HookRegistry::add(uint32_t address, const void* owner, Callback callback) {
+bool HookRegistry::add(uint32_t address, const void* owner, Callback callback, HookKind kind) {
     size_t index = kHookCount;
     for (size_t i = 0; i < kHookCount; ++i) if (kHookable[i] == address) index = i;
     if (index == kHookCount || !callback) return false;
     std::lock_guard lock(g_mutex);
     auto next = std::make_unique<HookChain>();
-    if (g_current[index]) next->entries = g_current[index]->entries;
+    if (g_current[size_t(kind)][index]) next->entries = g_current[size_t(kind)][index]->entries;
     next->entries.emplace_back(owner, std::move(callback));
-    publish(index, std::move(next));
+    publish(kind, index, std::move(next));
     return true;
 }
 
 void HookRegistry::remove_owner(const void* owner) {
     std::lock_guard lock(g_mutex);
-    for (size_t i = 0; i < kHookCount; ++i) {
-        const HookChain* current = g_current[i].get();
-        if (!current) continue;
-        auto next = std::make_unique<HookChain>();
-        for (const auto& entry : current->entries) if (entry.first != owner) next->entries.push_back(entry);
-        if (next->entries.size() != current->entries.size()) publish(i, std::move(next));
+    for (size_t kind = 0; kind < kHookKinds; ++kind) {
+        for (size_t i = 0; i < kHookCount; ++i) {
+            const HookChain* current = g_current[kind][i].get();
+            if (!current) continue;
+            auto next = std::make_unique<HookChain>();
+            for (const auto& entry : current->entries) if (entry.first != owner) next->entries.push_back(entry);
+            if (next->entries.size() != current->entries.size()) publish(HookKind(kind), i, std::move(next));
+        }
     }
 }
 
-size_t HookRegistry::count(uint32_t address) const {
+size_t HookRegistry::count(uint32_t address, HookKind kind) const {
     for (size_t i = 0; i < kHookCount; ++i) {
         if (kHookable[i] != address) continue;
         std::lock_guard lock(g_mutex);
-        return g_current[i] ? g_current[i]->entries.size() : 0;
+        return g_current[size_t(kind)][i] ? g_current[size_t(kind)][i]->entries.size() : 0;
     }
     return 0;
 }
 
 void HookRegistry::clear() {
     std::lock_guard lock(g_mutex);
-    for (size_t i = 0; i < kHookCount; ++i) {
-        g_hook_slots[i].store(nullptr, std::memory_order_seq_cst);
-        if (g_current[i]) g_retired.push_back(std::move(g_current[i]));
+    for (size_t kind = 0; kind < kHookKinds; ++kind) {
+        for (size_t i = 0; i < kHookCount; ++i) {
+            g_hook_slots[kind][i].store(nullptr, std::memory_order_seq_cst);
+            if (g_current[kind][i]) g_retired.push_back(std::move(g_current[kind][i]));
+        }
     }
     reclaim();
 }

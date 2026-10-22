@@ -5,6 +5,7 @@
 #include <memory>
 #include <set>
 #include <thread>
+#include <type_traits>
 
 using namespace uc::mods;
 
@@ -20,7 +21,7 @@ static ppc::Ctx make_ctx() {
 
 static void hook_slot_null_by_default() {
     hook_registry().clear();
-    for (size_t i = 0; i < kHookCount; ++i) CHECK(g_hook_slots[i].load() == nullptr);
+    for (size_t i = 0; i < kHookCount; ++i) CHECK(g_hook_slots[0][i].load() == nullptr);
     ppc::Ctx c = make_ctx();
     hook_enter<0x8006C268u>(c);   // nothing installed: must be a harmless no-op
     hook_enter<0x80000000u>(c);   // not hookable: compiles to nothing
@@ -39,7 +40,7 @@ static void hook_installed_called_with_context() {
     CHECK(calls == 1);
     hook_registry().remove_owner(&owner);
     hook_enter<0x8006C268u>(c);
-    CHECK(calls == 1 && g_hook_slots[hook_index(0x8006C268u)].load() == nullptr);
+    CHECK(calls == 1 && g_hook_slots[0][hook_index(0x8006C268u)].load() == nullptr);
 }
 
 static void callbacks_run_in_install_order_and_owners_are_independent() {
@@ -117,7 +118,42 @@ static void replaced_chains_are_freed_and_never_under_a_running_hook() {
     CHECK(hook_registry().retired_chains() < 64);   // not one per add/remove ever made (48000)
 }
 
+// What UC_ENTER does at the top of a translated function: a post scope first (its destructor runs at every return), then the entry hook, which may skip the body.
+static void translated_function(ppc::Ctx& c, bool& body_ran) {
+    auto post = post_scope<0x8006C268u>(c);
+    if (hook_enter<0x8006C268u>(c)) return;
+    body_ran = true;
+    c.r[3] = 5;   // the function's return value
+}
+
+static void post_and_replace_hooks() {
+    hook_registry().clear();
+    ppc::Ctx c = make_ctx();
+    bool ran = false;
+    translated_function(c, ran);
+    CHECK(ran && c.r[3] == 5);                                   // nothing installed: the function is untouched
+    static_assert(std::is_empty_v<decltype(post_scope<0x80000000u>(std::declval<ppc::Ctx&>()))>);   // a function that cannot be hooked pays nothing
+    int owner = 0, pre_calls = 0, post_calls = 0;
+    uint32_t post_saw_r3 = 0;
+    CHECK(hook_registry().add(0x8006C268u, &owner, [&](ppc::Ctx&) { ++post_calls; post_saw_r3 = c.r[3]; c.r[3] += 1; }, HookKind::post));
+    c = make_ctx(); ran = false;
+    translated_function(c, ran);
+    CHECK(ran && post_calls == 1 && post_saw_r3 == 5 && c.r[3] == 6);   // the post hook sees the return value and may change it
+    CHECK(hook_registry().add(0x8006C268u, &owner, [&](ppc::Ctx&) { ++pre_calls; }));
+    CHECK(hook_registry().add(0x8006C268u, &owner, [&](ppc::Ctx& ctx) { ctx.r[3] = 77; }, HookKind::replace));
+    c = make_ctx(); ran = false;
+    translated_function(c, ran);
+    CHECK(!ran && pre_calls == 1 && post_calls == 2 && post_saw_r3 == 77 && c.r[3] == 78);   // pre runs, the body does not, post still runs after the replacement
+    CHECK(hook_registry().count(0x8006C268u, HookKind::post) == 1 && hook_registry().count(0x8006C268u, HookKind::replace) == 1 && hook_registry().count(0x8006C268u) == 1);
+    hook_registry().remove_owner(&owner);                         // one owner drops all three kinds
+    c = make_ctx(); ran = false;
+    translated_function(c, ran);
+    CHECK(ran && c.r[3] == 5 && post_calls == 2);
+    CHECK(!hook_registry().add(0x80000000u, &owner, [](ppc::Ctx&) {}, HookKind::replace));   // not hookable
+}
+
 int main() {
+    post_and_replace_hooks();
     replaced_chains_are_freed_and_never_under_a_running_hook();
     hook_slot_null_by_default(); hook_installed_called_with_context(); callbacks_run_in_install_order_and_owners_are_independent();
     non_hookable_address_refused(); names_and_addresses(); hook_index_stable(); regs_round_trip();
