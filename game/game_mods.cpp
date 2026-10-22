@@ -1,4 +1,5 @@
 #include "game_mods.h"
+#include "audio/brstm.h"
 #include "mod_guest_call.h"
 #include <algorithm>
 #include <cstdio>
@@ -13,6 +14,17 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
     std::error_code error;
     if (disabled || !fs::is_directory(mods_dir_, error)) return;
     registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 1}, game_id));
+    // Audio replacement: the converter learns each original stream's rate and channel count from its BRSTM header on the disc.
+    audio_ = std::make_unique<mods::AudioConverter>(mods_dir_ / ".cache", [this](const std::string& stem) -> std::optional<mods::StreamOriginal> {
+        const int entry = dvd_->entry_of("Data/sound/stream/" + stem + ".brstm");
+        if (entry < 0) return std::nullopt;
+        uint8_t head[0x100];
+        const int64_t got = dvd_->read(entry, head, sizeof head, 0);
+        if (got < 0x40) return std::nullopt;
+        const auto header = mods::read_brstm_header(std::span<const uint8_t>(head, size_t(got)));
+        if (!header || header->channels < 1 || header->channels > 2 || header->rate == 0) return std::nullopt;
+        return mods::StreamOriginal{header->rate, header->channels};
+    }, [this] { audio_changed(); });
     for (const auto& entry : registry_->entries()) {
         if (entry.state == mods::ModState::enabled) continue;
         if (entry.state == mods::ModState::disabled) continue;
@@ -28,9 +40,30 @@ bool GameMods::runs(const mods::ModEntry& mod) const {
     return mod.manifest.native.empty() || registry_->allow_native();
 }
 
+std::vector<fs::path> GameMods::overlay_roots() const {
+    std::vector<fs::path> roots;
+    for (const auto& mod : active_) {
+        std::error_code error;
+        if (audio_) {
+            const fs::path generated = audio_->generated_root(mod.manifest.id);
+            if (fs::is_directory(generated / "Data", error)) roots.push_back(generated);   // before files/: a ready .brstm of the mod itself wins over its converted audio/
+        }
+        if (fs::is_directory(mod.root / "files", error)) roots.push_back(mod.root / "files");
+    }
+    return roots;
+}
+
+void GameMods::audio_changed() {
+    std::lock_guard lock(files_mutex_);
+    files_roots_ = overlay_roots();
+    const size_t files = dvd_->set_overlays(files_roots_);   // scans again: the new file is not in the index yet
+    std::fprintf(stderr, "[mods] audio converted: %zu overlay files\n", files);
+}
+
 // Rebuilds the list of running mods, their file overlay and (once the game's texture table is known) their textures from the registry as it is now.
 // The overlay is swapped in one step and only when the set of mods with files changed; likewise the texture table.
 void GameMods::refresh_files(bool initial) {
+    std::lock_guard lock(files_mutex_);
     active_.clear();
     for (const auto* mod : registry_->active()) {
         if (!runs(*mod)) {
@@ -41,10 +74,11 @@ void GameMods::refresh_files(bool initial) {
     }
     std::vector<const mods::ModEntry*> active;
     for (const auto& mod : active_) active.push_back(&mod);
-    std::vector<fs::path> files_roots, texture_roots;
+    if (audio_) audio_->set_active(active);   // starts converting, and removes the generated files of mods that are off
+    const std::vector<fs::path> files_roots = overlay_roots();
+    std::vector<fs::path> texture_roots;
     for (const auto* mod : active) {
         std::error_code error;
-        if (fs::is_directory(mod->root / "files", error)) files_roots.push_back(mod->root / "files");
         if (fs::is_directory(mod->root / "textures", error)) texture_roots.push_back(mod->root / "textures");
     }
     if (initial || files_roots != files_roots_) {

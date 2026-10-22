@@ -168,6 +168,15 @@ void ModMenuUi::manager_tab(float unit) {
         ImGui::TextWrapped("%s", line.c_str());   // wraps: a long reason (native code off) must not run past the window
         ImGui::PopStyleColor();
         if (!e->manifest.description.empty()) ImGui::TextWrapped("%s", e->manifest.description.c_str());
+        if (status_line_) {
+            const std::string extra = status_line_(id);
+            if (!extra.empty()) {
+                const bool problem = extra.find("audio:") != std::string::npos;   // error lines start with "audio:"; progress ("converting audio") is plain
+                ImGui::PushStyleColor(ImGuiCol_Text, problem ? ImVec4(1.f, .52f, .52f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("%s", extra.c_str());
+                ImGui::PopStyleColor();
+            }
+        }
         for (const auto& message : e->messages) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .52f, .52f, 1.f)); ImGui::TextWrapped("%s", message.c_str()); ImGui::PopStyleColor(); }
         if (!e->manifest.native.empty()) {
             ImGui::TextDisabled("%s", tr("has_native"));

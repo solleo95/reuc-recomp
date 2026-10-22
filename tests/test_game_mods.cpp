@@ -1,8 +1,12 @@
 #include "check.h"
+#include "audio/brstm.h"
 #include "game_mods.h"
 #include "guest_mem.h"
+#include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 using nlohmann::ordered_json;
@@ -194,7 +198,50 @@ static void log_is_capped_and_bad_config_is_reported() {
     CHECK(text.find("mods.chatty") != std::string::npos);
 }
 
+static std::string tone_wav(uint32_t rate, double seconds) {   // mono 16-bit WAV of a 440 Hz sine
+    const uint32_t frames = uint32_t(rate * seconds);
+    std::string d;
+    const auto le32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) d.push_back(char(v >> (8 * i))); };
+    const auto le16 = [&](uint32_t v) { d.push_back(char(v)); d.push_back(char(v >> 8)); };
+    d += "RIFF"; le32(36 + frames * 2); d += "WAVEfmt "; le32(16); le16(1); le16(1); le32(rate); le32(rate * 2); le16(2); le16(16);
+    d += "data"; le32(frames * 2);
+    for (uint32_t i = 0; i < frames; ++i) le16(uint16_t(int16_t(8000 * std::sin(6.2831853 * 440 * i / rate))));
+    return d;
+}
+
+// A mod's audio/<stream>.wav replaces the disc stream of that name once the converter is done (the disc file was a 48 kHz mono BRSTM, so the result
+// must be 48 kHz mono), and switching the mod off puts the original back.
+static void audio_of_a_mod_replaces_a_disc_stream() {
+    uc::guest_mem_init();
+    const auto exe = fresh("gm_audio");
+    uc::mods::PcmAudio original;
+    original.rate = 48000;
+    original.channels = {std::vector<int16_t>(4800, 100)};
+    const auto original_file = uc::mods::write_brstm_pcm16(original);
+    put(exe / "disc" / "Data" / "sound" / "stream" / "music.brstm", std::string(original_file.begin(), original_file.end()));
+    put(exe / "mods" / "tune" / "mod.json", R"({"id":"tune","name":"Tune","version":"1.0","api":"1.1"})");
+    put(exe / "mods" / "tune" / "audio" / "Music.wav", tone_wav(44100, 0.5));
+    put(exe / "mods" / "tune" / "audio" / "other.wav", tone_wav(44100, 0.1));   // no such stream on the disc
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({"tune"}), dvd, "RBUE08", false);
+    const auto length = [&] { return dvd.length(dvd.entry_of("Data/sound/stream/music.brstm")); };
+    CHECK(length() == original_file.size());   // until the conversion is done the original plays
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (length() == original_file.size() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(length() != original_file.size());
+    std::vector<uint8_t> bytes(length());
+    CHECK(dvd.read(dvd.entry_of("Data/sound/stream/music.brstm"), bytes.data(), uint32_t(bytes.size()), 0) == int64_t(bytes.size()));
+    const auto converted = uc::mods::read_brstm(bytes);
+    CHECK(converted && converted->rate == 48000 && converted->channels.size() == 1 && std::abs(int(converted->frames()) - 24000) <= 1);
+    CHECK(mods.audio_status("tune").find("other.wav") != std::string::npos);   // the stray file is reported, the rest works
+    mods.registry()->set_enabled("tune", false);
+    mods.apply();
+    CHECK(length() == original_file.size());   // switched off: the original again
+}
+
 int main() {
+    audio_of_a_mod_replaces_a_disc_stream();
     mods_switch_on_and_off_while_the_game_runs();
     log_is_capped_and_bad_config_is_reported();
     applies_overlay_and_runs_scripts(); nothing_without_the_folder_or_when_disabled(); mod_not_enabled_stays_off(); game_api_ticks_through_the_host(); textures_of_mods_are_indexed();

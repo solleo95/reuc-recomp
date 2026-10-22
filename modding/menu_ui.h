@@ -23,6 +23,9 @@ public:
     // After a manager change has been saved: makes the running game follow at once (GameMods::apply).
     using Apply = std::function<void()>;
     void set_apply(Apply apply) { apply_ = std::move(apply); }
+    // A line of status under a mod's description (the game feeds it, for example audio conversion progress); empty: nothing to show.
+    using StatusLine = std::function<std::string(const std::string& mod_id)>;
+    void set_status_line(StatusLine line) { status_line_ = std::move(line); }
     void set_save(SaveSection save) { save_ = std::move(save); }   // the config's "mods" section writer (LiveSettings::apply_mods); may arrive after construction
 
     // ModMenu
@@ -61,6 +64,7 @@ private:
     GetRegistry registry_;
     GetHost host_;
     SaveSection save_;
+    StatusLine status_line_;
     std::string language_;
     bool in_draw_ = false;
     bool dirty_ = false;
