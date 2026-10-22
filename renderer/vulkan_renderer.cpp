@@ -777,14 +777,15 @@ void VulkanRenderer::queue_pipeline(const PipelineKey& key,bool uber) {
     if ((uber ? uber_queued_ : queued_).insert(key).second) { compile_queue_.push_back({key,uber}); compile_cv_.notify_one(); }
 }
 void VulkanRenderer::start_workers() {
-    const unsigned count=std::clamp(std::thread::hardware_concurrency()/2,2u,8u);
-    for (unsigned t=0;t<count;++t) compilers_.emplace_back([this] { compile_worker(); });
+    const unsigned all=std::max(2u,std::thread::hardware_concurrency());
+    game_workers_=compile_limit_=std::clamp(all/2,2u,8u);
+    for (unsigned t=0;t<all;++t) compilers_.emplace_back([this] { compile_worker(); });   // the extra threads only work during warm-up
 }
 void VulkanRenderer::compile_worker() {
     SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_LOW);   // in game these never compete with the guest and render threads; on the loading screen nothing else runs
     std::unique_lock lock(pipelines_mutex_);
     for (;;) {
-        compile_cv_.wait(lock,[this] { return compile_stop_ || !compile_queue_.empty(); });
+        compile_cv_.wait(lock,[this] { return compile_stop_ || (!compile_queue_.empty() && compiling_<compile_limit_); });
         if (compile_stop_) return;
         const CompileJob job=compile_queue_.front(); compile_queue_.pop_front();
         auto& target=job.uber ? uber_pipelines_ : pipelines_;
@@ -815,7 +816,8 @@ void VulkanRenderer::warm_pipelines(const std::function<void(size_t,size_t)>& pr
     owner();
     const auto begin=std::chrono::steady_clock::now();
     std::unique_lock lock(pipelines_mutex_);
-    for (const auto& key:warm_keys_) queue_pipeline(uber_key(key),true);   // the few ubershader variants first: they cover any key still missing
+    compile_limit_=compilers_.size(); compile_cv_.notify_all();   // nothing else runs on the loading screen: every thread compiles
+    for (const auto& key:uber_key_closure(warm_keys_)) queue_pipeline(key,true);   // the ubershader variants first: they cover any key still missing
     for (const auto& key:warm_keys_) queue_pipeline(key,false);
     const size_t base=jobs_done_, total=compile_queue_.size()+compiling_;
     while (!compile_queue_.empty() || compiling_) {
@@ -825,6 +827,7 @@ void VulkanRenderer::warm_pipelines(const std::function<void(size_t,size_t)>& pr
         lock.lock();
         compile_cv_.wait_for(lock,std::chrono::milliseconds(50),[this] { return compile_queue_.empty() && !compiling_; });
     }
+    compile_limit_=game_workers_;
     lock.unlock();
     progress(total,total);
     std::fprintf(stderr,"[pipeline] warm-up: %zu pipelines in %.0f ms\n",total,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count());

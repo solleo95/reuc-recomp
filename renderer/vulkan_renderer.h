@@ -385,6 +385,7 @@ private:
     std::set<PipelineKey> queued_, uber_queued_;
     std::condition_variable compile_cv_;
     size_t compiling_ = 0, compiled_ = 0, compiled_ubers_ = 0, jobs_done_ = 0;
+    size_t compile_limit_ = 0, game_workers_ = 0;   // threads allowed to compile at once: all of them during warm-up, game_workers_ in game
     double compiled_ms_ = 0, compiled_uber_ms_ = 0;   // compile time since the last idle report
     bool compile_stop_ = false;
     bool uber_only_ = false;

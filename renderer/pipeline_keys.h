@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace uc {
@@ -25,6 +26,16 @@ inline bool valid_pipeline_key(const PipelineKey& key,bool logic_ops) {
 inline PipelineKey uber_key(PipelineKey key) {
     std::fill(key.begin()+1,key.begin()+68,0u);
     return key;
+}
+
+// Every ubershader key built from the blend/cull words, depth words and topologies that occur in `keys`: a key not recorded yet is mostly a
+// new TEV setup over fixed-function state seen before, so these cover it with a ready pipeline.
+inline std::vector<PipelineKey> uber_key_closure(const std::vector<PipelineKey>& keys) {
+    std::set<uint32_t> blends,depths,topologies;
+    for(const auto& key:keys) { blends.insert(key[0]); depths.insert(key[68]); topologies.insert(key[69]); }
+    std::vector<PipelineKey> result;
+    for(auto blend:blends) for(auto depth:depths) for(auto topology:topologies) { PipelineKey key{}; key[0]=blend; key[68]=depth; key[69]=topology; result.push_back(key); }
+    return result;
 }
 
 // Write mask of the motion attachment (upscaling): only draws that write depth (compare + update, key word 68) write their vectors.

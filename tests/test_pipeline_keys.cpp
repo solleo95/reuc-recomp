@@ -27,6 +27,14 @@ int main() {
     CHECK(uc::uber_key(c)[0]==0x1234 && uc::uber_key(c)[68]==9 && uc::uber_key(c)[69]==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST && uc::uber_key(c)[1]==0 && uc::uber_key(c)[67]==0);
     CHECK(uc::uber_key(c)!=uc::uber_key([&]{ auto e=c; e[0]^=1; return e; }()));
 
+    // The ubershader closure combines every blend/cull word, depth word and topology seen, so a new TEV key never needs a synchronous compile.
+    uc::PipelineKey f=a, g=a, h=a; f[0]=1; f[68]=1; g[0]=2; g[68]=17; h[0]=1; h[68]=1; h[69]=VK_PRIMITIVE_TOPOLOGY_LINE_LIST; h[1]=5;
+    const auto closure=uc::uber_key_closure({f,g,h});
+    CHECK(closure.size()==2*2*2);
+    CHECK(std::find(closure.begin(),closure.end(),uc::uber_key(h))!=closure.end());
+    auto cross=a; cross[0]=2; cross[68]=1; CHECK(std::find(closure.begin(),closure.end(),cross)!=closure.end());   // blend word of g with the depth word of f
+    CHECK(uc::uber_key_closure({}).empty());
+
     // Motion vectors are written only by draws that write depth (compare + update), so blended effects keep the vectors underneath.
     uc::PipelineKey z=a; z[68]=17|(3<<1);
     CHECK(uc::motion_write_mask(z)==(VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT));
