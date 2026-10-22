@@ -8,7 +8,9 @@
 ---@field damage number The damage meter: 0 is unhurt, 50 is dead. Writing 0 heals. [implemented]
 ---@field invulnerable boolean While true the damage meter is reset to 0 every game step. [implemented]
 ---@field infinite_ammo boolean While true the magazine is refilled to its starting size every game step. [implemented]
----@field position {x: number, y: number, z: number} World position (x, y, z) in game units (10 cm). [planned]
+---@field weapon integer The weapon id the player holds (0 to 19: the record number of the weapon table, 0 and 19 are the handgun). Read only: switching weapons runs game logic a plain write would skip. [implemented]
+---@field health number Health as a fraction: 1 unhurt, 0 dead. The damage meter turned around (health = 1 - damage / 50), so setting it writes the meter. [implemented]
+---@field reserve integer The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count. [implemented]
 
 ---@class UcWeaponHandle
 ---@field damage number Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay). [implemented]
@@ -265,6 +267,22 @@ uc.camera = {}
 ---@type number[]
 ---The world-to-view matrix as 12 floats (3 rows of 4). [implemented]
 uc.camera.view = nil
+
+---@type number[]
+---The camera's world position [x, y, z] in the game's units (10 cm, y up). The game is on rails and both players share this one viewpoint, so it is also the player's eye position (about 1.5 m high). Throws when there is no scene. [implemented]
+uc.camera.position = nil
+
+---@type number[]
+---The direction the camera looks in, a unit vector [x, y, z]. Throws when there is no scene. [implemented]
+uc.camera.forward = nil
+
+---@type number[]
+---The camera's right direction, a unit vector. [implemented]
+uc.camera.right = nil
+
+---@type number[]
+---The camera's up direction, a unit vector. [implemented]
+uc.camera.up = nil
 
 ---Enemies in the current scene.
 uc.enemies = {}

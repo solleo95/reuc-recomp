@@ -1,0 +1,1 @@
+{ "id": "camera-probe", "name": "Camera probe", "version": "1.0", "api": "1.1", "script": "scripts/main.lua" }

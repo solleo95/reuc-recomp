@@ -561,6 +561,65 @@ def hook_replace(g, args):
     return result
 
 
+def camera_api(g, args):
+    """camera.position / forward from the view matrix, in the real game: the eye is about 1.5 m (15 units) above the floor, forward is a unit vector and the nearest
+    living zombie is in front of the camera (dot product of the direction to it with forward > 0.3)."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("camera_logged"):
+        lines = []
+        for _ in range(40):
+            g.advance(60)
+            text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+            lines = [line for line in text.splitlines() if "camera eye_y=" in line]
+            if lines:
+                break
+        if not lines:
+            g.fail("the camera probe never saw a living zombie (no 'camera eye_y=' line in debug/mods.log)", "camera")
+        fields = dict(part.split("=") for part in lines[-1].split("] ")[-1].split()[1:])
+        eye_y, ahead = float(fields["eye_y"]), float(fields["ahead"])
+        forward = [float(v) for v in fields["forward"].split(",")]
+        result.update(eye_y=eye_y, ahead=ahead, forward=forward)
+        if not 8 <= eye_y <= 25:
+            g.fail(f"eye height {eye_y} units is not about 15", "camera")
+        if abs(sum(v * v for v in forward) - 1) > 0.02:
+            g.fail(f"forward {forward} is not a unit vector", "camera")
+        if ahead < 0.3:
+            g.fail(f"the nearest zombie is not in front of the camera (dot {ahead})", "camera")
+    return result
+
+
+def player_api(g, args):
+    """player.weapon / health / reserve in the real game: the handgun (id 0 or 19), full health, an infinite reserve (nil); then a script sets health to 0.5
+    and the damage meter reads 25 (of 50)."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("player_logged"):
+        line = ""
+        for _ in range(40):
+            g.advance(60)
+            text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+            lines = [l for l in text.splitlines() if "player weapon=" in l]
+            if lines:
+                line = lines[-1]
+                break
+        if not line:
+            g.fail("no 'player weapon=' line in debug/mods.log", "player api")
+        fields = dict(part.split("=") for part in line.split("] ")[-1].split()[1:])
+        result["logged"] = fields
+        if fields["weapon"] not in ("0", "19") or fields["health"] != "1.00" or fields["reserve"] != "nil":
+            g.fail(f"unexpected player values {fields}", "player api")
+    with g.step("health_set"):
+        g.advance(300)
+        damage = g.state()["player"]["damage"]
+        result["damage_meter"] = damage
+        if abs(damage - 25) > 0.01:
+            g.fail(f"health 0.5 should give a damage meter of 25, it is {damage}", "player api")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

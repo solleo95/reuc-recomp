@@ -2,6 +2,7 @@
 // with the test harness; see docs/spikes/G22-autoplay-memory.md and docs/spikes/M1-weapon-data.md.
 #include "game_api.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -22,6 +23,10 @@ constexpr uint32_t kReloading = 2;              // weapon state while a reload r
 constexpr uint32_t kSceneSize = 0x6C18, kDamage = 0x6C00, kDamageStride = 0x14;   // damage meter of player 1 at scene+6C00, player 2 at +6C14 (0 unhurt .. 50 dead)
 constexpr uint32_t kZombieClass = 0x803F2B60, kEnemyPosition = 0xF48, kEnemyHealth = 0x3A4, kActorClass = 0x10;
 constexpr uint32_t kMaxMagazine = 65535;
+// Spare ammo: u16 counts per ammo key (21 keys, 42 bytes per player), found through fn_801BD014 and confirmed by a reload taking one off the count. Key 0 is the
+// handgun's infinite reserve. (The two words after the table's start hold the grenades at 8056F338: key 3.)
+constexpr uint32_t kReserveTable = 0x8056F334, kReserveSetStride = 42, kReserveKeys = 21, kMaxReserve = 9999;
+constexpr double kDamageDead = 50.0;   // the damage meter's value at which a player is dead
 
 // The weapon table: 20 records of 168 bytes, found through the record accessor 8006C8C8 (id clamped to 0..19, 8046A86C + id * 168).
 constexpr uint32_t kWeaponTable = 0x8046A86C, kWeaponStride = 168, kWeaponCount = 20;
@@ -65,6 +70,26 @@ public:
                 const double d = v.get<double>();
                 if (!std::isfinite(d) || d < 0 || d > 1000) throw ApiError("damage must be between 0 and 1000 (0 is unhurt, 50 is dead)");
                 if (!s.memory_.write_f32(s.damage_address(slot), float(d))) throw ApiError("the damage meter is not readable right now");
+            });
+        add_property("weapon",
+            [](PlayerWeaponApi& s, int slot) { return Value(s.read(s.require_player(slot) + kWeaponId)); }, nullptr);
+        add_property("health",
+            [](PlayerWeaponApi& s, int slot) { return Value(std::clamp(1.0 - double(s.read_float(s.damage_address(slot))) / kDamageDead, 0.0, 1.0)); },
+            [](PlayerWeaponApi& s, int slot, const Value& v) {
+                if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() < 0 || v.get<double>() > 1) throw ApiError("health must be a number from 0 (dead) to 1 (unhurt)");
+                if (!s.memory_.write_f32(s.damage_address(slot), float((1.0 - v.get<double>()) * kDamageDead))) throw ApiError("the damage meter is not writable right now");
+            });
+        add_property("reserve",
+            [](PlayerWeaponApi& s, int slot) {
+                const uint32_t key = s.read(s.require_player(slot) + kWeaponKey);
+                if (key == 0) return Value(nullptr);   // infinite
+                return Value(s.read_u16(kReserveTable + uint32_t(slot - 1) * kReserveSetStride + s.checked_key(key) * 2));
+            },
+            [](PlayerWeaponApi& s, int slot, const Value& v) {
+                const uint32_t key = s.read(s.require_player(slot) + kWeaponKey);
+                if (key == 0) throw ApiError("this weapon has an infinite reserve (ammo key 0): there is nothing to set");
+                if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxReserve) throw ApiError("reserve must be a whole number from 0 to 9999");
+                if (!s.memory_.write_u16(kReserveTable + uint32_t(slot - 1) * kReserveSetStride + s.checked_key(key) * 2, uint16_t(v.get<long long>()))) throw ApiError("game memory is not writable right now");
             });
         add_property("invulnerable",
             [](PlayerWeaponApi& s, int slot) { std::lock_guard lock(s.mutex_); return Value(s.state_[size_t(slot - 1)].invulnerable); },
@@ -129,6 +154,15 @@ public:
             return view;
         };
         api.add(std::move(camera));
+        // The game is on rails and both players share one viewpoint: the "player position" is the camera's. The view matrix has the camera axes as its
+        // rows (right, up, back) and -R^T t as the eye position (measured: eye height 1.5 m, zombies 3 to 6 m ahead along -back).
+        const auto add_camera_vector = [&](const char* name, int what) {
+            Member member;
+            member.path = std::string("camera.") + name;
+            member.get = [self, what](const Value&) { return self->camera_vector(what); };
+            api.add(std::move(member));
+        };
+        add_camera_vector("position", 0); add_camera_vector("forward", 1); add_camera_vector("right", 2); add_camera_vector("up", 3);
 
         Member enemies;
         enemies.path = "enemies.list";
@@ -293,6 +327,15 @@ private:
         if (!s) throw ApiError("there is no scene right now (the game is in a menu or loading)");
         return *s + kDamage + uint32_t(slot - 1) * kDamageStride;
     }
+    uint32_t checked_key(uint32_t key) const {
+        if (key >= kReserveKeys) throw ApiError("the held weapon has an ammo key outside the game's table (" + std::to_string(key) + ")");
+        return key;
+    }
+    uint16_t read_u16(uint32_t address) const {
+        const auto v = memory_.read_u16(address);
+        if (!v) throw ApiError("game memory is not readable right now");
+        return *v;
+    }
     uint32_t read(uint32_t address) const {
         const auto v = memory_.read_u32(address);
         if (!v) throw ApiError("game memory is not readable right now");
@@ -305,6 +348,26 @@ private:
     }
     void write(uint32_t address, uint32_t value) {
         if (!memory_.write_u32(address, value)) throw ApiError("game memory is not writable right now");
+    }
+
+    Value camera_vector(int what) const {
+        float m[12];
+        for (uint32_t i = 0; i < 12; ++i) m[i] = read_float(kCameraView + 4 * i);
+        const auto row = [&](int r) { return std::array<double, 3>{m[4 * r], m[4 * r + 1], m[4 * r + 2]}; };
+        for (int r = 0; r < 3; ++r) {
+            const auto v = row(r);
+            const double length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (!std::isfinite(length) || length < 0.9 || length > 1.1) throw ApiError("there is no camera right now (the game is in a menu or loading)");   // an all-zero or broken matrix
+        }
+        std::array<double, 3> result{};
+        if (what == 0) {
+            for (int i = 0; i < 3; ++i) result[size_t(i)] = -(double(m[i]) * m[3] + double(m[4 + i]) * m[7] + double(m[8 + i]) * m[11]);
+        } else {
+            const auto axis = what == 1 ? row(2) : what == 2 ? row(0) : row(1);
+            const double sign = what == 1 ? -1.0 : 1.0;   // forward is minus the third row
+            for (int i = 0; i < 3; ++i) result[size_t(i)] = sign * axis[size_t(i)];
+        }
+        return Value::array({result[0], result[1], result[2]});
     }
 
     // Zombies from the actor table, plus actors with ids of 200 and up, which are only in the actor list (object+8 holds the next object + 8).

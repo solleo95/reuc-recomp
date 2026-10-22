@@ -140,7 +140,9 @@
         { "name": "damage", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.0", "doc": "The damage meter: 0 is unhurt, 50 is dead. Writing 0 heals.", "example": { "lua": "uc.player(1).damage = 0", "js": "uc.player(1).damage = 0;" } },
         { "name": "invulnerable", "kind": "property", "type": "bool", "access": "rw", "status": "implemented", "since": "1.0", "doc": "While true the damage meter is reset to 0 every game step.", "example": { "lua": "uc.player(1).invulnerable = true", "js": "uc.player(1).invulnerable = true;" } },
         { "name": "infinite_ammo", "kind": "property", "type": "bool", "access": "rw", "status": "implemented", "since": "1.0", "doc": "While true the magazine is refilled to its starting size every game step.", "example": { "lua": "uc.player(1).infinite_ammo = true", "js": "uc.player(1).infinite_ammo = true;" } },
-        { "name": "position", "kind": "property", "type": "vec3", "access": "r", "status": "planned", "since": "1.0", "doc": "World position (x, y, z) in game units (10 cm)." }
+        { "name": "weapon", "kind": "property", "type": "int", "access": "r", "status": "implemented", "since": "1.1", "doc": "The weapon id the player holds (0 to 19: the record number of the weapon table, 0 and 19 are the handgun). Read only: switching weapons runs game logic a plain write would skip.", "example": { "lua": "if uc.player(1).weapon == 0 then log.write('handgun') end", "js": "if (uc.player(1).weapon === 0) log.write('handgun');" } },
+        { "name": "health", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.1", "doc": "Health as a fraction: 1 unhurt, 0 dead. The damage meter turned around (health = 1 - damage / 50), so setting it writes the meter.", "example": { "lua": "uc.player(1).health = 1", "js": "uc.player(1).health = 1;" } },
+        { "name": "reserve", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.1", "doc": "The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count.", "example": { "lua": "local r = uc.player(1).reserve", "js": "const r = uc.player(1).reserve;" } }
       ]
     },
     {
@@ -163,7 +165,11 @@
       "name": "camera", "provider": "registry",
       "doc": "The game camera.",
       "members": [
-        { "name": "view", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.0", "doc": "The world-to-view matrix as 12 floats (3 rows of 4).", "example": { "lua": "local m = uc.camera.view", "js": "const m = uc.camera.view;" } }
+        { "name": "view", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.0", "doc": "The world-to-view matrix as 12 floats (3 rows of 4).", "example": { "lua": "local m = uc.camera.view", "js": "const m = uc.camera.view;" } },
+        { "name": "position", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The camera's world position [x, y, z] in the game's units (10 cm, y up). The game is on rails and both players share this one viewpoint, so it is also the player's eye position (about 1.5 m high). Throws when there is no scene.", "example": { "lua": "local p = uc.camera.position", "js": "const p = uc.camera.position;" } },
+        { "name": "forward", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The direction the camera looks in, a unit vector [x, y, z]. Throws when there is no scene.", "example": { "lua": "local f = uc.camera.forward", "js": "const f = uc.camera.forward;" } },
+        { "name": "right", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The camera's right direction, a unit vector.", "example": { "lua": "local r = uc.camera.right", "js": "const r = uc.camera.right;" } },
+        { "name": "up", "kind": "property", "type": "array<float>", "access": "r", "status": "implemented", "since": "1.1", "doc": "The camera's up direction, a unit vector.", "example": { "lua": "local u = uc.camera.up", "js": "const u = uc.camera.up;" } }
       ]
     },
     {

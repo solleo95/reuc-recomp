@@ -7,6 +7,10 @@ The game camera.
 | Member | Kind | Type | Status | Since |
 |---|---|---|---|---|
 | `view` | read | `array<float>` | implemented | 1.0 |
+| `position` | read | `array<float>` | implemented | 1.1 |
+| `forward` | read | `array<float>` | implemented | 1.1 |
+| `right` | read | `array<float>` | implemented | 1.1 |
+| `up` | read | `array<float>` | implemented | 1.1 |
 
 ## `view`
 
@@ -26,4 +30,84 @@ JavaScript:
 
 ```js
 const m = uc.camera.view;
+```
+
+## `position`
+
+`uc.camera.position` (`array<float>`, read)
+
+Status: **implemented**, since API 1.1.
+
+The camera's world position [x, y, z] in the game's units (10 cm, y up). The game is on rails and both players share this one viewpoint, so it is also the player's eye position (about 1.5 m high). Throws when there is no scene.
+
+Lua:
+
+```lua
+local p = uc.camera.position
+```
+
+JavaScript:
+
+```js
+const p = uc.camera.position;
+```
+
+## `forward`
+
+`uc.camera.forward` (`array<float>`, read)
+
+Status: **implemented**, since API 1.1.
+
+The direction the camera looks in, a unit vector [x, y, z]. Throws when there is no scene.
+
+Lua:
+
+```lua
+local f = uc.camera.forward
+```
+
+JavaScript:
+
+```js
+const f = uc.camera.forward;
+```
+
+## `right`
+
+`uc.camera.right` (`array<float>`, read)
+
+Status: **implemented**, since API 1.1.
+
+The camera's right direction, a unit vector.
+
+Lua:
+
+```lua
+local r = uc.camera.right
+```
+
+JavaScript:
+
+```js
+const r = uc.camera.right;
+```
+
+## `up`
+
+`uc.camera.up` (`array<float>`, read)
+
+Status: **implemented**, since API 1.1.
+
+The camera's up direction, a unit vector.
+
+Lua:
+
+```lua
+local u = uc.camera.up
+```
+
+JavaScript:
+
+```js
+const u = uc.camera.up;
 ```

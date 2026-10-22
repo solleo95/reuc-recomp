@@ -158,6 +158,48 @@ static void camera_view() {
     CHECK(view.is_array() && view.size() == 12 && view[0] == 0.0 && view[3] == 1.5 && view[11] == 5.5);
 }
 
+// The game is on rails: the player's eye is the camera. Its position and axes come from the world-to-view matrix (rows = right, up, back).
+static void camera_position_and_axes_from_the_view_matrix() {
+    Fixture f;
+    const float view[12] = {0.f, 0.f, -1.f, 0.95f,   0.f, 1.f, 0.f, -15.11f,   1.f, 0.f, 0.f, -539.45f};   // measured in the train chapter
+    for (int i = 0; i < 12; ++i) f.memory.write_f32(kCamera + 4u * uint32_t(i), view[i]);
+    const auto near = [](const json& v, double x, double y, double z) { return v.is_array() && v.size() == 3 && std::abs(v[0].get<double>() - x) < 1e-3 && std::abs(v[1].get<double>() - y) < 1e-3 && std::abs(v[2].get<double>() - z) < 1e-3; };
+    CHECK(near(f.get("camera.position"), 539.45, 15.11, 0.95));
+    CHECK(near(f.get("camera.right"), 0, 0, -1) && near(f.get("camera.up"), 0, 1, 0) && near(f.get("camera.forward"), -1, 0, 0));   // looking along -x, zombies stand at smaller x
+    for (int i = 0; i < 12; ++i) f.memory.write_f32(kCamera + 4u * uint32_t(i), 0.f);                                              // no scene (menu, loading): the matrix is empty
+    CHECK(f.throws([&] { f.get("camera.position"); }) && f.throws([&] { f.get("camera.forward"); }));
+    CHECK(!f.api.find("player.position"));   // not offered: with two players on rails there is one viewpoint, see camera.position
+}
+
+// player.weapon (the id of the held weapon), player.health (the damage meter as a fraction) and player.reserve (the spare ammo of the held weapon).
+static void weapon_health_and_reserve() {
+    Fixture f;
+    constexpr uint32_t kReserveTable = 0x8056A2D0 + 0x5064;   // u16 counts: 21 ammo keys per player, 42 bytes apart; key 0 means infinite
+    f.memory.write_u32(kP1 + 0x4C8, 19); f.memory.write_u32(kP2 + 0x4C8, 2);
+    CHECK(f.get("player.weapon", slot(1)) == 19 && f.get("player.weapon", slot(2)) == 2);
+    CHECK(!f.api.find("player.weapon") || !f.api.find("player.weapon")->set);   // read only: the game's equip logic is not run by a write
+    f.memory.write_f32(kScene + 0x6C00, 0.f); f.memory.write_f32(kScene + 0x6C14, 25.f);
+    CHECK(f.get("player.health", slot(1)) == 1.0 && f.get("player.health", slot(2)) == 0.5);
+    f.set("player.health", slot(1), 0.2);
+    CHECK(std::abs(f.memory.read_f32(kScene + 0x6C00).value() - 40.f) < 1e-4);
+    f.set("player.health", slot(2), 1);
+    CHECK(f.memory.read_f32(kScene + 0x6C14) == 0.f);
+    CHECK(f.throws([&] { f.set("player.health", slot(1), 1.5); }) && f.throws([&] { f.set("player.health", slot(1), -0.1); }) && f.throws([&] { f.set("player.health", slot(1), "full"); }));
+    f.memory.write_u32(kP1 + 0x4CC, 0);   // the handgun: key 0, infinite reserve
+    CHECK(f.get("player.reserve", slot(1)).is_null());
+    CHECK(f.throws([&] { f.set("player.reserve", slot(1), 5); }));
+    f.memory.write_u32(kP1 + 0x4CC, 7); f.memory.write_u32(kP2 + 0x4CC, 7);
+    f.memory.write_u16(kReserveTable + 7 * 2, 437); f.memory.write_u16(kReserveTable + 42 + 7 * 2, 12);
+    CHECK(f.get("player.reserve", slot(1)) == 437 && f.get("player.reserve", slot(2)) == 12);   // player 2 has its own set
+    f.set("player.reserve", slot(1), 100); f.set("player.reserve", slot(2), 0);
+    CHECK(f.memory.read_u16(kReserveTable + 7 * 2) == 100u && f.memory.read_u16(kReserveTable + 42 + 7 * 2) == 0u);
+    CHECK(f.throws([&] { f.set("player.reserve", slot(1), -1); }) && f.throws([&] { f.set("player.reserve", slot(1), 10000); }) && f.throws([&] { f.set("player.reserve", slot(1), 1.5); }));
+    f.memory.write_u32(kP1 + 0x4CC, 99);   // a key outside the table (0..20) is not trusted
+    CHECK(f.throws([&] { f.get("player.reserve", slot(1)); }));
+    f.memory.write_u32(kPlayerTable, 0);   // player 1 is not in the game
+    CHECK(f.throws([&] { f.get("player.weapon", slot(1)); }) && f.throws([&] { f.get("player.reserve", slot(1)); }));
+}
+
 static void enemies_list_parses_actor_table() {
     Fixture f;
     const auto zombie = [&](uint32_t address, uint32_t id, float x, float y, float z, float hp) {
@@ -343,6 +385,9 @@ static void fire_rate_sets_the_live_interval() {
 }
 
 int main() {
+    weapon_health_and_reserve();
+    camera_position_and_axes_from_the_view_matrix();
+    camera_position_and_axes_from_the_view_matrix();
     fire_rate_sets_the_live_interval();
     overlapping_weapon_values_restore_in_order();
     effects_belong_to_the_mod_that_set_them(); concurrent_setters_and_ticks();

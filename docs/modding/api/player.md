@@ -12,7 +12,9 @@ A player. uc.player(1) is player 1, uc.player(2) player 2 (co-op). Reading or wr
 | `damage` | read/write | `float` | implemented | 1.0 |
 | `invulnerable` | read/write | `bool` | implemented | 1.0 |
 | `infinite_ammo` | read/write | `bool` | implemented | 1.0 |
-| `position` | read | `vec3` | planned | 1.0 |
+| `weapon` | read | `int` | implemented | 1.1 |
+| `health` | read/write | `float` | implemented | 1.1 |
+| `reserve` | read/write | `int` | implemented | 1.1 |
 
 ## `present`
 
@@ -134,10 +136,62 @@ JavaScript:
 uc.player(1).infinite_ammo = true;
 ```
 
-## `position`
+## `weapon`
 
-`uc.player(slot).position` (`vec3`, read)
+`uc.player(slot).weapon` (`int`, read)
 
-Status: **planned**, since API 1.0.
+Status: **implemented**, since API 1.1.
 
-World position (x, y, z) in game units (10 cm).
+The weapon id the player holds (0 to 19: the record number of the weapon table, 0 and 19 are the handgun). Read only: switching weapons runs game logic a plain write would skip.
+
+Lua:
+
+```lua
+if uc.player(1).weapon == 0 then log.write('handgun') end
+```
+
+JavaScript:
+
+```js
+if (uc.player(1).weapon === 0) log.write('handgun');
+```
+
+## `health`
+
+`uc.player(slot).health` (`float`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Health as a fraction: 1 unhurt, 0 dead. The damage meter turned around (health = 1 - damage / 50), so setting it writes the meter.
+
+Lua:
+
+```lua
+uc.player(1).health = 1
+```
+
+JavaScript:
+
+```js
+uc.player(1).health = 1;
+```
+
+## `reserve`
+
+`uc.player(slot).reserve` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count.
+
+Lua:
+
+```lua
+local r = uc.player(1).reserve
+```
+
+JavaScript:
+
+```js
+const r = uc.player(1).reserve;
+```

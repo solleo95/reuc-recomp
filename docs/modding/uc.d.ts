@@ -16,8 +16,12 @@ interface PlayerHandle {
     invulnerable: boolean;
     /** While true the magazine is refilled to its starting size every game step. [implemented] */
     infinite_ammo: boolean;
-    /** World position (x, y, z) in game units (10 cm). [planned] */
-    readonly position: Vec3;
+    /** The weapon id the player holds (0 to 19: the record number of the weapon table, 0 and 19 are the handgun). Read only: switching weapons runs game logic a plain write would skip. [implemented] */
+    readonly weapon: number;
+    /** Health as a fraction: 1 unhurt, 0 dead. The damage meter turned around (health = 1 - damage / 50), so setting it writes the meter. [implemented] */
+    health: number;
+    /** The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count. [implemented] */
+    reserve: number;
 }
 
 /** Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits. */
@@ -89,6 +93,14 @@ declare namespace uc {
     namespace camera {
         /** The world-to-view matrix as 12 floats (3 rows of 4). [implemented] */
         const view: number[];
+        /** The camera's world position [x, y, z] in the game's units (10 cm, y up). The game is on rails and both players share this one viewpoint, so it is also the player's eye position (about 1.5 m high). Throws when there is no scene. [implemented] */
+        const position: number[];
+        /** The direction the camera looks in, a unit vector [x, y, z]. Throws when there is no scene. [implemented] */
+        const forward: number[];
+        /** The camera's right direction, a unit vector. [implemented] */
+        const right: number[];
+        /** The camera's up direction, a unit vector. [implemented] */
+        const up: number[];
     }
     /** Enemies in the current scene. */
     namespace enemies {

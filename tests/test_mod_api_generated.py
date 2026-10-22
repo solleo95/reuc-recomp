@@ -53,7 +53,8 @@ check("function uc.mem.read_u8(address) end" in lua and "---@field magazine inte
 inc = files["modding/generated/hookable.inc"]
 check('UC_HOOKABLE(0x8006C268u, "GameWeaponUpdate")' in inc, "hookable.inc wrong")
 page = files["docs/modding/api/player.md"]
-check("`magazine`" in page and "planned" in page and "uc.player(1).magazine = 15" in page, "player page wrong")
+check("`magazine`" in page and "implemented" in page and "uc.player(1).magazine = 15" in page, "player page wrong")
+check("planned" in files["docs/modding/api/input.md"], "planned members must show up as planned (input.fire_held)")
 
 # The committed files are current.
 stale = gen.stale_files(root, files)
