@@ -1,0 +1,8 @@
+{
+  "id": "hook-block",
+  "name": "Hook block",
+  "version": "1.0",
+  "api": "1.0",
+  "touches_gameplay": true,
+  "script": "scripts/main.lua"
+}

@@ -61,6 +61,7 @@
 #include <future>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <exception>
 #include <functional>
 #include <cstdio>
@@ -651,6 +652,8 @@ static int real_main(int argc, char** argv) {
     };
     // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
     uc::HostKeys host_keys;
+    uint64_t menu_click_presents=0;
+    std::deque<SDL_Event> menu_click_events;   // harness menu clicks: press and release, one per main-loop iteration
     bool restart_pending=false;   // apply upscaling changes at the next frame boundary; replace the device only when required
     std::optional<uc::LiveSettings> live_settings;
     std::optional<uc::SettingsMenu> settings_menu;
@@ -728,7 +731,16 @@ static int real_main(int argc, char** argv) {
                 +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")+"}";
             const auto pumped=test_server->pump(state.frame,frame_json);
             debug_capture_requested|=pumped.capture; draws_wanted|=pumped.draws;
+            if (!menu_click_events.empty() && host_keys.menu_open && renderer.presentation_count()!=menu_click_presents) {   // one event per presented frame: the menu needs the hover of a frame before the press
+                menu_click_presents=renderer.presentation_count(); renderer.menu_event(menu_click_events.front()); menu_click_events.pop_front();
+            }
             for (const auto code : pumped.host_keys) host_key_pressed(SDL_Scancode(code));
+            if (host_keys.menu_open) for (const auto& [x,y] : pumped.menu_clicks) {   // harness clicks on the menu: the pointer moves now, the press and the release follow on the next iterations (ImGui needs the hover first)
+                SDL_Event motion{}; motion.type=SDL_EVENT_MOUSE_MOTION; motion.motion.windowID=SDL_GetWindowID(window.get()); motion.motion.x=x; motion.motion.y=y;
+                SDL_Event press{}; press.type=SDL_EVENT_MOUSE_BUTTON_DOWN; press.button.windowID=motion.motion.windowID; press.button.button=SDL_BUTTON_LEFT; press.button.down=true; press.button.clicks=1; press.button.x=x; press.button.y=y;
+                SDL_Event release=press; release.type=SDL_EVENT_MOUSE_BUTTON_UP; release.button.down=false;
+                renderer.menu_event(motion); menu_click_events.push_back(motion); menu_click_events.push_back(press); menu_click_events.push_back(release);
+            }
             for (const auto& graphics : pumped.options) if (live_settings) {   // the in-game menu's path: merged over the saved settings, applied and saved
                 try {
                     uc::ConfigDocument document; uc::store_options(document,live_settings->options());

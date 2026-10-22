@@ -18,7 +18,7 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 | [mem](mem.md) | registry | 18 | 18 |
 | [symbols](symbols.md) | registry | 2 | 2 |
 | [player](player.md) | registry | 7 | 6 |
-| [weapon](weapon.md) | registry | 5 | 3 |
+| [weapon](weapon.md) | registry | 5 | 4 |
 | [camera](camera.md) | registry | 1 | 1 |
 | [enemies](enemies.md) | registry | 1 | 1 |
 | [input](input.md) | registry | 1 | 0 |
@@ -29,5 +29,5 @@ Used with `hook.pre`, `hook.post`, `hook.replace`.
 
 | Name | Guest address | Status | Meaning |
 |---|---|---|---|
-| `GameWeaponUpdate` | `0x8006C268` | unverified | Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag. |
+| `GameWeaponUpdate` | `0x8006C268` | implemented | Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag. Checked in the game: the hook is called with a guest address in r3, and clearing r4 stops the held trigger from firing. |
 | `PlayerEventHandler` | `0x800676A0` | unverified | Player event handler (damage, firing and similar events). |

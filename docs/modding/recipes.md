@@ -31,7 +31,7 @@ Weapon records 0 and 19 are the handgun. With `fire_mode = 'auto'` a held trigge
 
 ## Damage multiplier (Lua) — `damage_multiplier`
 
-One number setting. The script waits until the game has filled its weapon table (the first step where `uc.weapon(0).damage > 0`), remembers every weapon's original damage, and writes `original * scale`. Changing the setting in the menu recomputes from the originals. Shows: why reading game data belongs in `on_step` rather than `on_load`, and that weapon values stay set when the game refills its tables. `weapon.damage` is `unverified` in the API reference.
+One number setting. The script waits until the game has filled its weapon table (the first step where `uc.weapon(0).damage > 0`), remembers every weapon's original damage, and writes `original * scale`. Changing the setting in the menu recomputes from the originals. Shows: why reading game data belongs in `on_step` rather than `on_load`, and that weapon values stay set when the game refills its tables.
 
 ## Faster handgun (data only) — `faster_handgun`
 

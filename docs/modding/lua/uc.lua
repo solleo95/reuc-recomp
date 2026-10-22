@@ -11,7 +11,7 @@
 ---@field position {x: number, y: number, z: number} World position (x, y, z) in game units (10 cm). [planned]
 
 ---@class UcWeaponHandle
----@field damage number Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. [unverified]
+---@field damage number Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay). [implemented]
 ---@field fire_rate number Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now. [planned]
 ---@field capacity integer Magazine size, 0 to 999. The game reads it when a reload ends: with 30 set for the handgun a reload refills 30 rounds. [implemented]
 ---@field reload_time number Reload duration in seconds of game time (1.0 for the handgun, 2.3 for a shotgun); 0.2 makes a handgun reload about seven times faster. [implemented]

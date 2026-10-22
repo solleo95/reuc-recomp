@@ -6,7 +6,7 @@ Parameters of a weapon type: one record of the game's weapon table, addressed by
 
 | Member | Kind | Type | Status | Since |
 |---|---|---|---|---|
-| `damage` | read/write | `float` | unverified | 1.0 |
+| `damage` | read/write | `float` | implemented | 1.0 |
 | `fire_rate` | read/write | `float` | planned | 1.0 |
 | `capacity` | read/write | `int` | implemented | 1.0 |
 | `reload_time` | read/write | `float` | implemented | 1.0 |
@@ -16,9 +16,9 @@ Parameters of a weapon type: one record of the game's weapon table, addressed by
 
 `uc.weapon(id).damage` (`float`, read/write)
 
-Status: **unverified**, since API 1.0.
+Status: **implemented**, since API 1.0.
 
-Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits.
+Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay).
 
 Lua:
 

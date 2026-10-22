@@ -179,6 +179,7 @@ class Game:
         ids = []
         for name in self.mods:
             source, folder = ROOT / "mods-examples" / name, target / name
+            if not source.exists(): source = ROOT / "scripts" / "uctest" / "mods" / name   # test-only mods live beside the harness
             marker = folder / ".uctest-installed"
             if folder.exists():
                 if not marker.exists():   # the owner's own mod with this folder name: never delete it
@@ -311,6 +312,13 @@ class Game:
     def host_key(self, code):
         """A key of the port itself (Insert: settings menu, P: pause), handled in the main loop's next iteration."""
         self.request({"cmd": "host_key", "code": code})
+
+    def menu_click(self, x, y):
+        """A left click on the in-game menu at window pixel (x, y) (the menu must be open; the harness window is 1280x720)."""
+        start = (self.frame or {}).get("presents", 0)
+        self.request({"cmd": "menu_click", "x": x, "y": y})
+        # The game delivers the pointer move, a settle move, the press and the release one per presented frame: wait for them (game frames are no measure at speed 8).
+        self.wait(lambda f: f.get("presents", 0) >= start + 8, seconds=15, awaited="menu click delivered")
 
     def set_options(self, **graphics):
         """Change graphics settings live, as the in-game menu does (config.json "graphics" keys); saved to the run's config copy."""

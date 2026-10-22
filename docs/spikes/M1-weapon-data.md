@@ -57,4 +57,4 @@ Names other than 0 to 2 are not established; the API addresses records by id.
 Findings that shaped the API:
 
 - The game fills the table again after a mod's `on_load` (a first run, with a one-time write, showed the original values): the API keeps the values a mod set and writes them again at the next game step when they differ.
-- `fire_rate` stays `planned` (two approaches tried, no effect). `damage` is `unverified`: record 0 holds 10 and zombies lose 10 per handgun hit (G22), `fn_8006B0C4` reads it, but a hit with a changed value was not observed. `capacity`, `reload_time` and `fire_mode` are confirmed live.
+- `fire_rate` stays `planned` (two approaches tried, no effect). `damage` is confirmed live (2026-10-22, autoplay bot, hp sampled per frame): zombies lose 10 per body hit, 3 or 5 per other hit, and with record 0 and 19 set to 100 the same hits take 100, 30 and 50 (the multipliers stay). `capacity`, `reload_time` and `fire_mode` are confirmed live too.

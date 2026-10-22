@@ -164,7 +164,9 @@ void ModMenuUi::manager_tab(float unit) {
         const auto running = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == id; });
         if (running != status.end() && running->disabled_for_session) line = std::string(tr("stopped")) + ": " + running->last_error;
         else if (e->state == ModState::enabled && running != status.end() && !running->running) line = tr("waiting");   // enabled, but the game does not run it: native code is off
-        ImGui::TextDisabled("%s", line.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", line.c_str());   // wraps: a long reason (native code off) must not run past the window
+        ImGui::PopStyleColor();
         if (!e->manifest.description.empty()) ImGui::TextWrapped("%s", e->manifest.description.c_str());
         for (const auto& message : e->messages) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .52f, .52f, 1.f)); ImGui::TextWrapped("%s", message.c_str()); ImGui::PopStyleColor(); }
         if (!e->manifest.native.empty()) {

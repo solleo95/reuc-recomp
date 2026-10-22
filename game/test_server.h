@@ -19,7 +19,7 @@ class TestServer {
 public:
     TestServer(TestPipes&, TestInputSink&);
     // Called once per main-loop iteration with the latest published frame counter.
-    struct Pump { bool capture = false; bool draws = false; bool quit = false; std::vector<uint32_t> host_keys; std::vector<std::string> options; };
+    struct Pump { bool capture = false; bool draws = false; bool quit = false; std::vector<uint32_t> host_keys; std::vector<std::string> options; std::vector<std::pair<float, float>> menu_clicks; };
     Pump pump(uint64_t frame, const std::string& frame_json);
     void captured(const std::string& path);           // completes the oldest pending capture
     void capture_failed(const std::string& message);

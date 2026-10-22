@@ -22,7 +22,7 @@ interface PlayerHandle {
 
 /** Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits. */
 interface WeaponHandle {
-    /** Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. [unverified] */
+    /** Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay). [implemented] */
     damage: number;
     /** Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now. [planned] */
     fire_rate: number;

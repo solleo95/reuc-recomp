@@ -145,7 +145,7 @@
       "name": "weapon", "provider": "registry", "scope": "id",
       "doc": "Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits.",
       "members": [
-        { "name": "damage", "kind": "property", "type": "float", "access": "rw", "status": "unverified", "since": "1.0", "doc": "Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits.",
+        { "name": "damage", "kind": "property", "type": "float", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay).",
           "example": { "lua": "uc.weapon(0).damage = uc.weapon(0).damage * 2", "js": "uc.weapon(0).damage *= 2;" } },
         { "name": "fire_rate", "kind": "property", "type": "float", "access": "rw", "status": "planned", "since": "1.0", "doc": "Shots per second. The weapon record has a rate field (1 for single shots, 10 to 15 for automatic weapons) but changing it did not change how fast the handgun shoots in automatic mode, so it is not exposed yet; how fast a held trigger shoots is fixed by the weapon's animation for now." },
         { "name": "capacity", "kind": "property", "type": "int", "access": "rw", "status": "implemented", "since": "1.0", "doc": "Magazine size, 0 to 999. The game reads it when a reload ends: with 30 set for the handgun a reload refills 30 rounds.",
@@ -180,7 +180,7 @@
     }
   ],
   "hookable": [
-    { "name": "GameWeaponUpdate", "address": "8006C268", "status": "unverified", "doc": "Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag." },
+    { "name": "GameWeaponUpdate", "address": "8006C268", "status": "implemented", "doc": "Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag. Checked in the game: the hook is called with a guest address in r3, and clearing r4 stops the held trigger from firing." },
     { "name": "PlayerEventHandler", "address": "800676A0", "status": "unverified", "doc": "Player event handler (damage, firing and similar events)." }
   ]
 }

@@ -3,7 +3,7 @@
   "name": "Damage Multiplier",
   "version": "1.0",
   "author": "Umbrella Chronicles PC port",
-  "description": "Multiplies the damage of every weapon. Needs weapon.damage, which is marked unverified in the API reference.",
+  "description": "Multiplies the damage of every weapon.",
   "api": "1.0",
   "touches_gameplay": true,
   "script": "scripts/main.lua",

@@ -1,0 +1,7 @@
+{
+  "id": "damage-big",
+  "name": "Damage big",
+  "version": "1.0",
+  "api": "1.0",
+  "touches_gameplay": true
+}

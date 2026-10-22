@@ -401,6 +401,9 @@ def overlay(g, args):
 MODS_SMOKE_MODS = ["infinite_ammo", "god_mode", "pistol_autofire", "faster_handgun"]
 
 
+MODS_TAB, FIRST_GEAR = (717, 83), (769, 330)   # window pixels in the harness's 1280x720 window: the gear of the second smoke mod (Бессмертие / god_mode: settings and free drawing)
+
+
 def mods_smoke(g, args):
     """Mods in the real game (the example mods, copied next to the exe for this run): the held trigger fires but the magazine never drops (infinite ammo),
     the handgun record is automatic with the data patch's 30 rounds, the damage meter stays at zero (god mode), and the menu shows the Mods tab and the
@@ -441,12 +444,84 @@ def mods_smoke(g, args):
         g.host_key(g.INSERT)
         g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
         g.advance(10)
-        result["menu"] = g.capture()   # look at it: the Mods tab and the mods' tabs after Controls, with scroll arrows when they do not fit
+        result["menu"] = g.capture()   # look at it: the built-in tabs and the Mods tab
+        g.menu_click(*MODS_TAB)
+        result["menu_mods"] = g.capture()   # the manager: one row per mod, gear + order arrows flush right
+        g.menu_click(*FIRST_GEAR)
+        result["menu_settings"] = g.capture()   # the second mod's settings window (a modal over the manager)
         g.host_key(g.ESCAPE)
         g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
     return result
 
 
+def hook_probe(g, args):
+    """Hooks in the real game: a mod's hook on GameWeaponUpdate is called with the weapon object, and clearing the 'allowed' flag (r4) from a hook changes
+    what the game does. Reads debug/mods.log next to the exe; fire presses use the game's own pad input."""
+    reach_gameplay(g)
+    g.advance(240)
+    log_path = g.exe.parent / "debug" / "mods.log"
+    result = {}
+    with g.step("hook_called"):
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        lines = [line for line in text.splitlines() if "hook r3=" in line]
+        result["hook_lines"] = lines[-3:]
+        if not lines:
+            g.fail("the hook was never called (no 'hook r3=' line in debug/mods.log)", "hook")
+        r3 = int(lines[-1].split("r3=")[1].split()[0], 16)
+        result["r3"] = hex(r3)
+        if not 0x80000000 <= r3 < 0x81800000:
+            g.fail(f"r3 {r3:#x} is not a guest address", "hook")
+    return result
+
+
+def hook_block(g, args):
+    """A hook that clears r4 of GameWeaponUpdate: the held trigger must not fire. (Without the mod the same press takes the magazine from 15 to 14, checked
+    on 2026-10-22; r4 is the weapon's 'allowed' flag.)"""
+    reach_gameplay(g)
+    g.advance(60)
+    result = {}
+    with g.step("held_trigger"):
+        before = g.state()["player"]["magazine"]
+        g.press("B", 90)
+        g.advance(30)
+        after = g.state()["player"]["magazine"]
+        result["magazine"] = {"before": before, "after": after}
+        if after != before:
+            g.fail(f"the magazine went from {before} to {after} although the hook cleared r4", "hook r4")
+    return result
+
+
+def weapon_damage(g, args):
+    """A data-only mod sets the handgun damage to 100: the autoplay bot's hits must take 100 (body), 30 or 50 (other parts) off zombies; unmodded the same
+    hits take 10, 3 and 5 (measured 2026-10-22). Enemy hp is sampled from the frame events while the bot plays."""
+    import collections, threading, time
+    from .autoplay import Autoplay
+    reach_gameplay(g)
+    last, drops, stop = {}, collections.Counter(), threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            for e in (g.frame or {}).get("enemies") or []:
+                hp = e.get("hp")
+                if hp is None:
+                    continue
+                if e["id"] in last and hp < last[e["id"]] and last[e["id"]] - hp < 1000:
+                    drops[round(last[e["id"]] - hp)] += 1
+                last[e["id"]] = hp
+            time.sleep(0.003)
+    thread = threading.Thread(target=sample, daemon=True)
+    thread.start()
+    with g.step("hits"):
+        Autoplay(g, g.run_dir / "autoplay.jsonl", speed=args.speed).run(0.5)
+    stop.set()
+    thread.join()
+    result = {"hp_drops": dict(drops.most_common(8))}
+    with g.step("damage_applied"):
+        if drops[100] < 5 or drops[10] > drops[100]:
+            g.fail(f"hits did not take 100 off (drops: {result['hp_drops']})", "weapon damage")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

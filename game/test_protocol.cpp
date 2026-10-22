@@ -103,6 +103,9 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
             r.addr = uint32_t(number(root, "addr", 0, 4294967295.0, true)); r.size = uint32_t(number(root, "size", 1, 262144, true));
         } else if (name == "host_key") {   // a key of the port itself (SDL scancode): Insert opens the settings menu, P pauses
             only(root, {"id", "cmd", "code"}); r.kind = TestRequestKind::host_key; r.input.code = uint32_t(number(root, "code", 1, 511, true));
+        } else if (name == "menu_click") {   // a left click on the in-game menu (window pixels): moves the pointer there, presses and releases
+            only(root, {"id", "cmd", "x", "y"}); r.kind = TestRequestKind::menu_click;
+            r.mx = float(number(root, "x", 0, 16384, false)); r.my = float(number(root, "y", 0, 16384, false));
         } else if (name == "options") {    // graphics settings to apply live, as the in-game menu does (config.json "graphics" keys)
             only(root, {"id", "cmd", "graphics"}); r.kind = TestRequestKind::options;
             auto it = root.find("graphics");

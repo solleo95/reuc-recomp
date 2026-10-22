@@ -25,6 +25,10 @@ int main() {
     CHECK(host.kind==TestRequestKind::host_key && host.input.code==73);
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"host_key"})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"host_key","code":0})")).empty());
+    const auto click=ok(parse_test_request(R"({"id":15,"cmd":"menu_click","x":640.5,"y":120})"));   // a click on the in-game menu, window pixels
+    CHECK(click.kind==TestRequestKind::menu_click && click.mx==640.5f && click.my==120.f);
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"menu_click","x":10})")).empty());
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"menu_click","x":-1,"y":5})")).empty());
     const auto options=ok(parse_test_request(R"({"id":15,"cmd":"options","graphics":{"bloom":false,"upscaler":"fsr","render_scale":2}})"));
     CHECK(options.kind==TestRequestKind::options && options.text==R"({"bloom":false,"upscaler":"fsr","render_scale":2})");
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options"})")).empty());
