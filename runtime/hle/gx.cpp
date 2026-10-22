@@ -104,7 +104,7 @@ struct MeshCacheEntry { uintptr_t key; std::shared_ptr<const CachedMesh> mesh; }
 std::list<MeshCacheEntry> mesh_cache;
 std::unordered_map<uintptr_t,std::list<MeshCacheEntry>::iterator> mesh_index;
 size_t mesh_cache_bytes=0;
-constexpr size_t mesh_cache_budget=32u<<20;
+constexpr size_t mesh_cache_budget=256u<<20;
 std::atomic<uint64_t> geometry_hits{0},geometry_misses{0};
 // Guest baton is the sole writer; atomic load/store lets host readers sample without a locked RMW.
 inline void add_guest_stat(std::atomic<uint64_t>& counter,uint64_t amount) {
