@@ -263,6 +263,22 @@ static void weapon_health_and_reserve() {
     CHECK(f.throws([&] { f.get("player.weapon", slot(1)); }) && f.throws([&] { f.get("player.reserve", slot(1)); }));
 }
 
+static void game_state_and_stats() {
+    Fixture f;
+    f.memory.write_u32(0x805C5D74, 125); f.memory.write_u32(0x804C77C4, 300); f.memory.write_u32(0x805965A8, 1);
+    CHECK(f.get("game.time") == 125 && f.get("game.stars") == 300 && f.get("game.paused") == false);
+    f.memory.write_u32(0x805965A8, 2);
+    CHECK(f.get("game.paused") == true && !f.api.find("game.paused")->set);
+    f.set("game.time", json::object(), 0); f.set("game.stars", json::object(), 9999);
+    CHECK(f.memory.read_u32(0x805C5D74) == 0u && f.memory.read_u32(0x804C77C4) == 9999u);
+    CHECK(f.throws([&] { f.set("game.time", json::object(), -1); }) && f.throws([&] { f.set("game.stars", json::object(), 10000); }) && f.throws([&] { f.set("game.time", json::object(), 1.5); }));
+    f.memory.write_u32(0x805C5CC0, 7); f.memory.write_u32(0x805C5CC4, 9); f.memory.write_u32(0x805C5CC8, 2); f.memory.write_u32(0x805C5CD4, 4);
+    CHECK(f.get("player.hits", slot(1)) == 7 && f.get("player.hits", slot(2)) == 9 && f.get("player.critical_hits", slot(1)) == 2 && f.get("player.objects_destroyed", slot(2)) == 4);
+    f.set("player.hits", slot(2), 0); f.set("player.critical_hits", slot(1), 255);
+    CHECK(f.memory.read_u32(0x805C5CC4) == 0u && f.memory.read_u32(0x805C5CC8) == 255u);
+    CHECK(f.throws([&] { f.set("player.hits", slot(1), -1); }) && f.throws([&] { f.set("player.hits", slot(1), 100000); }));
+}
+
 static void enemies_list_parses_actor_table() {
     Fixture f;
     const auto zombie = [&](uint32_t address, uint32_t id, float x, float y, float z, float hp) {
@@ -485,6 +501,7 @@ int main() {
     enemy_and_death_events();
     enemy_members();
     weapon_health_and_reserve();
+    game_state_and_stats();
     camera_position_and_axes_from_the_view_matrix();
     camera_position_and_axes_from_the_view_matrix();
     fire_rate_sets_the_live_interval();

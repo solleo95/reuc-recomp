@@ -11,6 +11,9 @@
 ---@field weapon integer The weapon id the player holds (0 to 19: the record number of the weapon table, 0 and 19 are the handgun). Read only: switching weapons runs game logic a plain write would skip. [implemented]
 ---@field health number Health as a fraction: 1 unhurt, 0 dead. The damage meter turned around (health = 1 - damage / 50), so setting it writes the meter. [implemented]
 ---@field reserve integer The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count. [implemented]
+---@field hits integer Enemy hits of this mission (the result screen's counter), 0 to 99999. Checked: it rises with the shots that hit while a bot plays. [implemented]
+---@field critical_hits integer Critical hits of this mission (the result screen's counter), 0 to 99999. [implemented]
+---@field objects_destroyed integer Objects destroyed in this mission (the result screen's counter), 0 to 99999. Checked: it rose while a bot played the train chapter. [implemented]
 
 ---@class UcWeaponHandle
 ---@field damage number Damage per hit (per pellet for a shotgun): the handgun's 10 takes a zombie down in two hits. Checked in the game: with 100 a hit takes 100 off a zombie (the body, head and limb multipliers stay). [implemented]
@@ -261,6 +264,21 @@ function uc.symbols.name_of(address) end
 ---@param slot integer
 ---@return UcPlayerHandle
 function uc.player(slot) end
+
+---The state of the game as a whole. The mission clock and the counters keep their last values outside a mission.
+uc.game = {}
+
+---@type integer
+---Mission clock in whole seconds (0 to 359999), the time the result screen shows. Checked: it counts about one per second of game time while a mission runs. [implemented]
+uc.game.time = nil
+
+---@type boolean
+---True while the game's pause menu is open. [implemented]
+uc.game.paused = nil
+
+---@type integer
+---The stars (the money spent on weapon upgrades), 0 to 9999. The game keeps it in its save data. [implemented]
+uc.game.stars = nil
 
 ---Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits.
 ---@param id integer

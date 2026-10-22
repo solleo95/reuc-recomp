@@ -15,6 +15,9 @@ A player. uc.player(1) is player 1, uc.player(2) player 2 (co-op). Reading or wr
 | `weapon` | read | `int` | implemented | 1.1 |
 | `health` | read/write | `float` | implemented | 1.1 |
 | `reserve` | read/write | `int` | implemented | 1.1 |
+| `hits` | read/write | `int` | implemented | 1.1 |
+| `critical_hits` | read/write | `int` | implemented | 1.1 |
+| `objects_destroyed` | read/write | `int` | implemented | 1.1 |
 
 ## `present`
 
@@ -194,4 +197,64 @@ JavaScript:
 
 ```js
 const r = uc.player(1).reserve;
+```
+
+## `hits`
+
+`uc.player(slot).hits` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Enemy hits of this mission (the result screen's counter), 0 to 99999. Checked: it rises with the shots that hit while a bot plays.
+
+Lua:
+
+```lua
+local n = uc.player(1).hits
+```
+
+JavaScript:
+
+```js
+const n = uc.player(1).hits;
+```
+
+## `critical_hits`
+
+`uc.player(slot).critical_hits` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Critical hits of this mission (the result screen's counter), 0 to 99999.
+
+Lua:
+
+```lua
+local n = uc.player(1).critical_hits
+```
+
+JavaScript:
+
+```js
+const n = uc.player(1).critical_hits;
+```
+
+## `objects_destroyed`
+
+`uc.player(slot).objects_destroyed` (`int`, read/write)
+
+Status: **implemented**, since API 1.1.
+
+Objects destroyed in this mission (the result screen's counter), 0 to 99999. Checked: it rose while a bot played the train chapter.
+
+Lua:
+
+```lua
+local n = uc.player(1).objects_destroyed
+```
+
+JavaScript:
+
+```js
+const n = uc.player(1).objects_destroyed;
 ```

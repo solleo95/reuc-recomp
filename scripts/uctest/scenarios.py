@@ -454,6 +454,36 @@ def mods_smoke(g, args):
     return result
 
 
+def state_dump(g, args):
+    """Spike (block 3 of the mod API): dumps the statistics area that the Gecko codes point at (0x805C5C00..0x805C6000, stars at 0x804C77C4) at several
+    moments of the first chapter, with the trigger held in between, and lists the words that changed."""
+    import struct
+    reach_gameplay(g, args.chapter)
+
+    def peek(addr, size):
+        return bytes.fromhex(g.request({"cmd": "peek", "addr": addr, "size": size})["hex"])
+
+    regions = [(0x805C5A00, 0x800), (0x804C7700, 0x200)]
+    from .autoplay import Autoplay
+    bot = Autoplay(g, g.run_dir / "autoplay.jsonl", speed=args.speed, god=True)
+    snaps, next_at, start = [], 0, g.frame["retraces"]
+    while len(snaps) < 8 and bot.step() is None:
+        tick = g.frame["retraces"] - start
+        if tick >= next_at:
+            next_at = tick + 900   # every 15 s of game time
+            st = g.state()
+            snaps.append((f"t{tick // 60}s kills={bot.kills}", st, [peek(a, n) for a, n in regions]))
+    out = []
+    for (la, _, ra), (lb, _, rb) in zip(snaps, snaps[1:]):
+        out.append(f"--- {la} -> {lb}")
+        for (addr, n), a, b in zip(regions, ra, rb):
+            for i in range(0, n, 4):
+                if a[i:i + 4] != b[i:i + 4]:
+                    out.append(f"{addr + i:08X}: {a[i:i + 4].hex()} -> {b[i:i + 4].hex()}  (f32 {struct.unpack('>f', b[i:i + 4])[0]:.4g}, u32 {struct.unpack('>I', b[i:i + 4])[0]})")
+    (g.run_dir / "state_dump.txt").write_text("\n".join(out), encoding="utf-8")
+    return {"dump": str(g.run_dir / "state_dump.txt"), "state": snaps[-1][1]}
+
+
 def hook_probe(g, args):
     """Hooks in the real game: a mod's hook on GameWeaponUpdate is called with the weapon object, and clearing the 'allowed' flag (r4) from a hook changes
     what the game does. Reads debug/mods.log next to the exe; fire presses use the game's own pad input."""
@@ -690,6 +720,46 @@ def enemy_api(g, args):
     return result
 
 
+def game_api(g, args):
+    """uc.game.time / paused and the hit counters in the real game: the clock rises while the mission runs, the hit counter rises while the trigger is
+    held at the zombies, and the game's pause menu (the + button) shows as paused = true."""
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+
+    def rows():
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        return [dict(kv.split("=") for kv in l.split("game ", 1)[1].split()) for l in text.splitlines() if "game time=" in l]
+
+    result = {}
+    with g.step("clock_and_hits"):
+        g.advance(120)
+        first = rows()
+        if not first:
+            g.fail("the probe mod logged nothing", "game api")
+        from .autoplay import Autoplay
+        bot = Autoplay(g, g.run_dir / "autoplay.jsonl", speed=args.speed, god=True)
+        start = g.frame["retraces"]
+        while g.frame["retraces"] - start < 1500 and bot.step() is None:   # 25 s of game time, shooting the zombies
+            pass
+        g.advance(30)
+        last = rows()[-1]
+        result["first"], result["last"] = first[0], last
+        if int(last["time"]) <= int(first[0]["time"]):
+            g.fail(f"the mission clock did not move: {first[0]['time']} -> {last['time']}", "game api")
+        if int(last["hits"]) <= int(first[0]["hits"]):
+            g.fail(f"the hit counter did not rise: {first[0]['hits']} -> {last['hits']}", "game api")
+    with g.step("pause"):
+        steps._toggle_pause(g, 2, 10)   # the game's pause key (Escape)
+        g.advance(60)
+        result["pause_word"] = g.frame.get("pause")
+        seen = any(r["paused"] == "true" for r in rows()[-6:])
+        result["paused_in_log"] = seen
+        result["capture"] = g.capture()
+        if not seen:
+            g.fail(f"uc.game.paused never read true (pause word {result['pause_word']})", "game api")
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "game_api": game_api}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))

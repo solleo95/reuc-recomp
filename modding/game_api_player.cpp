@@ -26,6 +26,10 @@ constexpr uint32_t kMaxMagazine = 65535;
 // Spare ammo: u16 counts per ammo key (21 keys, 42 bytes per player), found through fn_801BD014 and confirmed by a reload taking one off the count. Key 0 is the
 // handgun's infinite reserve. (The two words after the table's start hold the grenades at 8056F338: key 3.)
 constexpr uint32_t kReserveTable = 0x8056F334, kReserveSetStride = 42, kReserveKeys = 21, kMaxReserve = 9999;
+// Mission statistics (USA build; the Gecko codes give them for PAL 0x300 higher): per-player words P1, P2 and the mission clock in whole seconds.
+constexpr uint32_t kStatHits = 0x805C5CC0, kStatCritical = 0x805C5CC8, kStatObjects = 0x805C5CD0, kMissionSeconds = 0x805C5D74;
+constexpr uint32_t kStars = 0x804C77C4, kPauseState = 0x805965A8, kPaused = 2;   // upgrade money (a 4-byte word); the pause state word (2 = paused) is read by the input context too
+constexpr long long kMaxStat = 99999, kMaxSeconds = 359999, kMaxStars = 9999;
 constexpr double kDamageDead = 50.0;   // the damage meter's value at which a player is dead
 
 // The weapon table: 20 records of 168 bytes, found through the record accessor 8006C8C8 (id clamped to 0..19, 8046A86C + id * 168).
@@ -91,6 +95,13 @@ public:
                 if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxReserve) throw ApiError("reserve must be a whole number from 0 to 9999");
                 if (!s.memory_.write_u16(kReserveTable + uint32_t(slot - 1) * kReserveSetStride + s.checked_key(key) * 2, uint16_t(v.get<long long>()))) throw ApiError("game memory is not writable right now");
             });
+        // Mission statistics (the result screen's counters), one word per player, found through the Gecko codes and confirmed by a bot run (hits rose with the shots).
+        const auto add_stat = [&](const char* name, uint32_t first) {
+            add_property(name,
+                [first](PlayerWeaponApi& s, int slot) { return Value(s.read(first + uint32_t(slot - 1) * 4)); },
+                [first, name](PlayerWeaponApi& s, int slot, const Value& v) { s.write(first + uint32_t(slot - 1) * 4, stat_of(v, name)); });
+        };
+        add_stat("hits", kStatHits); add_stat("critical_hits", kStatCritical); add_stat("objects_destroyed", kStatObjects);
         add_property("invulnerable",
             [](PlayerWeaponApi& s, int slot) { std::lock_guard lock(s.mutex_); return Value(s.state_[size_t(slot - 1)].invulnerable); },
             [](PlayerWeaponApi& s, int slot, const Value& v) { s.set_switch(s.invulnerable_by_[size_t(slot - 1)], s.state_[size_t(slot - 1)].invulnerable, flag_of(v, "invulnerable")); });
@@ -190,6 +201,25 @@ public:
                     p[i] = float(v[size_t(i)].get<double>());
                 }
                 for (int i = 0; i < 3; ++i) s.write_float_direct(a + kEnemyPosition + 4 * uint32_t(i), p[i]);
+            });
+
+        const auto add_game = [&](const char* name, std::function<Value(PlayerWeaponApi&)> get, std::function<void(PlayerWeaponApi&, const Value&)> set) {
+            Member member;
+            member.path = std::string("game.") + name;
+            member.get = [self, get](const Value&) { return get(*self); };
+            if (set) member.set = [self, set](const Value&, const Value& value) { set(*self, value); };
+            api.add(std::move(member));
+        };
+        add_game("time", [](PlayerWeaponApi& s) { return Value(s.read(kMissionSeconds)); },
+            [](PlayerWeaponApi& s, const Value& v) {
+                if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxSeconds) throw ApiError("time must be a whole number of seconds from 0 to 359999");
+                s.write(kMissionSeconds, uint32_t(v.get<long long>()));
+            });
+        add_game("paused", [](PlayerWeaponApi& s) { return Value(s.read(kPauseState) == kPaused); }, nullptr);
+        add_game("stars", [](PlayerWeaponApi& s) { return Value(s.read(kStars)); },
+            [](PlayerWeaponApi& s, const Value& v) {
+                if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxStars) throw ApiError("stars must be a whole number from 0 to 9999");
+                s.write(kStars, uint32_t(v.get<long long>()));
             });
 
         Member enemies;
@@ -357,6 +387,10 @@ private:
     }
     static uint32_t count_of(const Value& v, const char* what) {
         if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxMagazine) throw ApiError(std::string(what) + " must be a whole number from 0 to 65535");
+        return uint32_t(v.get<long long>());
+    }
+    static uint32_t stat_of(const Value& v, const char* what) {
+        if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > kMaxStat) throw ApiError(std::string(what) + " must be a whole number from 0 to 99999");
         return uint32_t(v.get<long long>());
     }
     static bool flag_of(const Value& v, const char* what) {

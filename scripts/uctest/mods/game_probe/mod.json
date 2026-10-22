@@ -1,0 +1,1 @@
+{ "id": "game-probe", "name": "Game probe", "version": "1.0", "api": "1.1", "script": "scripts/main.lua" }

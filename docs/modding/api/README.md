@@ -17,7 +17,8 @@ Status: `implemented` works in this build, `unverified` works but was not confir
 | [hook](hook.md) | context | 4 | 4 |
 | [mem](mem.md) | registry | 18 | 18 |
 | [symbols](symbols.md) | registry | 2 | 2 |
-| [player](player.md) | registry | 9 | 9 |
+| [player](player.md) | registry | 12 | 12 |
+| [game](game.md) | registry | 3 | 3 |
 | [weapon](weapon.md) | registry | 5 | 5 |
 | [camera](camera.md) | registry | 5 | 5 |
 | [enemy](enemy.md) | registry | 4 | 4 |

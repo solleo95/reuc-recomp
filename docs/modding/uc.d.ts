@@ -22,6 +22,12 @@ interface PlayerHandle {
     health: number;
     /** The spare ammo of the weapon the player holds (0 to 9999), per player. nil / null for the handgun, whose reserve is infinite (setting it is an error). Confirmed: a reload takes the rounds it loads off this count. [implemented] */
     reserve: number;
+    /** Enemy hits of this mission (the result screen's counter), 0 to 99999. Checked: it rises with the shots that hit while a bot plays. [implemented] */
+    hits: number;
+    /** Critical hits of this mission (the result screen's counter), 0 to 99999. [implemented] */
+    critical_hits: number;
+    /** Objects destroyed in this mission (the result screen's counter), 0 to 99999. Checked: it rose while a bot played the train chapter. [implemented] */
+    objects_destroyed: number;
 }
 
 /** Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits. */
@@ -99,6 +105,15 @@ declare namespace uc {
     }
     /** A player. uc.player(1) is player 1, uc.player(2) player 2 (co-op). Reading or writing a slot that is not in the game is an error; check 'present' first. */
     function player(slot: 1 | 2): PlayerHandle;
+    /** The state of the game as a whole. The mission clock and the counters keep their last values outside a mission. */
+    namespace game {
+        /** Mission clock in whole seconds (0 to 359999), the time the result screen shows. Checked: it counts about one per second of game time while a mission runs. [implemented] */
+        let time: number;
+        /** True while the game's pause menu is open. [implemented] */
+        const paused: boolean;
+        /** The stars (the money spent on weapon upgrades), 0 to 9999. The game keeps it in its save data. [implemented] */
+        let stars: number;
+    }
     /** Parameters of a weapon type: one record of the game's weapon table, addressed by its id 0 to 19 (uc.weapon(0)). Id 0 is the handgun (15 rounds, damage 10), 1 a shotgun (6 rounds), 2 a submachine gun (50 rounds); the table has 20 records and the other ids are not named yet (read capacity and damage to tell them apart). A change applies to every weapon of that type from the weapon's next shot or reload on. The game fills the table at boot and at mission starts, so the API remembers what a mod set and writes it again at the next game step whenever the game's value differs; it lasts until the game exits. */
     function weapon(id: number): WeaponHandle;
     /** The game camera. */
