@@ -12,6 +12,15 @@ struct Params { uint32_t src[2], dst[2], region[2]; float weight, weight_a, scal
 static_assert(sizeof(Params)==48);
 constexpr uint32_t kSetsShared=10;   // down first, down 1..5, up 4..1
 constexpr VkFormat kFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
+// Between two dependent dispatches of the chain: only compute writes must reach the next compute reads.
+void barrier_compute(VkCommandBuffer command) {
+    VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask=barrier.dstStageMask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    VkDependencyInfo info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; info.memoryBarrierCount=1; info.pMemoryBarriers=&barrier;
+    vkCmdPipelineBarrier2(command,&info);
+}
 void barrier_all(VkCommandBuffer command) {
     VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     barrier.srcStageMask=barrier.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -60,12 +69,12 @@ void BloomPass::write(VkDescriptorSet set, uint32_t binding, VkDescriptorType ty
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; write.dstSet=set; write.dstBinding=binding; write.descriptorCount=1; write.descriptorType=type; write.pImageInfo=&info;
     vkUpdateDescriptorSets(device_,1,&write,0,nullptr);
 }
-void BloomPass::dispatch(VkCommandBuffer command, VkPipeline pipeline, VkDescriptorSet set, const void* params, VkExtent2D size) {
+void BloomPass::dispatch(VkCommandBuffer command, VkPipeline pipeline, VkDescriptorSet set, const void* params, VkExtent2D size, bool final) {
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
     vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set,0,nullptr);
     vkCmdPushConstants(command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(Params),params);
     vkCmdDispatch(command,(size.width+7)/8,(size.height+7)/8,1);
-    barrier_all(command);
+    if (final) barrier_all(command); else barrier_compute(command);
 }
 void BloomPass::initialize(VkDevice device, const VkPhysicalDeviceMemoryProperties& memory, const std::filesystem::path& shaders, uint32_t slots, std::function<void()> idle) {
     if (device_) return;
@@ -175,8 +184,8 @@ void BloomPass::record(const BloomInputs& in) {
     params.src[0]=level_extent_[1].width; params.src[1]=level_extent_[1].height;
     params.dst[0]=level_extent_[0].width; params.dst[1]=level_extent_[0].height;
     params.weight=kBloomWeights[0]; params.weight_a=1; params.scale=mix;
-    dispatch(command,pipelines_[2],sets_[kSetsShared+in.slot],&params,level_extent_[0]);
-    if (!in.hdr) dispatch(command,pipelines_[3],sets_[kSetsShared+slots_+in.slot],&params,in.region);
+    dispatch(command,pipelines_[2],sets_[kSetsShared+in.slot],&params,level_extent_[0],in.hdr);
+    if (!in.hdr) dispatch(command,pipelines_[3],sets_[kSetsShared+slots_+in.slot],&params,in.region,true);
     valid_[in.slot]=in.hdr;
 }
 void BloomPass::shutdown() {

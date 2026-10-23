@@ -44,7 +44,7 @@ private:
     Image make_image(VkExtent2D extent);
     void destroy_image(Image& image);
     void write(VkDescriptorSet set, uint32_t binding, VkDescriptorType type, VkImageView view);
-    void dispatch(VkCommandBuffer command, VkPipeline pipeline, VkDescriptorSet set, const void* params, VkExtent2D size);
+    void dispatch(VkCommandBuffer command, VkPipeline pipeline, VkDescriptorSet set, const void* params, VkExtent2D size, bool final=false);   // final: the output goes to later, non-compute readers
     VkDevice device_=VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_{};
     VkShaderModule modules_[4]{};   // down first, down, up, composite
