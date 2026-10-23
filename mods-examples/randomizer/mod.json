@@ -1,0 +1,23 @@
+{
+  "id": "randomizer",
+  "name": "Randomizer",
+  "version": "1.0",
+  "author": "Umbrella Chronicles PC port",
+  "description": "Shuffles the game from a seed: weapon stats, zombie hit points and, if you like, the weapon each player starts a mission with. The same seed always gives the same game; share it with a friend. The gear button opens its window with a New seed button and the list of changes.",
+  "api": "1.1",
+  "touches_gameplay": true,
+  "script": "scripts/main.js",
+  "names": { "ru": "Рандомайзер" },
+  "settings": [
+    { "key": "seed", "type": "int", "default": 1, "min": 1, "max": 999999, "step": 1,
+      "label": { "en": "Seed", "ru": "Зерно" }, "tooltip": { "en": "The same seed gives the same game.", "ru": "Одно и то же зерно даёт одну и ту же игру." } },
+    { "key": "strength", "type": "int", "default": 50, "min": 0, "max": 100, "step": 5,
+      "label": { "en": "Strength (%)", "ru": "Сила (%)" }, "tooltip": { "en": "0 changes nothing; 50 changes values by up to half or double; 100 by up to a third or triple.", "ru": "0 ничего не меняет; 50 меняет значения до половины или вдвое; 100 - до трети или втрое." } },
+    { "key": "weapons", "type": "bool", "default": true,
+      "label": { "en": "Randomize weapons", "ru": "Менять оружие" }, "tooltip": { "en": "Damage, fire rate, magazine size and reload time of every weapon.", "ru": "Урон, скорострельность, размер магазина и время перезарядки каждого оружия." } },
+    { "key": "enemies", "type": "bool", "default": true,
+      "label": { "en": "Randomize zombies", "ru": "Менять зомби" }, "tooltip": { "en": "Hit points of every zombie, once, when it is first seen.", "ru": "Здоровье каждого зомби один раз, когда он впервые замечен." } },
+    { "key": "start_weapon", "type": "bool", "default": false,
+      "label": { "en": "Random starting weapon", "ru": "Случайное стартовое оружие" }, "tooltip": { "en": "Each player gets a random weapon when a mission starts.", "ru": "Каждый игрок получает случайное оружие в начале миссии." } }
+  ]
+}

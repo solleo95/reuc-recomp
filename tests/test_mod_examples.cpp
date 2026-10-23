@@ -97,7 +97,7 @@ static void every_example_manifest_is_valid() {
         CHECK(parsed.manifest->api.major == 1 && !parsed.manifest->names.empty());   // every example has a Russian name too
         ++found;
     }
-    CHECK(found == 7);
+    CHECK(found == 8);
 }
 
 static void infinite_ammo() {
@@ -290,6 +290,129 @@ static void inspector_settings_are_declared() {
     CHECK(expected.empty());
 }
 
+// ---- the randomizer: weapon stats, zombie hit points and the start weapon from a seed ----
+
+namespace {
+struct WeaponValues { std::vector<float> damage, reload; std::vector<uint32_t> capacity; };
+
+WeaponValues weapon_values(World& w) {
+    WeaponValues v;
+    for (uint32_t id = 0; id < 20; ++id) {
+        v.damage.push_back(w.weapon_damage(id));
+        v.capacity.push_back(w.weapon_word(id, 0x14));
+        v.reload.push_back(w.view.read_f32(kWeaponTable + id * kStride + 0x38).value());
+    }
+    return v;
+}
+
+WeaponValues randomized(const ordered_json& settings) {   // a world of its own (the rig's folder is per example)
+    World w("randomizer", "randomizer", settings);
+    w.step(2);
+    return weapon_values(w);
+}
+
+bool near(float a, float b) { return std::fabs(a - b) <= 1e-3f * std::max(1.f, std::fabs(b)); }
+}  // namespace
+
+static void randomizer_weapons_follow_the_seed() {
+    const auto a = randomized({{"seed", 7}, {"strength", 50}});
+    int changed = 0;
+    for (size_t id = 0; id < 20; ++id) {
+        const float original = 10.f * float(id + 1);
+        CHECK(a.damage[id] >= original / 2 - 1e-3f && a.damage[id] <= original * 2 + 1e-3f);
+        CHECK(a.capacity[id] >= 8 && a.capacity[id] <= 30);
+        CHECK(a.reload[id] >= 0.5f - 1e-3f && a.reload[id] <= 2.f + 1e-3f);
+        changed += !near(a.damage[id], original);
+    }
+    CHECK(changed >= 10);
+    const auto same = randomized({{"seed", 7}, {"strength", 50}});
+    CHECK(same.damage == a.damage && same.capacity == a.capacity && same.reload == a.reload);   // deterministic
+    const auto other = randomized({{"seed", 8}, {"strength", 50}});
+    CHECK(other.damage != a.damage);
+}
+
+static void randomizer_strength_zero_changes_nothing() {
+    const auto v = randomized({{"seed", 7}, {"strength", 0}});
+    for (size_t id = 0; id < 20; ++id) CHECK(near(v.damage[id], 10.f * float(id + 1)) && v.capacity[id] == 15 && near(v.reload[id], 1.f));
+}
+
+static void randomizer_strength_100_stays_within_a_third_to_triple_and_the_limits() {
+    for (int seed : {0, 1, 999999}) {
+        const auto v = randomized({{"seed", seed}, {"strength", 100}});
+        for (size_t id = 0; id < 20; ++id) {
+            const float original = 10.f * float(id + 1);
+            CHECK(std::isfinite(v.damage[id]) && v.damage[id] >= original / 3 - 1e-3f && v.damage[id] <= original * 3 + 1e-3f && v.damage[id] <= 10000.f);
+            CHECK(v.capacity[id] >= 5 && v.capacity[id] <= 45);
+            CHECK(v.reload[id] >= 1.f / 3 - 1e-3f && v.reload[id] <= 3.f + 1e-3f);
+        }
+    }
+}
+
+static void randomizer_switching_and_replanning_start_from_the_game_values() {
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 50}});
+    w.step(2);
+    const auto first = weapon_values(w);
+    w.change_setting("randomizer", "weapons", false);
+    w.step(2);
+    const auto off = weapon_values(w);
+    for (size_t id = 0; id < 20; ++id) CHECK(near(off.damage[id], 10.f * float(id + 1)) && off.capacity[id] == 15 && near(off.reload[id], 1.f));
+    w.change_setting("randomizer", "weapons", true);
+    w.step(2);
+    const auto back = weapon_values(w);
+    CHECK(back.damage == first.damage && back.capacity == first.capacity && back.reload == first.reload);   // re-planned from the base: no compounding
+    w.change_setting("randomizer", "strength", 100);
+    w.step(2);
+    const auto wild = weapon_values(w);
+    CHECK(wild.damage != first.damage);
+    for (size_t id = 0; id < 20; ++id) CHECK(wild.damage[id] >= 10.f * float(id + 1) / 3 - 1e-3f && wild.damage[id] <= 10.f * float(id + 1) * 3 + 1e-3f);
+    w.change_setting("randomizer", "strength", 50);
+    w.step(2);
+    const auto again = weapon_values(w);
+    CHECK(again.damage == first.damage);
+}
+
+static void randomizer_window_shows_the_seed_and_new_seed_changes_it() {
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 50}});
+    w.ui.open_headers = true;
+    w.step(2);
+    const auto first = weapon_values(w);
+    CHECK(w.mods->host()->status()[0].has_ui && w.mods->host()->draw_ui("randomizer").ok);
+    CHECK(w.ui.has("Seed 7  "));   // (two spaces: a new seed that merely starts with 7 must not match)
+    w.ui.press.insert("New seed");
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("randomizer").ok);
+    w.ui.press.clear();
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("randomizer").ok && !w.ui.has("Seed 7  ") && w.ui.has("Seed "));
+    w.step(2);
+    CHECK(weapon_values(w).damage != first.damage);   // the weapons follow the new seed
+}
+
+static void randomizer_outside_a_mission_is_plain_text() {
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 50}});
+    w.ui.open_headers = true;
+    for (uint32_t id = 0; id < 20; ++id) w.view.write_f32(kWeaponTable + id * kStride + 0x24, 0.f);   // the game has not filled its table
+    w.view.write_u32(kPlayerTable, 0);
+    w.view.write_u32(kPlayerTable + 4, 0);
+    w.view.write_u32(kScenePointer, 0);
+    w.step(3);
+    CHECK(w.mods->host()->draw_ui("randomizer").ok && !w.ui.texts.empty());
+}
+
+static void randomizer_settings_are_declared() {
+    std::ifstream in(fs::path(UC_EXAMPLES_DIR) / "randomizer" / "mod.json");
+    const auto manifest = nlohmann::json::parse(in);
+    CHECK(manifest["api"] == "1.1" && manifest["touches_gameplay"] == true);
+    std::map<std::string, nlohmann::json> by_key;
+    for (const auto& setting : manifest["settings"]) by_key[setting["key"]] = setting;
+    CHECK(by_key.size() == 5);
+    CHECK(by_key["seed"]["type"] == "int" && by_key["seed"]["min"] == 1 && by_key["seed"]["max"] == 999999 && by_key["seed"]["default"] == 1);
+    CHECK(by_key["strength"]["type"] == "int" && by_key["strength"]["min"] == 0 && by_key["strength"]["max"] == 100 && by_key["strength"]["step"] == 5 && by_key["strength"]["default"] == 50);
+    CHECK(by_key["weapons"]["type"] == "bool" && by_key["weapons"]["default"] == true);
+    CHECK(by_key["enemies"]["type"] == "bool" && by_key["enemies"]["default"] == true);
+    CHECK(by_key["start_weapon"]["type"] == "bool" && by_key["start_weapon"]["default"] == false);
+}
+
 static void pistol_autofire() {
     World w("pistol_autofire", "pistol-autofire");
     w.step();
@@ -334,7 +457,12 @@ int main() {
                                                          {"inspector_in_a_mission", inspector_in_a_mission}, {"inspector_outside_a_mission", inspector_outside_a_mission},
                                                          {"memory_watch_reads_what_is_typed", memory_watch_reads_what_is_typed}, {"events_are_logged_and_trimmed", events_are_logged_and_trimmed},
                                                          {"events_kept_can_be_lowered_at_once", events_kept_can_be_lowered_at_once}, {"snapshot_is_one_line_of_json", snapshot_is_one_line_of_json},
-                                                         {"log_every_writes_snapshots", log_every_writes_snapshots}, {"log_every_waits_while_the_game_is_paused", log_every_waits_while_the_game_is_paused}, {"inspector_settings_are_declared", inspector_settings_are_declared}};
+                                                         {"log_every_writes_snapshots", log_every_writes_snapshots}, {"log_every_waits_while_the_game_is_paused", log_every_waits_while_the_game_is_paused}, {"inspector_settings_are_declared", inspector_settings_are_declared},
+                                                         {"randomizer_weapons_follow_the_seed", randomizer_weapons_follow_the_seed}, {"randomizer_strength_zero_changes_nothing", randomizer_strength_zero_changes_nothing},
+                                                         {"randomizer_strength_100_limits", randomizer_strength_100_stays_within_a_third_to_triple_and_the_limits},
+                                                         {"randomizer_switching_and_replanning", randomizer_switching_and_replanning_start_from_the_game_values},
+                                                         {"randomizer_window", randomizer_window_shows_the_seed_and_new_seed_changes_it}, {"randomizer_outside_a_mission", randomizer_outside_a_mission_is_plain_text},
+                                                         {"randomizer_settings_are_declared", randomizer_settings_are_declared}};
     for (const auto& [name, run] : tests) {
         std::printf("%s\n", name);
         std::fflush(stdout);
