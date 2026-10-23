@@ -988,8 +988,8 @@ def _sfd_tool():
 
 
 def prepare_movie_replace():
-    """Writes the test-only mod movie_replace (git-ignored): the opening movie replaced by a 9 s clip made with tools/sfd_tool (3 s of solid red, 3 s green,
-    3 s blue and a 440 Hz tone). Returns a reason to skip when ffmpeg is missing."""
+    """Writes the test-only mod movie_replace (git-ignored): the opening movie replaced by a 9 s clip made with tools/sfd_tool (3 s of red, 3 s green,
+    3 s blue with noise on top (so that the picture needs a real bitrate) and a 440 Hz tone). Returns a reason to skip when ffmpeg is missing."""
     import json
     import shutil
     import subprocess
@@ -1008,7 +1008,7 @@ def prepare_movie_replace():
         for color in ("red", "lime", "blue"):   # "green" is (0, 128, 0) in ffmpeg: lime is the full green
             inputs += ["-f", "lavfi", "-i", f"color=c={color}:s=320x240:r=30000/1001:d=3"]
         inputs += ["-f", "lavfi", "-i", "sine=frequency=440:duration=9"]
-        result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *inputs, "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-map", "3:a",
+        result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *inputs, "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0,noise=alls=30:allf=t[v]", "-map", "[v]", "-map", "3:a",
                                  "-c:v", "mpeg4", "-c:a", "aac", str(clip)], capture_output=True, text=True)
         if result.returncode:
             raise RuntimeError("ffmpeg could not make the test clip: " + result.stderr[-300:])
@@ -1025,7 +1025,8 @@ def movie_replace(g, args):
     def colour(path):
         from .overlay import read_png
         width, height, channels, rows = read_png(path)
-        r, g_, b = rows[height // 2][(width // 2) * channels:(width // 2) * channels + 3]
+        block = [rows[y][x * channels:x * channels + 3] for y in range(height // 2 - 16, height // 2 + 16) for x in range(width // 2 - 16, width // 2 + 16)]
+        r, g_, b = (sum(p[i] for p in block) // len(block) for i in range(3))   # the picture is noisy (a real bitrate for the decoder): average a block
         for name, own, others in (("red", r, (g_, b)), ("green", g_, (r, b)), ("blue", b, (r, g_))):
             if own >= 130 and max(others) <= 100:
                 return name

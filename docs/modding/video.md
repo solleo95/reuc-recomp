@@ -14,10 +14,10 @@ tools\sfd_tool.bat info "game\DATA\files\Data\movie\MV_002_0.sfd"
 
 | Option | Meaning |
 |---|---|
-| `--fit pad` (default) | Keep the aspect ratio and fill the rest of the 4:3 picture with black bars. |
+| `--fit pad` (default) | Keep the aspect ratio (as it is seen: non-square pixels of DVD-style video are taken into account) and fill the rest of the 4:3 picture with black bars. |
 | `--fit stretch` | Stretch the picture to 640x480. |
 | `--fit crop` | Fill 640x480 and cut off what does not fit. |
-| `--bitrate KBPS` | Picture bitrate, 50 to 20000 (default 2500; the game's own movies are about 1700). |
+| `--bitrate KBPS` | Picture bitrate, 50 to 19000 (default 2500; the game's own movies are about 1700). |
 | `--ffmpeg PATH` | Use this ffmpeg. |
 | `--force` | Overwrite an existing output file. |
 

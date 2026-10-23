@@ -9,6 +9,7 @@ mods/<id>/files/Data/movie/<name of the movie to replace>.sfd.
 """
 import argparse
 import base64
+import os
 import re
 import shutil
 import struct
@@ -24,7 +25,10 @@ SECTOR = 2048
 FRAME_TICKS = 3003        # 90 kHz ticks per picture at 29.97 fps
 AUDIO_SECTOR_TICKS = 5040 # 2016 bytes of 32 kHz stereo ADX last 0.056 s
 SCR_PER_SECTOR = 14       # the mux-rate ramp of the game's files
-VIDEO_LEAD = 45000        # the picture data is sent half a second ahead of the sound
+VIDEO_LEAD = 0            # the originals send picture and sound data in step (without B-frames the decode order is the display order)
+VIDEO_STD = b"\x60\x2e"   # the STD buffer field of the originals' video packets
+VIDEO_WITH_PTS = 2030 - len(VIDEO_STD) - 5   # picture bytes in a packet that carries a PTS
+VIDEO_PLAIN = 2030 - len(VIDEO_STD) - 1      # ... and in one that does not
 SYSTEM_HEADER = bytes.fromhex("000001bb00098824290620ffc0c004")   # as the game's own movies start
 PACK_TAIL = bytes.fromhex("882429")   # the mux rate field
 END_CODE = b"\x00\x00\x01\xb9"        # ISO end code: the last sector of the game's movies
@@ -70,7 +74,7 @@ def sofdec_sector(number, name, pictures, largest, average):
     sector[0:12] = pack_header(number)
     sector[64:76] = name.encode("ascii", "replace")[:12].ljust(12, b"\x00")
     sector[76:88] = time.strftime("%Y%m%d%H%M").encode("ascii")
-    milliseconds = round(pictures * 1001 / 30)
+    milliseconds = pictures * 1001 // 30   # truncated, as the originals' are
     sector[184:204] = struct.pack("<5I", milliseconds, milliseconds, pictures, largest, average)
     return bytes(sector)
 
@@ -85,12 +89,33 @@ def picture_starts(es):
         i += 4
 
 
+def picture_unit_sizes(es, starts):
+    """Bytes per picture, each counted together with the sequence, GOP and user-data headers in front of it (as the originals' "largest" and "average" do)."""
+    begins = []
+    for k, start in enumerate(starts):
+        begin = 0 if k == 0 else start
+        if k > 0:   # the headers that follow the last slice of the previous picture belong to this one (user data right after a picture header belongs to that picture)
+            at, first_header = starts[k - 1] + 4, None
+            while True:
+                at = es.find(b"\x00\x00\x01", at, start)
+                if at < 0 or at + 3 >= len(es):
+                    break
+                if 0x01 <= es[at + 3] <= 0xAF:
+                    first_header = None
+                elif es[at + 3] in (0xB2, 0xB3, 0xB8) and first_header is None:
+                    first_header = at
+                at += 3
+            begin = start if first_header is None else first_header
+        begins.append(begin)
+    return [(begins[k + 1] if k + 1 < len(starts) else len(es)) - begins[k] for k in range(len(starts))]
+
+
 def mux(es, adx, name="movie.sfd"):
     """The .sfd for an MPEG-1 elementary stream (the sequence end code is added) and an ADX file, as 2048-byte sectors in time order."""
     es = es + b"\x00\x00\x01\xb7"
     starts = picture_starts(es)
-    sizes = [b - a for a, b in zip(starts, starts[1:] + [len(es)])]
-    sectors = [header_sector(0), header_sector(1), sofdec_sector(2, name, len(starts), max(sizes, default=0), sum(sizes) // max(len(sizes), 1))]
+    sizes = picture_unit_sizes(es, starts)
+    sectors = [header_sector(0), header_sector(1), sofdec_sector(2, name, len(starts), max(sizes, default=0), -(-len(es) // max(len(sizes), 1)))]
     vpos = apos = vpic = n_audio = 0
     while vpos < len(es) or apos < len(adx):
         video_time = float("inf")
@@ -99,12 +124,14 @@ def mux(es, adx, name="movie.sfd"):
         audio_time = n_audio * AUDIO_SECTOR_TICKS if apos < len(adx) else float("inf")
         number = len(sectors)
         if video_time <= audio_time:
-            has_picture = any(vpos <= p < vpos + 2025 for p in starts[vpic:vpic + 2])
-            if has_picture:
-                index = vpic + next(k for k, p in enumerate(starts[vpic:vpic + 2]) if vpos <= p < vpos + 2025)
-                header, take = stamp(index * FRAME_TICKS), 2025
+            window = starts[vpic:vpic + 3]
+            here = [p for p in window if vpos <= p < vpos + VIDEO_WITH_PTS]
+            if here:   # the first picture that starts in this packet is stamped
+                header, take = VIDEO_STD + stamp((vpic + window.index(here[0])) * FRAME_TICKS), VIDEO_WITH_PTS
+            elif any(vpos + VIDEO_WITH_PTS <= p < vpos + VIDEO_PLAIN for p in window):
+                header, take = b"\xff\xff\xff\xff" + VIDEO_STD + b"\x0f", VIDEO_WITH_PTS   # a picture would start in the last bytes with no room for a PTS: it starts in the next packet
             else:
-                header, take = b"\x0f", 2029
+                header, take = VIDEO_STD + b"\x0f", VIDEO_PLAIN
             body = es[vpos:vpos + take]
             body += bytes(take - len(body))
             sectors.append(pack_header(number) + packet(0xE0, header + body))
@@ -129,6 +156,7 @@ class SfdInfo:
     audio_bytes: bytes = b""
     pictures: int = 0
     picture_pts: list = field(default_factory=list)
+    picture_pts_at: list = field(default_factory=list)   # (offset in the video stream of the packet's first byte, PTS) for every video packet that has one
     audio_pts: list = field(default_factory=list)
     scr: list = field(default_factory=list)
     kinds: list = field(default_factory=list)   # per sector: header, video, audio or other
@@ -171,17 +199,23 @@ def parse(data):
                 while k < len(body) and body[k] == 0xFF:
                     k += 1
                 if k < len(body) and body[k] >> 6 == 1:
+                    if k + 2 > len(body):
+                        raise SfdError(f"a packet in sector {number} is cut off in its buffer field")
                     k += 2
                 pts = None
                 if k < len(body) and body[k] >> 4 in (2, 3):
+                    size = 5 if body[k] >> 4 == 2 else 10
+                    if k + size > len(body):
+                        raise SfdError(f"a time stamp in sector {number} is cut off")
                     pts = read_stamp(body[k:k + 5])
-                    k += 5 if body[k] >> 4 == 2 else 10
+                    k += size
                 elif k < len(body) and body[k] == 0x0F:
                     k += 1
                 if code == 0xE0:
-                    video += body[k:]
                     if pts is not None:
                         info.picture_pts.append(pts)
+                        info.picture_pts_at.append((len(video), pts))
+                    video += body[k:]
                 else:
                     audio += body[k:]
                     if pts is not None:
@@ -214,7 +248,7 @@ def find_ffmpeg(explicit):
     if not path or (explicit and not Path(path).exists()):
         raise ToolError("ffmpeg was not found: install it and put it on PATH, or give its location with --ffmpeg")
     try:
-        encoders = subprocess.run([str(path), "-hide_banner", "-encoders"], capture_output=True, text=True, errors="replace").stdout
+        encoders = subprocess.run([str(path), "-hide_banner", "-encoders"], capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL).stdout
     except OSError as error:
         raise ToolError(f"cannot run ffmpeg ({path}): {error}")
     for name in ("mpeg1video", "adpcm_adx"):
@@ -225,7 +259,7 @@ def find_ffmpeg(explicit):
 
 def probe(ffmpeg, source):
     """(seconds or None, has_audio) of a file; raises ToolError when ffmpeg finds no video in it."""
-    text = subprocess.run([ffmpeg, "-hide_banner", "-i", str(source)], capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    text = subprocess.run([ffmpeg, "-hide_banner", "-i", str(source)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stderr
     if "Video:" not in text:
         raise ToolError(f"{source}: ffmpeg finds no video in this file")
     match = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", text)
@@ -234,23 +268,26 @@ def probe(ffmpeg, source):
 
 
 def run_ffmpeg(ffmpeg, arguments, what):
-    result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *map(str, arguments)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", *map(str, arguments)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         lines = [line for line in result.stderr.splitlines() if line.strip()]
         raise ToolError(f"ffmpeg failed to {what}: {lines[-1] if lines else 'no message'}")
 
 
+SQUARE_PIXELS = "scale='trunc(iw*sar/2)*2':ih,setsar=1,"   # a source with non-square pixels (DVD, anamorphic video) is made square first, so the fit keeps what is seen
 FIT_FILTERS = {
-    "pad": "scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
-    "stretch": "scale=640:480,setsar=1",
-    "crop": "scale=640:480:force_original_aspect_ratio=increase,crop=640:480,setsar=1",
+    "pad": SQUARE_PIXELS + "scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+    "stretch": SQUARE_PIXELS + "scale=640:480,setsar=1",
+    "crop": SQUARE_PIXELS + "scale=640:480:force_original_aspect_ratio=increase,crop=640:480,setsar=1",
 }
 
 
 def encode_video(ffmpeg, source, fit, bitrate, workdir):
+    """The picture as an MPEG-1 elementary stream; at most MAX_SECONDS and a little more, so that a source of unknown or endless length cannot run away."""
     out = Path(workdir) / "video.m1v"
-    run_ffmpeg(ffmpeg, ["-i", source, "-an", "-vf", FIT_FILTERS[fit], "-r", "30000/1001", "-c:v", "mpeg1video", "-b:v", f"{bitrate}k", "-maxrate", f"{bitrate}k",
-                        "-bufsize", "655360", "-bf", "0", "-g", "15", "-pix_fmt", "yuv420p", "-f", "mpeg1video", out], "encode the picture")
+    run_ffmpeg(ffmpeg, ["-i", source, "-an", "-t", str(MAX_SECONDS + 2), "-vf", FIT_FILTERS[fit], "-r", "30000/1001", "-c:v", "mpeg1video", "-b:v", f"{bitrate}k",
+                        "-maxrate", f"{bitrate}k", "-bufsize", "655360", "-bf", "0", "-g", "15", "-pix_fmt", "yuv420p", "-f", "mpeg1video", out], "encode the picture")
     return out
 
 
@@ -258,7 +295,7 @@ def encode_audio(ffmpeg, source, seconds, has_audio, workdir):
     """An ADX file (stereo, 32 kHz) of exactly `seconds`: the source's sound padded with silence or cut, silence alone when it has none."""
     out = Path(workdir) / "audio.adx"
     if has_audio:
-        arguments = ["-i", source, "-vn", "-af", "apad", "-t", f"{seconds:.3f}"]
+        arguments = ["-i", source, "-vn", "-af", "aresample=async=1:first_pts=0,apad", "-t", f"{seconds:.3f}"]   # a late start of the sound becomes silence, so it stays in step with the picture
     else:
         arguments = ["-f", "lavfi", "-i", "anullsrc=r=32000:cl=stereo", "-t", f"{seconds:.3f}"]
     run_ffmpeg(ffmpeg, arguments + ["-ar", "32000", "-ac", "2", "-c:a", "adpcm_adx", "-f", "adx", out], "encode the sound")
@@ -269,8 +306,12 @@ def make(source, output, ffmpeg_path, bitrate, fit, force):
     source, output = Path(source), Path(output)
     if not source.is_file():
         raise ToolError(f"{source}: no such file")
+    if output.is_dir():
+        raise ToolError(f"{output} is a folder: give the name of the movie file")
     if output.exists() and not force:
         raise ToolError(f"{output} exists: use --force to overwrite it")
+    if not output.absolute().parent.is_dir():
+        raise ToolError(f"the folder {output.absolute().parent} does not exist")
     ffmpeg = find_ffmpeg(ffmpeg_path)
     seconds, has_audio = probe(ffmpeg, source)
     if seconds is not None and seconds > MAX_SECONDS:
@@ -282,9 +323,17 @@ def make(source, output, ffmpeg_path, bitrate, fit, force):
         if pictures == 0:
             raise ToolError(f"{source}: ffmpeg produced no pictures")
         length = pictures * 1001 / 30000
+        if length > MAX_SECONDS:   # a source whose length ffmpeg could not tell beforehand
+            raise ToolError(f"{source} is longer than {MAX_SECONDS // 60} minutes: movies longer than 30 minutes are refused")
         adx = encode_audio(ffmpeg, source, length, has_audio, workdir).read_bytes()
         data = mux(es, adx, output.name)
-    output.write_bytes(data)
+    temporary = output.with_name(output.name + ".tmp")   # written whole first: a full disk never leaves half a movie or destroys the old file
+    try:
+        temporary.write_bytes(data)
+        os.replace(temporary, output)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise ToolError(f"cannot write {output}: {error.strerror or error}")
     print(f"wrote {output}: {len(data) / 2**20:.1f} MiB, {length:.1f} s, {pictures} pictures{'' if has_audio else ', silent'}")
 
 
@@ -321,8 +370,8 @@ def main(argv):
     args = parser.parse_args(argv[1:])
     try:
         if args.command == "make":
-            if not 50 <= args.bitrate <= 20000:
-                raise ToolError("--bitrate must be between 50 and 20000 kb/s")
+            if not 50 <= args.bitrate <= 19000:   # above that ffmpeg's MPEG-1 buffer (655360 bits) is too small for one picture
+                raise ToolError("--bitrate must be between 50 and 19000 kb/s")
             make(args.input, args.output, args.ffmpeg, args.bitrate, args.fit, args.force)
         else:
             info(args.file)

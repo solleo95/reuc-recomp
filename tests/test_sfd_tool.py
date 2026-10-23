@@ -127,6 +127,68 @@ class WriterReader(unittest.TestCase):
                 sfd_tool.parse(data)
 
 
+class ReviewFixes(unittest.TestCase):
+    def test_each_picture_start_gets_the_pts_of_its_sector(self):
+        # sizes chosen so that start codes land everywhere in a sector, including its last bytes
+        for step in range(2000, 2040):
+            es = synthetic_es([step - 4] * 30 + [37] * 5)
+            info = sfd_tool.parse(sfd_tool.mux(es, synthetic_adx(10)))
+            starts = [m for m in range(len(es)) if es.startswith(b"\x00\x00\x01\x00", m)]
+            for offset, pts in info.picture_pts_at:
+                following = next(p for p in starts if p >= offset)
+                self.assertEqual(pts, 3003 * starts.index(following), (step, offset))
+                self.assertLess(following - offset, 2030, (step, offset))   # the picture starts inside this packet
+            covered = {p for offset, _ in info.picture_pts_at for p in starts if offset <= p < offset + 2030}
+            # every picture that is the first to start in its packet is stamped; only pictures that share a packet with an earlier one go without
+            self.assertGreaterEqual(len(info.picture_pts_at), len(starts) // 2)
+            self.assertEqual(starts[0] in covered, True)
+
+    def test_sofdec_sector_numbers_follow_the_originals(self):
+        seq = b"\x00\x00\x01\xb3" + bytes(8)
+        gop = b"\x00\x00\x01\xb8" + bytes(4)
+        pic = lambda size: b"\x00\x00\x01\x00" + bytes([0x55]) * size
+        es = seq + gop + pic(500) + pic(300) + gop + pic(52)
+        sector = sfd_tool.mux(es, synthetic_adx(10))[2 * 2048:3 * 2048]
+        milliseconds, again, frames, largest, average = struct.unpack("<5I", sector[184:204])
+        self.assertEqual((milliseconds, again, frames), (100, 100, 3))     # 3 pictures last 100.1 ms: truncated
+        self.assertEqual(largest, 12 + 8 + 504)                            # a picture counts with the headers in front of it
+        self.assertEqual(average, -(-(len(es) + 4) // 3))                  # rounded up (the end code is part of the stream)
+
+    def test_info_on_a_hostile_packet(self):
+        pack = b"\x00\x00\x01\xba\x21\x00\x01\x00\x01\x88\x24\x29"
+        for body in (b"\x21", b"\x31\x00\x01", b"\x40"):
+            sector = pack + b"\x00\x00\x01\xe0" + struct.pack(">H", len(body)) + body
+            sector += bytes(2048 - len(sector))
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "x.sfd"
+                path.write_bytes(sector)
+                result = run_tool("info", path)
+                self.assertEqual(result.returncode, 1, body)
+                self.assertNotIn("Traceback", result.stderr, body)
+
+    def test_output_errors_are_clear_and_nothing_is_lost(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "in.mp4"
+            source.write_bytes(b"not a video, the parent folder is checked first")
+            result = run_tool("make", source, Path(folder) / "no" / "such" / "out.sfd")
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn("folder", result.stderr)
+            (Path(folder) / "adir").mkdir()
+            result = run_tool("make", source, Path(folder) / "adir", "--force")
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_bitrate_range_matches_the_docs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "in.mp4"
+            source.write_bytes(b"x")
+            for bad in ("20000", "19001", "49"):
+                result = run_tool("make", source, Path(folder) / "o.sfd", "--bitrate", bad)
+                self.assertEqual(result.returncode, 1, bad)
+                self.assertIn("19000", result.stderr)
+
+
 def run_tool(*args):
     return subprocess.run([sys.executable, "-I", str(TOOL), *map(str, args)], capture_output=True, text=True, encoding="utf-8")
 
@@ -273,6 +335,50 @@ class MakeWithFfmpeg(unittest.TestCase):
             result = run_tool("make", source, out)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(out.exists())
+
+    def test_late_starting_audio_stays_in_sync_and_the_length_is_exact(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "late.mkv"
+            ffmpeg("-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-itsoffset", "1.0", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=2",
+                   "-t", "3", "-c:v", "mpeg4", "-c:a", "aac", source)
+            out = Path(folder) / "out.sfd"
+            self.assertEqual(run_tool("make", source, out).returncode, 0)
+            info = sfd_tool.parse(out.read_bytes())
+            adx_seconds = (len(info.audio_bytes) - 0x24) / 36000
+            self.assertGreaterEqual(adx_seconds, info.seconds - 0.1)          # as long as the picture although the sound starts a second late
+            # the first second is silence, the tone comes after: decode the sound back and look at the level of its first half second
+            wav = Path(folder) / "a.wav"
+            ffmpeg("-i", out, "-vn", "-t", "0.5", wav)
+            levels = subprocess.run([FFMPEG, "-hide_banner", "-i", str(wav), "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+            mean = float(levels.split("mean_volume:")[1].split("dB")[0])
+            self.assertLess(mean, -50)
+
+    def test_fit_respects_the_sample_aspect_ratio(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "anamorphic.mkv"
+            ffmpeg("-f", "lavfi", "-i", "testsrc2=size=720x480:rate=25,setsar=32/27", "-t", "0.5", "-c:v", "mpeg4", source)   # 16:9 on screen
+            out = Path(folder) / "out.sfd"
+            self.assertEqual(run_tool("make", source, out).returncode, 0)
+            frame = Path(folder) / "f.gray"
+            ffmpeg("-i", out, "-frames:v", "1", "-vf", "format=gray", "-f", "rawvideo", frame)
+            data = frame.read_bytes()
+            rows = [y for y in range(480) if max(data[y * 640:(y + 1) * 640]) > 40]
+            self.assertAlmostEqual(len(rows), 360, delta=6)   # 16:9 inside 4:3 is 640x360
+
+    def test_unknown_duration_is_limited_too(self):
+        with tempfile.TemporaryDirectory() as folder:
+            raw = Path(folder) / "clip.h264"
+            ffmpeg("-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25", "-t", "4", "-c:v", "mpeg4", "-f", "m4v", raw)
+            self.assertIn("N/A", probe(raw))
+            saved = sfd_tool.MAX_SECONDS
+            sfd_tool.MAX_SECONDS = 1
+            try:
+                with self.assertRaises(sfd_tool.ToolError) as caught:
+                    sfd_tool.make(raw, Path(folder) / "out.sfd", None, 2500, "pad", False)
+            finally:
+                sfd_tool.MAX_SECONDS = saved
+            self.assertIn("minutes", str(caught.exception))
+            self.assertFalse((Path(folder) / "out.sfd").exists())
 
     def test_bitrate_option_changes_the_size(self):
         with tempfile.TemporaryDirectory() as folder:

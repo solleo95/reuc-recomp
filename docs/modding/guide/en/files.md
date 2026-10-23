@@ -120,7 +120,7 @@ Full rules, the measured size limits and the tool: [Archive members](../../archi
 
 ## Movies
 
-A movie is a whole file too: put it at `files\Data\movie\<name>.sfd`. You do not need special software to make one: `tools\sfd_tool.bat make my-video.mp4 MV_000_0.sfd` turns any video into a file the game plays (it needs [ffmpeg](https://ffmpeg.org) on your computer). The game's own decoder plays your picture and sound, and its subtitles are drawn over it. Details, options and limits: [Replacing a movie](../../video.md).
+A movie is a whole file too: put it at `files\Data\movie\<name>.sfd`. The only extra program you need to make one is [ffmpeg](https://ffmpeg.org): `tools\sfd_tool.bat make my-video.mp4 MV_000_0.sfd` turns any video into a file the game plays. The game's own decoder plays your picture and sound, and its subtitles are drawn over it. Details, options and limits: [Replacing a movie](../../video.md).
 
 ## When the game notices a change
 
