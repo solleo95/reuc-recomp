@@ -975,6 +975,16 @@ def arc_member(g, args):
     return {"member_at": f"{member_at:08X}", "after_member": after.hex(), "capture": capture}
 
 
+def movie_probe(g, args):
+    """Spike M7: boots without skipping the opening movie and takes a capture every 3 s of game time, so a replacement of Data/movie/MV_000_0.sfd (the
+    test-only mod movie_probe, git-ignored, written by hand) can be looked at."""
+    captures = []
+    for _ in range(8):
+        g.advance(180)
+        captures.append(g.capture())
+    return {"captures": captures, "retraces": g.frame["retraces"]}
+
+
 def guest_api(g, args):
     """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
     given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
@@ -1015,6 +1025,6 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
