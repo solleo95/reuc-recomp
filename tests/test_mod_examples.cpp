@@ -5,6 +5,8 @@
 #include "guest_mem.h"
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <set>
 
 namespace fs = std::filesystem;
 using namespace uc::mods;
@@ -17,16 +19,22 @@ constexpr uint32_t kP1 = 0x80100000, kP2 = 0x80101000, kScene = 0x80200000;
 // Widgets that draw nothing; remembers the text and whether a button was asked for.
 struct RecordingUi : UiApi {
     std::vector<std::string> texts, buttons;
+    bool open_headers = false;                      // what collapsing_header answers
+    std::set<std::string> press;                    // buttons that report a click
+    std::map<std::string, std::string> typed;       // input_text answers by label (others return what they were given)
+    std::map<std::string, int> chosen;              // combo answers by label
+    bool has(const std::string& part) const { for (const auto& t : texts) if (t.find(part) != std::string::npos) return true; return false; }
+    size_t count(const std::string& part) const { size_t n = 0; for (const auto& t : texts) n += t.find(part) != std::string::npos; return n; }
     void text(const std::string& t) override { texts.push_back(t); }
-    bool button(const std::string& l) override { buttons.push_back(l); return false; }
+    bool button(const std::string& l) override { buttons.push_back(l); return press.count(l) > 0; }
     bool checkbox(const std::string&, bool v) override { return v; }
     int slider_int(const std::string&, int v, int, int) override { return v; }
     double slider_float(const std::string&, double v, double, double) override { return v; }
-    int combo(const std::string&, int s, const std::vector<std::string>&) override { return s; }
-    std::string input_text(const std::string&, const std::string& v) override { return v; }
+    int combo(const std::string& l, int s, const std::vector<std::string>&) override { const auto at = chosen.find(l); return at == chosen.end() ? s : at->second; }
+    std::string input_text(const std::string& l, const std::string& v) override { const auto at = typed.find(l); return at == typed.end() ? v : at->second; }
     void separator() override {}
     void same_line() override {}
-    bool collapsing_header(const std::string&) override { return false; }
+    bool collapsing_header(const std::string&) override { return open_headers; }
     void tooltip(const std::string&) override {}
     std::array<float, 4> color_edit(const std::string&, std::array<float, 4> c) override { return c; }
 };
@@ -89,7 +97,7 @@ static void every_example_manifest_is_valid() {
         CHECK(parsed.manifest->api.major == 1 && !parsed.manifest->names.empty());   // every example has a Russian name too
         ++found;
     }
-    CHECK(found == 6);
+    CHECK(found == 7);
 }
 
 static void infinite_ammo() {
@@ -124,6 +132,140 @@ static void god_mode() {
     w.view.write_u32(kPlayerTable, 0);                                                    // not in a mission: the tab says so instead of failing
     w.ui.texts.clear();
     CHECK(w.mods->host()->draw_ui("god-mode").ok && w.ui.texts.back() == "not in a mission");
+}
+
+// ---- the inspector: read-only view of everything the API exposes ----
+
+namespace {
+std::vector<std::string> inspector_log_lines(const World& w) {   // the snapshot lines the mod wrote: "[inspector] {json}"
+    std::ifstream in(w.exe / "debug" / "mods.log");
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);) if (line.rfind("[inspector] {", 0) == 0) lines.push_back(line.substr(12));
+    return lines;
+}
+constexpr const char* kWatch1 = "Address or symbol 1";
+}  // namespace
+
+static void inspector_in_a_mission() {
+    World w("inspector", "inspector");
+    w.ui.open_headers = true;
+    CHECK(w.mods->host()->status()[0].has_ui && w.mods->host()->draw_ui("inspector").ok);
+    CHECK(w.ui.has("Player 1") && w.ui.has("magazine 15") && w.ui.has("Player 2") && w.ui.has("magazine 8"));
+    CHECK(!w.ui.has("not in a mission"));
+}
+
+static void inspector_outside_a_mission() {
+    World w("inspector", "inspector");
+    w.ui.open_headers = true;
+    w.view.write_u32(kPlayerTable, 0);
+    w.view.write_u32(kPlayerTable + 4, 0);
+    w.view.write_u32(kScenePointer, 0);
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    CHECK(w.ui.has("not in a mission") && !w.ui.has("Player 1"));
+}
+
+static void memory_watch_reads_what_is_typed() {
+    World w("inspector", "inspector");
+    w.ui.open_headers = true;
+    w.view.write_u32(0x80100200, 123);
+    w.ui.typed[kWatch1] = "0x80100200";
+    w.ui.chosen["Type 1"] = 2;   // u32
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    CHECK(w.ui.has("123") && w.ui.has("0x0000007B"));
+    w.ui.texts.clear();
+    w.ui.typed[kWatch1] = "2148532736";   // the same address in decimal
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has("0x0000007B"));
+    w.view.write_f32(0x80100204, 2.5f);
+    w.ui.typed[kWatch1] = "0x80100204";
+    w.ui.chosen["Type 1"] = 4;   // f32
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has("2.5"));
+    w.ui.texts.clear();
+    w.ui.typed[kWatch1] = "";
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has("type an address"));
+    const size_t others = w.ui.count("! ");   // notes of the other sections (the rig has no camera)
+    for (const char* bad : {"zz", "0x", "-5", "0xFFFFFFFF", "no_such_symbol", "0x80100200 junk", "1e30"}) {
+        w.ui.texts.clear();
+        w.ui.typed[kWatch1] = bad;
+        CHECK(w.mods->host()->draw_ui("inspector").ok);
+        CHECK(w.ui.count("! ") == others + 1 && w.ui.count("type an address") == 3);   // (the three other, empty rows show their hint)   // one message line for the bad input, no throw out of the drawing function
+    }
+}
+
+static void events_are_logged_and_trimmed() {
+    World w("inspector", "inspector", {{"events_kept", 5}});
+    w.ui.open_headers = true;
+    w.step();   // the first step only learns the magazines
+    for (uint32_t magazine = 14; magazine >= 7; --magazine) { w.view.write_u32(kP1 + 0x4D4, magazine); w.step(); }   // eight shots
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    CHECK(w.ui.count("weapon_fired") == 5);                                   // the ring keeps the newest five
+    CHECK(w.ui.has("slot=1"));
+    w.ui.press.insert("Clear events");
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    w.ui.press.clear();
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.count("weapon_fired") == 0 && w.ui.has("no events yet"));
+}
+
+static void events_kept_can_be_lowered_at_once() {
+    World w("inspector", "inspector", {{"events_kept", 20}});
+    w.ui.open_headers = true;
+    w.step();
+    for (uint32_t magazine = 14; magazine >= 9; --magazine) { w.view.write_u32(kP1 + 0x4D4, magazine); w.step(); }   // six events
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.count("weapon_fired") == 6);
+    w.change_setting("inspector", "events_kept", 5);
+    w.step();
+    w.ui.texts.clear();
+    CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.count("weapon_fired") == 5);
+}
+
+static void snapshot_is_one_line_of_json() {
+    World w("inspector", "inspector");
+    w.ui.open_headers = true;
+    w.ui.press.insert("Log snapshot");
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    const auto lines = inspector_log_lines(w);
+    CHECK(lines.size() == 1);
+    const auto json = nlohmann::json::parse(lines[0], nullptr, false);
+    CHECK(!json.is_discarded() && json.is_object());
+    for (const char* key : {"players", "game", "camera", "enemies"}) CHECK(json.contains(key));
+    CHECK(json["players"].is_array() && json["players"].size() == 2 && json["players"][0]["magazine"] == 15 && json["players"][1]["magazine"] == 8);
+    CHECK(json["enemies"].is_array());
+    w.view.write_u32(kPlayerTable + 4, 0);   // player 2 gone: null, not an error
+    w.ui.press.insert("Log snapshot");
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    const auto again = nlohmann::json::parse(inspector_log_lines(w).back(), nullptr, false);
+    CHECK(!again.is_discarded() && again["players"][1].is_null());
+}
+
+static void log_every_writes_snapshots() {
+    {
+        World w("inspector", "inspector", {{"log_every", 1}});
+        CHECK(inspector_log_lines(w).empty());
+        w.step(31);
+        CHECK(inspector_log_lines(w).size() == 1);
+        w.step(30);
+        CHECK(inspector_log_lines(w).size() == 2);
+        for (const auto& line : inspector_log_lines(w)) CHECK(!nlohmann::json::parse(line, nullptr, false).is_discarded());
+    }
+    World off("inspector", "inspector");   // the default: nothing is written without a click
+    off.step(100);
+    CHECK(inspector_log_lines(off).empty());
+}
+
+static void inspector_settings_are_declared() {
+    std::ifstream in(fs::path(UC_EXAMPLES_DIR) / "inspector" / "mod.json");
+    const auto manifest = nlohmann::json::parse(in);
+    CHECK(manifest["api"] == "1.1" && !manifest.contains("touches_gameplay"));
+    std::map<std::string, std::array<double, 3>> expected = {{"enemies_shown", {1, 30, 8}}, {"events_kept", {5, 100, 30}}, {"log_every", {0, 600, 0}}};
+    for (const auto& setting : manifest["settings"]) {
+        const auto at = expected.find(setting["key"]);
+        CHECK(at != expected.end() && setting["type"] == "number");
+        CHECK(setting["min"] == at->second[0] && setting["max"] == at->second[1] && setting["default"] == at->second[2]);
+        expected.erase(at);
+    }
+    CHECK(expected.empty());
 }
 
 static void pistol_autofire() {
@@ -166,7 +308,11 @@ static void faster_handgun() {
 
 int main() {
     const std::pair<const char*, void (*)()> tests[] = {{"every_example_manifest_is_valid", every_example_manifest_is_valid}, {"infinite_ammo", infinite_ammo}, {"god_mode", god_mode},
-                                                         {"pistol_autofire", pistol_autofire}, {"damage_multiplier", damage_multiplier}, {"faster_handgun", faster_handgun}};
+                                                         {"pistol_autofire", pistol_autofire}, {"damage_multiplier", damage_multiplier}, {"faster_handgun", faster_handgun},
+                                                         {"inspector_in_a_mission", inspector_in_a_mission}, {"inspector_outside_a_mission", inspector_outside_a_mission},
+                                                         {"memory_watch_reads_what_is_typed", memory_watch_reads_what_is_typed}, {"events_are_logged_and_trimmed", events_are_logged_and_trimmed},
+                                                         {"events_kept_can_be_lowered_at_once", events_kept_can_be_lowered_at_once}, {"snapshot_is_one_line_of_json", snapshot_is_one_line_of_json},
+                                                         {"log_every_writes_snapshots", log_every_writes_snapshots}, {"inspector_settings_are_declared", inspector_settings_are_declared}};
     for (const auto& [name, run] : tests) {
         std::printf("%s\n", name);
         std::fflush(stdout);
