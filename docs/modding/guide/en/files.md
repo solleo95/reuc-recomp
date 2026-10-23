@@ -73,7 +73,7 @@ File types you will meet:
 | `.brfnt` | A font. |
 | `.txtres`, `.csvtbl` | Texts and subtitle tables. |
 
-The port does not ship tools to edit these formats. Use the general tools of the Wii modding community for archives and models, and the matching guides of this folder for textures, audio and text.
+The port ships `tools\arc_tool.bat` to look inside archives ([Archives](#archives)). For models and other formats use the general tools of the Wii modding community, and the matching guides of this folder for textures, audio and text.
 
 ## Finding the file you need
 
@@ -103,9 +103,19 @@ Play the part of the game you are interested in (a menu, a mission, a movie) and
 
 ## Archives
 
-The overlay works on **whole files**. If the game keeps many assets inside one `.arc` archive and opens it as one file, you replace the **whole archive**, not one file inside it. To change one model inside an archive, unpack the archive with a Wii archive tool, change the model, pack the archive again, and put the new archive in `files`.
+The game keeps many assets (models, layouts, scripts) inside `.arc` archives. You do not have to ship a whole archive to change one file in it: put the file in a folder named like the archive **with `!` added**, and the port rebuilds the archive for you.
 
-Replacing single files inside archives automatically is planned, but not available yet.
+```
+mods\my-mod\files\Data\chara\EZ01.arc!\EZ01.brres        replaces the model inside Data\chara\EZ01.arc
+mods\my-mod\files\Data\chara\EZ01.arc!\extra\note.txt     adds a file (and its folder) to the archive
+```
+
+- The path inside the archive is the path below `EZ01.arc!`. Use `tools\arc_tool.bat list <archive>` to see the paths, and `unpack` to get the original files.
+- Mods apply in load order, and a mod that ships the whole archive replaces everything before it. Two mods changing one member: the later one wins.
+- **Size matters.** The game loads the archive into a small pool of memory: an archive that grows by more than about 256 KB can stop the game (the Mods tab warns). Replacements of about the original size are safe.
+- Not supported: an archive inside an archive.
+
+Full rules, the measured size limits and the tool: [Archive members](../../archives.md).
 
 ## When the game notices a change
 

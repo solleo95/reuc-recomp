@@ -61,7 +61,7 @@ Under the name of each mod:
 | `stopped: ...` | The mod failed three times and was switched off; the last error follows. Untick and tick it to restart. |
 | `waiting` | A native mod: native code is off or not confirmed. |
 | a grey `converting audio (1 of 3)` | Audio is being converted. |
-| red `audio: ...` or `text: ...` lines | Problems with the mod's audio or text files. |
+| red `audio: ...`, `text: ...` or `arc: ...` lines | Problems with the mod's audio or text files, or with the archive members under `files` ([Archive members](../../archives.md)). |
 
 ## Reading the log
 

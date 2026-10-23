@@ -10,7 +10,7 @@ Everything under `mods/<id>/files/` is laid over the game's disc files. The fold
 - Symbolic links and junctions inside `files/` are ignored.
 - Mods can be switched on and off, and reordered, while the game runs. The overlay is rebuilt at once, but the game uses it the next time it opens a file: a file it already holds open or has loaded into memory (a level, a sound already playing) stays as it was until the game loads it again, for example in the next area.
 
-**Archives:** the overlay works on whole files. If the game keeps its assets inside packed archives that it opens as one file and reads itself, such an archive can only be replaced as a whole file; editing a single asset inside it is not supported by the overlay.
+**Archives:** the overlay works on whole files, but a single member of an archive can be replaced or added through a folder named like the archive with `!` appended (`files/Data/chara/EZ01.arc!/EZ01.brres`); see [Archive members](archives.md).
 
 **Music and voices** do not need game-format files: see [audio.md](audio.md) (an `audio/` folder with `.ogg` or `.wav`). **Text** is changed with JSON files in a `text/` folder: see [text.md](text.md).
 

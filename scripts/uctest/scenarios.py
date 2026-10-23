@@ -901,6 +901,80 @@ def text_replace(g, args):
     return {"original_at": f"{original:08X}", "marker_at": None if marker is None else f"{marker:08X}", "capture": capture}
 
 
+ARC_FILE, ARC_MEMBER, ARC_MARKER = "layout/game_us.arc", "lyt_data/timg/2SHT_B.tpl", b"UCARCMARKER" + bytes([0])
+
+
+def _game_files_dir():
+    """<game folder>/DATA/files/Data of the owner's install (UC_GAME_DIR, the usual place, or next to the exe), or None."""
+    import os
+    from pathlib import Path
+    for folder in (os.environ.get("UC_GAME_DIR"), r"S:\Games\Umbrella Chronicles\game"):
+        path = Path(folder or "") / "DATA" / "files" / "Data"
+        if folder and (path / ARC_FILE).exists():
+            return path
+    return None
+
+
+def _arc_tool():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("arc_tool", Path(__file__).resolve().parents[2] / "tools" / "arc_tool" / "arc_tool.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def prepare_arc_member():
+    """Writes the test-only mod arc_member (git-ignored) from the install: the HUD layout archive's member 2SHT_B.tpl as the game has it, followed by a marker
+    text. Returns a reason to skip the run when the install cannot be found."""
+    import json
+    from pathlib import Path
+    root = _game_files_dir()
+    if root is None:
+        return "the game's layout/game_us.arc was not found (set UC_GAME_DIR to the game folder that holds DATA)"
+    original = dict(_arc_tool().parse((root / ARC_FILE).read_bytes()))[ARC_MEMBER]
+    mod = Path(__file__).resolve().parent / "mods" / "arc_member"
+    member = mod / "files" / "Data" / "layout" / "game_us.arc!" / Path(*ARC_MEMBER.split("/"))
+    member.parent.mkdir(parents=True, exist_ok=True)
+    member.write_bytes(original + ARC_MARKER + bytes(64))
+    (mod / "mod.json").write_text(json.dumps({"id": "arc-member", "name": "Arc member", "version": "1.0", "api": "1.1"}))
+    return None
+
+
+def _find_in_game_memory(g, needle):
+    """First guest address of `needle` in MEM1 (0x80400000..0x81700000) or MEM2, scanned in 8 MB windows; None when absent."""
+    windows = [(0x90000000 + i * (8 << 20), 8 << 20) for i in range(7)] + [(0x80400000, 8 << 20), (0x80C00000, 8 << 20), (0x81400000, 3 << 20)]
+    for start, size in windows:
+        found = _find_in_guest_memory(g, needle, start=start, size=size)
+        if found is not None:
+            return found
+    return None
+
+
+def arc_member(g, args):
+    """The arc_member mod replaces one member of the HUD layout archive (layout/game_us.arc) with the original bytes plus a marker text, through the member
+    path files/Data/layout/game_us.arc!/lyt_data/timg/2SHT_B.tpl. The game loads the archive whole into memory: the original member's first bytes prove the
+    archive was found, and the marker must follow it exactly when the mod is on (arc_member_plain runs without the mod)."""
+    root = _game_files_dir()
+    if root is None:
+        return {"skipped": "the game's layout/game_us.arc was not found (set UC_GAME_DIR to the game folder that holds DATA)"}
+    original = dict(_arc_tool().parse((root / ARC_FILE).read_bytes()))[ARC_MEMBER]
+    reach_gameplay(g)
+    g.advance(60)
+    capture = g.capture()
+    with g.step("scan_memory"):
+        member_at = _find_in_game_memory(g, original[:48])
+        if member_at is None:
+            g.fail("the layout archive's member was not found in the game's memory (the archive may live elsewhere)", "arc member")
+        after = bytes.fromhex(g.request({"cmd": "peek", "addr": member_at + len(original), "size": len(ARC_MARKER)}, seconds=60)["hex"])   # what follows the member
+    marked = "arc_member" in (getattr(g, "mods", None) or [])
+    if marked and after != ARC_MARKER:
+        g.fail(f"the marker does not follow the member at {member_at:08X}: the rebuilt archive was not used", "arc member")
+    if not marked and after == ARC_MARKER:
+        g.fail(f"the marker follows the member at {member_at:08X} without the mod", "arc member")
+    return {"member_at": f"{member_at:08X}", "after_member": after.hex(), "capture": capture}
+
+
 def guest_api(g, args):
     """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
     given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
@@ -941,5 +1015,6 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+SCENARIO_PREPARE = {"arc_member": prepare_arc_member}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
