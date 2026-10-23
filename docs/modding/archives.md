@@ -13,8 +13,8 @@ The folder `EZ01.arc!` stands for the archive `Data\chara\EZ01.arc` of the disc;
 
 - The archive path is relative to `DATA\files` like any file of the mod; the member path is the path inside the archive. Names are matched case-insensitively. A path that does not exist in the archive is **added**, with its folders.
 - Load order decides: the base is the disc's archive; a mod that ships the whole archive (`files\Data\chara\EZ01.arc`) replaces everything before it; the members of a mod apply on top of that. Two mods setting one member: the later one wins, and the console prints `archive member ... is set by A and B`.
-- Not supported: an archive inside an archive (`a.arc!\b.arc!\x`), compressed archives (the game's own are not), members of 64 MiB or more, archives of 256 MiB or more.
-- A damaged archive (a member past the end of the file, bad names) is refused with a message in the Mods tab; the game then keeps the original.
+- Not supported: an archive inside an archive (`a.arc!\b.arc!\x`), compressed archives (the game's own are not), members larger than 64 MiB, archives (the result) larger than 256 MiB.
+- A damaged disc archive (a member past the end of the file, bad names) is refused with a message in the Mods tab, and the game keeps the original. If the damaged one is a **mod's own whole archive**, the game is served that file as it is; members of later mods cannot be applied to it (they say so), unless a still later mod ships a good whole archive.
 - Problems show under the mod in the Mods tab as `arc: <archive>!/<member>: <what>`; the rest of the mod still applies.
 
 ## The size limit
@@ -26,7 +26,7 @@ The game loads an archive whole into memory it takes from its own heap, and that
 | `layout\*.arc`, `sysres_g.arc`, `script\*.arc` (always loaded) | about 250 KB | 500 KB to 1 MB |
 | `chara\*.arc`, `bg\*.arc` (stage data) | about 1 MB | 2 MB |
 
-So a replacement of about the **same size** is always safe, and an archive that grows more than 256 KB gets the warning `N KiB bigger than the original; the game may run out of memory loading it` in the Mods tab (it is still applied). When the game runs out of memory it closes with the message `DVDReadPrio into an invalid guest buffer`. Smaller is always fine: for a bigger texture, lower its resolution or use a more compact format.
+So a replacement of about the **same size** is always safe, and an archive that grows more than 256 KB gets the warning `N KiB bigger than the original; the game may run out of memory loading it` in the Mods tab (it is still applied; "the original" is the archive the members were applied to: the disc's, or a mod's whole archive). When the game runs out of memory it closes with the message `DVDReadPrio into an invalid guest buffer`. Smaller is always fine: for a bigger texture, lower its resolution or use a more compact format.
 
 ## Looking inside an archive: `arc_tool`
 

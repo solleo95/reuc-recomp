@@ -205,7 +205,7 @@ class Game:
             marker.write_text("installed by uctest; removed at cleanup", encoding="utf-8")
             self._installed_mods.append(folder)
             ids.append(json.loads((source / "mod.json").read_text(encoding="utf-8"))["id"])
-            self._installed_caches = getattr(self, "_installed_caches", []) + [target / ".cache" / "_audio" / ids[-1], target / ".cache" / "_text"]
+            self._installed_caches = getattr(self, "_installed_caches", []) + [target / ".cache" / "_audio" / ids[-1], target / ".cache" / "_text", target / ".cache" / "_arc"]
         data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
         data["mods"] = {"enabled": ids}
         config.write_text(json.dumps(data, indent=1), encoding="utf-8")

@@ -145,6 +145,17 @@ static void padding_and_alignment() {
     }
 }
 
+static void the_whole_archive_stays_below_the_size_limit() {
+    auto archive = parse(make_u8(sample()));
+    std::string error;
+    const std::vector<uint8_t> big(U8Archive::kMaxMemberBytes, 1);
+    CHECK(archive->add_or_replace("big1.bin", big, error) && archive->add_or_replace("big2.bin", big, error) && archive->add_or_replace("big3.bin", big, error));
+    const auto before = archive->files();
+    CHECK(!archive->add_or_replace("big4.bin", big, error) && error.find("256 MiB") != std::string::npos);   // 4 x 64 MiB and the tables do not fit
+    CHECK(!archive->replace("a.txt", big, error));                                                          // growing a member counts too
+    CHECK(archive->files() == before && archive->replace("big1.bin", bytes("tiny"), error) && archive->add_or_replace("big4.bin", big, error));   // shrinking one makes room
+}
+
 static void round_trips_the_install_when_UC_GAME_DIR_is_set() {
     const char* dir = std::getenv("UC_GAME_DIR");
     if (!dir) { std::fprintf(stderr, "UC_GAME_DIR is not set: the install round trip is skipped\n"); return; }
@@ -177,6 +188,7 @@ int main() {
     rejects_directory_as_file_and_file_as_folder();
     rejects_damaged_archives();
     padding_and_alignment();
+    the_whole_archive_stays_below_the_size_limit();
     round_trips_the_install_when_UC_GAME_DIR_is_set();
     std::puts("ok");
 }

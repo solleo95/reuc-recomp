@@ -77,10 +77,21 @@ std::optional<U8Archive> U8Archive::parse(std::span<const uint8_t> file, std::st
             if (b > kMaxMemberBytes) return refuse("a member is larger than 64 MiB");
             node.order = a;
             node.data.assign(file.begin() + a, file.begin() + a + b);
+            archive.data_bytes_ += align32(b);
         }
     }
     archive.next_order_ = uint64_t(size) + 1;
     return archive;
+}
+
+bool U8Archive::fits(size_t new_nodes, size_t new_names, int64_t data_delta, std::string& error) const {
+    const uint64_t tables = (nodes_.size() + new_nodes) * 12 + pool_.size() + new_names;
+    const int64_t data = int64_t(data_bytes_) + data_delta;
+    if (align32(root_off_ + tables) + uint64_t(data) > kMaxArchiveBytes) {
+        error = "the archive would be larger than the 256 MiB limit";
+        return false;
+    }
+    return true;
 }
 
 std::string U8Archive::name_of(const Node& node) const {
@@ -163,7 +174,11 @@ bool U8Archive::replace(std::string_view path, std::vector<uint8_t> data, std::s
     if (last < 0) { error = "the archive has no member '" + std::string(path) + "'"; return false; }
     if (nodes_[size_t(last)].dir) { error = "'" + std::string(path) + "' is a folder in the archive"; return false; }
     if (data.size() > kMaxMemberBytes) { error = "the replacement for '" + std::string(path) + "' is larger than 64 MiB"; return false; }
-    nodes_[size_t(last)].data = std::move(data);
+    Node& node = nodes_[size_t(last)];
+    const int64_t delta = int64_t(align32(data.size())) - int64_t(align32(node.data.size()));
+    if (!fits(0, 0, delta, error)) return false;
+    data_bytes_ = uint64_t(int64_t(data_bytes_) + delta);
+    node.data = std::move(data);
     dirty_ = true;
     return true;
 }
@@ -178,7 +193,11 @@ bool U8Archive::add_or_replace(std::string_view path, std::vector<uint8_t> data,
     if (data.size() > kMaxMemberBytes) { error = "'" + std::string(path) + "' is larger than 64 MiB"; return false; }
     if (last >= 0) {
         if (nodes_[size_t(last)].dir) { error = "'" + std::string(path) + "' is a folder in the archive"; return false; }
-        nodes_[size_t(last)].data = std::move(data);
+        Node& node = nodes_[size_t(last)];
+        const int64_t delta = int64_t(align32(data.size())) - int64_t(align32(node.data.size()));
+        if (!fits(0, 0, delta, error)) return false;
+        data_bytes_ = uint64_t(int64_t(data_bytes_) + delta);
+        node.data = std::move(data);
         dirty_ = true;
         return true;
     }
@@ -186,7 +205,9 @@ bool U8Archive::add_or_replace(std::string_view path, std::vector<uint8_t> data,
     size_t names = 0;
     for (size_t i = found; i < parts.size(); ++i) names += parts[i].size() + 1;
     if (nodes_.size() + missing > kMaxNodes || pool_.size() + names > 0xFFFFFF) { error = "the archive has no room for '" + std::string(path) + "' (too many nodes or names)"; return false; }
+    if (!fits(missing, names, int64_t(align32(data.size())), error)) return false;
     for (size_t i = found; i + 1 < parts.size(); ++i) folder = insert(folder, parts[i], true, {});
+    data_bytes_ += align32(data.size());
     insert(folder, parts.back(), false, std::move(data));
     return true;
 }

@@ -157,6 +157,28 @@ static void damaged_base_is_a_problem_and_no_file() {
     CHECK(bad.root.empty() && all_problems(bad).find("m: arc: Data/chara/A.arc: the archive of this mod cannot be used") != std::string::npos);
 }
 
+static void a_bad_whole_archive_can_be_replaced_by_a_later_one() {
+    const auto garbage = bytes("garbage that is not a U8 archive, 32+ bytes long..");
+    Rig rig;
+    rig.add("a");
+    rig.add("b");
+    rig.add("c");
+    rig.whole("a", "Data/chara/A.arc", garbage);
+    rig.whole("b", "Data/chara/A.arc", make_u8({{"b-only.bin", bytes("from-b")}}));
+    rig.member("c", "Data/chara/A.arc!/c-new.bin", "from-c");
+    const auto built = rig.build();
+    const auto out = Rig::result(built);
+    CHECK(has(out, "from-b") && has(out, "from-c") && !has(out, "disc-x"));
+    CHECK(all_problems(built).find("a: arc: Data/chara/A.arc: the archive of this mod cannot be used") != std::string::npos);
+    Rig only_bad;   // no later whole archive: the members cannot apply and say why
+    only_bad.add("a");
+    only_bad.add("c");
+    only_bad.whole("a", "Data/chara/A.arc", garbage);
+    only_bad.member("c", "Data/chara/A.arc!/c-new.bin", "from-c");
+    const auto none = only_bad.build();
+    CHECK(none.root.empty() && all_problems(none).find("c: arc: Data/chara/A.arc!/c-new.bin: cannot be applied: the archive of mod a is damaged") != std::string::npos);
+}
+
 static void bad_member_paths_are_problems_not_fatal() {
     Rig rig;
     rig.add("m");
@@ -235,6 +257,7 @@ int main() {
     later_mod_wins_and_conflict_is_listed();
     whole_archive_of_a_later_mod_resets_earlier_members();
     members_of_a_later_mod_apply_on_an_earlier_whole_archive();
+    a_bad_whole_archive_can_be_replaced_by_a_later_one();
     unknown_archive_is_a_problem_with_the_path();
     damaged_base_is_a_problem_and_no_file();
     bad_member_paths_are_problems_not_fatal();

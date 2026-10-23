@@ -117,7 +117,7 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
         for (const ModEntry* mod : mods) {
             const fs::path whole = mod->root / "files" / from_utf8(target.archive);
             std::error_code error;
-            const bool has_whole = fs::is_regular_file(whole, error);
+            const bool has_whole = fs::symlink_status(whole, error).type() == fs::file_type::regular;   // like the overlay: a symlink is not served
             auto at = std::find_if(target.parts.begin(), target.parts.end(), [&](const ModPart& p) { return p.mod == mod; });
             if (at == target.parts.end() && !has_whole) continue;
             ModPart part = at == target.parts.end() ? ModPart{mod, {}, std::nullopt} : std::move(*at);
@@ -132,6 +132,7 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
     std::set<std::string> seen_conflicts;
     for (auto& [key, target] : targets) {
         std::optional<U8Archive> state;
+        std::string broken_by;   // the mod whose whole archive is the current (unusable) base
         size_t base_size = 0;
         bool dropped = false;
         std::map<std::string, std::string> setter;   // lower-case member path -> mod
@@ -147,18 +148,24 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
                 const auto bytes = read_file(*part.whole, U8Archive::kMaxArchiveBytes, why);
                 std::string parse_error;
                 std::optional<U8Archive> parsed = bytes ? U8Archive::parse(*bytes, parse_error) : std::nullopt;
-                if (!parsed) {
-                    add_problem(id, target.archive + ": the archive of this mod cannot be used: " + (bytes ? parse_error : why));
-                    dropped = true;
-                    break;
-                }
-                state = std::move(parsed);
-                base_size = bytes->size();
                 setter.clear();
                 applied = 0;
                 contributors.clear();
+                if (!parsed) {   // the game would be served this damaged file: nothing can be built on it, but a later mod's whole archive replaces it
+                    add_problem(id, target.archive + ": the archive of this mod cannot be used: " + (bytes ? parse_error : why));
+                    state.reset();
+                    broken_by = id;
+                } else {
+                    state = std::move(parsed);
+                    base_size = bytes->size();
+                    broken_by.clear();
+                }
             }
             if (part.members.empty()) continue;
+            if (!broken_by.empty()) {
+                for (const Member& member : part.members) add_problem(id, target.archive + "!/" + member.path + ": cannot be applied: the archive of mod " + broken_by + " is damaged");
+                continue;
+            }
             if (!state) {
                 const auto disc = base(target.archive);
                 if (!disc) { blame_members(target.archive + ": the game has no such archive"); dropped = true; break; }

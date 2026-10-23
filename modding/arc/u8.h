@@ -36,6 +36,9 @@ private:
         std::vector<uint8_t> data;    // files
     };
     std::string name_of(const Node& node) const;
+    // The archive after a change that adds `new_nodes` nodes and `new_names` pool bytes and changes the (aligned) member bytes by `data_delta` must stay
+    // within kMaxArchiveBytes; checked before anything is changed, so a huge result is never built.
+    bool fits(size_t new_nodes, size_t new_names, int64_t data_delta, std::string& error) const;
     int find_child(uint32_t dir, std::string_view name) const;   // -1: none
     uint32_t insert(uint32_t parent, std::string_view name, bool dir, std::vector<uint8_t> data);   // at the end of the parent's range; returns the new index
     static bool split_path(std::string_view path, std::vector<std::string_view>& parts, std::string& error);
@@ -47,6 +50,7 @@ private:
     std::vector<uint8_t> original_; // the file as parsed
     uint32_t root_off_ = 0x20, data_off_ = 0;
     uint64_t next_order_ = 0;
+    uint64_t data_bytes_ = 0;       // the members' sizes, each rounded up to 0x20
     bool dirty_ = false;
     size_t original_nodes_ = 0, original_pool_ = 0;
 };
