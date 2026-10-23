@@ -186,7 +186,7 @@ ui.draw(() => {
 });
 ```
 
-More in the [mods-examples](../../../../mods-examples) folder (`god_mode` and `inspector` are JavaScript mods).
+More in the [mods-examples](../../../../mods-examples) folder (`god_mode`, `inspector` and `randomizer` are JavaScript mods).
 
 ## What is not available
 

@@ -986,6 +986,67 @@ def camera_capture(g, args):
     return {"capture": first, "later": g.capture()}
 
 
+# The game's own weapon table in the train chapter (id: damage, capacity, reload) and the hit points of its first four zombies, read in the game 2026-10-23.
+ORIGINAL_WEAPONS = {0: (10, 15, 1.0), 1: (9, 6, 2.3), 2: (4, 50, 0.5), 3: (5, 30, 1.0), 4: (180, 4, 2.7), 5: (100, 1, 1.0), 6: (12, 0, 10.0), 7: (120, 4, 2.3), 8: (100, 6, 1.7), 9: (7, 6, 2.0),
+                    10: (7, 50, 0.4), 11: (80, 6, 2.0), 12: (60, 8, 1.2), 13: (120, 3, 2.3), 14: (8, 8, 1.7), 15: (8, 40, 0.7), 16: (180, 1, 2.3), 17: (300, 3, 2.0), 18: (350, 1, 2.5), 19: (10, 15, 1.0)}
+ORIGINAL_ZOMBIES = {160: 20, 161: 10, 162: 30, 163: 20}
+
+
+def randomizer_live(g, args):
+    """The randomizer example mod (seed 1, strength 100, start weapon on) in the real train chapter: the weapon table differs from the game's own in several records
+    and stays within a third to triple of it, the first zombies' hit points differ within the same range, and player 1 holds a gun from the table (not id 6).
+    Run without the mod (randomizer_plain) the same reads must give the game's own values: that is the baseline."""
+    import struct
+    reach_gameplay(g)
+    g.advance(300)   # the start weapon is given 3 game seconds into the mission
+    marked = "randomizer" in (getattr(g, "mods", None) or [])
+    raw = bytes.fromhex(g.request({"cmd": "peek", "addr": 0x8046A86C, "size": 168 * 20})["hex"])
+    table = {}
+    for i in range(20):
+        r = raw[i * 168:(i + 1) * 168]
+        table[i] = (struct.unpack(">f", r[0x24:0x28])[0], struct.unpack(">I", r[0x14:0x18])[0], struct.unpack(">f", r[0x38:0x3C])[0])
+    zombies = {e["id"]: e["hp"] for e in g.frame.get("enemies", []) if e["id"] in ORIGINAL_ZOMBIES}
+    player = g.frame["player"]["address"]
+    weapon = struct.unpack(">I", bytes.fromhex(g.request({"cmd": "peek", "addr": player + 0x4C8, "size": 4})["hex"]))[0]
+    result = {"changed_records": sum(1 for i, o in ORIGINAL_WEAPONS.items() if abs(table[i][0] - o[0]) > 1e-3 * max(1, o[0]) or table[i][1] != o[1]), "zombies": zombies, "weapon": weapon}
+    with g.step("weapons"):
+        for i, (damage, capacity, reload) in ORIGINAL_WEAPONS.items():
+            now = table[i]
+            if not marked:
+                if abs(now[0] - damage) > 1e-3 * max(1, damage) or now[1] != capacity or abs(now[2] - reload) > 1e-3:
+                    g.fail(f"weapon {i} is {now} in the unmodified game, expected {(damage, capacity, reload)}", "randomizer")
+                continue
+            if i == 6:   # not a gun (no magazine): left alone
+                if now[1] != 0 or abs(now[0] - damage) > 1e-3 * max(1, damage) or abs(now[2] - reload) > 1e-3:
+                    g.fail(f"record 6 changed: {now}", "randomizer")
+                continue
+            if not (damage / 3 - 0.01 <= now[0] <= damage * 3 + 0.01 and 1 <= now[1] <= capacity * 3 + 1 and reload / 3 - 0.01 <= now[2] <= reload * 3 + 0.01):
+                g.fail(f"weapon {i} left the range: {now} from {(damage, capacity, reload)}", "randomizer")
+        if marked and result["changed_records"] < 3:
+            g.fail(f"only {result['changed_records']} weapon records changed", "randomizer")
+    with g.step("zombies"):
+        if len(zombies) != 4:
+            g.fail(f"expected the four zombies of the first scene, saw {zombies}", "randomizer")
+        for zombie_id, original in ORIGINAL_ZOMBIES.items():
+            hp = zombies[zombie_id]
+            if not marked and abs(hp - original) > 1e-3:
+                g.fail(f"zombie {zombie_id} has {hp} hit points in the unmodified game, expected {original}", "randomizer")
+            if marked and not original / 3 - 0.01 <= hp <= original * 3 + 0.01:
+                g.fail(f"zombie {zombie_id} has {hp} hit points, outside a third to triple of {original}", "randomizer")
+        if marked and all(abs(zombies[i] - o) < 1e-3 for i, o in ORIGINAL_ZOMBIES.items()):
+            g.fail("no zombie changed", "randomizer")
+    with g.step("start_weapon"):
+        if not marked and weapon not in (0, 19):
+            g.fail(f"the unmodified game starts with weapon {weapon}", "randomizer")
+        if marked and (weapon == 0 or ORIGINAL_WEAPONS.get(weapon, (0, 0, 0))[1] == 0):
+            g.fail(f"player 1 holds weapon {weapon}: expected a random gun other than the handgun (seed 1)", "randomizer")
+    result["capture"] = g.capture()
+    g.advance(180)
+    result["later"] = g.capture()
+    result["magazine"] = g.frame["player"]["magazine"]
+    return result
+
+
 def inspector_live(g, args):
     """The inspector example mod with log_every = 1 in the real train chapter: 25 s of play must give a snapshot line of valid JSON about every second in
     debug/mods.log, the mission clock must rise, the camera must have a position, player 1 must be present with a health between 0 and 1, and the enemy list
@@ -1176,7 +1237,7 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
-SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}}   # stored settings of the mods a scenario installs
+SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}, "randomizer_live": {"randomizer": {"seed": 1, "strength": 100, "start_weapon": True}}}   # stored settings of the mods a scenario installs

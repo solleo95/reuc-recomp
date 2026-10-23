@@ -32,8 +32,9 @@ export function factor(draw, strength) {
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-// The planned record for a base record {damage, fire_rate, capacity, reload_time}; a field the game leaves at 0 (or below) stays as it is. The API's limits hold.
+// The planned record for a base record {damage, fire_rate, capacity, reload_time}; a record without a magazine and a field the game leaves at 0 (or below) stay as they are. The API's limits hold.
 export function planWeapon(seed, strength, id, base) {
+  if (!(base.capacity > 0)) return { ...base };   // a record without a magazine is not a gun: left alone
   const draw = rng(seed, WEAPON, id);
   const f = [factor(draw(), strength), factor(draw(), strength), factor(draw(), strength), factor(draw(), strength)];   // always four draws: a field that is absent does not shift the others
   return {

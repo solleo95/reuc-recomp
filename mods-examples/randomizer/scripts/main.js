@@ -3,6 +3,7 @@
 import { enemyHp, planWeapon, startPool, startWeapon } from './lib/random.js';
 
 const attempt = (read, fallback = null) => { try { return read(); } catch (e) { return fallback; } };
+const START_DELAY = 90;   // steps (3 game seconds)
 const WEAPONS = 20, FIELDS = ['damage', 'fire_rate', 'capacity', 'reload_time'];
 
 let base = null;         // the game's values per weapon id, read once its table is filled
@@ -12,6 +13,7 @@ const changed = [];      // the latest zombie changes {id, from, to}
 const started = {};      // slot -> weapon id given at the start of the mission
 let present = false;     // was player 1 in the mission at the last step
 let pendingStart = false;
+let waited = 0;          // steps since the mission began: the HUD needs a moment before it follows a weapon switch
 
 const seed = () => settings.get('seed');
 const strength = () => settings.get('strength');
@@ -60,10 +62,10 @@ let steps = 0;
 on('on_step', () => {
   if (!base && attempt(() => uc.weapon(0).damage, 0) > 0) { base = attempt(readBase); writeWeapons(); }
   const here = !!attempt(() => uc.player(1).present);
-  if (here && !present) { zombies.clear(); changed.length = 0; pendingStart = true; }   // a mission starts: its zombies and its loadout are new
+  if (here && !present) { zombies.clear(); changed.length = 0; pendingStart = true; waited = 0; }   // a mission starts: its zombies and its loadout are new
   if (!here && present) { Object.keys(started).forEach((k) => delete started[k]); }
   present = here;
-  if (pendingStart && base) {
+  if (pendingStart && base && ++waited >= START_DELAY) {
     pendingStart = false;
     if (settings.get('start_weapon')) giveStartWeapons();
   }
