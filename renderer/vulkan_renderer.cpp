@@ -1129,7 +1129,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     };
     in.render_size=region(scene_extent_); in.output_size=region(efb_extent_);
     in.jitter=jitter_;
-    in.reset=reset_next_ || tracker_.camera_cut() || black_output;
+    in.reset=reset_next_ || tracker_.camera_cut() || black_output || (scene_vectors_wanted() && !motion_cleared_);   // the last term: a reader switched on mid-frame finds no vectors written this frame
     in.sharpening=sharpening_; in.sharpness=float(sharpness_);
     in.frame_ms=last_upscale_==std::chrono::steady_clock::time_point{} ? 16.7f : std::clamp(std::chrono::duration<float,std::milli>(now-last_upscale_).count(),0.1f,100.f);
     in.frame=upscale_frame_;
@@ -1138,7 +1138,7 @@ void VulkanRenderer::record_upscale(VkCommandBuffer command, bool black_output) 
     const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
     barrier(command,scene_color_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
     barrier(command,scene_depth_,scene_depth_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any,VK_IMAGE_ASPECT_DEPTH_BIT);
-    barrier(command,scene_motion_,scene_motion_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
+    barrier(command,scene_motion_,motion_initialized_ ? scene_motion_layout_ : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);   // never bound (bloom alone): still UNDEFINED
     scene_depth_layout_=scene_motion_layout_=VK_IMAGE_LAYOUT_GENERAL;   // and they stay there until the next frame's first scene pass
     if (gbuffer_cleared_) { barrier(command,scene_gbuffer_,scene_gbuffer_layout_,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any); scene_gbuffer_layout_=VK_IMAGE_LAYOUT_GENERAL; }   // written this frame: readable by the effects
     if (rt_material_cleared_) {   // likewise the RT pair
@@ -1771,6 +1771,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             if (!cut && packet.present) ++whole_frame_upscales_;   // no scene copy: the HUD goes through the upscaler too
         }
     }
+    const bool vectors=scene_vectors_wanted();   // false: the scene path runs for the bloom alone, nothing reads the motion vectors
     std::vector<MotionBlock> motion_blocks;
     std::vector<uint32_t> draw_motion(scene_draws,kNoMotion);
     // RT material records (rt_material.h) of this packet's depth-writing scene draws, appended to the frame's at rt_record_count_.
@@ -1836,8 +1837,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             info.bank=bank->second;
         }
         if (const size_t d=gpu_draws.size(); d<scene_draws) {   // scene draw: last frame's matrices of the same draw for its motion vectors
-            const auto key=tracker_.key(draw);
-            if(motion_write_mask(info.key)) {
+            const auto key=vectors ? tracker_.key(draw) : gx::DrawKey{};
+            if(vectors && motion_write_mask(info.key)) {
                 MotionBlock block{};
                 if (const auto* previous=tracker_.previous(key)) {
                     block.kind=1; block.prev_rows=previous->transforms->projection;
@@ -1857,7 +1858,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
                 record_uniforms.push_back(&uniforms);
                 draw_record[d]=index;
             }
-            tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
+            if (vectors) tracker_.record(key,draw.transforms.block(),summary.draws[d].z_write);
             if (summary.draws[d].perspective) scene_projection_=draw.transforms->projection;
             if (summary.draws[d].perspective && summary.draws[d].z_write && !frame_projection_) {   // the world's projection: the first depth-writing perspective draw (the weapon comes later with its own)
                 frame_projection_=draw.transforms->projection;
@@ -2069,7 +2070,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     color.loadOp = initialized ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     for (size_t i=0;i<4;++i) color.clearValue.color.float32[i]=packet.clear_color[i]/255.f;
     VkRenderingAttachmentInfo colors[5]{color,{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO},{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}};   // [1]: motion, [2]: G-buffer, [3], [4]: RT material and albedo; none bound outside the scene pass
-    const bool bind_motion=scene && (!motion_cleared_ || std::any_of(draw_motion.begin()+first,draw_motion.begin()+last,[](uint32_t index) { return index!=kNoMotion; }));
+    const bool bind_motion=scene && vectors && (!motion_cleared_ || std::any_of(draw_motion.begin()+first,draw_motion.begin()+last,[](uint32_t index) { return index!=kNoMotion; }));
     if (bind_motion) {   // clear once, then bind only for passes whose depth-writing draws produce vectors
         barrier(slot.command,scene_motion_,motion_initialized_ && motion_cleared_ ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);

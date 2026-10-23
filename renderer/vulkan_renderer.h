@@ -101,6 +101,8 @@ public:
     UpscaleMode effective_upscale_mode() const { return upscaler_kind_==UpscalerKind::smaa || upscaler_kind_==UpscalerKind::off ? UpscaleMode::native : upscale_mode_; }
     bool bloom_active() const { return bloom_.enabled && bloom_.strength>0; }
     bool scene_path_wanted() const { return motion_outputs_ && (force_scene_targets_ || needs_scene_targets(effects_) || dlss5_requested() || bloom_active()); }   // a pass-through upscaler keeps the scene targets without DLSS/FSR/SMAA
+    // The scene path of the bloom alone (pass-through, no effect, no DLSS 5) has no reader of the motion vectors: its draws are not tracked and the motion target stays unbound.
+    bool scene_vectors_wanted() const { return upscaler_kind_!=UpscalerKind::off || force_scene_targets_ || needs_scene_targets(effects_) || dlss5_requested(); }
     UpscalerKind active_upscaler() const { return motion_outputs_ && upscaler_ ? upscaler_kind_ : UpscalerKind::off; }   // after fallbacks
     bool frame_generation_active() const { return dlss_generation_enabled() || fsr_generation_enabled(); }
     // Renderer replacement: the EFB copies the old renderer held (copy_keys) are drawn as a blank texture by the new one until the game copies them again.
