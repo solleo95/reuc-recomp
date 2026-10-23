@@ -1,6 +1,6 @@
 // Pure helpers of the inspector: formatting, sorting, the event ring, address parsing and memory reads. Positions are [x, y, z] in the game's units (10 cm).
 
-const fixed = (value, digits = 1) => (typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '?');
+const fixed = (value, digits = 1) => (typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits).replace(/^-(0\.0+)$/, '$1') : '?');   // no "-0.0"
 const two = (n) => String(n).padStart(2, '0');
 
 export function clockText(seconds) {
@@ -12,8 +12,11 @@ export function clockText(seconds) {
 export function playerLine(slot, p) {
   const health = typeof p.health === 'number' ? `${Math.round(p.health * 100)}%` : '?';
   const reserve = p.reserve == null ? 'inf' : p.reserve;
-  return `Player ${slot}: health ${health} (damage ${fixed(p.damage)}/50)  weapon ${p.weapon}  magazine ${p.magazine}  reserve ${reserve}  grenades ${p.grenades}` +
-    `  |  hits ${p.hits}  crits ${p.critical_hits}  objects ${p.objects_destroyed}`;
+  return `Player ${slot}: health ${health}  weapon ${p.weapon}  magazine ${p.magazine}  reserve ${reserve}  grenades ${p.grenades}`;
+}
+
+export function playerStatsLine(p) {
+  return `   damage meter ${fixed(p.damage)}/50  hits ${p.hits}  crits ${p.critical_hits}  objects ${p.objects_destroyed}`;
 }
 
 const distance = (e, camera) => {

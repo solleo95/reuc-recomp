@@ -44,6 +44,7 @@ Make the loop short: a test save that starts right at the interesting place save
 | `uc.exe --log-dvd` | Prints every file the game opens and reads (useful for [disc files](files.md) and [audio](audio.md)). |
 | `uc.exe --no-mods` | Starts the game with every mod off: use it to check whether a problem is yours. |
 | **Reload scripts** (Mods tab) | Restarts the scripts without leaving the game. |
+| The `inspector` example mod | A window with the live game state the API sees (players, mission, camera, enemies, events, any memory address): enable it from `mods-examples` ([Recipes](../../recipes.md)). Its Snapshot button writes the state as one line of JSON to `mods.log`. |
 | The Mods tab itself | Shows each mod's state, the last error, the list of conflicting files, conversion progress. |
 | `log.write(...)` | The simplest and best debugger. Log the values you doubt. |
 

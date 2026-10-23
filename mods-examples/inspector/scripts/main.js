@@ -1,6 +1,6 @@
 // Inspector (JavaScript): a read-only window onto everything the mod API exposes. Open it with the gear button of this mod in the Mods tab.
 // Copy this folder as a starting point for your own debugging tools; the helpers are in lib/inspect.js.
-import { EventRing, WATCH_TYPES, clockText, enemyLine, eventLine, nearest, parseAddress, playerLine, readWatch, snapshot } from './lib/inspect.js';
+import { EventRing, WATCH_TYPES, clockText, enemyLine, eventLine, nearest, parseAddress, playerLine, playerStatsLine, readWatch, snapshot } from './lib/inspect.js';
 
 const attempt = (read, fallback = null) => { try { return read(); } catch (e) { return fallback; } };   // a part that does not exist (no mission, no scene) is null, never an error
 
@@ -10,14 +10,16 @@ for (const name of ['on_weapon_fired', 'on_damage_taken', 'on_reload', 'on_playe
 }
 on('on_settings_changed', () => ring.setLimit(settings.get('events_kept')));
 
-const readPlayer = (slot) => attempt(() => {
-  const p = uc.player(slot);
-  if (!p.present) return null;
+// A player that is there but has a field the game cannot give right now still shows up: that field is null.
+const readPlayer = (slot) => {
+  const p = attempt(() => uc.player(slot));
+  if (!p || !attempt(() => p.present)) return null;
+  const field = (name) => attempt(() => p[name]);
   return {
-    health: p.health, damage: p.damage, weapon: p.weapon, magazine: p.magazine, reserve: attempt(() => p.reserve), grenades: p.grenades,
-    hits: p.hits, critical_hits: p.critical_hits, objects_destroyed: p.objects_destroyed,
+    health: field('health'), damage: field('damage'), weapon: field('weapon'), magazine: field('magazine'), reserve: field('reserve'), grenades: field('grenades'),
+    hits: field('hits'), critical_hits: field('critical_hits'), objects_destroyed: field('objects_destroyed'),
   };
-});
+};
 
 const readState = () => ({
   players: [readPlayer(1), readPlayer(2)],
@@ -59,8 +61,8 @@ function drawWatches() {
 
 ui.draw(() => {
   const state = readState();
-  const present = state.players.map((p, i) => (p ? playerLine(i + 1, p) : null)).filter(Boolean);
-  if (present.length === 0) ui.text('not in a mission'); else present.forEach((line) => ui.text(line));
+  if (!state.players[0] && !state.players[1]) ui.text('not in a mission');
+  state.players.forEach((p, i) => { if (p) { ui.text(playerLine(i + 1, p)); ui.text(playerStatsLine(p)); } });
 
   if (ui.collapsing_header('Mission and camera')) {
     if (!state.game) note('the mission clock cannot be read');

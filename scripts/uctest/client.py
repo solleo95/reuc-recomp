@@ -54,12 +54,12 @@ class StepFailed(Exception):
 class Game:
     BUTTONS = {"A": 0x0800, "B": 0x0400, "minus": 0x0010, "plus": 0x1000}
 
-    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=(), mods=False):
+    def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=(), mods=False, mod_settings=None):
         self.exe = (ROOT / exe).resolve()
         self.run_dir = Path(run_dir) if run_dir else ROOT / "build" / "autotest" / str(time.time_ns())
         self.name = re.sub(r"[^A-Za-z0-9_-]", "_", self.run_dir.name)[-32:] or "run"
         self.speed, self.skip_intro, self.seconds, self.launch, self.god = speed, skip_intro, seconds, launch, god
-        self.skip_tutorials, self.mods = skip_tutorials, mods
+        self.skip_tutorials, self.mods, self.mod_settings = skip_tutorials, mods, mod_settings   # mod_settings: {mod id: {setting key: value}} stored in this run's config
         self.transport_factory, self.saves, self.game_args = transport_factory, saves, list(game_args)
         self.process = None
         self.transport = None
@@ -208,6 +208,8 @@ class Game:
             self._installed_caches = getattr(self, "_installed_caches", []) + [target / ".cache" / "_audio" / ids[-1], target / ".cache" / "_text", target / ".cache" / "_arc"]
         data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
         data["mods"] = {"enabled": ids}
+        for mod_id, stored in (self.mod_settings or {}).items():
+            data["mods"][mod_id] = {"settings": stored}
         config.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
     # events ----------------------------------------------------------

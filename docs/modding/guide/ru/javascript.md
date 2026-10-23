@@ -186,7 +186,7 @@ ui.draw(() => {
 });
 ```
 
-Больше примеров - в папке [mods-examples](../../../../mods-examples) (`god_mode` - мод на JavaScript).
+Больше примеров - в папке [mods-examples](../../../../mods-examples) (`god_mode` и `inspector` - моды на JavaScript).
 
 ## Что недоступно
 

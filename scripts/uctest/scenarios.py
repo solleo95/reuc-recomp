@@ -401,6 +401,8 @@ def overlay(g, args):
 MODS_SMOKE_MODS = ["infinite_ammo", "god_mode", "pistol_autofire", "faster_handgun"]
 
 
+INSPECTOR_GEAR = (769, 234)
+INSPECTOR_MISSION, INSPECTOR_ENEMIES = (640, 373), (640, 431)   # headers in the mod's window, as the first capture showed them   # gear of the only mod in the manager (found by looking at a capture)
 MODS_TAB, FIRST_GEAR = (717, 83), (769, 330)   # window pixels in the harness's 1280x720 window: the gear of the second smoke mod (Бессмертие / god_mode: settings and free drawing)
 
 
@@ -975,6 +977,73 @@ def arc_member(g, args):
     return {"member_at": f"{member_at:08X}", "after_member": after.hex(), "capture": capture}
 
 
+def inspector_live(g, args):
+    """The inspector example mod with log_every = 1 in the real train chapter: 25 s of play must give a snapshot line of valid JSON about every second in
+    debug/mods.log, the mission clock must rise, the camera must have a position, player 1 must be present with a health between 0 and 1, and the enemy list
+    must be a list. Then the Insert menu is opened on the mod's window and captured (look at it)."""
+    import json
+    reach_gameplay(g)
+    log_path = g.exe.parent / "debug" / "mods.log"
+
+    def snapshots():
+        text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+        return [line.split("] ", 1)[1] for line in text.splitlines() if line.startswith("[inspector] {")]
+
+    result = {}
+    with g.step("window_in_mission"):   # the mod's window while the player is alive: the enemy and mission sections opened (bottom one first: opening one moves those below it)
+        g.advance(60)
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(10)
+        g.menu_click(*MODS_TAB)
+        g.menu_click(*INSPECTOR_GEAR)
+        g.advance(10)
+        g.menu_click(*INSPECTOR_ENEMIES)
+        g.menu_click(*INSPECTOR_MISSION)
+        g.advance(10)
+        result["window_in_mission"] = g.capture()
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+    before = len(snapshots())
+    g.advance(1500)
+    lines = snapshots()[before:]
+    result["snapshots"] = len(lines)
+    with g.step("snapshots"):
+        if len(lines) < 10:
+            g.fail(f"{len(lines)} snapshot lines in 25 s of play (log_every 1)", "inspector")
+        rows = [json.loads(line) for line in lines]
+        for row in rows:
+            if not isinstance(row["enemies"], list):
+                g.fail("enemies is not a list", "inspector")
+        live = [row for row in rows if row["players"][0]]   # the first scene of the chapter ends after about 20 s of play: later lines say "not in a mission"
+        if len(live) < 5:
+            g.fail(f"player 1 is in only {len(live)} of {len(rows)} snapshots", "inspector")
+        first, last = live[0], live[-1]
+        position = last["camera"] and last["camera"]["position"]
+        if not (isinstance(position, list) and len(position) == 3 and all(isinstance(v, (int, float)) for v in position)):
+            g.fail(f"no camera position in a snapshot with a player: {last['camera']}", "inspector")
+        player = last["players"][0]
+        if not 0 <= player["health"] <= 1 or not isinstance(player["magazine"], int):
+            g.fail(f"player 1 in a snapshot: {player}", "inspector")
+        if not last["game"]["time"] > first["game"]["time"]:
+            g.fail(f"the mission clock did not rise: {first['game']['time']} -> {last['game']['time']}", "inspector")
+        if not any(row["enemies"] and all(isinstance(e["hp"], (int, float)) and isinstance(e["x"], (int, float)) for e in row["enemies"]) for row in live):
+            g.fail("no zombie in any snapshot of the chapter's first scene", "inspector")
+        result.update(first=first["game"], last=last["game"], most_enemies=max(len(r["enemies"]) for r in live), camera=position, player=player)
+    with g.step("window"):
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(10)
+        g.menu_click(*MODS_TAB)
+        result["menu_mods"] = g.capture()
+        g.menu_click(*INSPECTOR_GEAR)
+        g.advance(10)
+        result["menu_inspector"] = g.capture()
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+    return result
+
+
 def _sfd_tool():
     import importlib.util
     import sys
@@ -1098,6 +1167,7 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
+SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}}   # stored settings of the mods a scenario installs

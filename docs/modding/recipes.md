@@ -21,6 +21,10 @@ on('on_settings_changed', apply)
 
 Invulnerability per player through `uc.player(n).invulnerable`, and a free-drawing settings window: the damage meter of player 1 and a **Heal now** button (`ui.draw`). Shows: an ES-module entry file, settings plus free drawing in one window, checking `present` before reading a player.
 
+## Inspector (JavaScript) — `inspector`
+
+A read-only window onto everything the API exposes, for mod authors: open its window with the gear button in the Mods tab. Always shown: both players (health, weapon, magazine, reserve, grenades and the result counters). Sections: **Mission and camera** (mission clock, pause, stars, camera position in meters and direction), **Pad** (held buttons, fire, aim), **Enemies** (the zombies nearest to the camera, with hit points and distance), **Events** (a log of the game events, newest first, with the mission time), **Memory watch** (four rows: type an address in decimal or `0x` hex, or a symbol name, pick `u8`, `u16`, `u32`, `s32` or `f32`, and see the live value) and **Snapshot** (one line of JSON in `debug\mods.log`: players, mission, camera and enemies, for bug reports). Settings: how many enemies are listed (1 to 30), how many events are kept (5 to 100) and `log_every`, a snapshot every N game seconds (0 = never). It never writes to the game and needs no `touches_gameplay`. Outside a mission it says `not in a mission` and no part throws. Shows: `ui.draw` with collapsible sections, reading every part of the API defensively (a missing scene is `null`, not an error), ES-module helpers in `scripts/lib/inspect.js`, and the snapshot line as the way to hand data to somebody else.
+
 ## Pistol auto-fire (Lua) — `pistol_autofire`
 
 ```lua
