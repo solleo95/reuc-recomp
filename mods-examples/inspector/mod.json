@@ -8,12 +8,12 @@
   "script": "scripts/main.js",
   "names": { "ru": "Инспектор" },
   "settings": [
-    { "key": "enemies_shown", "type": "number", "default": 8, "min": 1, "max": 30, "step": 1,
+    { "key": "enemies_shown", "type": "int", "default": 8, "min": 1, "max": 30, "step": 1,
       "label": { "en": "Enemies listed", "ru": "Врагов в списке" }, "tooltip": { "en": "The nearest ones to the camera.", "ru": "Ближайшие к камере." } },
-    { "key": "events_kept", "type": "number", "default": 30, "min": 5, "max": 100, "step": 5,
+    { "key": "events_kept", "type": "int", "default": 30, "min": 5, "max": 100, "step": 5,
       "label": { "en": "Events kept", "ru": "Событий в журнале" }, "tooltip": { "en": "The newest ones stay.", "ru": "Остаются самые новые." } },
-    { "key": "log_every", "type": "number", "default": 0, "min": 0, "max": 600, "step": 1,
+    { "key": "log_every", "type": "int", "default": 0, "min": 0, "max": 600, "step": 1,
       "label": { "en": "Snapshot to the log every (game seconds, 0 = never)", "ru": "Снимок в журнал каждые (игровых секунд, 0 = никогда)" },
-      "tooltip": { "en": "Writes one line of JSON to debug\\mods.log.", "ru": "Пишет одну строку JSON в debug\\mods.log." } }
+      "tooltip": { "en": "Writes one line of JSON to debug\\mods.log. The game keeps the first 2000 log lines of a mod per session.", "ru": "Пишет одну строку JSON в debug\\mods.log. Игра хранит только первые 2000 строк журнала мода за сеанс." } }
   ]
 }

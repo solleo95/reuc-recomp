@@ -21,12 +21,17 @@ const readPlayer = (slot) => {
   };
 };
 
-const readState = () => ({
-  players: [readPlayer(1), readPlayer(2)],
-  game: attempt(() => ({ time: uc.game.time, paused: uc.game.paused, stars: uc.game.stars })),
-  camera: attempt(() => ({ position: uc.camera.position, forward: uc.camera.forward })),
-  enemies: attempt(() => uc.enemies.list(), []),
-});
+// Outside a mission the clock and the counters keep their last values and the camera is a leftover: only a mission's own state is reported.
+const readState = () => {
+  const players = [readPlayer(1), readPlayer(2)];
+  if (!players[0] && !players[1]) return { players, game: null, camera: null, enemies: [] };
+  return {
+    players,
+    game: attempt(() => ({ time: uc.game.time, paused: uc.game.paused, stars: uc.game.stars })),
+    camera: attempt(() => ({ position: uc.camera.position, forward: uc.camera.forward })),
+    enemies: attempt(() => uc.enemies.list(), []),
+  };
+};
 
 const logSnapshot = (state) => log.write(snapshot(state));
 
@@ -35,10 +40,12 @@ let steps = 0;
 on('on_step', () => {
   const every = settings.get('log_every');
   if (!(every > 0)) { steps = 0; return; }
+  if (attempt(() => uc.game.paused)) return;   // the pause menu still delivers steps, but game time stands still
   if (++steps >= every * 30) { steps = 0; logSnapshot(readState()); }
 });
 
 const meters = (v) => (Array.isArray(v) ? v.map((x) => (x / 10).toFixed(1)).join(', ') : '?');
+const aimText = (v) => (Array.isArray(v) ? v.map((x) => x.toFixed(2)).join(', ') : '?');   // the pointer is -1..1 on both axes, not a position
 const note = (text) => ui.text(`! ${text}`);
 
 const watches = Array.from({ length: 4 }, () => ({ text: '', type: 2 }));
@@ -65,15 +72,17 @@ ui.draw(() => {
   state.players.forEach((p, i) => { if (p) { ui.text(playerLine(i + 1, p)); ui.text(playerStatsLine(p)); } });
 
   if (ui.collapsing_header('Mission and camera')) {
-    if (!state.game) note('the mission clock cannot be read');
+    if (!state.players[0] && !state.players[1]) ui.text('not in a mission');
+    else if (!state.game) note('the mission clock cannot be read');
     else ui.text(`Mission time ${clockText(state.game.time)}  paused ${state.game.paused}  stars ${state.game.stars}`);
-    if (!state.camera) note('no camera: not in a scene');
+    if (!state.players[0] && !state.players[1]) { /* said above */ }
+    else if (!state.camera) note('no camera: not in a scene');
     else ui.text(`Camera at (${meters(state.camera.position)}) m, looking (${state.camera.forward.map((x) => x.toFixed(2)).join(', ')})`);
   }
   if (ui.collapsing_header('Pad')) {
     const held = attempt(() => uc.input.held);
     if (held === null) note('the pad cannot be read');
-    else ui.text(`Held buttons 0x${(held >>> 0).toString(16).toUpperCase().padStart(8, '0')}  fire held ${attempt(() => uc.input.fire_held)}  aim (${meters(attempt(() => uc.input.aim))})`);
+    else ui.text(`Held buttons 0x${(held >>> 0).toString(16).toUpperCase().padStart(8, '0')}  fire held ${attempt(() => uc.input.fire_held)}  aim (${aimText(attempt(() => uc.input.aim))})`);
   }
   if (ui.collapsing_header('Enemies')) {
     const alive = state.enemies.filter((e) => e.hp > 0).length;

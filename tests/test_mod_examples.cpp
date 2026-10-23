@@ -157,11 +157,16 @@ static void inspector_in_a_mission() {
 static void inspector_outside_a_mission() {
     World w("inspector", "inspector");
     w.ui.open_headers = true;
+    w.view.write_u32(0x805C5D74, 77);   // the mission clock keeps its last value after a mission: it must not be shown as current
     w.view.write_u32(kPlayerTable, 0);
     w.view.write_u32(kPlayerTable + 4, 0);
     w.view.write_u32(kScenePointer, 0);
     CHECK(w.mods->host()->draw_ui("inspector").ok);
-    CHECK(w.ui.has("not in a mission") && !w.ui.has("Player 1"));
+    CHECK(w.ui.count("not in a mission") == 2 && !w.ui.has("Player 1") && !w.ui.has("Mission time"));   // the top line and the Mission section
+    w.ui.press.insert("Log snapshot");
+    CHECK(w.mods->host()->draw_ui("inspector").ok);
+    const auto json = nlohmann::json::parse(inspector_log_lines(w).back(), nullptr, false);
+    CHECK(!json.is_discarded() && json["game"].is_null() && json["camera"].is_null() && json["enemies"].empty());
 }
 
 static void memory_watch_reads_what_is_typed() {
@@ -180,6 +185,13 @@ static void memory_watch_reads_what_is_typed() {
     w.ui.chosen["Type 1"] = 4;   // f32
     w.ui.texts.clear();
     CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has("2.5"));
+    for (const auto& [bits, shown] : {std::pair<uint32_t, const char*>{0x7F800000u, "NaN or infinity"}, {0xFF800000u, "NaN or infinity"}, {0x80000000u, "-0"}, {0x7FC00000u, "NaN or infinity"}}) {
+        w.view.write_u32(0x80100208, bits);
+        w.ui.typed[kWatch1] = "0x80100208";
+        w.ui.texts.clear();
+        CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has(std::string("= ") + shown));
+    }
+    w.ui.typed[kWatch1] = "0x80100204";
     w.ui.texts.clear();
     w.ui.typed[kWatch1] = "";
     CHECK(w.mods->host()->draw_ui("inspector").ok && w.ui.has("type an address"));
@@ -254,6 +266,16 @@ static void log_every_writes_snapshots() {
     CHECK(inspector_log_lines(off).empty());
 }
 
+static void log_every_waits_while_the_game_is_paused() {
+    World w("inspector", "inspector", {{"log_every", 1}});
+    w.view.write_u32(0x805965A8, 2);   // the game's pause menu is open: the steps still come, the game's time does not
+    w.step(70);
+    CHECK(inspector_log_lines(w).empty());
+    w.view.write_u32(0x805965A8, 1);
+    w.step(31);
+    CHECK(inspector_log_lines(w).size() == 1);
+}
+
 static void inspector_settings_are_declared() {
     std::ifstream in(fs::path(UC_EXAMPLES_DIR) / "inspector" / "mod.json");
     const auto manifest = nlohmann::json::parse(in);
@@ -261,7 +283,7 @@ static void inspector_settings_are_declared() {
     std::map<std::string, std::array<double, 3>> expected = {{"enemies_shown", {1, 30, 8}}, {"events_kept", {5, 100, 30}}, {"log_every", {0, 600, 0}}};
     for (const auto& setting : manifest["settings"]) {
         const auto at = expected.find(setting["key"]);
-        CHECK(at != expected.end() && setting["type"] == "number");
+        CHECK(at != expected.end() && setting["type"] == "int");   // whole numbers: the integer slider
         CHECK(setting["min"] == at->second[0] && setting["max"] == at->second[1] && setting["default"] == at->second[2]);
         expected.erase(at);
     }
@@ -312,7 +334,7 @@ int main() {
                                                          {"inspector_in_a_mission", inspector_in_a_mission}, {"inspector_outside_a_mission", inspector_outside_a_mission},
                                                          {"memory_watch_reads_what_is_typed", memory_watch_reads_what_is_typed}, {"events_are_logged_and_trimmed", events_are_logged_and_trimmed},
                                                          {"events_kept_can_be_lowered_at_once", events_kept_can_be_lowered_at_once}, {"snapshot_is_one_line_of_json", snapshot_is_one_line_of_json},
-                                                         {"log_every_writes_snapshots", log_every_writes_snapshots}, {"inspector_settings_are_declared", inspector_settings_are_declared}};
+                                                         {"log_every_writes_snapshots", log_every_writes_snapshots}, {"log_every_waits_while_the_game_is_paused", log_every_waits_while_the_game_is_paused}, {"inspector_settings_are_declared", inspector_settings_are_declared}};
     for (const auto& [name, run] : tests) {
         std::printf("%s\n", name);
         std::fflush(stdout);

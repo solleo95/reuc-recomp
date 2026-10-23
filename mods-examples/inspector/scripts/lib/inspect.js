@@ -75,7 +75,8 @@ const HEX_DIGITS = { u8: 2, u16: 4, u32: 8, s32: 8 };
 export function readWatch(mem, address, type) {
   try {
     const value = mem[`read_${type}`](address);
-    if (type === 'f32') return { text: Number.isFinite(value) ? String(value) : 'not a number' };
+    // The API hands numbers over as JSON, which has no NaN or infinity: such a float arrives as null.
+    if (type === 'f32') return { text: value === null || Number.isNaN(value) ? 'NaN or infinity' : Object.is(value, -0) ? '-0' : String(value) };
     return { text: `${value} (0x${(value >>> 0).toString(16).toUpperCase().padStart(HEX_DIGITS[type], '0')})` };
   } catch (e) {
     return { error: String(e && e.message || e) };

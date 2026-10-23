@@ -401,8 +401,8 @@ def overlay(g, args):
 MODS_SMOKE_MODS = ["infinite_ammo", "god_mode", "pistol_autofire", "faster_handgun"]
 
 
-INSPECTOR_GEAR = (769, 234)
-INSPECTOR_MISSION, INSPECTOR_ENEMIES = (640, 373), (640, 431)   # headers in the mod's window, as the first capture showed them   # gear of the only mod in the manager (found by looking at a capture)
+INSPECTOR_GEAR = (769, 234)   # gear of the only mod in the manager (found by looking at a capture)
+INSPECTOR_MISSION, INSPECTOR_ENEMIES = (640, 373), (640, 431)   # headers in the mod's window, as a capture showed them
 MODS_TAB, FIRST_GEAR = (717, 83), (769, 330)   # window pixels in the harness's 1280x720 window: the gear of the second smoke mod (Бессмертие / god_mode: settings and free drawing)
 
 
