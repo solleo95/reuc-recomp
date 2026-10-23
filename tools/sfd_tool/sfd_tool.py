@@ -7,9 +7,18 @@
 (MPEG-1, 640x480, 29.97 fps) and sound (ADX, stereo, 32 kHz) and writes them into the game's file layout. Put the result at
 mods/<id>/files/Data/movie/<name of the movie to replace>.sfd.
 """
+import argparse
+import base64
+import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
+import time
+import zlib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 SECTOR = 2048
 FRAME_TICKS = 3003        # 90 kHz ticks per picture at 29.97 fps
@@ -47,6 +56,25 @@ def header_sector(n):
     return pack_header(n) + SYSTEM_HEADER + packet(0xBE, padding)
 
 
+# Sector 2 of the game's movies: a private packet that starts "SofdecStream" and holds the file name, the encoder's name, the length in milliseconds and the
+# picture count, largest and average picture size (little-endian words at offsets 184 to 200). It is copied from MV_002_0.sfd with those fields blanked;
+# players such as ffmpeg need it to see that the 0xC0 stream is ADX. (A second packet, CRITAGS, repeats the numbers as text and is left out.)
+SOFDEC_SECTOR = zlib.decompress(base64.b64decode(
+    "eNpjYEAGjPvZ36EIMATnp6WkJgeXFKUm5iogASZZBqIARL+Cc5CjW4i+e6inQlhqkZ6hnoURTAEHhGJCYuMDzIyMjOfbTzMMF2AT"
+    "7OYbH2BkpxfiG2BkYGBuYGFobGhqaLSfSP2+YfEGBkbxBnrFaWXI+h8w/P+vwfiAhZGBQYCBn5kY/YkI/QYmB0BRUsswCkbBKBgF"
+    "o2CYAgBBFSk8"))
+
+
+def sofdec_sector(number, name, pictures, largest, average):
+    sector = bytearray(SOFDEC_SECTOR)
+    sector[0:12] = pack_header(number)
+    sector[64:76] = name.encode("ascii", "replace")[:12].ljust(12, b"\x00")
+    sector[76:88] = time.strftime("%Y%m%d%H%M").encode("ascii")
+    milliseconds = round(pictures * 1001 / 30)
+    sector[184:204] = struct.pack("<5I", milliseconds, milliseconds, pictures, largest, average)
+    return bytes(sector)
+
+
 def picture_starts(es):
     starts, i = [], 0
     while True:
@@ -57,11 +85,12 @@ def picture_starts(es):
         i += 4
 
 
-def mux(es, adx):
+def mux(es, adx, name="movie.sfd"):
     """The .sfd for an MPEG-1 elementary stream (the sequence end code is added) and an ADX file, as 2048-byte sectors in time order."""
     es = es + b"\x00\x00\x01\xb7"
     starts = picture_starts(es)
-    sectors = [header_sector(0), header_sector(1)]
+    sizes = [b - a for a, b in zip(starts, starts[1:] + [len(es)])]
+    sectors = [header_sector(0), header_sector(1), sofdec_sector(2, name, len(starts), max(sizes, default=0), sum(sizes) // max(len(sizes), 1))]
     vpos = apos = vpic = n_audio = 0
     while vpos < len(es) or apos < len(adx):
         video_time = float("inf")
@@ -168,3 +197,140 @@ def parse(data):
     info.video_bytes, info.audio_bytes = bytes(video), bytes(audio)
     info.pictures = len(picture_starts(info.video_bytes))
     return info
+
+
+# ---- the command line: ffmpeg does the encoding, mux() the container ----
+
+MAX_SECONDS = 30 * 60
+DEFAULT_BITRATE = 2500   # kb/s of picture; the game's own movies are around 1700
+
+
+class ToolError(Exception):
+    """An ordinary mistake (missing program, bad file): reported in one line, exit code 1."""
+
+
+def find_ffmpeg(explicit):
+    path = explicit or shutil.which("ffmpeg")
+    if not path or (explicit and not Path(path).exists()):
+        raise ToolError("ffmpeg was not found: install it and put it on PATH, or give its location with --ffmpeg")
+    try:
+        encoders = subprocess.run([str(path), "-hide_banner", "-encoders"], capture_output=True, text=True, errors="replace").stdout
+    except OSError as error:
+        raise ToolError(f"cannot run ffmpeg ({path}): {error}")
+    for name in ("mpeg1video", "adpcm_adx"):
+        if name not in encoders:
+            raise ToolError(f"this ffmpeg has no {name} encoder (needed for the game's movies): use a full build of ffmpeg")
+    return str(path)
+
+
+def probe(ffmpeg, source):
+    """(seconds or None, has_audio) of a file; raises ToolError when ffmpeg finds no video in it."""
+    text = subprocess.run([ffmpeg, "-hide_banner", "-i", str(source)], capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    if "Video:" not in text:
+        raise ToolError(f"{source}: ffmpeg finds no video in this file")
+    match = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    seconds = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3)) if match else None
+    return seconds, "Audio:" in text
+
+
+def run_ffmpeg(ffmpeg, arguments, what):
+    result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *map(str, arguments)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        lines = [line for line in result.stderr.splitlines() if line.strip()]
+        raise ToolError(f"ffmpeg failed to {what}: {lines[-1] if lines else 'no message'}")
+
+
+FIT_FILTERS = {
+    "pad": "scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+    "stretch": "scale=640:480,setsar=1",
+    "crop": "scale=640:480:force_original_aspect_ratio=increase,crop=640:480,setsar=1",
+}
+
+
+def encode_video(ffmpeg, source, fit, bitrate, workdir):
+    out = Path(workdir) / "video.m1v"
+    run_ffmpeg(ffmpeg, ["-i", source, "-an", "-vf", FIT_FILTERS[fit], "-r", "30000/1001", "-c:v", "mpeg1video", "-b:v", f"{bitrate}k", "-maxrate", f"{bitrate}k",
+                        "-bufsize", "655360", "-bf", "0", "-g", "15", "-pix_fmt", "yuv420p", "-f", "mpeg1video", out], "encode the picture")
+    return out
+
+
+def encode_audio(ffmpeg, source, seconds, has_audio, workdir):
+    """An ADX file (stereo, 32 kHz) of exactly `seconds`: the source's sound padded with silence or cut, silence alone when it has none."""
+    out = Path(workdir) / "audio.adx"
+    if has_audio:
+        arguments = ["-i", source, "-vn", "-af", "apad", "-t", f"{seconds:.3f}"]
+    else:
+        arguments = ["-f", "lavfi", "-i", "anullsrc=r=32000:cl=stereo", "-t", f"{seconds:.3f}"]
+    run_ffmpeg(ffmpeg, arguments + ["-ar", "32000", "-ac", "2", "-c:a", "adpcm_adx", "-f", "adx", out], "encode the sound")
+    return out
+
+
+def make(source, output, ffmpeg_path, bitrate, fit, force):
+    source, output = Path(source), Path(output)
+    if not source.is_file():
+        raise ToolError(f"{source}: no such file")
+    if output.exists() and not force:
+        raise ToolError(f"{output} exists: use --force to overwrite it")
+    ffmpeg = find_ffmpeg(ffmpeg_path)
+    seconds, has_audio = probe(ffmpeg, source)
+    if seconds is not None and seconds > MAX_SECONDS:
+        raise ToolError(f"{source} is {seconds / 60:.0f} minutes long: movies longer than 30 minutes are refused")
+    with tempfile.TemporaryDirectory() as workdir:
+        video = encode_video(ffmpeg, source, fit, bitrate, workdir)
+        es = video.read_bytes()
+        pictures = len(picture_starts(es))
+        if pictures == 0:
+            raise ToolError(f"{source}: ffmpeg produced no pictures")
+        length = pictures * 1001 / 30000
+        adx = encode_audio(ffmpeg, source, length, has_audio, workdir).read_bytes()
+        data = mux(es, adx, output.name)
+    output.write_bytes(data)
+    print(f"wrote {output}: {len(data) / 2**20:.1f} MiB, {length:.1f} s, {pictures} pictures{'' if has_audio else ', silent'}")
+
+
+def info(path):
+    path = Path(path)
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ToolError(f"{path}: {error.strerror or error}")
+    try:
+        found = parse(data)
+    except SfdError as error:
+        raise ToolError(f"{path}: {error}")
+    print(f"{path}: {len(data) / 2**20:.1f} MiB, {found.sectors} sectors, {found.pictures} pictures, {found.seconds:.1f} s")
+    print(f"  video: {len(found.video_bytes)} bytes in {found.video_sectors} sectors; audio: {len(found.audio_bytes)} bytes in {found.kinds.count('audio')} sectors")
+    for problem in found.problems[:10]:
+        print(f"  problem: {problem}")
+
+
+def main(argv):
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")   # file names are Unicode; the console's code page must not break a message
+    parser = argparse.ArgumentParser(prog="sfd_tool", description="Makes and inspects the game's movie files (Sofdec .sfd) for mods.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    make_parser = commands.add_parser("make", help="turn a video into a movie file the game plays (needs ffmpeg)")
+    make_parser.add_argument("input")
+    make_parser.add_argument("output")
+    make_parser.add_argument("--ffmpeg", help="path of ffmpeg (default: the one on PATH)")
+    make_parser.add_argument("--bitrate", type=int, default=DEFAULT_BITRATE, help=f"picture bitrate in kb/s (default {DEFAULT_BITRATE})")
+    make_parser.add_argument("--fit", choices=sorted(FIT_FILTERS), default="pad", help="how a picture that is not 4:3 fills 640x480: pad with black bars (default), stretch, or crop")
+    make_parser.add_argument("--force", action="store_true", help="overwrite an existing output file")
+    info_parser = commands.add_parser("info", help="show what a movie file holds (works on the game's own movies)")
+    info_parser.add_argument("file")
+    args = parser.parse_args(argv[1:])
+    try:
+        if args.command == "make":
+            if not 50 <= args.bitrate <= 20000:
+                raise ToolError("--bitrate must be between 50 and 20000 kb/s")
+            make(args.input, args.output, args.ffmpeg, args.bitrate, args.fit, args.force)
+        else:
+            info(args.file)
+    except ToolError as error:
+        print(f"sfd_tool: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

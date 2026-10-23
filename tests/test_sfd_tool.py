@@ -87,6 +87,13 @@ class WriterReader(unittest.TestCase):
     def test_header_sectors_are_first(self):
         self.assertEqual(self.sfd[12:27], b"\x00\x00\x01\xbb\x00\x09\x88\x24\x29\x06\x20\xff\xc0\xc0\x04")
         self.assertEqual(self.info.kinds[:2], ["header", "header"])
+        self.assertEqual(self.info.kinds[2], "other")   # sector 2 is the "SofdecStream" packet
+        sector = self.sfd[2 * 2048:3 * 2048]
+        self.assertIn(b"SofdecStream", sector)
+        frames, largest, average = struct.unpack("<3I", sector[192:204])
+        self.assertEqual(frames, 40)
+        self.assertGreaterEqual(largest, 3000)
+        self.assertLess(average, largest)
 
     def test_long_audio_and_short_video_and_the_reverse(self):
         short_video = synthetic_es([60] * 5)
@@ -100,7 +107,7 @@ class WriterReader(unittest.TestCase):
         self.assertTrue(b.video_bytes.startswith(long_video) and b.audio_bytes.startswith(short_audio))
         self.assertEqual(b.kinds[-2:], ["video", "end"])
         for result in (a, b):
-            self.assertNotIn("other", result.kinds)
+            self.assertEqual(result.kinds.count("other"), 1)   # the Sofdec packet
             self.assertEqual(result.problems, [])
 
     def test_parse_rejects_foreign_files(self):
@@ -118,6 +125,162 @@ class WriterReader(unittest.TestCase):
         for name, data in cases.items():
             with self.assertRaises(sfd_tool.SfdError, msg=name):
                 sfd_tool.parse(data)
+
+
+def run_tool(*args):
+    return subprocess.run([sys.executable, "-I", str(TOOL), *map(str, args)], capture_output=True, text=True, encoding="utf-8")
+
+
+def ffmpeg(*args):
+    result = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *map(str, args)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def probe(path):
+    """ffmpeg's own view of a file (stderr of `ffmpeg -i`)."""
+    return subprocess.run([FFMPEG, "-hide_banner", "-i", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+
+
+class CommandLine(unittest.TestCase):
+    def test_bad_arguments_are_clear_errors(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for args in ([], ["make"], ["make", str(Path(folder) / "missing.mp4"), str(Path(folder) / "o.sfd")], ["frobnicate"], ["info"]):
+                result = run_tool(*args)
+                self.assertNotEqual(result.returncode, 0, args)
+                self.assertTrue(result.stderr.strip(), args)
+                self.assertNotIn("Traceback", result.stderr, args)
+
+    def test_no_ffmpeg_is_explained(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "in.mp4"
+            source.write_bytes(b"x")
+            result = run_tool("make", source, Path(folder) / "o.sfd", "--ffmpeg", Path(folder) / "no-such-ffmpeg")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("ffmpeg", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_an_ffmpeg_without_the_encoders_is_explained(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = Path(folder) / ("fake_ffmpeg.bat" if sys.platform == "win32" else "fake_ffmpeg.sh")
+            if sys.platform == "win32":
+                fake.write_text("@echo off\r\necho  V....D mpeg4   MPEG-4 part 2\r\n")
+            else:
+                fake.write_text("#!/bin/sh\necho ' V....D mpeg4   MPEG-4 part 2'\n")
+                fake.chmod(0o755)
+            source = Path(folder) / "in.mp4"
+            source.write_bytes(b"x")
+            result = run_tool("make", source, Path(folder) / "o.sfd", "--ffmpeg", fake)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("mpeg1video", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_info_on_a_foreign_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "x.sfd"
+            path.write_bytes(bytes(5000))
+            result = run_tool("info", path)
+            self.assertEqual(result.returncode, 1)
+            self.assertTrue(result.stderr.strip())
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertNotEqual(run_tool("info", Path(folder) / "missing.sfd").returncode, 0)
+
+    def test_info_on_a_made_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "x.sfd"
+            path.write_bytes(sfd_tool.mux(synthetic_es(sizes_mixed()), synthetic_adx(400)))
+            result = run_tool("info", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("40 pictures", result.stdout)
+
+
+@unittest.skipUnless(FFMPEG, "ffmpeg is not installed: the make tests are skipped")
+class MakeWithFfmpeg(unittest.TestCase):
+    def source(self, folder, name="in.mp4", size="320x240", seconds=1, audio=True, rate=25):
+        path = Path(folder) / name
+        args = ["-f", "lavfi", "-i", f"testsrc2=size={size}:rate={rate}"]
+        if audio:
+            args += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100"]
+        args += ["-t", seconds, "-c:v", "mpeg4"] + (["-c:a", "aac"] if audio else ["-an"]) + [path]
+        ffmpeg(*args)
+        return path
+
+    def test_make_from_a_generated_clip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "out.sfd"
+            result = run_tool("make", self.source(folder), out)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = probe(out)
+            for expected in ("mpeg1video", "640x480", "29.97 fps", "adpcm_adx", "32000 Hz", "stereo"):
+                self.assertIn(expected, text)
+            info = sfd_tool.parse(out.read_bytes())
+            self.assertIn(info.pictures, range(29, 32))
+            self.assertAlmostEqual(info.seconds, 1.0, delta=0.1)
+            self.assertEqual(info.problems, [])
+            self.assertIn("pictures", run_tool("info", out).stdout)
+
+    def test_source_without_audio_gets_silence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "out.sfd"
+            self.assertEqual(run_tool("make", self.source(folder, audio=False), out).returncode, 0)
+            self.assertIn("adpcm_adx", probe(out))
+            info = sfd_tool.parse(out.read_bytes())
+            self.assertGreaterEqual(len(info.audio_bytes), int(info.seconds * 36000))   # about the video's length of sound
+
+    def test_fit_modes_give_640x480(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder, size="640x360", seconds=0.5)
+            for fit in ("pad", "stretch", "crop"):
+                out = Path(folder) / f"{fit}.sfd"
+                result = run_tool("make", source, out, "--fit", fit)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("640x480", probe(out), fit)
+
+    def test_existing_output_needs_force(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, out = self.source(folder, seconds=0.5), Path(folder) / "out.sfd"
+            out.write_bytes(b"keep me")
+            result = run_tool("make", source, out)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("--force", result.stderr)
+            self.assertEqual(out.read_bytes(), b"keep me")
+            self.assertEqual(run_tool("make", source, out, "--force").returncode, 0)
+            self.assertNotEqual(out.read_bytes(), b"keep me")
+
+    def test_refuses_over_30_minutes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "long.mp4"
+            ffmpeg("-f", "lavfi", "-i", "color=c=black:s=16x16:r=1", "-t", "1860", "-c:v", "mpeg4", source)
+            out = Path(folder) / "out.sfd"
+            result = run_tool("make", source, out)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("30 minutes", result.stderr)
+            self.assertFalse(out.exists())
+
+    def test_not_a_video_is_an_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "text.mp4"
+            source.write_text("this is not a video")
+            result = run_tool("make", source, Path(folder) / "out.sfd")
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_non_ascii_and_spaced_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            nested = Path(folder) / "папка with spaces"
+            nested.mkdir()
+            source = self.source(nested, name="видео clip.mp4", seconds=0.5)
+            out = nested / "ролик.sfd"
+            result = run_tool("make", source, out)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(out.exists())
+
+    def test_bitrate_option_changes_the_size(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder, seconds=1)
+            small, big = Path(folder) / "small.sfd", Path(folder) / "big.sfd"
+            self.assertEqual(run_tool("make", source, small, "--bitrate", "300").returncode, 0)
+            self.assertEqual(run_tool("make", source, big, "--bitrate", "4000").returncode, 0)
+            self.assertLess(small.stat().st_size, big.stat().st_size)
 
 
 if __name__ == "__main__":
