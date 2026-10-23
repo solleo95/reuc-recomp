@@ -975,6 +975,78 @@ def arc_member(g, args):
     return {"member_at": f"{member_at:08X}", "after_member": after.hex(), "capture": capture}
 
 
+def _sfd_tool():
+    import importlib.util
+    import sys
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "tools" / "sfd_tool" / "sfd_tool.py"
+    spec = importlib.util.spec_from_file_location("sfd_tool", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sfd_tool"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def prepare_movie_replace():
+    """Writes the test-only mod movie_replace (git-ignored): the opening movie replaced by a 9 s clip made with tools/sfd_tool (3 s of solid red, 3 s green,
+    3 s blue and a 440 Hz tone). Returns a reason to skip when ffmpeg is missing."""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return "ffmpeg is not installed (tools/sfd_tool needs it)"
+    mod = Path(__file__).resolve().parent / "mods" / "movie_replace"
+    target = mod / "files" / "Data" / "movie" / "MV_000_0.sfd"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    (mod / "mod.json").write_text(json.dumps({"id": "movie-replace", "name": "Movie replace", "version": "1.0", "api": "1.1"}))
+    with tempfile.TemporaryDirectory() as folder:
+        clip = Path(folder) / "clip.mp4"
+        inputs = []
+        for color in ("red", "lime", "blue"):   # "green" is (0, 128, 0) in ffmpeg: lime is the full green
+            inputs += ["-f", "lavfi", "-i", f"color=c={color}:s=320x240:r=30000/1001:d=3"]
+        inputs += ["-f", "lavfi", "-i", "sine=frequency=440:duration=9"]
+        result = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *inputs, "-filter_complex", "[0][1][2]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-map", "3:a",
+                                 "-c:v", "mpeg4", "-c:a", "aac", str(clip)], capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError("ffmpeg could not make the test clip: " + result.stderr[-300:])
+        _sfd_tool().make(clip, target, None, 2500, "pad", True)
+    return None
+
+
+def movie_replace(g, args):
+    """The movie_replace mod puts a 9 s red, green, blue clip (made by tools/sfd_tool) in place of the opening movie: the capture of the movie's centre must be
+    red, later green, later blue, and after the movie the game must go on (a last capture of none of the three: the title screen), with the clip's sound
+    in the audio statistics."""
+    seen = []
+
+    def colour(path):
+        from .overlay import read_png
+        width, height, channels, rows = read_png(path)
+        r, g_, b = rows[height // 2][(width // 2) * channels:(width // 2) * channels + 3]
+        for name, own, others in (("red", r, (g_, b)), ("green", g_, (r, b)), ("blue", b, (r, g_))):
+            if own >= 130 and max(others) <= 100:
+                return name
+        return "other"
+
+    for _ in range(26):
+        g.advance(60)
+        seen.append(colour(g.capture()))
+    order = [seen.index(c) if c in seen else None for c in ("red", "green", "blue")]
+    if None in order or not order[0] < order[1] < order[2]:
+        g.fail(f"the movie's red, green and blue were not seen in that order: {seen}", "movie replace")
+    if seen[-1] != "other":
+        g.fail(f"the game did not go on after the movie: {seen}", "movie replace")
+    import re
+    log = g.finish()
+    match = re.search(r"audio stats: native frames (\d+) nonzero samples (\d+)", log)
+    if not match or int(match.group(2)) < 100000:
+        g.fail(f"the clip's sound did not play: {match.group(0) if match else 'no audio statistics'}", "movie replace")
+    return {"colours": seen, "audio": match.group(0)}
+
+
 def movie_probe(g, args):
     """Spike M7: boots without skipping the opening movie and takes a capture every 3 s of game time, so a replacement of Data/movie/MV_000_0.sfd (the
     test-only mod movie_probe, git-ignored, written by hand) can be looked at."""
@@ -1025,6 +1097,6 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
-SCENARIO_PREPARE = {"arc_member": prepare_arc_member}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'

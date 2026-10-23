@@ -14,6 +14,7 @@ How to replace or add any file of the game: 3D models, scene data, movies, fonts
 - [Finding the file you need](#finding-the-file-you-need)
 - [Rules](#rules)
 - [Archives](#archives)
+- [Movies](#movies)
 - [When the game notices a change](#when-the-game-notices-a-change)
 - [Conflicts between mods](#conflicts-between-mods)
 - [Adding files](#adding-files)
@@ -116,6 +117,10 @@ mods\my-mod\files\Data\chara\EZ01.arc!\extra\note.txt     adds a file (and its f
 - Not supported: an archive inside an archive.
 
 Full rules, the measured size limits and the tool: [Archive members](../../archives.md).
+
+## Movies
+
+A movie is a whole file too: put it at `files\Data\movie\<name>.sfd`. You do not need special software to make one: `tools\sfd_tool.bat make my-video.mp4 MV_000_0.sfd` turns any video into a file the game plays (it needs [ffmpeg](https://ffmpeg.org) on your computer). The game's own decoder plays your picture and sound, and its subtitles are drawn over it. Details, options and limits: [Replacing a movie](../../video.md).
 
 ## When the game notices a change
 
