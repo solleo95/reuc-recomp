@@ -13,14 +13,16 @@ namespace uc {
 class DvdFs {
 public:
     DvdFs() = default;
-    DvdFs(DvdFs&& other) noexcept : e_(std::move(other.e_)), index_(std::move(other.index_)), undo_(std::move(other.undo_)), hidden_(std::move(other.hidden_)) {}   // (the lock stays behind)
+    DvdFs(DvdFs&& other) noexcept : e_(std::move(other.e_)), index_(std::move(other.index_)), undo_(std::move(other.undo_)), hidden_(std::move(other.hidden_)), root_(std::move(other.root_)) {}   // (the lock stays behind)
     DvdFs& operator=(DvdFs&& other) noexcept {
-        e_ = std::move(other.e_); index_ = std::move(other.index_); undo_ = std::move(other.undo_); hidden_ = std::move(other.hidden_);
+        e_ = std::move(other.e_); index_ = std::move(other.index_); undo_ = std::move(other.undo_); hidden_ = std::move(other.hidden_); root_ = std::move(other.root_);
         return *this;
     }
     bool open_root(const std::filesystem::path& root);
+    const std::filesystem::path& disc_root() const { return root_; }   // the folder open_root was given (the game's own files, whatever the overlays hold); empty before
     // Mod files: every regular file below files_root replaces the disc file with the same path (case-insensitive; the entry keeps its
-    // number) or is added with its parent folders. Symlinks and junctions are skipped. Returns files replaced + added.
+    // number) or is added with its parent folders. Symlinks and junctions are skipped, and so are folders named *.arc! (their files are members of an
+    // archive, see mods/arc/arc_mods.h). Returns files replaced + added.
     // May be called while the game runs (mods are switched on and off live): the tree is locked, and entry numbers never move or change meaning.
     size_t overlay(const std::filesystem::path& files_root);
     // Takes every overlay back: replaced files return to the disc's own, added files and folders disappear (their entry numbers stay reserved and
@@ -54,6 +56,7 @@ private:
     std::map<std::string, int> index_;   // lower-case relative path -> entry
     std::vector<Undo> undo_;             // what overlay() changed, in order
     std::map<std::string, size_t> hidden_;   // lower-case path -> slot of an added entry that was taken back
+    std::filesystem::path root_;
 };
 
 struct DvdStats { uint64_t opens = 0, reads = 0, bytes = 0; };

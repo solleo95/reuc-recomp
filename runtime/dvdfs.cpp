@@ -10,6 +10,9 @@ static std::string lower(std::string s) { for (char& c : s) c = char(std::tolowe
 // path::string() throws for names outside the ANSI code page (the game tree contains such names); keep UTF-8 instead.
 static std::string utf8(const fs::path& p) { auto s = p.u8string(); return std::string(s.begin(), s.end()); }
 
+// A folder named <archive>.arc! holds members of that archive (mods put them next to the archive; the port builds the changed archive from them).
+static bool is_member_folder(const std::string& name) { return name.size() > 5 && lower(name.substr(name.size() - 5)) == ".arc!"; }
+
 void DvdFs::walk(const fs::path& dir, const std::string& rel) {
     std::vector<fs::directory_entry> kids;
     for (const auto& k : fs::directory_iterator(dir)) kids.push_back(k);
@@ -26,8 +29,9 @@ void DvdFs::walk(const fs::path& dir, const std::string& rel) {
 
 bool DvdFs::open_root(const fs::path& root) {
     std::unique_lock lock(m_);
-    e_.clear(); index_.clear(); undo_.clear(); hidden_.clear();
+    e_.clear(); index_.clear(); undo_.clear(); hidden_.clear(); root_.clear();
     if (!fs::is_directory(root)) return false;
+    root_ = root;
     e_.push_back({"", root, true, 0});
     index_[""] = 0;
     walk(root, "");
@@ -80,6 +84,7 @@ std::vector<DvdFs::Found> DvdFs::scan(const fs::path& files_root) {
         std::error_code entry_error;
         const auto type = it->symlink_status(entry_error).type();
         if (type == fs::file_type::symlink || type == fs::file_type::junction) { it.disable_recursion_pending(); continue; }
+        if (type == fs::file_type::directory && is_member_folder(utf8(it->path().filename()))) { it.disable_recursion_pending(); continue; }
         if (type != fs::file_type::regular) continue;
         const auto measured = it->file_size(entry_error);
         if (entry_error || measured > UINT32_MAX) continue;

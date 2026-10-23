@@ -53,6 +53,19 @@ int main() {
     CHECK(d.entry_of("../x") == -1 && d.entry_of("Data/../Data/a.bin") == -1);   // no way out of the root
     CHECK(d.entry_count() == 8);                         // includes the large pending-read lifecycle fixture
     CHECK(d.entry_of("Data/\xE6\x97\xA5\xE6\x9C\xAC.bin") > 0);   // looked up by its UTF-8 bytes
+    CHECK(d.disc_root() == root && uc::DvdFs().disc_root().empty());
+    {   // a mod's archive member folders (Data/x.arc!/...) hold members, not disc files: they are not added to the tree
+        const fs::path mod = fs::temp_directory_path() / ("uc_dvd_members_" + std::to_string(uc::now_ticks()));
+        write_file(mod / "Data" / "a.bin", 7);
+        write_file(mod / "Data" / "A.arc!" / "x.bin", 8);
+        write_file(mod / "Data" / "sub" / "c.ARC!" / "deep" / "y.bin", 8);
+        CHECK(d.set_overlays({mod}) == 1);   // only a.bin (replaced)
+        CHECK(d.length(a) == 7 && d.entry_of("Data/A.arc!") == -1 && d.entry_of("Data/A.arc!/x.bin") == -1 && d.entry_of("Data/sub/c.ARC!/deep/y.bin") == -1);
+        CHECK(d.entry_count() == 8);
+        d.set_overlays({});
+        fs::remove_all(mod);
+        CHECK(d.length(a) == 100);
+    }
     // reads
     uint8_t buf[256];
     CHECK(d.read(a, buf, 100, 0) == 100 && buf[0] == pat(0) && buf[99] == pat(99));
