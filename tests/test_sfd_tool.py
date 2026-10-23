@@ -42,8 +42,9 @@ class WriterReader(unittest.TestCase):
 
     def test_mux_output_is_whole_sectors(self):
         self.assertEqual(len(self.sfd) % 2048, 0)
-        for i in range(0, len(self.sfd), 2048):
+        for i in range(0, len(self.sfd) - 2048, 2048):
             self.assertEqual(self.sfd[i:i + 4], b"\x00\x00\x01\xba", i)
+        self.assertEqual(self.sfd[-2048:], b"\x00\x00\x01\xb9" + bytes(2044))   # the last sector holds the end code, as in the game's movies
         self.assertEqual(self.info.sectors, len(self.sfd) // 2048)
         self.assertTrue(all(b > a for a, b in zip(self.info.scr, self.info.scr[1:])))
 
@@ -76,6 +77,7 @@ class WriterReader(unittest.TestCase):
     def test_streams_are_interleaved(self):
         longest, run, last = 0, 0, None
         last_video = len(self.info.kinds) - 1 - self.info.kinds[::-1].index("video")
+        self.assertEqual(self.info.kinds[-1], "end")
         for kind in self.info.kinds[:last_video + 1]:   # while both streams have data
             run = run + 1 if kind == last else 1
             last = kind
@@ -91,14 +93,15 @@ class WriterReader(unittest.TestCase):
         long_audio = synthetic_adx(20000)
         a = sfd_tool.parse(sfd_tool.mux(short_video, long_audio))
         self.assertTrue(a.audio_bytes.startswith(long_audio) and a.video_bytes.startswith(short_video))
-        self.assertEqual(a.kinds[-1], "audio")   # the file ends after the last sector that carries data
+        self.assertEqual(a.kinds[-2:], ["audio", "end"])   # the file ends after the last sector that carries data, with the end code
         long_video = synthetic_es([2500] * 60)
         short_audio = synthetic_adx(100)
         b = sfd_tool.parse(sfd_tool.mux(long_video, short_audio))
         self.assertTrue(b.video_bytes.startswith(long_video) and b.audio_bytes.startswith(short_audio))
-        self.assertEqual(b.kinds[-1], "video")
+        self.assertEqual(b.kinds[-2:], ["video", "end"])
         for result in (a, b):
-            self.assertNotIn("empty", result.kinds)
+            self.assertNotIn("other", result.kinds)
+            self.assertEqual(result.problems, [])
 
     def test_parse_rejects_foreign_files(self):
         pack = b"\x00\x00\x01\xba\x21\x00\x01\x00\x01\x88\x24\x29"

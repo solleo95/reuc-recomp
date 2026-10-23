@@ -18,6 +18,7 @@ SCR_PER_SECTOR = 14       # the mux-rate ramp of the game's files
 VIDEO_LEAD = 45000        # the picture data is sent half a second ahead of the sound
 SYSTEM_HEADER = bytes.fromhex("000001bb00098824290620ffc0c004")   # as the game's own movies start
 PACK_TAIL = bytes.fromhex("882429")   # the mux rate field
+END_CODE = b"\x00\x00\x01\xb9"        # ISO end code: the last sector of the game's movies
 
 
 class SfdError(ValueError):
@@ -87,6 +88,7 @@ def mux(es, adx):
             sectors.append(pack_header(number) + packet(0xC0, b"\x40\x04" + stamp(n_audio * AUDIO_SECTOR_TICKS) + body) + packet(0xBE, b"\x0f"))
             apos += 2016
             n_audio += 1
+    sectors.append(END_CODE + bytes(SECTOR - 4))
     assert all(len(s) == SECTOR for s in sectors)
     return b"".join(sectors)
 
@@ -120,6 +122,9 @@ def parse(data):
     video, audio = bytearray(), bytearray()
     for number in range(info.sectors):
         sector = data[number * SECTOR:(number + 1) * SECTOR]
+        if sector[:4] == END_CODE and number == info.sectors - 1:   # the game's files end with a sector that holds only the end code
+            info.kinds.append("end")
+            continue
         if sector[:4] != b"\x00\x00\x01\xba":
             raise SfdError(f"sector {number} does not start with a pack header")
         if sector[4] >> 4 != 2:
