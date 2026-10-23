@@ -3,11 +3,14 @@
 import { enemyHp, planWeapon, startPool, startWeapon } from './lib/random.js';
 
 const attempt = (read, fallback = null) => { try { return read(); } catch (e) { return fallback; } };
-const START_DELAY = 90;   // steps (3 game seconds)
+const START_DELAY = 90;    // steps (3 game seconds) from the start of a mission
+const START_WINDOW = 450;  // steps (15 game seconds): a player who joins later in that time gets a weapon too
+const MISSION_START = 3;   // the mission clock is at most this many seconds when a mission has just begun
 const WEAPONS = 20, FIELDS = ['damage', 'fire_rate', 'capacity', 'reload_time'];
 
-let base = null;         // the game's values per weapon id, read once its table is filled
-let plan = [];           // what is written now
+let base = null;         // the game's values per weapon id, read the first time its table is filled
+let plan = [];           // what is planned now
+const written = new Set();   // "id.field" of every value that was written once: a value never changed is not pinned (the game's later values stay)
 const zombies = new Set();   // ids already handled in this scene
 const changed = [];      // the latest zombie changes {id, from, to}
 const started = {};      // slot -> weapon id given at the start of the mission
@@ -23,14 +26,21 @@ const readBase = () => Array.from({ length: WEAPONS }, (_, id) => {
   return { damage: w.damage, fire_rate: w.fire_rate, capacity: w.capacity, reload_time: w.reload_time };
 });
 
-// Writes the plan (or the base when weapons are switched off); only fields the game has above 0 (a rate of 0 is not a value the API accepts).
+// Writes the plan (or the base when weapons are switched off). A field is written only when it differs from the base or was written before (the base goes
+// back then): the API keeps every written value for the whole session, so a value that is never changed is left to the game. Only fields the game has
+// above 0 (a rate of 0 is not a value the API accepts).
 function writeWeapons() {
   if (!base) return;
   const on = settings.get('weapons');
   plan = base.map((b, id) => (on ? planWeapon(seed(), strength(), id, b) : b));
   plan.forEach((p, id) => {
     const w = uc.weapon(id);
-    for (const field of FIELDS) if (base[id][field] > 0) w[field] = p[field];
+    for (const field of FIELDS) {
+      const key = `${id}.${field}`;
+      if (!(base[id][field] > 0) || (p[field] === base[id][field] && !written.has(key))) continue;
+      w[field] = p[field];
+      written.add(key);
+    }
   });
 }
 
@@ -43,31 +53,39 @@ function randomizeZombie(id, hp) {
   if (changed.length > 12) changed.shift();
 }
 
+// Every player who is in the mission and has no start weapon yet (player 2 may join later); recorded only when the game took the weapon.
 function giveStartWeapons() {
   const pool = startPool(base);
   for (const slot of [1, 2]) {
-    if (!attempt(() => uc.player(slot).present)) continue;
+    if (started[slot] !== undefined || !attempt(() => uc.player(slot).present)) continue;
     const id = startWeapon(seed(), slot, pool);
     if (id === null) continue;
     const index = attempt(() => uc.game.give_weapon(slot, id));
-    if (index !== null) attempt(() => uc.game.select_weapon(slot, index));
+    if (index === null) continue;
+    attempt(() => uc.game.select_weapon(slot, index));
     started[slot] = id;
   }
 }
 
-on('on_enemy_spawned', (e) => randomizeZombie(e.id, e.hp));
+// A spawn event always means a new zombie, even when the game reuses the id of one that died in an earlier wave.
+on('on_enemy_spawned', (e) => { zombies.delete(e.id); randomizeZombie(e.id, e.hp); });
 on('on_settings_changed', () => writeWeapons());
 
 let steps = 0;
 on('on_step', () => {
   if (!base && attempt(() => uc.weapon(0).damage, 0) > 0) { base = attempt(readBase); writeWeapons(); }
   const here = !!attempt(() => uc.player(1).present);
-  if (here && !present) { zombies.clear(); changed.length = 0; pendingStart = true; waited = 0; }   // a mission starts: its zombies and its loadout are new
+  if (here && !present) {   // a scene begins: its zombies are new; a mission (the clock near 0) also gets its loadout
+    zombies.clear();
+    changed.length = 0;
+    pendingStart = attempt(() => uc.game.time, 999) <= MISSION_START;
+    waited = 0;
+  }   // a mission starts: its zombies and its loadout are new
   if (!here && present) { Object.keys(started).forEach((k) => delete started[k]); }
   present = here;
-  if (pendingStart && base && ++waited >= START_DELAY) {
-    pendingStart = false;
-    if (settings.get('start_weapon')) giveStartWeapons();
+  if (pendingStart && here && base && ++waited >= START_DELAY) {
+    if (waited > START_WINDOW) pendingStart = false;
+    else if (settings.get('start_weapon')) giveStartWeapons();
   }
   if (here && ++steps % 6 === 0) for (const e of attempt(() => uc.enemies.list(), [])) randomizeZombie(e.id, e.hp);   // zombies that were there before the mod saw the scene
 });

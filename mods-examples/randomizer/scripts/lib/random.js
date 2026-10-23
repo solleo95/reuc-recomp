@@ -45,9 +45,11 @@ export function planWeapon(seed, strength, id, base) {
   };
 }
 
+// The new hit points of a zombie that has `hp`: hp itself at strength 0 and for a dead one, otherwise hp times a factor (one decimal, never below 0.1, so a
+// hurt zombie is not killed or healed by the rounding).
 export function enemyHp(seed, strength, id, hp) {
-  if (!(hp > 0)) return hp;
-  return Math.max(1, Math.round(hp * factor(rng(seed, ENEMY, id)(), strength) * 10) / 10);
+  if (!(hp > 0) || !(strength > 0)) return hp;
+  return Math.max(0.1, Math.round(hp * factor(rng(seed, ENEMY, id)(), strength) * 10) / 10);
 }
 
 // Records of the table that are real guns (a magazine and a rate); the table has a few that are not.

@@ -65,6 +65,7 @@ struct World {
             view.write_u32(kWeaponTable + i * kStride + 0x14, 15);
             view.write_f32(kWeaponTable + i * kStride + 0x38, 1.f);
             view.write_u32(kWeaponTable + i * kStride + 0x10, 1);
+            view.write_f32(kWeaponTable + i * kStride + 0x0C, 1.f);   // a shot per second
         }
         ordered_json section = {{"enabled", {id}}};
         if (!settings.empty()) section[id] = {{"settings", settings}};
@@ -293,7 +294,7 @@ static void inspector_settings_are_declared() {
 // ---- the randomizer: weapon stats, zombie hit points and the start weapon from a seed ----
 
 namespace {
-struct WeaponValues { std::vector<float> damage, reload; std::vector<uint32_t> capacity; };
+struct WeaponValues { std::vector<float> damage, reload, rate; std::vector<uint32_t> capacity; };
 
 WeaponValues weapon_values(World& w) {
     WeaponValues v;
@@ -301,6 +302,7 @@ WeaponValues weapon_values(World& w) {
         v.damage.push_back(w.weapon_damage(id));
         v.capacity.push_back(w.weapon_word(id, 0x14));
         v.reload.push_back(w.view.read_f32(kWeaponTable + id * kStride + 0x38).value());
+        v.rate.push_back(w.view.read_f32(kWeaponTable + id * kStride + 0x0C).value());
     }
     return v;
 }
@@ -322,28 +324,35 @@ static void randomizer_weapons_follow_the_seed() {
         CHECK(a.damage[id] >= original / 2 - 1e-3f && a.damage[id] <= original * 2 + 1e-3f);
         CHECK(a.capacity[id] >= 8 && a.capacity[id] <= 30);
         CHECK(a.reload[id] >= 0.5f - 1e-3f && a.reload[id] <= 2.f + 1e-3f);
+        CHECK(a.rate[id] >= 0.5f - 1e-3f && a.rate[id] <= 2.f + 1e-3f);
         changed += !near(a.damage[id], original);
     }
     CHECK(changed >= 10);
     const auto same = randomized({{"seed", 7}, {"strength", 50}});
-    CHECK(same.damage == a.damage && same.capacity == a.capacity && same.reload == a.reload);   // deterministic
+    CHECK(same.damage == a.damage && same.capacity == a.capacity && same.reload == a.reload && same.rate == a.rate);   // deterministic
     const auto other = randomized({{"seed", 8}, {"strength", 50}});
     CHECK(other.damage != a.damage);
 }
 
 static void randomizer_strength_zero_changes_nothing() {
     const auto v = randomized({{"seed", 7}, {"strength", 0}});
-    for (size_t id = 0; id < 20; ++id) CHECK(near(v.damage[id], 10.f * float(id + 1)) && v.capacity[id] == 15 && near(v.reload[id], 1.f));
+    for (size_t id = 0; id < 20; ++id) CHECK(near(v.damage[id], 10.f * float(id + 1)) && v.capacity[id] == 15 && near(v.reload[id], 1.f) && near(v.rate[id], 1.f));
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 0}});   // nothing is pinned: a value the game writes later (an upgrade, another table) stays
+    w.step(2);
+    w.view.write_f32(kWeaponTable + 0x24, 99.f);
+    w.step(3);
+    CHECK(near(w.weapon_damage(0), 99.f));
 }
 
 static void randomizer_strength_100_stays_within_a_third_to_triple_and_the_limits() {
-    for (int seed : {0, 1, 999999}) {
+    for (int seed : {1, 2, 999999}) {
         const auto v = randomized({{"seed", seed}, {"strength", 100}});
         for (size_t id = 0; id < 20; ++id) {
             const float original = 10.f * float(id + 1);
             CHECK(std::isfinite(v.damage[id]) && v.damage[id] >= original / 3 - 1e-3f && v.damage[id] <= original * 3 + 1e-3f && v.damage[id] <= 10000.f);
             CHECK(v.capacity[id] >= 5 && v.capacity[id] <= 45);
             CHECK(v.reload[id] >= 1.f / 3 - 1e-3f && v.reload[id] <= 3.f + 1e-3f);
+            CHECK(v.rate[id] >= 1.f / 3 - 1e-3f && v.rate[id] <= 3.f + 1e-3f);
         }
     }
 }
@@ -386,6 +395,65 @@ static void randomizer_window_shows_the_seed_and_new_seed_changes_it() {
     CHECK(w.mods->host()->draw_ui("randomizer").ok && !w.ui.has("Seed 7  ") && w.ui.has("Seed "));
     w.step(2);
     CHECK(weapon_values(w).damage != first.damage);   // the weapons follow the new seed
+}
+
+namespace {
+constexpr uint32_t kActorTable = 0x804421C4, kZombieClass = 0x803F2B60, kZombieA = 0x80300000, kZombieB = 0x80301000;
+void put_zombie(World& w, uint32_t address, uint32_t id, float hp) {
+    w.view.write_u32(address, id);
+    w.view.write_u32(address + 0x10, kZombieClass);
+    w.view.write_f32(address + 0xF48, 1.f); w.view.write_f32(address + 0xF4C, 2.f); w.view.write_f32(address + 0xF50, 3.f);
+    w.view.write_f32(address + 0x3A4, hp);
+    w.view.write_f32(address + 0x1058, 1.f);
+    w.view.write_u32(kActorTable + id * 8, id);
+    w.view.write_u32(kActorTable + id * 8 + 4, address);
+}
+void remove_zombie(World& w, uint32_t id) { w.view.write_u32(kActorTable + id * 8, 0); w.view.write_u32(kActorTable + id * 8 + 4, 0); }
+float hp_of(World& w, uint32_t address) { return w.view.read_f32(address + 0x3A4).value(); }
+
+std::pair<float, float> zombies_after(const ordered_json& settings, float a, float b) {   // hit points of two zombies that were there before the mod looked
+    World w("randomizer", "randomizer", settings);
+    put_zombie(w, kZombieA, 10, a);
+    put_zombie(w, kZombieB, 11, b);
+    w.step(14);   // the periodic scan runs every sixth step
+    return {hp_of(w, kZombieA), hp_of(w, kZombieB)};
+}
+}  // namespace
+
+static void randomizer_zombies_follow_the_seed() {
+    const auto [a, b] = zombies_after({{"seed", 7}, {"strength", 100}}, 20.f, 30.f);
+    CHECK(a >= 20.f / 3 - 0.1f && a <= 60.f + 0.1f && b >= 10.f - 0.1f && b <= 90.f + 0.1f);
+    CHECK(std::fabs(a - 20.f) > 0.05f || std::fabs(b - 30.f) > 0.05f);
+    CHECK(zombies_after({{"seed", 7}, {"strength", 100}}, 20.f, 30.f) == std::make_pair(a, b));   // deterministic
+    CHECK(zombies_after({{"seed", 8}, {"strength", 100}}, 20.f, 30.f) != std::make_pair(a, b));
+    CHECK(zombies_after({{"seed", 7}, {"strength", 100}, {"enemies", false}}, 20.f, 30.f) == std::make_pair(20.f, 30.f));
+}
+
+static void randomizer_strength_zero_leaves_zombies_exactly_as_they_are() {
+    CHECK(zombies_after({{"seed", 7}, {"strength", 0}}, 20.f, 0.04f) == std::make_pair(20.f, 0.04f));   // a nearly dead zombie is not raised to 1 either
+    const auto [a, b] = zombies_after({{"seed", 7}, {"strength", 100}}, 0.f, 0.04f);
+    CHECK(a == 0.f && b > 0.f && b <= 0.04f * 3 + 0.1f);   // a dead zombie is left alone and a hurt one stays alive
+}
+
+static void randomizer_zombie_ids_are_reused_by_later_waves() {
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 100}});
+    put_zombie(w, kZombieA, 10, 20.f);
+    w.step(14);
+    const float first = hp_of(w, kZombieA);
+    CHECK(std::fabs(first - 20.f) > 0.05f);
+    remove_zombie(w, 10);                 // the wave ends
+    w.step(2);
+    put_zombie(w, kZombieA, 10, 25.f);    // the next wave brings a new zombie with the same id
+    w.step(14);
+    CHECK(std::fabs(hp_of(w, kZombieA) - 25.f) > 0.05f);   // randomized again, from its own hit points
+}
+
+static void randomizer_start_weapon_that_cannot_be_given_is_not_reported() {
+    World w("randomizer", "randomizer", {{"seed", 7}, {"strength", 50}, {"start_weapon", true}});
+    w.ui.open_headers = true;
+    w.step(100);   // the rig has no guest code: give_weapon fails
+    CHECK(w.mods->host()->draw_ui("randomizer").ok);
+    CHECK(!w.ui.has("started with") && w.ui.has("none given yet"));
 }
 
 static void randomizer_outside_a_mission_is_plain_text() {
@@ -461,7 +529,9 @@ int main() {
                                                          {"randomizer_weapons_follow_the_seed", randomizer_weapons_follow_the_seed}, {"randomizer_strength_zero_changes_nothing", randomizer_strength_zero_changes_nothing},
                                                          {"randomizer_strength_100_limits", randomizer_strength_100_stays_within_a_third_to_triple_and_the_limits},
                                                          {"randomizer_switching_and_replanning", randomizer_switching_and_replanning_start_from_the_game_values},
-                                                         {"randomizer_window", randomizer_window_shows_the_seed_and_new_seed_changes_it}, {"randomizer_outside_a_mission", randomizer_outside_a_mission_is_plain_text},
+                                                         {"randomizer_window", randomizer_window_shows_the_seed_and_new_seed_changes_it},
+                                                         {"randomizer_zombies_follow_the_seed", randomizer_zombies_follow_the_seed}, {"randomizer_strength_zero_zombies", randomizer_strength_zero_leaves_zombies_exactly_as_they_are},
+                                                         {"randomizer_zombie_ids_are_reused", randomizer_zombie_ids_are_reused_by_later_waves}, {"randomizer_start_weapon_failure", randomizer_start_weapon_that_cannot_be_given_is_not_reported}, {"randomizer_outside_a_mission", randomizer_outside_a_mission_is_plain_text},
                                                          {"randomizer_settings_are_declared", randomizer_settings_are_declared}};
     for (const auto& [name, run] : tests) {
         std::printf("%s\n", name);
