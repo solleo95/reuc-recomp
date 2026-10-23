@@ -977,6 +977,15 @@ def arc_member(g, args):
     return {"member_at": f"{member_at:08X}", "after_member": after.hex(), "capture": capture}
 
 
+def camera_capture(g, args):
+    """Reaches the train chapter, lets the opening fade finish and captures twice (3 s apart); for looking at what a camera change does."""
+    reach_gameplay(g)
+    g.advance(300)
+    first = g.capture()
+    g.advance(180)
+    return {"capture": first, "later": g.capture()}
+
+
 def inspector_live(g, args):
     """The inspector example mod with log_every = 1 in the real train chapter: 25 s of play must give a snapshot line of valid JSON about every second in
     debug/mods.log, the mission clock must rise, the camera must have a position, player 1 must be present with a health between 0 and 1, and the enemy list
@@ -1167,7 +1176,7 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
 SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}}   # stored settings of the mods a scenario installs
