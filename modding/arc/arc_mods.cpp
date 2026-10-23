@@ -2,6 +2,7 @@
 #include "arc/u8.h"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <set>
@@ -24,9 +25,18 @@ std::string lower(std::string text) {
     return text;
 }
 
+// FNV-1a over 8-byte words (the archives are megabytes: a byte at a time is eight times the work), then the tail bytes.
 uint64_t fnv1a(uint64_t hash, const void* data, size_t size) {
     const auto* bytes = static_cast<const uint8_t*>(data);
-    for (size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ull; }
+    size_t i = 0;
+    for (; i + 8 <= size; i += 8) {
+        uint64_t word;
+        std::memcpy(&word, bytes + i, 8);
+        hash ^= word;
+        hash *= 1099511628211ull;
+        hash ^= hash >> 29;   // the multiply alone leaves the high bytes of a word weakly mixed
+    }
+    for (; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ull; }
     return hash;
 }
 
@@ -65,8 +75,13 @@ std::optional<std::vector<uint8_t>> read_file(const fs::path& path, size_t limit
 }
 }  // namespace
 
-ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModEntry*>& mods, const ArcBase& base) {
+ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModEntry*>& mods, const ArcBase& base, ArcMemo* memo) {
     ArcBuild build;
+    std::string signature;
+    const auto remember = [&] {
+        if (memo) { memo->signature = signature; memo->result = build; }
+        return build;
+    };
     std::map<std::string, size_t> problem_count;
     const auto add_problem = [&](const std::string& mod, const std::string& text) {
         auto& list = build.problems[mod];
@@ -125,6 +140,26 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
             ordered.push_back(std::move(part));
         }
         target.parts = std::move(ordered);
+    }
+    if (memo) {   // the same inputs as the last build: its result stands
+        const auto stamp = [](const fs::path& file) {
+            std::error_code error;
+            const auto size = fs::file_size(file, error);
+            const auto time = fs::last_write_time(file, error).time_since_epoch().count();
+            return utf8(file) + "|" + (error ? std::string("?") : std::to_string(size) + "|" + std::to_string(time)) + "\n";
+        };
+        signature = utf8(cache_root) + "\n";
+        for (const auto& [key, target] : targets) {
+            signature += "T " + key + "\n";
+            for (const ModPart& part : target.parts) {
+                signature += "M " + part.mod->manifest.id + "\n";
+                if (part.whole) signature += "W " + stamp(*part.whole);
+                for (const Member& member : part.members) signature += "F " + member.path + " " + stamp(member.file);
+            }
+        }
+        for (const auto& [mod, lines] : build.problems) for (const auto& line : lines) signature += "P " + mod + line + "\n";   // problems of the scan
+        std::error_code exists_error;
+        if (signature == memo->signature && (memo->result.root.empty() || fs::exists(memo->result.root, exists_error))) return memo->result;
     }
 
     // 2. Apply them in load order.
@@ -203,7 +238,7 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
         }
         produced[target.archive] = std::move(out);
     }
-    if (produced.empty()) return build;
+    if (produced.empty()) return remember();
 
     // 3. The generated root, named by the content.
     uint64_t hash = 1469598103934665603ull;
@@ -244,7 +279,7 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
         }
     }
     build.root = root;
-    return build;
+    return remember();
 }
 
 void prune_arc_cache(const fs::path& cache_root, const fs::path& keep) {

@@ -78,7 +78,8 @@ private:
     std::map<std::string, std::vector<uint8_t>> text_bases_;   // the disc's mes_<lang>.txtres, read before any overlay (only when a mod has a text/ folder)
     std::filesystem::path text_root_;                          // the generated root of the active mods' text (guarded by files_mutex_)
     std::map<std::string, std::vector<std::string>> text_problems_;   // by mod id, from the last refresh_files
-    std::filesystem::path arc_root_;                           // the generated root of the active mods' archive members (guarded by files_mutex_)
+    mods::ArcMemo arc_memo_;                                   // the last archive build: a menu change that touches no archive input does not rebuild (files_mutex_)
+    std::filesystem::path arc_root_;                          // the generated root of the active mods' archive members (guarded by files_mutex_)
     std::map<std::string, std::vector<std::string>> arc_problems_;    // by mod id, from the last refresh_files
     std::mutex files_mutex_;                     // active_, files_roots_ and the overlay: the menu thread (refresh_files) and the converter's worker (audio_changed)
     std::unique_ptr<mods::AudioConverter> audio_;   // last: its worker uses the members above, so it stops first

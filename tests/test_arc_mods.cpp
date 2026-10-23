@@ -85,6 +85,8 @@ static void member_replaces_inside_the_disc_archive() {
 static void new_member_is_added_and_case_is_ignored() {
     Rig rig;
     rig.add("m");
+    // (on a case-insensitive file system both spellings are one folder; the merge of two spellings of one archive in a mod is only reachable where the
+    // file system tells them apart)
     rig.member("m", "data/chara/a.arc!/Extra/new.bin", "fresh");   // another spelling of the archive; a new folder
     rig.member("m", "Data/chara/A.arc!/INNER/Y.BIN", "mod-y");     // the existing member in other letters
     const auto built = rig.build();
@@ -220,6 +222,30 @@ static void same_input_reuses_the_folder_and_changed_input_makes_a_new_one() {
     CHECK(repaired.root == changed.root && has(Rig::result(repaired), "two"));
 }
 
+static void unchanged_inputs_are_not_rebuilt() {
+    Rig rig;
+    rig.add("m");
+    rig.member("m", "Data/chara/A.arc!/inner/x.bin", "one");
+    int reads = 0;
+    const auto inner = rig.base;
+    rig.base = [&](const std::string& path) { ++reads; return inner(path); };
+    ArcMemo memo;
+    const auto first = build_arc_mods(rig.cache, rig.active(), rig.base, &memo);
+    CHECK(!first.root.empty() && reads == 1);
+    const auto again = build_arc_mods(rig.cache, rig.active(), rig.base, &memo);
+    CHECK(again.root == first.root && reads == 1);                                                      // nothing changed: the archive is not read again
+    rig.member("m", "Data/chara/A.arc!/inner/x.bin", "changed text");
+    const auto changed = build_arc_mods(rig.cache, rig.active(), rig.base, &memo);
+    CHECK(changed.root != first.root && reads == 2 && has(Rig::result(changed), "changed text"));      // a member changed: rebuilt
+    fs::remove_all(changed.root);
+    const auto restored = build_arc_mods(rig.cache, rig.active(), rig.base, &memo);
+    CHECK(restored.root == changed.root && reads == 3 && fs::exists(restored.root / "Data" / "chara" / "A.arc"));   // the folder vanished: rebuilt
+    rig.add("other");
+    rig.member("other", "Data/chara/A.arc!/inner/y.bin", "more");
+    const auto more = build_arc_mods(rig.cache, rig.active(), rig.base, &memo);
+    CHECK(more.root != restored.root && reads == 4);                                                    // another mod with members: rebuilt
+}
+
 static void no_members_means_empty_root() {
     Rig rig;
     rig.add("m");
@@ -263,6 +289,7 @@ int main() {
     bad_member_paths_are_problems_not_fatal();
     growth_over_256_kib_warns_but_applies();
     same_input_reuses_the_folder_and_changed_input_makes_a_new_one();
+    unchanged_inputs_are_not_rebuilt();
     no_members_means_empty_root();
     member_names_with_non_ascii_letters();
     prune_keeps_only_the_given_key();

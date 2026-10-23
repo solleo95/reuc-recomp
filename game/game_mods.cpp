@@ -129,7 +129,7 @@ void GameMods::refresh_files(bool initial) {
             if (!in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size))) return std::nullopt;
             return bytes;
         };
-        auto built = mods::build_arc_mods(mods_dir_ / ".cache", active, base);
+        auto built = mods::build_arc_mods(mods_dir_ / ".cache", active, base, &arc_memo_);
         arc_root_ = std::move(built.root);
         arc_problems_ = std::move(built.problems);
         for (const auto& conflict : built.conflicts) std::fprintf(stderr, "[mods] %s\n", conflict.c_str());

@@ -21,9 +21,17 @@ struct ArcBuild {
 // The archive file of the disc by its path below DATA/files ("Data/chara/EZ01.arc"); nullopt: the game has none.
 using ArcBase = std::function<std::optional<std::vector<uint8_t>>(const std::string& disc_path)>;
 
+// The last build, for callers that build again on every change of the mod list: while the inputs (every member file and whole archive of the active mods,
+// in load order, with size and modification time) are the same and the generated folder is still there, the result is returned without reading the
+// archives again.
+struct ArcMemo {
+    std::string signature;
+    ArcBuild result;
+};
+
 // The files are written under <cache_root>/_arc/<key>/<archive path> (key = hash of the produced bytes); a folder of the same key is reused if every file is
 // there at its length, a different content gets a new folder, so an archive the game has open is never rewritten.
-ArcBuild build_arc_mods(const std::filesystem::path& cache_root, const std::vector<const ModEntry*>& mods, const ArcBase& base);
+ArcBuild build_arc_mods(const std::filesystem::path& cache_root, const std::vector<const ModEntry*>& mods, const ArcBase& base, ArcMemo* memo = nullptr);
 
 // Deletes the other folders under <cache_root>/_arc (and half-written ones); call it when no file of the cache can be open (at start).
 void prune_arc_cache(const std::filesystem::path& cache_root, const std::filesystem::path& keep);
