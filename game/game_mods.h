@@ -2,6 +2,7 @@
 #include "host.h"
 #include "hooks.h"
 #include "overlay.h"
+#include "arc/arc_mods.h"
 #include "audio/audio_converter.h"
 #include "text/text_mods.h"
 #include <atomic>
@@ -43,7 +44,7 @@ public:
     // Called when the texture table has entries after a rebuild (raises the texture cache budget if it was not raised at startup).
     void set_texture_handler(std::function<void()> handler) { texture_handler_ = std::move(handler); }
 
-    // What the Mods tab shows under a mod besides its description: audio conversion progress ("converting audio (1 of 3)") and the "audio: ..." and "text: ..."
+    // What the Mods tab shows under a mod besides its description: audio conversion progress ("converting audio (1 of 3)") and the "audio: ...", "text: ..." and "arc: ..."
     // problems of its files; empty when there is nothing to say.
     std::string mod_status(const std::string& mod_id) const;
 
@@ -56,7 +57,7 @@ private:
     static void step(void* self, uint32_t nominal, ppc::Ctx* ctx);
     bool runs(const mods::ModEntry& mod) const;
     void refresh_files(bool initial);
-    std::vector<std::filesystem::path> overlay_roots() const;   // per active mod: its generated audio root (when it exists), then its files/; the text root last; call with files_mutex_ held
+    std::vector<std::filesystem::path> overlay_roots() const;   // per active mod: its generated audio root (when it exists), then its files/; the archive and text roots last; call with files_mutex_ held
     void audio_changed();   // the converter published or removed a file (called on its worker thread): the overlay is scanned again
 
     std::filesystem::path exe_dir_, mods_dir_;
@@ -77,6 +78,8 @@ private:
     std::map<std::string, std::vector<uint8_t>> text_bases_;   // the disc's mes_<lang>.txtres, read before any overlay (only when a mod has a text/ folder)
     std::filesystem::path text_root_;                          // the generated root of the active mods' text (guarded by files_mutex_)
     std::map<std::string, std::vector<std::string>> text_problems_;   // by mod id, from the last refresh_files
+    std::filesystem::path arc_root_;                           // the generated root of the active mods' archive members (guarded by files_mutex_)
+    std::map<std::string, std::vector<std::string>> arc_problems_;    // by mod id, from the last refresh_files
     std::mutex files_mutex_;                     // active_, files_roots_ and the overlay: the menu thread (refresh_files) and the converter's worker (audio_changed)
     std::unique_ptr<mods::AudioConverter> audio_;   // last: its worker uses the members above, so it stops first
 };

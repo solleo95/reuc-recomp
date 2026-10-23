@@ -4,6 +4,8 @@
 #include "guest_mem.h"
 #include "text/txtres.h"
 #include "txtres_fixture.h"
+#include "arc/u8.h"
+#include "u8_fixture.h"
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -287,7 +289,45 @@ static void text_of_a_mod_replaces_a_disc_text_file() {
     CHECK(dvd.length(dvd.entry_of("Data/message/mes_us.txtres")) == disc_file.size() && lines_of(1) == std::vector<std::string>{"Enter"});
 }
 
+// A mod's files/<archive>.arc!/<member> changes one member of the disc's archive: the game's entry has the rebuilt archive, the member folder itself is no
+// disc entry, a member for an archive the game does not have is reported in the mod's status, and switching the mod off puts the disc archive back.
+static void archive_members_of_a_mod_rebuild_a_disc_archive() {
+    using namespace u8_fixture;
+    uc::guest_mem_init();
+    const auto exe = fresh("gm_arc");
+    const auto disc_archive = make_u8({{"inner/x.bin", bytes("disc-x")}, {"top.txt", bytes("disc-top")}});
+    put(exe / "disc" / "Data" / "chara" / "A.arc", std::string(disc_archive.begin(), disc_archive.end()));
+    put(exe / "mods" / "m" / "mod.json", R"({"id":"m","name":"M","version":"1.0","api":"1.1"})");
+    put(exe / "mods" / "m" / "files" / "Data" / "chara" / "A.arc!" / "inner" / "new.bin", "member-new");
+    put(exe / "mods" / "m" / "files" / "Data" / "chara" / "A.arc!" / "top.txt", "member-top");
+    uc::DvdFs dvd;
+    CHECK(dvd.open_root(exe / "disc"));
+    uc::GameMods mods(exe, enabled({"m"}), dvd, "RBUE08", false);
+    const auto archive_bytes = [&] {
+        const int entry = dvd.entry_of("Data/chara/A.arc");
+        std::vector<uint8_t> out(dvd.length(entry));
+        CHECK(dvd.read(entry, out.data(), uint32_t(out.size()), 0) == int64_t(out.size()));
+        return out;
+    };
+    std::string error;
+    auto rebuilt = uc::mods::U8Archive::parse(archive_bytes(), error);
+    CHECK(rebuilt && rebuilt->contains("inner/new.bin") && rebuilt->contains("inner/x.bin") && rebuilt->contains("top.txt"));
+    CHECK(dvd.entry_of("Data/chara/A.arc!") == -1 && dvd.entry_of("Data/chara/A.arc!/top.txt") == -1);
+    CHECK(mods.mod_status("m").empty());
+    // a member of an archive the game does not have
+    put(exe / "mods" / "m" / "files" / "Data" / "chara" / "Nope.arc!" / "x.bin", "x");
+    uc::DvdFs dvd2;
+    CHECK(dvd2.open_root(exe / "disc"));
+    uc::GameMods again(exe, enabled({"m"}), dvd2, "RBUE08", false);
+    CHECK(again.mod_status("m").find("arc: Data/chara/Nope.arc: the game has no such archive") != std::string::npos);
+    // switched off: the disc archive again
+    mods.registry()->set_enabled("m", false);
+    mods.apply();
+    CHECK(archive_bytes() == disc_archive);
+}
+
 int main() {
+    archive_members_of_a_mod_rebuild_a_disc_archive();
     text_of_a_mod_replaces_a_disc_text_file();
     audio_of_a_mod_replaces_a_disc_stream();
     mods_switch_on_and_off_while_the_game_runs();

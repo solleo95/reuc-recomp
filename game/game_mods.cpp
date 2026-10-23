@@ -1,4 +1,5 @@
 #include "game_mods.h"
+#include "arc/u8.h"
 #include "audio/brstm.h"
 #include "mod_guest_call.h"
 #include <algorithm>
@@ -49,6 +50,7 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
         for (const auto& message : entry.messages) std::fprintf(stderr, "[mods] %s: %s\n", entry.manifest.id.c_str(), message.c_str());
     }
     refresh_files(true);
+    mods::prune_arc_cache(mods_dir_ / ".cache", arc_root_);     // older versions of the rebuilt archives: nothing has them open yet
     mods::prune_text_cache(mods_dir_ / ".cache", text_root_);   // older versions of the patched text: nothing has them open yet
 }
 
@@ -69,6 +71,7 @@ std::vector<fs::path> GameMods::overlay_roots() const {
         }
         if (fs::is_directory(mod.root / "files", error)) roots.push_back(mod.root / "files");
     }
+    if (!arc_root_.empty()) roots.push_back(arc_root_);     // the rebuilt archives win over the mods' whole files
     if (!text_root_.empty()) roots.push_back(text_root_);   // last: the patched text files win over every mod's files
     return roots;
 }
@@ -113,6 +116,22 @@ void GameMods::refresh_files(bool initial) {
         auto built = mods::build_text_mods(mods_dir_ / ".cache", active, base);
         text_root_ = std::move(built.root);
         text_problems_ = std::move(built.problems);
+        for (const auto& conflict : built.conflicts) std::fprintf(stderr, "[mods] %s\n", conflict.c_str());
+    }
+    {   // the archive members of the active mods, applied to the disc's archives (read from the disc folder, never through the overlay)
+        const auto base = [&](const std::string& disc_path) -> std::optional<std::vector<uint8_t>> {
+            std::error_code file_error;
+            const fs::path file = dvd_->disc_root() / fs::path(std::u8string(disc_path.begin(), disc_path.end()));
+            const uintmax_t size = fs::is_regular_file(file, file_error) ? fs::file_size(file, file_error) : 0;
+            if (size == 0 || size > mods::U8Archive::kMaxArchiveBytes) return std::nullopt;
+            std::vector<uint8_t> bytes(size);
+            std::ifstream in(file, std::ios::binary);
+            if (!in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size))) return std::nullopt;
+            return bytes;
+        };
+        auto built = mods::build_arc_mods(mods_dir_ / ".cache", active, base);
+        arc_root_ = std::move(built.root);
+        arc_problems_ = std::move(built.problems);
         for (const auto& conflict : built.conflicts) std::fprintf(stderr, "[mods] %s\n", conflict.c_str());
     }
     const std::vector<fs::path> files_roots = overlay_roots();
@@ -175,6 +194,8 @@ std::string GameMods::mod_status(const std::string& mod_id) const {
     std::string text = audio_ ? audio_->status(mod_id) : std::string();
     const auto problems = text_problems_.find(mod_id);
     if (problems != text_problems_.end()) for (const auto& problem : problems->second) text += (text.empty() ? "" : "; ") + problem;
+    const auto arc_problems = arc_problems_.find(mod_id);
+    if (arc_problems != arc_problems_.end()) for (const auto& problem : arc_problems->second) text += (text.empty() ? "" : "; ") + problem;
     return text;
 }
 
