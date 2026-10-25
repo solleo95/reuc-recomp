@@ -10,6 +10,9 @@
 #include <mutex>
 
 namespace gx {
+struct SceneFrame;
+struct SceneSnapshot;
+class SceneCapture;
 using DrawQueue=std::deque<DrawPacket,FrameAllocator<DrawPacket>>;
 struct TextureCopy {
     std::array<uint32_t,4> source; // x,y,width,height in the SDK's640x480 EFB coordinates
@@ -27,6 +30,9 @@ struct FramePacket {
     std::vector<PromptDraw> prompts;
     bool black_output = false; // VI blanked: present black, the EFB copy still happens
     std::array<float,2> aim_consumed{};   // pointer (aim units) the game read when it drew this batch; the reference of the late-aim shift
+    bool replay = false; // Preserve GX work and frame boundaries without displaying intermediate rollback frames.
+    bool clear_only = false;
+    std::shared_ptr<const SceneFrame> scene;
 };
 
 // A game frame is ~23 packets in the train (one per EFB copy) and the renderer drains them in bursts: the packet window must cover
@@ -41,13 +47,18 @@ struct LatencyWindow { double sealed_to_done_ms, taken_to_done_ms; };   // worst
 LatencyWindow take_latency_window();
 class Packets {
 public:
+    explicit Packets(bool detached=false);
+    ~Packets();
+    bool detached() const { return bool(scene_capture_); }
+    std::shared_ptr<const SceneSnapshot> checkpoint();
+    void restore(const SceneSnapshot&);
     uint64_t seal_batch(FramePacket packet);
     std::unique_ptr<const FramePacket> try_take();
     bool wait_ready(std::chrono::nanoseconds timeout);
     bool complete(uint64_t serial);
     void cancel();
     struct Depth { size_t queued, outstanding, frames_in_flight; };
-    Depth depth() { std::lock_guard lock(mutex_); return {queued_.size(), outstanding_.size(), frames_in_flight_.size()}; }
+    Depth depth() { std::lock_guard lock(mutex_); return {queued_.size()+size_t(bool(latest_scene_)), outstanding_.size(), frames_in_flight_.size()}; }
 private:
     std::mutex mutex_;
     std::condition_variable space_;
@@ -58,5 +69,7 @@ private:
     std::map<uint64_t, std::chrono::steady_clock::time_point> taken_at_;           // ... and when the renderer took them
     uint64_t next_serial_ = 1;
     bool canceled_ = false;
+    std::unique_ptr<SceneCapture> scene_capture_;
+    std::shared_ptr<const SceneFrame> latest_scene_;
 };
 } // namespace gx

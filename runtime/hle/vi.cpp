@@ -30,7 +30,7 @@ void arm(uint64_t at) {
         if (g.hook) g.hook();
         if (uint32_t post = ppc::rd32(ic, base + kPostCb)) call_guest(ic, post, {uint32_t(n)});
         s.wake_all(kViKey);
-    });
+    },Sched::EventKind::Vi);
 }
 }  // namespace
 
@@ -41,6 +41,11 @@ void vi_hle_init(Sched&, uint64_t period_ticks, std::function<void()> on_retrace
     arm(now_ticks() + period_ticks);
 }
 ViStats vi_stats() { return {g.retraces.load(), g.cur_fb.load(), g.next_fb.load(), g.tv.load(), g.black.load()}; }
+ViSnapshot vi_checkpoint() { return {vi_stats(),g.period}; }
+void vi_restore(const ViSnapshot& saved) {
+    g.retraces=saved.stats.retraces; g.cur_fb=saved.stats.current_fb; g.next_fb=saved.stats.next_fb;
+    g.tv=saved.stats.tv_mode; g.black=saved.stats.black; g.period=saved.period;
+}
 }  // namespace uc
 
 void hle_VIInit(ppc::Ctx&) {}
@@ -53,4 +58,4 @@ void hle_VIFlush(ppc::Ctx&) {}
 void hle_VISetNextFrameBuffer(ppc::Ctx& c) { g.next_fb = c.r[3]; }
 void hle_VISetBlack(ppc::Ctx& c) { g.black = c.r[3] != 0; }
 void hle_VIGetTvFormat(ppc::Ctx& c) { c.r[3] = g.tv == 1 || g.tv == 4 ? 1 : g.tv == 2 ? 2 : g.tv == 5 ? 5 : 0; }   // VI_NTSC 0, VI_PAL 1, VI_MPAL 2, VI_EURGB60 5
-void hle_VIWaitForRetrace(ppc::Ctx&) { os_sched().block_on(kViKey); }
+void hle_VIWaitForRetrace(ppc::Ctx& c) { PendingHle pending(os_sched(),c); os_sched().block_on(kViKey); }

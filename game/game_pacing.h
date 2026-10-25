@@ -1,6 +1,7 @@
 #pragma once
 #include "ppc_rt.h"
 #include <optional>
+#include <memory>
 namespace uc {
 struct PacingMode { bool unlock_60=false; uint32_t game_hz=0; };
 // The game update rate a frame rate limit chooses (Options::fps_limit): 30 or less the original 30 Hz, 31..60 the retrace-locked 60 Hz,
@@ -12,7 +13,11 @@ void game_pacing_set_paused(bool);
 bool game_pacing_paused();
 struct GamePacingStats { uint64_t calls,retraces,timestep_ns,threshold_two,adjusted,wait_ns; };   // wait_ns: time the guest idled in the frame wait, i.e. headroom
 void game_pacing_init(bool unlock, uint32_t game_hz = 0);   // game_hz > 0: experimental timer-driven step instead of the retrace wait
+void game_pacing_set_network_period(uint64_t ticks); // Guest baton only; shared period, applied at the normal frame wait.
 GamePacingStats game_pacing_stats();
+struct PacingSnapshot;
+std::shared_ptr<const PacingSnapshot> game_pacing_checkpoint();
+void game_pacing_restore(const PacingSnapshot&);
 float game_step_scale();   // real step / nominal frame of the game clock (1 in the original mode)
 void pacing_call_body(ppc::Ctx& c, uint32_t frame, uint32_t entry);   // run an AOT body after its lowered stwu of `frame` bytes
 // Generated step fixes (game/pacing_fixes.inc, written by tools/step_audit). Every template is the identity when the

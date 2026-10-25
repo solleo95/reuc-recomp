@@ -10,6 +10,10 @@ void gx_set_texture_budget(size_t bytes);   // host bytes the texture cache keep
 void gx_fifo_write(int size, uint32_t value); // resource recording writes bytes; live primitives consume descriptor-sized attributes
 void gx_completed(uint64_t serial);          // any host thread; callback runs later on the guest baton
 GxStats gx_stats();
+struct GxSnapshot;
+std::shared_ptr<const GxSnapshot> gx_checkpoint();
+void gx_restore(const GxSnapshot&);
+void gx_set_replaying(bool on); // Guest baton only; output policy is not rewound.
 std::string gx_state_summary(); // bound vertex/matrix arrays as text lines, for the crash bundle (guest thread)
 bool gx_fifo_in_primitive(); // guest bytes are vertex data of an open primitive
 bool gx_fifo_recording();

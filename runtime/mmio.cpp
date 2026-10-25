@@ -48,4 +48,19 @@ void MmioBus::write(uint32_t ea, int size, uint32_t v) {
 }
 
 MmioBus& mmio_bus() { static MmioBus b; return b; }
+MmioBus::RegisterSnapshot MmioBus::checkpoint_registers() const {
+    RegisterSnapshot result;
+    for(const auto& range:ranges_) if(auto* regs=dynamic_cast<RegFile*>(range.dev)) {
+        if(std::none_of(result.begin(),result.end(),[&](const auto& entry) { return entry.first==regs; }))
+            result.emplace_back(regs,regs->bytes);
+    }
+    return result;
+}
+void MmioBus::restore_registers(const RegisterSnapshot& saved) {
+    for(const auto& [regs,bytes]:saved) {
+        if(std::none_of(ranges_.begin(),ranges_.end(),[&](const auto& range) { return range.dev==regs; }) || regs->bytes.size()!=bytes.size())
+            throw std::logic_error("MMIO checkpoint does not match mapped registers");
+    }
+    for(const auto& [regs,bytes]:saved) regs->bytes=bytes;
+}
 }  // namespace uc

@@ -17,6 +17,8 @@ int main() {
     auto roundtrip=parse_config(serialize_config(config));
     CHECK(roundtrip.input==config.input && roundtrip.properties["graphics"]["future"]==42);
     CHECK(parse_config(serialize_config(parse_config("{}"))).input==default_bindings());
+    auto camera=parse_config(R"({"input":{"version":1,"bindings":{"camera_up":[{"kind":"mouse","code":4}],"camera_down":[],"camera_left":[{"kind":"wheel","code":1}],"camera_right":[{"kind":"key","code":79,"modifiers":[{"kind":"key","code":224}]}]}}})");
+    CHECK(parse_config(serialize_config(camera)).input==camera.input);
     for(auto text:{R"({"input":{"version":2}})",R"({"input":{"version":1,"bindings":{"unknown":[]}}})",
         R"({"input":{"version":1,"version":1}})",R"({"x":{"a":1,"a":2}})",R"({"input":null})",
         R"({"input":{"version":1,"bindings":{"fire":[{"kind":"key","code":-1}]}}})",

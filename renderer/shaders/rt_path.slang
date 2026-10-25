@@ -270,6 +270,8 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (any(isnan(light)) || any(isinf(light))) light = float3(kReference, kReference, kReference);   // a bad sample leaves the pixel as the game drew it
     float4 color = sceneColor[id.xy];
     const float3 scale = clamp(light / kReference, kMinScale, kMaxScale);   // rt_path_math.h rt_path_compose: the game's colour keeps its textures
-    color.rgb = saturate(color.rgb * lerp(float3(1.0, 1.0, 1.0), scale, saturate(params.mixAmount) * (1.0 - texel.z)));
+    const float3 gain = lerp(float3(1.0, 1.0, 1.0), scale, saturate(params.mixAmount) * (1.0 - texel.z));
+    // Roll positive gain off toward white: multiplying the already lit SDR colour would clip its texture detail before bloom.
+    color.rgb = color.rgb * gain / (1.0 + color.rgb * max(gain - 1.0, 0.0));
     sceneColor[id.xy] = color;
 }

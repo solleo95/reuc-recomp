@@ -58,6 +58,9 @@
 #include "localization.h"
 #include "prompt_hooks.h"
 #include "settings_menu.h"
+#include "netplay_game.h"
+#include "game_checkpoint.h"
+#include "gx_scene.h"
 #include <algorithm>
 #include <future>
 #include <atomic>
@@ -165,8 +168,8 @@ struct VideoSession {
     ~VideoSession() { SDL_Quit(); }
 };
 struct NativeInputSink : uc::TestInputSink {
-    uc::NativeInput& input; SDL_Window* window; const uint8_t* guest;
-    NativeInputSink(uc::NativeInput& i, SDL_Window* w, const uint8_t* g) : input(i), window(w), guest(g) {}
+    uc::NativeInput& input; SDL_Window* window; const uint8_t* guest;const uc::NetGame* network;
+    NativeInputSink(uc::NativeInput& i, SDL_Window* w, const uint8_t* g,const uc::NetGame* n) : input(i), window(w), guest(g),network(n) {}
     std::string peek(uint32_t address, uint32_t size) override {
         // MEM1 24 MB at 0x80000000, MEM2 64 MB at 0x90000000 (guest_mem layout).
         const uint64_t end = uint64_t(address) + size;
@@ -183,7 +186,7 @@ struct NativeInputSink : uc::TestInputSink {
         if (!SDL_GetWindowSizeInPixels(window, &width, &height)) return false;
         return input.apply_test_event(sequence, event, uint32_t(std::max(0, width)), uint32_t(std::max(0, height)));
     }
-    uint64_t consumed() override { return input.last_consumed_sequence(); }
+    uint64_t consumed() override { return network ? network->consumed_sequence() : input.last_consumed_sequence(); }
 };
 struct GuestRunner {
     uc::Sched& sched;
@@ -326,7 +329,11 @@ static int real_main(int argc, char** argv) {
             } else std::fprintf(stderr,"guest CPU %d unavailable; using Windows scheduling\n",options.guest_cpu);
         }
     }
-    uc::SaveFs saves(options.save_root.empty() ? exe_dir()/"saves" : options.save_root);
+    uc::NativeInput input;
+    std::unique_ptr<uc::NetGame> network;
+    const auto local_save_root=options.save_root.empty() ? exe_dir()/"saves" : options.save_root;
+    if(options.netplay)network=std::make_unique<uc::NetGame>(options,input,exe_path(),local_save_root);
+    uc::SaveFs saves(network ? network->save_root() : local_save_root);
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
     uc::dvd_log(options.log_dvd);
@@ -354,7 +361,8 @@ static int real_main(int argc, char** argv) {
     // The start code runs on the SDK's DefaultThread: __OSThreadInit (802611B8) stores this OSThread in the current-thread word and fills it in.
     const uint32_t kMainThread = 0x805F88D8;
     uint32_t entry = dol.image.entry;
-    uc::Thread* mt = sched.create(kMainThread, 16, [entry](ppc::Ctx& c) {
+    uc::Thread* mt = sched.create(kMainThread, 16, [entry,&network](ppc::Ctx& c) {
+        if(network)network->prepare();
         c.r[1] = 0x817D0000;   // the start code installs its own stack pointer; this one only has to be valid
         uc::call_indirect(c, entry);
     }, &boot);
@@ -363,13 +371,12 @@ static int real_main(int argc, char** argv) {
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
     std::optional<uc::VulkanRenderer> renderer_storage; renderer_storage.emplace();
     uc::VulkanRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
-    uc::NativeInput input;
     double render_aspect=16.0/9;
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
-        renderer.set_aim_source([&input] { return input.latest_aim(); });
+        if(!options.netplay)renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);
@@ -430,6 +437,18 @@ static int real_main(int argc, char** argv) {
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);
+    if(options.netplay) {
+        network->install(sched,saves);
+    }
+    if(const char* probe=std::getenv("UC_ROLLBACK_PROBE_RETRACE")) {
+        if(!deterministic || options.demo_play.empty() || options.netplay)
+            throw std::invalid_argument("rollback probe requires an offline deterministic input demo");
+        size_t parsed=0;
+        const auto retrace=std::stoull(probe,&parsed);
+        if(probe[parsed]!='\0') throw std::invalid_argument("invalid rollback probe retrace");
+        saves.begin_rollback();
+        uc::install_rollback_probe(sched,saves,input,retrace,8);
+    }
     uc::input_probe_init(options.input_probe);
     uc::entry_probe_init(options.input_probe);
     uc::prompt_hooks_init(input_config.input,options.input_probe);
@@ -437,14 +456,14 @@ static int real_main(int argc, char** argv) {
     std::optional<uc::TestPipes> test_pipes;
     std::optional<NativeInputSink> test_sink;
     std::optional<uc::TestServer> test_server;
-    if (server_mode) { test_pipes.emplace(options.test_server); test_sink.emplace(input, window.get(), boot.mem); test_server.emplace(*test_pipes, *test_sink); }
+    if (server_mode) { test_pipes.emplace(options.test_server); test_sink.emplace(input, window.get(), boot.mem,network.get()); test_server.emplace(*test_pipes, *test_sink); }
     bool test_released = false, draws_wanted = false; uint32_t draws_pass = 0; std::vector<uc::TestDrawStat> draw_stats; std::string draw_projection;
     double last_render_ms = 0;
     std::optional<uc::AudioOutput> audio;
     if (!options.headless) audio.emplace(options.mute);
     uc::audio_gap_audit_enable(options.audio_audit);
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
-    gx::Packets packets;
+    gx::Packets packets{bool(network)};
     uc::gx_hle_init(sched, boot.mem, options.headless ? nullptr : &packets, options.profile);
     if (!options.headless) {
         uc::gx_enable_async_textures();
@@ -458,7 +477,7 @@ static int real_main(int argc, char** argv) {
             uc::gx_set_texture_budget(size_t(2) << 30);
         }
     }
-    sched.set_shutdown_hook([&packets] { packets.cancel(); });
+    sched.set_shutdown_hook([&packets,&network] { if(network)network->cancel(); packets.cancel(); });
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
     uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
     mods.set_texture_handler([] { uc::gx_set_texture_budget(size_t(2) << 30); });   // textures of a mod switched on live need the larger cache too
@@ -474,7 +493,9 @@ static int real_main(int argc, char** argv) {
     uint64_t loop_wait_ns=0,profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
-    std::unique_ptr<const gx::FramePacket> pending;
+    std::shared_ptr<const gx::FramePacket> pending;
+    std::deque<std::shared_ptr<const gx::FramePacket>> scene_commands;
+    uint64_t render_serial=0,pending_serial=0;
     uc::FrameLimit frame_limit(options.fps_limit);
     std::chrono::steady_clock::time_point last_present_at{};
     // Frame log (frame_log.h): UC_FRAME_LOG=<file> or an empty frame_log.on next to uc.exe.
@@ -506,25 +527,36 @@ static int real_main(int argc, char** argv) {
     bool at_frame_boundary=false;   // the last rendered packet presented: a renderer restart starts the next frame cleanly
     auto render_pending = [&]() -> bool {
         bool progressed = false;
-        if (!pending) pending = packets.try_take();
+        if (!pending) {
+            if(scene_commands.empty() && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now()))) {
+                auto next=packets.try_take();
+                if(next && next->scene) {
+                    auto commands=gx::scene_commands(*next->scene,[&](const auto& texture,bool previous){return renderer.copy_ready(texture,previous);});
+                    scene_commands.assign(std::make_move_iterator(commands.begin()),std::make_move_iterator(commands.end()));
+                } else pending=std::move(next);
+            }
+            if(!scene_commands.empty()) { pending=std::move(scene_commands.front()); scene_commands.pop_front(); }
+            if(pending)pending_serial=packets.detached() ? ++render_serial : pending->serial;
+        }
         // Keep the captured slot alive until its fence completes and readback finishes.
-        if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial && frame_limit.ready(pending->present,std::chrono::steady_clock::now())) {
+        if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial && (network || pending->replay || frame_limit.ready(pending->present,std::chrono::steady_clock::now()))) {
             const auto render_start=std::chrono::steady_clock::now();
-            const bool rendered=renderer.render(*pending);
+            const bool display=!pending->replay && frame_limit.ready(pending->present,render_start);
+            const auto prior_presents=renderer.presentation_count();
+            const bool rendered=renderer.render(*pending,display,pending_serial);
             profile_retries+=!rendered;
             const auto render_elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
             render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6; frame_busy_ns+=uint64_t(render_elapsed);
             if (rendered) {
             progressed = true;
-            // The guest's GXWaitDrawDone ends when the packet is submitted: the packet owns everything the GPU reads, so nothing the guest does next can reach it, and waiting for the
-            // GPU serialised the guest with it (the frame took guest + GPU time instead of the longer of the two). The frames in flight stay bounded by the real completion (Packets), and
-            // the deterministic mode keeps the real one. The fence path below completes the serial again, which is harmless. UC_FINISH_AT_GPU=1 restores the old wait.
-            static const bool finish_at_submit=!deterministic && !std::getenv("UC_FINISH_AT_GPU");
-            if (finish_at_submit) uc::gx_completed(pending->serial);
+            // GPU slots retain immutable inputs until their fences complete; detached GX already completed logically.
+            // Offline real-time play releases GX at submission; deterministic playback retains fence completion.
+            static const bool finish_at_submit=(!deterministic || network) && !std::getenv("UC_FINISH_AT_GPU");
+            if (finish_at_submit && !packets.detached()) uc::gx_completed(pending_serial);
             packet_dump.packet(*pending);
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
-                scene_capture_serial=pending->serial; ++scene_capture_pass;
+                scene_capture_serial=pending_serial; ++scene_capture_pass;
                 std::fprintf(stderr,"[scene-pass] %u serial %llu draws %zu present %u clear %u\n",scene_capture_pass,(unsigned long long)pending->serial,pending->draws.size(),pending->present,pending->clear_after_copy);
                 if(pending->texture_copy) {
                     const auto& copy=*pending->texture_copy;
@@ -549,7 +581,7 @@ static int real_main(int argc, char** argv) {
                 if (draw_projection.empty()) draw_projection = uc::projection_json(uc::scene_projection(*pending));
                 if (pending->present) { test_server->draws_ready(uc::test_draws_json(draw_stats), draw_projection.empty() ? "[]" : draw_projection); draws_wanted=false; draws_pass=0; draw_stats.clear(); draw_projection.clear(); }
             }
-            if (pending->present) {
+            if (renderer.presentation_count()!=prior_presents) {
                 const auto presented_at=std::chrono::steady_clock::now();
                 if (last_present_at!=std::chrono::steady_clock::time_point{} && present_intervals.size()<present_intervals.capacity()) present_intervals.push_back(std::chrono::duration<double,std::milli>(presented_at-last_present_at).count());
                 if (frame_log && last_present_at!=std::chrono::steady_clock::time_point{}) {
@@ -571,14 +603,14 @@ static int real_main(int argc, char** argv) {
                 } else if (frame_log) frame_cpu_last=thread_cycles();
                 last_present_at=presented_at; frame_limit.presented(presented_at);
             }
-            if (packet_dump.scene_sampled()) scene_dump_serial=pending->serial;
-            if (pending->present && debug_capture_requested) {
-                debug_capture_serial=pending->serial;
+            if (packet_dump.scene_sampled()) scene_dump_serial=pending_serial;
+            if (pending->present && display && debug_capture_requested) {
+                debug_capture_serial=pending_serial;
                 debug_capture_requested=false;
             }
             audit_seen_geometry |= !pending->draws.empty();
             const bool late_frame=renderer.presentation_count()>=120 && std::chrono::steady_clock::now()-start>=std::chrono::seconds(15);
-            if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && (!audit_captured || late_frame)) audit_capture_serial=pending->serial;
+            if (options.gx_audit && !audit_late_captured && !audit_capture_serial && audit_seen_geometry && pending->present && display && (!audit_captured || late_frame)) audit_capture_serial=pending_serial;
             at_frame_boundary=pending->present;
             pending.reset();
             }
@@ -677,7 +709,7 @@ static int real_main(int argc, char** argv) {
         };
         targets.fps_limit=[&](std::optional<uint32_t> limit) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
-            uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
+            if(!network)uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
         };
         targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
@@ -717,6 +749,7 @@ static int real_main(int argc, char** argv) {
         input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
     };
     const auto host_key_pressed=[&](SDL_Scancode key) {   // true when the key belongs to the port (never to the game)
+        if(network && key==SDL_SCANCODE_P)return true; // Escape sends the original synchronized pause action.
         const auto result=uc::host_key(host_keys,key,settings_menu && settings_menu->capturing());
         if (result==uc::HostKeyResult::none) return false;
         if (result!=uc::HostKeyResult::consumed) {
@@ -732,7 +765,11 @@ static int real_main(int argc, char** argv) {
             const auto state=uc::test_state_latest();
             auto frame_json=uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped());
             frame_json.pop_back(); frame_json+=std::string(",\"menu_open\":")+(host_keys.menu_open ? "true" : "false")+",\"paused\":"+(host_keys.paused ? "true" : "false")
-                +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")+"}";
+                +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")
+                +",\"game_seconds\":"+std::to_string(uc::game_pacing_stats().timestep_ns/1e9)
+                +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
+                +",\"sample_time_ns\":"+std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())
+                +",\"fps_limit\":"+std::to_string((live_settings ? live_settings->options().fps_limit : options.fps_limit).value_or(240))+"}";
             const auto pumped=test_server->pump(state.frame,frame_json);
             debug_capture_requested|=pumped.capture; draws_wanted|=pumped.draws;
             if (!menu_click_events.empty() && host_keys.menu_open && renderer.presentation_count()!=menu_click_presents) {   // one event per presented frame: the menu needs the hover of a frame before the press
@@ -836,9 +873,9 @@ static int real_main(int argc, char** argv) {
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
                 // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
-                if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
+                if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
                 if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && event.key.scancode==SDL_SCANCODE_TAB && !settings_menu->capturing()) {
-                    if(!event.key.repeat) uc::set_clock_speed(event.type==SDL_EVENT_KEY_DOWN && !host_keys.menu_open ? 8 : 1);
+                    if(!network && !event.key.repeat) uc::set_clock_speed(event.type==SDL_EVENT_KEY_DOWN && !host_keys.menu_open ? 8 : 1);
                     continue;
                 }
                 if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && host_key_pressed(event.key.scancode)) continue;
@@ -911,21 +948,27 @@ static int real_main(int argc, char** argv) {
             }
             next_watch = now + std::chrono::seconds(1);
             uint64_t retraces = uc::vi_stats().retraces;
-            if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
+            if(network && !network->error().empty()) {result=5;close=true;}
+            else if(network && network->waiting()) {boot_seconds=stalled=0;last_retraces=retraces;}
+            else if (!retraces) { if (++boot_seconds >= 15) { result = 4; close = true; } }
             else if (retraces != last_retraces) { last_retraces = retraces; stalled = 0; }
             else if (++stalled >= 10) { result = 4; close = true; }
-            if (result) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
+            if (result==4) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
         }
-        if(!options.headless && !pending && packets.wait_ready(std::chrono::nanoseconds(0))) continue;   // more work is queued
+        if(!options.headless && !pending && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now())) && packets.wait_ready(std::chrono::nanoseconds(0))) continue;
         const auto wait_start=std::chrono::steady_clock::now();
         if(options.headless) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         else if(!renderer.wait_for_pending(1000000)) {
-            if(!pending) packets.wait_ready(std::chrono::milliseconds(1));
+            if(!pending && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now()))) packets.wait_ready(std::chrono::milliseconds(1));
             else std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         loop_wait_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count();
     }
     runner.stop();
+    if(network && !network->error().empty()) {
+        result=5;
+        if(!controlled)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Network play",network->error().c_str(),window.get());
+    }
     if(test_pipes) { if(!test_released) test_server->release_all(); test_pipes->send("{\"type\":\"exit\",\"code\":"+std::to_string(result)+"}",false); }
     const auto prompt_stats=uc::gx_stats();
     std::fprintf(stderr,"native prompt stats: annotations %llu present %llu fallback %llu\n",(unsigned long long)prompt_stats.prompt_annotations,(unsigned long long)prompt_stats.prompt_present,(unsigned long long)prompt_stats.prompt_fallback);

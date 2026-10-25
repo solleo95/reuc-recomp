@@ -148,18 +148,19 @@ size_t encoded_draw_size(const State& state,uint8_t primitive,uint8_t vat,uint16
     return encoded_vertex_size(state,vat,callsite)*count;
 }
 
-void Vertices::begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite) {
+void Vertices::begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard) {
     if (active_ || ready_) throw Error(ErrorCode::sequence, callsite, 0, count);
     const size_t vertex_size=encoded_draw_size(*state,primitive,vat,count,callsite)/count;
     draw_ = {callsite, primitive, vat, state, {}, {}};
-    draw_.vertices.reserve(count);
+    discard_=discard; decoded_=0;
+    if(!discard_)draw_.vertices.reserve(count);
     vertex_size_ = vertex_size; count_ = count; producer_ = producer;
     vertex_bytes_.clear(); vertex_bytes_.reserve(vertex_size);
     sources_={};
     active_ = true;
 }
 
-Vertex Vertices::decode(std::span<const std::byte> data) {
+void Vertices::decode(std::span<const std::byte> data) {
     Vertex vertex;
     size_t cursor = 0;
     for (size_t a = 0; a < draw_.state->descriptors.size(); ++a) {
@@ -186,6 +187,8 @@ Vertex Vertices::decode(std::span<const std::byte> data) {
                     range=SourceRange{uint32_t(begin),size_t(end-begin)};
                 }
             }
+            // Replay still validates every indexed address; decoded values only serve rendering.
+            if(discard_)continue;
             if (a == 0) vertex.position_matrix = uint8_t(be(attr));
             else if (a < 9) vertex.texture_matrix[a - 1] = uint8_t(be(attr));
             else if (a == 11 || a == 12) vertex.color[a - 11] = color(attr, fmt.color);
@@ -201,17 +204,18 @@ Vertex Vertices::decode(std::span<const std::byte> data) {
             }
         }
     }
-    return vertex;
+    if(!discard_)draw_.vertices.push_back(vertex);
+    ++decoded_;
 }
 
 void Vertices::write_attribute(uint32_t producer, std::span<const std::byte> bytes) {
     if (!active_) throw Error(ErrorCode::sequence, draw_.callsite, 0, bytes.size());
     if (producer != producer_) throw Error(ErrorCode::producer, draw_.callsite, producer_, producer);
-    size_t remaining = (count_ - draw_.vertices.size()) * vertex_size_ - vertex_bytes_.size();
+    size_t remaining = (count_ - decoded_) * vertex_size_ - vertex_bytes_.size();
     if (bytes.size() > remaining) throw Error(ErrorCode::truncated, draw_.callsite, remaining, bytes.size());
     while (!bytes.empty()) {
         if (vertex_bytes_.empty() && bytes.size() >= vertex_size_) {
-            draw_.vertices.push_back(decode(bytes.first(vertex_size_)));
+            decode(bytes.first(vertex_size_));
             bytes = bytes.subspan(vertex_size_);
             continue;
         }
@@ -221,20 +225,20 @@ void Vertices::write_attribute(uint32_t producer, std::span<const std::byte> byt
         std::memcpy(vertex_bytes_.data() + old, bytes.data(), n);
         bytes = bytes.subspan(n);
         if (vertex_bytes_.size() == vertex_size_) {
-            draw_.vertices.push_back(decode(vertex_bytes_));
+            decode(vertex_bytes_);
             vertex_bytes_.clear();
         }
     }
-    if (draw_.vertices.size() == count_) { indices(draw_); active_ = false; ready_ = true; }
+    if (decoded_ == count_) { if(!discard_)indices(draw_); active_ = false; ready_ = true; }
 }
 
 DrawPacket Vertices::take_draw() {
-    if (!ready_) { finish(); throw Error(ErrorCode::sequence, draw_.callsite, count_, draw_.vertices.size()); }
+    if (!ready_) { finish(); throw Error(ErrorCode::sequence, draw_.callsite, count_, decoded_); }
     ready_ = false;
     return std::move(draw_);
 }
 void Vertices::finish() const {
-    if (active_) throw Error(ErrorCode::truncated, draw_.callsite, count_ * vertex_size_, draw_.vertices.size() * vertex_size_ + vertex_bytes_.size());
+    if (active_) throw Error(ErrorCode::truncated, draw_.callsite, count_ * vertex_size_, decoded_ * vertex_size_ + vertex_bytes_.size());
 }
 
 } // namespace gx

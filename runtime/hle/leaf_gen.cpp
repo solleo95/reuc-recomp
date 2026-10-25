@@ -25,13 +25,13 @@ void verify_compare(const char* name, const Ctx& want, const Ctx& have) {
 }
 inline bool leaf_off(uint32_t address) { if (g_leaf_off.empty()) return false; for (uint32_t a : g_leaf_off) if (a == address) return true; return false; }
 inline uint32_t ld32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return _byteswap_ulong(v); }
-inline void st32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
+inline void st32(uint8_t* p, uint32_t v) { uc::rollback_note_pointer(p,4); v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
 inline uint32_t ld16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return _byteswap_ushort(v); }
-inline void st16(uint8_t* p, uint32_t v) { const uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(p, &h, 2); }
+inline void st16(uint8_t* p, uint32_t v) { uc::rollback_note_pointer(p,2); const uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(p, &h, 2); }
 inline double ldf(const uint8_t* p) { const uint32_t b = ld32(p); float f; std::memcpy(&f, &b, 4); return f; }
 inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }
 inline double ldd(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); v = _byteswap_uint64(v); double d; std::memcpy(&d, &v, 8); return d; }
-inline void std_(uint8_t* p, double d) { uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
+inline void std_(uint8_t* p, double d) { uc::rollback_note_pointer(p,8); uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
 }  // namespace
 
 namespace {

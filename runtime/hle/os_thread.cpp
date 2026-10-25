@@ -47,11 +47,15 @@ void hle_OSCreateThread(ppc::Ctx& c) {
 
 void hle_OSResumeThread(ppc::Ctx& c) {
     Thread* t = os_sched().find(c.r[3]);
-    c.r[3] = t ? uint32_t(os_sched().resume(t)) : uint32_t(-1);
+    PendingHle pending(os_sched(),c);
+    c.r[3]=t ? uint32_t(t->suspend_count) : uint32_t(-1);
+    if(t) os_sched().resume(t);
 }
 void hle_OSSuspendThread(ppc::Ctx& c) {
     Thread* t = os_sched().find(c.r[3]);
-    c.r[3] = t ? uint32_t(os_sched().suspend(t)) : uint32_t(-1);
+    PendingHle pending(os_sched(),c);
+    c.r[3]=t ? uint32_t(t->suspend_count) : uint32_t(-1);
+    if(t) os_sched().suspend(t);
 }
 namespace uc { static bool g_log_sleep; void os_log_sleep(bool on) { g_log_sleep = on; } }
 void hle_OSSleepThread(ppc::Ctx& c) {   // r3 = OSThreadQueue*
@@ -63,14 +67,16 @@ void hle_OSSleepThread(ppc::Ctx& c) {   // r3 = OSThreadQueue*
             if (prev <= sp) break;
             sp = prev;
         } }
+    PendingHle pending(os_sched(),c);
     os_sched().block_on(c.r[3]);
 }
-void hle_OSWakeupThread(ppc::Ctx& c) { os_sched().wake_all(c.r[3]); }
-void hle_OSYieldThread(ppc::Ctx&) { os_sched().yield(); }
+void hle_OSWakeupThread(ppc::Ctx& c) { PendingHle pending(os_sched(),c); os_sched().wake_all(c.r[3]); }
+void hle_OSYieldThread(ppc::Ctx& c) { PendingHle pending(os_sched(),c); os_sched().yield(); }
 void hle_OSExitThread(ppc::Ctx& c) { os_sched().exit_current(c.r[3]); }
 void hle_OSJoinThread(ppc::Ctx& c) {                                          // (thread, void** value) -> 1
     Thread* t = os_sched().find(c.r[3]);
     if (!t) { c.r[3] = 0; return; }
+    PendingHle pending(os_sched(),c,hle_OSJoinThread);
     uint32_t v = os_sched().join(t);
     if (c.r[4]) ppc::wr32(c, c.r[4], v);
     c.r[3] = 1;
@@ -81,13 +87,15 @@ void hle_OSSetThreadPriority(ppc::Ctx& c) {
     if (!t || prio < 0 || prio > 31) { c.r[3] = 0; return; }
     ppc::wr32(c, c.r[3] + layout::kThreadPriority, uint32_t(prio));
     ppc::wr32(c, c.r[3] + layout::kThreadBasePriority, uint32_t(prio));   // OSGetThreadPriority (translated) reads the base priority
-    os_sched().set_priority(t, prio);
     c.r[3] = 1;
+    PendingHle pending(os_sched(),c);
+    os_sched().set_priority(t, prio);
 }
 void hle_OSCancelThread(ppc::Ctx& c) {   // (thread); a cancelled thread is moribund and its joiners wake
     Thread* t = os_sched().find(c.r[3]);
     if (!t) return;
     ppc::wr16(c, c.r[3] + layout::kThreadState, 8);
+    PendingHle pending(os_sched(),c);
     os_sched().cancel(t);
 }
 // The SDK's scheduler-lock counter lives in a small-data word (r13-26464); both functions also drive the scheduler.
@@ -100,6 +108,7 @@ void hle_OSDisableScheduler(ppc::Ctx& c) {
 void hle_OSEnableScheduler(ppc::Ctx& c) {
     uint32_t a = c.r[13] - 26464, prev = ppc::rd32(c, a);
     ppc::wr32(c, a, prev - 1);
-    os_sched().unlock_scheduler();
     c.r[3] = prev;
+    PendingHle pending(os_sched(),c);
+    os_sched().unlock_scheduler();
 }

@@ -77,6 +77,27 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     click({tabs->BarRect.Min.x+tabs->Tabs[3].Offset+tabs->Tabs[3].Width*.5f,tabs->BarRect.GetCenter().y});
     CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);
     capture("controls");
+    {   // The last camera row remains reachable and saves a captured replacement binding.
+        ImGuiWindow* bindings=nullptr;
+        for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("bindings")!=std::string_view::npos) bindings=candidate;
+        CHECK(bindings);
+        io.AddMousePosEvent(bindings->InnerClipRect.GetCenter().x,bindings->InnerClipRect.GetCenter().y); frame();
+        io.AddMouseWheelEvent(0,-100); frame(); frame();
+        bindings->IDStack.push_back(bindings->GetID(int(uc::Action::camera_right)));
+        const auto button=bindings->GetID(SDL_GetScancodeName(SDL_SCANCODE_RIGHT));
+        bindings->IDStack.pop_back();
+        bool found=false;
+        for(float y=bindings->InnerClipRect.Min.y+4;y<bindings->InnerClipRect.Max.y;y+=3) {
+            io.AddMousePosEvent(bindings->Pos.x+70,y); frame();
+            if(context.HoveredId==button) {click(io.MousePos);found=true;break;}
+        }
+        CHECK(found);
+        SDL_Event key{}; key.type=SDL_EVENT_KEY_DOWN; key.key.scancode=SDL_SCANCODE_F6; key.key.down=true;
+        menu.capture_event(key); menu.commit(); frame();
+        const auto& entries=live.bindings()[size_t(uc::Action::camera_right)];
+        CHECK(entries.size()==1 && entries[0].input.kind==uc::PhysicalKind::key && entries[0].input.code==SDL_SCANCODE_F6 && !live.error());
+        capture("camera-bindings");
+    }
     {   // the Effects tab: pick 4x anisotropic filtering through the combo
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
         CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);

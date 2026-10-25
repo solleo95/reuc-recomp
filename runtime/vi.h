@@ -11,4 +11,7 @@ struct ViStats { uint64_t retraces = 0; uint32_t current_fb = 0, next_fb = 0, tv
 
 void vi_hle_init(Sched& s, uint64_t period_ticks, std::function<void()> on_retrace);   // after os_hle_init
 ViStats vi_stats();
+struct ViSnapshot { ViStats stats; uint64_t period; };
+ViSnapshot vi_checkpoint();
+void vi_restore(const ViSnapshot&);
 }

@@ -28,14 +28,21 @@ int main(int argc,char** argv) {
     uc::ConfigDocument config;uc::Options options;options.game=directory;
     uc::store_options(config,options);uc::save_config(directory/"config.json",config);
     wchar_t executable[32768];CHECK(GetModuleFileNameW(nullptr,executable,32768));
-    for(int cpu:{7,-1}) {
-        auto process=uc::launch_game(executable,directory/"config.json",nullptr,cpu);
+    for(int mode:{0,1,2}) {
+        const int cpu=mode==1 ? 7 : -1;
+        std::optional<uc::net::Endpoint> network;
+        if(mode)network=uc::net::Endpoint{mode==1,"127.0.0.1",27889};
+        auto process=uc::launch_game(executable,directory/"config.json",nullptr,cpu,network);
         CHECK(WaitForSingleObject(process.get(),10000)==WAIT_OBJECT_0);
         DWORD code=1;CHECK(GetExitCodeProcess(process.get(),&code) && code==0);
         std::ifstream in(directory/"child-args.txt");std::string args(std::istreambuf_iterator<char>(in),{});
         CHECK(args.find("console=0\n")!=std::string::npos);
         CHECK((args.find("--guest-cpu\n7\n")!=std::string::npos)==(cpu==7));
         if(cpu==-1)CHECK(args.find("--guest-cpu")==std::string::npos);
+        if(mode) {
+            CHECK(args.find("--net-port\n27889\n")!=std::string::npos);
+            CHECK(args.find(cpu==7 ? "--net-host\n" : "--net-join\n127.0.0.1\n")!=std::string::npos);
+        } else CHECK(args.find("--net-")==std::string::npos);
     }
     for(int cpu:{-2,63,999}) {
         failed=false;try {uc::launch_game(executable,directory/"config.json",nullptr,cpu);}catch(const std::invalid_argument&){failed=true;}CHECK(failed);

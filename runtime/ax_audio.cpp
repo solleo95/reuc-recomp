@@ -12,6 +12,7 @@ namespace {
 uc::Sched* scheduler;
 uc::AudioSink output;
 bool started=false;
+bool replaying=false;
 bool profile_audio=false;
 struct VoiceProbe { bool running=false,tracked=false; int32_t peak=0; };
 std::array<VoiceProbe,128> voice_probes{};
@@ -65,7 +66,7 @@ void arm(uint64_t at) {
         hle_AXFrame(scheduler->irq_ctx());
         // Every interval produces96 samples; skipping overdue intervals starves the device.
         arm(at+uc::ms_to_ticks(3));
-    });
+    },uc::Sched::EventKind::Audio);
 }
 }
 namespace uc {
@@ -97,11 +98,25 @@ void mix_ax_voice(ppc::Ctx& c,uint32_t pb,std::span<int32_t,192> mix) {
     ppc::wr16(c,pb+0x6A,uint16_t(envelope)); ppc::wr16(c,pb+0x14,uint16_t(left)); ppc::wr16(c,pb+0x18,uint16_t(right));
 }
 void audio_hle_init(Sched& s,AudioSink sink,bool profile) {
-    scheduler=&s; output=std::move(sink); started=false; frames=nonzero=0;
+    scheduler=&s; output=std::move(sink); started=false; replaying=false; frames=nonzero=0;
     profile_audio=profile; voice_probes={}; voice_probe_starts=0;
 }
 void audio_hle_shutdown() { started=false; output={}; scheduler=nullptr; }
 AudioStats audio_stats() { return {frames.load(),nonzero.load()}; }
+struct AudioSnapshot {
+    bool started;
+    std::array<VoiceProbe,128> probes;
+    uint32_t starts;
+    AudioStats stats;
+};
+std::shared_ptr<const AudioSnapshot> audio_checkpoint() {
+    return std::make_shared<AudioSnapshot>(AudioSnapshot{started,voice_probes,voice_probe_starts,audio_stats()});
+}
+void audio_restore(const AudioSnapshot& saved) {
+    started=saved.started; voice_probes=saved.probes; voice_probe_starts=saved.starts;
+    frames=saved.stats.frames; nonzero=saved.stats.nonzero_samples;
+}
+void audio_set_replaying(bool on) { replaying=on; }
 }
 void hle_AIStartDMA(ppc::Ctx&) {
     if (scheduler && !started) { started=true; arm(uc::now_ticks()+uc::ms_to_ticks(3)); }
@@ -155,5 +170,5 @@ void hle_AXFrame(ppc::Ctx& c) {
     uint64_t active=0;
     for (size_t i=0;i<pcm.size();++i) { pcm[i]=int16_t(std::clamp(mix[i],-32768,32767)); active+=pcm[i]!=0; }
     ++frames; nonzero+=active;
-    if (output) output(pcm);
+    if (output && !replaying) output(pcm);
 }

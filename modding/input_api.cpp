@@ -28,7 +28,8 @@ public:
         for (const auto& [owner, mask] : force_) force |= mask;
         for (const auto& [owner, mask] : block_) block |= mask;
         const uint32_t held = (sample.held | force) & ~block;
-        sample.pressed = (sample.pressed | (held & ~sample.held)) & held;
+        // Pulses (wheel, quick taps, native weapon steps) need not remain held.
+        sample.pressed = (sample.pressed | (held & ~sample.held)) & ~block;
         sample.released = (sample.released | (sample.held & ~held)) & ~held;
         sample.held = held;
         if (!aim_order_.empty()) { const auto& aim = aim_.at(aim_order_.back()); sample.x = aim[0]; sample.y = aim[1]; }

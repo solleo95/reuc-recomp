@@ -25,6 +25,9 @@ struct Output {
     std::vector<std::pair<std::string, std::string>> files;  // name -> content
 };
 
+// Resume a parked SDK call through the guest LR chain after its native stack unwinds.
+void add_resume_entries(Program& p);
+
 // Condition-register liveness. out[function entry][i] = CR fields (bit f = cr<f>) that may still be read after instruction i of the function.
 struct CrLive {
     std::unordered_map<uint32_t, std::vector<uint8_t>> out;

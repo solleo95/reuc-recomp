@@ -194,6 +194,7 @@ GXLoadNrmMtxImm
 @8024585C IntroLogoUpdate
 @801426D4 MovieUpdate
 @801581E0 GameFrameWait
+@8003F670 GameLoop
 @800C790C ActorStepTime
 @800329FC FixedPlaybackStep
 @8014D368 HudNameDelay

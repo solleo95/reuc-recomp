@@ -7,12 +7,14 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace uc {
 
 struct ThreadExit {};   // thrown to unwind a guest thread's host stack; carries no guest-visible meaning
+struct ThreadRewind {};
 
 struct Thread {
     enum class State { Suspended, Ready, Running, Waiting, Dead };
@@ -30,12 +32,22 @@ struct Thread {
     ppc::Ctx ctx{};
     std::function<void(ppc::Ctx&)> body;
     std::condition_variable cv;
+    struct Continuation {
+        uint32_t pc=0;
+        uint32_t return_lr=0;
+        void (*retry)(ppc::Ctx&)=nullptr;
+        std::array<uint32_t,8> args{};
+        bool entry_ee=true;
+    } continuation;
+    bool entered=false, restart=false;
+    bool host_alive=false, rewind_requested=false, rewound=false; // baton_m_
 };
 
 class Sched {
 public:
     using Body = std::function<void(ppc::Ctx&)>;
     using Event = std::function<void()>;
+    enum class EventKind { Opaque, Sleep, Vi, Alarm, Audio, Dvd, Gx, Save, Ios, Dsp };
 
     explicit Sched(uint8_t* guest_mem, size_t host_stack = 8u << 20);
     ~Sched();
@@ -60,8 +72,8 @@ public:
     Thread* find(uint32_t guest_addr) const;
 
     // Events run on the thread that holds the baton, only while interrupts are enabled (the "interrupt context").
-    void post_at(uint64_t tick, Event fn);       // baton holder only
-    void post_external(Event fn);                // any host thread
+    void post_at(uint64_t tick, Event fn, EventKind kind=EventKind::Opaque);
+    void post_external(Event fn, EventKind kind=EventKind::Opaque, std::optional<uint64_t> generation={});
     void safe_point();                           // deliver due events, then let a more urgent ready thread run
     bool set_interrupts(bool enabled);           // returns the previous state; enabling is a safe point
     bool interrupts_enabled() const { return ee_; }
@@ -80,6 +92,10 @@ public:
     void set_switch_hook(std::function<void(Thread*)> h) { switch_hook_ = std::move(h); }
 
     void thread_main(Thread* t);                 // host thread entry (internal)
+    struct Snapshot;
+    std::shared_ptr<const Snapshot> checkpoint(); // Main guest baton, deterministic clock, no in-flight I/O.
+    static uint64_t checkpoint_hash(const Snapshot& snapshot); // Canonical guest fields; excludes host addresses and callable captures.
+    void restore(const Snapshot& snapshot);
 
 private:
     static constexpr uint32_t join_key(const Thread* t) { return 0xF0000000u + uint32_t(t->id); }
@@ -99,11 +115,14 @@ private:
     uint8_t* mem_;
     size_t host_stack_;
     std::vector<std::unique_ptr<Thread>> threads_;
+    std::vector<std::unique_ptr<Thread>> retired_;
     std::map<uint32_t, std::vector<Thread*>> waitq_;
-    std::multimap<uint64_t, Event> timed_;
-    std::vector<Event> ext_q_;
+    struct EventRecord { Event fn; EventKind kind; };
+    std::multimap<uint64_t, EventRecord> timed_;
+    std::vector<EventRecord> ext_q_;
     std::mutex baton_m_, ext_m_, done_m_, join_m_;
     std::condition_variable ext_cv_, done_cv_;
+    std::condition_variable rewind_cv_;
     std::vector<void*> handles_;
     Thread* running_ = nullptr;
     Thread* main_ = nullptr;
@@ -122,7 +141,9 @@ private:
     std::atomic<uint64_t> run_cycles_[32] = {}, cycle_started_{0};   // CPU cycles a guest thread ran while holding the baton (QueryThreadCycleTime: no waits, no preemption)
     static uint64_t thread_cycles();
     bool det_ = false, ext_allowed_ = true;
+    bool rollback_ = false;
     std::atomic<int> async_pending_{0};
+    std::atomic<uint64_t> generation_{0};
     int pin_cpu_ = -1;   // >= 0: every guest host thread runs on this logical CPU (benchmarks: steadier timing than letting Windows move the thread between cores and CCDs)
     std::atomic<uint32_t> entry_[32] = {};
     static uint64_t steady_ns();
@@ -139,12 +160,27 @@ public:
     // and an idle scheduler waits for the announced ones instead of moving virtual time on. async_begin() announces one.
     void set_deterministic(bool on) { det_ = on; ext_allowed_ = !on; }
     bool deterministic() const { return det_; }
-    void async_begin() { ++async_pending_; }
+    void set_rollback(bool on) { rollback_=on; }
+    uint64_t async_begin() { ++async_pending_; return generation_.load(); }
+    uint64_t generation() const { return generation_.load(); }
+    void drain_async(); // Wait for announced results; retain their deterministic delivery order.
     uint64_t guest_cycles() const { uint64_t sum = 0; for (const auto& c : run_cycles_) sum += c.load(); return sum; }
     uint64_t idle_ns() const { return idle_ns_.load(); }   // time every guest thread was blocked and the scheduler waited for an event
     uint64_t thread_run_ns(int id) const { return id > 0 && id < 32 ? run_ns_[id].load() : 0; }
     std::string idle_report() const;   // idle waits of 1 ms or more, grouped by the blocked threads and the wait keys they sat on (frame-log notes)
     uint32_t thread_entry(int id) const { return id > 0 && id < 32 ? entry_[id].load() : 0; }
+};
+
+// A blocking HLE call either returns at pc or retries an operation not yet committed.
+class PendingHle {
+    Thread* thread_;
+    Thread::Continuation previous_;
+public:
+    PendingHle(Sched& scheduler,ppc::Ctx& c,void (*retry)(ppc::Ctx&)=nullptr,uint32_t entry=0);
+    ~PendingHle();
+    PendingHle(const PendingHle&)=delete;
+    PendingHle& operator=(const PendingHle&)=delete;
+    void committed() { if(thread_) thread_->continuation.retry=nullptr; }
 };
 
 }  // namespace uc

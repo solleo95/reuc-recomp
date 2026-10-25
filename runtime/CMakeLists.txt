@@ -2,10 +2,11 @@ add_library(uc_runtime STATIC guest_mem.cpp dispatch.cpp trace.cpp fatal.cpp gue
 target_include_directories(uc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_sources(uc_runtime PRIVATE gx_audit.cpp)
 target_sources(uc_runtime PRIVATE hle/gx.cpp hle/sdk_math.cpp hle/leaf_gen.cpp)
-target_sources(uc_runtime PRIVATE savefs.cpp hle/save.cpp)
+target_sources(uc_runtime PRIVATE savefs.cpp save_rollback.cpp hle/save.cpp)
 target_sources(uc_runtime PRIVATE native_input.cpp)
 target_sources(uc_runtime PRIVATE ax_audio.cpp audio_gap_audit.cpp)
 target_sources(uc_runtime PRIVATE locked_copy.cpp)
+target_sources(uc_runtime PRIVATE rollback_memory.cpp)
 target_sources(uc_runtime PRIVATE crash_report.cpp gx_gap_audit.cpp)
 target_link_libraries(uc_runtime PUBLIC uc_gx uc_input)
 # Real hook implementations for uc.exe (ppc::trap, mmio_*, timebase); tests use tests/mmio_stub.cpp instead.

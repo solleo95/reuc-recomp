@@ -7,5 +7,11 @@ void os_hle_init(Sched& s, uint8_t* guest_mem, uint32_t dummy_context_addr);   /
 uint32_t os_dummy_context();
 void os_log_sleep(bool on);   // print the guest trace at every OSSleepThread (bring-up diagnostic)
 Sched& os_sched();
+struct OsSyncSnapshot;
+std::shared_ptr<const OsSyncSnapshot> os_sync_checkpoint();
+void os_sync_restore(const OsSyncSnapshot&);
+struct OsAlarmSnapshot;
+std::shared_ptr<const OsAlarmSnapshot> os_alarm_checkpoint();
+void os_alarm_restore(const OsAlarmSnapshot&);
 std::string format_guest(ppc::Ctx& c, uint32_t fmt_addr, int first_gpr);
 }

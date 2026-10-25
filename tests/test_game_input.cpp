@@ -3,10 +3,12 @@
 #include "input_probe.h"
 #include "ppc_fixture.h"
 #include "dispatch.h"
+#include "input_api.h"
 #include <bit>
 static uint32_t actor_address=0x80010000;
 static unsigned reloads=0,grenades=0,knives=0;
 static uint32_t reserve=30,grenade_count=3;
+static uint32_t inventory_selector=0;
 static float knife_x=uc::kKnifeKeyDirectionX,knife_y=uc::kKnifeKeyDirectionY;
 static uc::NativeInput* redirect_input=nullptr;
 static void original_update(ppc::Ctx& c) {
@@ -20,7 +22,7 @@ static void original_update(ppc::Ctx& c) {
     c.r[1]=ppc::rd32(c,c.r[1]); c.r[3]=0x12345678;
 }
 static void capacity(ppc::Ctx& c) { c.r[3]=15; }
-static void inventory(ppc::Ctx& c) { c.r[3]=c.r[5]==3 ? grenade_count : reserve; }
+static void inventory(ppc::Ctx& c) { CHECK(c.r[4]==inventory_selector); c.r[3]=c.r[5]==3 ? grenade_count : reserve; }
 static void reload(ppc::Ctx& c) { ++reloads; CHECK(c.r[3]==actor_address+0x48); ppc::wr32(c,c.r[3]+0x48C,15); ppc::wr32(c,c.r[3]+0x490,2); }
 static void grenade(ppc::Ctx& c) { ++grenades; --grenade_count; ppc::wrf32(c,c.r[3]+0xF0,.5f); }
 static void knife(ppc::Ctx& c) {
@@ -31,12 +33,18 @@ static void knife(ppc::Ctx& c) {
 }
 static uint64_t bit(uc::Action a) { return uint64_t(1)<<unsigned(a); }
 int main() {
+    uc::mods::ApiRegistry api;
+    auto input_api=uc::mods::register_input_api(api);
     uc::InputProbeSnapshot s;
     CHECK(uc::game_input_context(s)==uc::InputContext::inactive);
     s.ui_valid=s.ui_enabled=true; s.ui_states.fill(uint32_t(-1));
     CHECK(uc::game_input_context(s)==uc::InputContext::menu);
     s.players[0].valid=true; s.players[0].player_790=0; s.players[0].state_794=1;
     s.ui_states[2]=s.ui_states[3]=5; s.ui_states[11]=0;
+    CHECK(uc::game_input_context(s)==uc::InputContext::gameplay);
+    CHECK(uc::game_input_context(s,1)==uc::InputContext::menu);
+    s.players[1]=s.players[0]; s.players[1].player_790=1; s.players[1].mode_630=2;
+    CHECK(uc::game_input_context(s,1)==uc::InputContext::qte);
     CHECK(uc::game_input_context(s)==uc::InputContext::gameplay);
     s.ui_states[6]=6; CHECK(uc::game_input_context(s)==uc::InputContext::gameplay);
     s.game_mode_valid=true; s.game_mode=3; CHECK(uc::game_input_context(s)==uc::InputContext::menu);
@@ -100,6 +108,28 @@ int main() {
     CHECK(mapped.held==uc::kButtonB && mapped.pressed==uc::kButtonB && mapped.x==.3f && mapped.y==-.2f);
     input.host_button({uc::PhysicalKind::mouse,3},false);
     mapped=uc::game_input_sample(c,raw); CHECK(mapped.held==0 && mapped.released==uc::kButtonB);
+    uc::input_hle_init(&input);
+    const auto camera_sample=[&](float x,float y) {
+        c.r[3]=0;c.r[4]=0x80060000;c.r[5]=1;hle_KPADRead(c);
+        CHECK(c.r[3]==1 && ppc::rd8(c,0x8006005C)==1);
+        CHECK(ppc::rd32(c,0x80060000)==0 && ppc::rd32(c,0x80060004)==0 && ppc::rd32(c,0x80060008)==0);
+        CHECK(ppc::rdf32(c,0x80060060)==x && ppc::rdf32(c,0x80060064)==y);
+    };
+    for(const auto [key,axes]:{std::pair{82u,std::pair{0.f,1.f}},{81u,{0.f,-1.f}},{80u,{-1.f,0.f}},{79u,{1.f,0.f}}}) {
+        input.host_button({uc::PhysicalKind::key,uint16_t(key)},true);
+        camera_sample(axes.first,axes.second);
+        camera_sample(axes.first,axes.second);
+        input.host_button({uc::PhysicalKind::key,uint16_t(key)},false);
+        camera_sample(0,0);
+    }
+    input.host_button({uc::PhysicalKind::key,82},true);input.host_button({uc::PhysicalKind::key,81},true);
+    input.host_button({uc::PhysicalKind::key,80},true);input.host_button({uc::PhysicalKind::key,79},true);
+    camera_sample(0,0);
+    input.host_button({uc::PhysicalKind::key,81},false);input.host_button({uc::PhysicalKind::key,80},false);
+    camera_sample(1,1);
+    input.focus(false);camera_sample(0,0);input.focus(true);
+    input.host_button({uc::PhysicalKind::key,82},false);input.host_button({uc::PhysicalKind::key,79},false);
+    uc::input_hle_init(nullptr);
     input.host_wheel(2); mapped=uc::game_input_sample(c,raw);
     CHECK(mapped.pressed&uc::kNativeWeaponStep);
     for(unsigned i=0;i<2;++i) {
@@ -131,9 +161,13 @@ int main() {
     key_press(21); weapon_update(); CHECK(reloads==1); // Reload animation in progress.
     ppc::wr32(c,actor+0x48+0x490,1); key_press(21); weapon_update(); CHECK(reloads==1); // Full magazine.
     ppc::wr32(c,actor+0x48+0x48C,10); ppc::wr32(c,actor+0x48+0x484,1); reserve=1;
+    inventory_selector=2;ppc::wr32(c,actor+0x48+0x494,2);
     key_press(21); weapon_update(); CHECK(reloads==1); // No refill available.
+    inventory_selector=0;ppc::wr32(c,actor+0x48+0x494,0);
     reserve=30; key_press(21); input.focus(false); input.focus(true); weapon_update(); CHECK(reloads==1);
+    inventory_selector=2;ppc::wr32(c,actor+0x4F8+0xFC,2);
     key_press(10); owner_update(); CHECK(grenades==1 && grenade_count==2);
+    inventory_selector=0;ppc::wr32(c,actor+0x4F8+0xFC,0);
     key_press(10); owner_update(); CHECK(grenades==1); // Original grenade cooldown.
     ppc::wrf32(c,actor+0x4F8+0xF0,0); grenade_count=0; key_press(10); owner_update(); CHECK(grenades==1);
     input.host_button({uc::PhysicalKind::key,25},true); uc::game_input_sample(c,raw);
@@ -230,5 +264,19 @@ int main() {
     c.r[3]=binding;c.r[4]=4;c.lr=0x80068510;c.r[30]=actor;hle_GameActionMask(c);CHECK(c.r[3]==0);
     c.r[3]=binding;c.r[4]=4;c.r[30]=actor_address;hle_GameActionMask(c);CHECK(c.r[3]==uc::kNativeWeaponStep);
     c.r[3]=actor+0x5F8;c.r[4]=0;c.lr=0x800673A0;hle_GameMotionCount(c);CHECK(c.r[3]==1); // Old actor never falls back to sensor-driven QTE progress.
+    // Channel 1 owns its native requests; a P1 update must not consume P2's reload.
+    uc::NativeInput second;second.focus(true);
+    uc::input_hle_init(&input,&second);uc::game_input_init(&input,false,&second);
+    const auto first_actor=actor_address;actor_address=0x80050000;
+    ppc::wr32(c,c.r[13]-27460,actor_address);ppc::wr32(c,actor_address+0x790,1);ppc::wr32(c,actor_address+0x794,1);
+    ppc::wrf32(c,actor_address+0x4F8+0xEC,1);ppc::wr32(c,actor_address+0x4D4,10);ppc::wr32(c,actor_address+0x4D8,1);
+    auto sample_second=[&] {c.r[3]=1;c.r[4]=0x80060000;c.r[5]=1;hle_KPADRead(c);CHECK(c.r[3]==1);};
+    sample_second();second.host_button({uc::PhysicalKind::key,21},true);second.host_button({uc::PhysicalKind::key,21},false);sample_second();
+    c.r[1]=0x817D0000;c.r[3]=first_actor+0x48;c.r[4]=1;hle_GameWeaponUpdate(c);CHECK(reloads==2);
+    c.r[1]=0x817D0000;c.r[3]=actor_address+0x48;c.r[4]=1;hle_GameWeaponUpdate(c);CHECK(reloads==3 && ppc::rd32(c,actor_address+0x4D4)==15);
+    second.host_wheel(1);sample_second();
+    c.r[3]=binding;c.r[4]=4;c.lr=0x80068510;c.r[30]=first_actor;hle_GameActionMask(c);CHECK(c.r[3]!=uc::kNativeWeaponStep);
+    c.r[3]=binding+0x68;c.r[4]=4;c.lr=0x80068510;c.r[30]=actor_address;hle_GameActionMask(c);CHECK(c.r[3]==uc::kNativeWeaponStep);
+    uc::input_hle_init(nullptr);
     uc::game_input_shutdown();
 }

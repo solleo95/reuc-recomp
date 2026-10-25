@@ -72,6 +72,19 @@ int64_t read_padded(const std::optional<DvdFs::Snapshot>& file, std::vector<uint
 }  // namespace
 
 namespace uc {
+struct DvdSnapshot {
+    std::map<uint32_t,DvdFs::Snapshot> open;
+    std::set<uint32_t> cancelled;
+    DvdStats stats;
+};
+std::shared_ptr<const DvdSnapshot> dvd_checkpoint() {
+    std::lock_guard lock(g_m);
+    return std::make_shared<DvdSnapshot>(DvdSnapshot{g_open,g_cancelled,g_stats});
+}
+void dvd_restore(const DvdSnapshot& saved) {
+    std::lock_guard lock(g_m);
+    g_open=saved.open; g_cancelled=saved.cancelled; g_stats=saved.stats;
+}
 void dvd_hle_shutdown() {
     {
         std::lock_guard lock(g_m);
@@ -137,6 +150,7 @@ void hle_DVDReadPrio(ppc::Ctx& c) {
     int64_t n = read_padded(open_version(fi, e), data, len, off);
     if (n < 0) { c.r[3] = uint32_t(-1); return; }
     std::memcpy(ppc::hp(c, buf), data.data(), len);
+    gx::note_write_range(buf,len);
     { std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
     c.r[3] = len;
 }
@@ -151,7 +165,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
     const auto version = open_version(fi, e);
     Sched& s = os_sched();
     uint8_t* mem = c.mem;
-    s.async_begin();   // deterministic mode: the idle scheduler waits for this read's completion event
+    const uint64_t generation=s.async_begin();
     enqueue([=, &s] {
         auto data = std::make_shared<std::vector<uint8_t>>();
         int64_t n = read_padded(version, *data, len, off);
@@ -161,7 +175,7 @@ void hle_DVDReadAsyncPrio(ppc::Ctx& c) {
             if (n >= 0) { std::memcpy(mem + (buf & 0x3FFFFFFFu), data->data(), len); gx::note_write_range(buf, len); std::lock_guard lock(g_m); ++g_stats.reads; g_stats.bytes += len; }
             ppc::wr32(ic, fi + layout::kCbState, n < 0 ? uint32_t(-1) : 0u);   // DVD_STATE_END or FATAL_ERROR
             if (cb) call_guest(ic, cb, {uint32_t(n < 0 ? -1 : int64_t(len)), fi});
-        });
+        },Sched::EventKind::Dvd,generation);
     });
     c.r[3] = 1;
 }
@@ -176,6 +190,6 @@ void hle_DVDCancelAsync(ppc::Ctx& c) {
     uint32_t block = c.r[3], cb = c.r[4];
     cancel_block(c, block);
     Sched& s = os_sched();
-    if (cb) s.post_external([=, &s] { call_guest(s.irq_ctx(), cb, {0u, block}); });
+    if (cb) s.post_external([=, &s] { call_guest(s.irq_ctx(), cb, {0u, block}); },Sched::EventKind::Dvd);
     c.r[3] = 1;
 }

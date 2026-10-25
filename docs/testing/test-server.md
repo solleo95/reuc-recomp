@@ -48,6 +48,11 @@ For CTest, use a temporary directory inside `build`. Tests that exercise atomic 
 
 `n` counts KPAD samples. `retraces` counts VI retraces = game time at 60 ticks/s at any speed. Menu animations, loading and tutorials follow game time, so waits that depend on them use `retraces` (`Game.advance(ticks)`). With `--speed k` the whole runtime clock is scaled by k (verified at 1/2/4/8: retraces/s = 60·k). Above 4 the KPAD/present rate is capped near 160–190 Hz (rendering is not skipped), so game logic frames per game tick fall below 1.
 
+`frame.game_seconds` is the accumulated game timestep from `game_pacing_stats`,
+in seconds. Use its change over wall time to distinguish slow simulation from low
+render FPS. In network mode an input reply waits until the delayed canonical input
+is applied; capture alone does not acknowledge consumption.
+
 Speeds 16 and 32 are accepted (2026-10-15, `--skip-tutorials`, train chapter 1, 6 s wall in gameplay, render scale 2x): retraces/s 893 at x16 and 1714 at x32 (ideal 960/1920), but KPAD/present frames/s stay at 88 (x8), 83 (x16), 79 (x32), against 30 at x1. The game logic therefore runs at most ~2.9x faster than real time whatever the factor; the ceiling is the guest CPU cost per frame, not the clock (`--render-scale 0.5` and `1` give the same 85-89 frames/s). Above x8 the extra clock only gives each logic frame a larger time step and costs more menu retries; use x8 unless the frame cost drops (docs/spikes/F3-guest-frame-cost.md, F4-gx-offload-estimate.md).
 
 ## Menu detection (state, not timers)

@@ -29,12 +29,14 @@ uint32_t game_hz;  // same ownership
 std::atomic<uint64_t> requested_mode{0};   // game_pacing_set_mode: 1<<63 | unlock<<32 | hz, 0 = none pending
 std::atomic<bool> paused{false};
 uint64_t deadline_ticks,last_boundary_ticks;
+uint64_t network_period_ticks=0; // Guest baton owns network updates.
 // Experimental --game-hz: the game clock waits for a wall-clock (virtual clock) deadline instead of a VI retrace and gets the real elapsed time as its timestep.
 // shortcut: coarse scheduler sleep (1 ms granularity) plus a 2 ms spin; replace with a waitable timer if the spin shows up in CPU use.
 void timed_wait() {
     uint64_t period=uc::kTimebaseHz/game_hz;
     // Deterministic runs have a virtual clock that cannot run faster: the test speed factor (x8 to skip to a scene) gives each step a longer timestep instead, i.e. fewer steps per game second (at most 50 ms, the clamp of timed_step).
     if(uc::deterministic_clock()) period=std::min<uint64_t>(period*uc::input_demo_speed(uc::clock_speed()),uc::ms_to_ticks(50));
+    if(network_period_ticks)period=network_period_ticks;
     const uint64_t now=uc::now_ticks(),spin=uc::ms_to_ticks(2);
     deadline_ticks=std::max(deadline_ticks+period,now);   // a late frame starts the next one at once instead of waiting for the next slot
     if(deadline_ticks>now+spin) uc::os_sched().sleep_ticks(deadline_ticks-spin-now);
@@ -60,8 +62,34 @@ uint32_t home_object=0;
 std::array<HomeInput,4> home_input{}; // Guest baton; reset by the menu initialization call.
 }
 namespace uc {
+struct PacingSnapshot {
+    bool unlock,paused;
+    uint32_t hz;
+    uint64_t requested,deadline,last_boundary,network_period;
+    float scale;
+    double phase;
+    uint32_t ticks;
+    decltype(owed_frames) owed;
+    decltype(sleep_carry) carry;
+    uint32_t home;
+    decltype(home_input) input;
+    GamePacingStats stats;
+};
+std::shared_ptr<const PacingSnapshot> game_pacing_checkpoint() {
+    return std::make_shared<PacingSnapshot>(PacingSnapshot{unlock_60fps,paused.load(),game_hz,
+        requested_mode.load(),deadline_ticks,last_boundary_ticks,network_period_ticks,step_scale,nominal_phase,
+        nominal_ticks,owed_frames,sleep_carry,home_object,home_input,game_pacing_stats()});
+}
+void game_pacing_restore(const PacingSnapshot& saved) {
+    unlock_60fps=saved.unlock; paused=saved.paused; game_hz=saved.hz; requested_mode=saved.requested;
+    deadline_ticks=saved.deadline; last_boundary_ticks=saved.last_boundary; network_period_ticks=saved.network_period;
+    step_scale=saved.scale; nominal_phase=saved.phase; nominal_ticks=saved.ticks; owed_frames=saved.owed;
+    sleep_carry=saved.carry; home_object=saved.home; home_input=saved.input;
+    calls=saved.stats.calls; retraces=saved.stats.retraces; timestep_ns=saved.stats.timestep_ns;
+    threshold_two=saved.stats.threshold_two; adjusted=saved.stats.adjusted; wait_ns=saved.stats.wait_ns;
+}
 void game_pacing_init(bool unlock,uint32_t hz) {
-    unlock_60fps=unlock; game_hz=hz; deadline_ticks=last_boundary_ticks=0; calls=retraces=timestep_ns=threshold_two=adjusted=wait_ns=0;
+    unlock_60fps=unlock; game_hz=hz; deadline_ticks=last_boundary_ticks=network_period_ticks=0; calls=retraces=timestep_ns=threshold_two=adjusted=wait_ns=0;
     step_scale=1.f; nominal_phase=0; nominal_ticks=1; owed_frames.clear(); sleep_carry.clear(); requested_mode=0;
     home_object=0; home_input={};
 }
@@ -73,6 +101,10 @@ PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit,uint32_t game_hz_o
     return {limit>30,0};
 }
 void game_pacing_set_mode(PacingMode mode) { requested_mode=(uint64_t(1)<<63)|(uint64_t(mode.unlock_60)<<32)|mode.game_hz; }
+void game_pacing_set_network_period(uint64_t ticks) {
+    if(ticks && (ticks<kTimebaseHz/120 || ticks>kTimebaseHz/20))throw std::invalid_argument("network frame period out of range");
+    network_period_ticks=ticks;
+}
 void game_pacing_set_paused(bool on) { paused=on; }
 bool game_pacing_paused() { return paused.load(); }
 float game_step_scale() { return step_scale; }

@@ -34,7 +34,16 @@ public:
     Stats stats(int fd);
     Directory read_dir(const std::string& path);
     Usage usage(const std::string& path);
+    struct Snapshot;
+    void begin_rollback(); // Before guest startup; speculative filesystem stays in memory.
+    std::shared_ptr<const Snapshot> checkpoint() const;
+    void restore(const Snapshot&);
+    void commit(const Snapshot&); // Confirmed timeline only.
 private:
+    std::shared_ptr<Snapshot> rollback_;
+    std::shared_ptr<const Snapshot> committed_;
+    uint64_t snapshot_revision_=0;
+    Snapshot& writable();
     struct Pin { std::filesystem::path path; std::shared_ptr<void> handle; };
     using Pins=std::vector<Pin>;
     struct File { HANDLE handle; uint32_t mode; Pins parents; };

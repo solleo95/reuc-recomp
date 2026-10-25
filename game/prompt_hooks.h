@@ -5,6 +5,9 @@
 namespace uc {
 void prompt_hooks_init(const Bindings&,bool trace=false);
 void prompt_hooks_set_bindings(const Bindings&);   // any thread (in-game menu); prompts built from the next hook on use them
+struct PromptSnapshot;
+std::shared_ptr<const PromptSnapshot> prompt_checkpoint();
+void prompt_restore(const PromptSnapshot&);
 class PromptScope {
 public:
     PromptScope(ppc::Ctx&,uint32_t entry);

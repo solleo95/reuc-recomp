@@ -1,9 +1,21 @@
 #include "gx_packets.h"
+#include "gx_scene.h"
 #include <atomic>
 #include <chrono>
 #include <limits>
 
 namespace gx {
+Packets::Packets(bool detached):scene_capture_(detached ? std::make_unique<SceneCapture>() : nullptr) {}
+Packets::~Packets()=default;
+std::shared_ptr<const SceneSnapshot> Packets::checkpoint() {
+    std::lock_guard lock(mutex_);
+    return scene_capture_ ? std::make_shared<const SceneSnapshot>(scene_capture_->checkpoint()) : nullptr;
+}
+void Packets::restore(const SceneSnapshot& snapshot) {
+    std::lock_guard lock(mutex_);
+    if(!scene_capture_)throw std::logic_error("scene restore requires detached rendering");
+    scene_capture_->restore(snapshot); latest_scene_.reset();
+}
 namespace { std::atomic<uint64_t> total_seal_wait_ns{0}, total_window_wait_ns{0}, total_seals{0}, latency_frames{0}, latency_total_ns{0}, latency_max_ns{0}; }
 uint64_t seal_wait_ns() { return total_seal_wait_ns.load(); }
 uint64_t seal_window_wait_ns() { return total_window_wait_ns.load(); }
@@ -13,6 +25,15 @@ LatencyWindow take_latency_window() { return {window_sealed_max_ns.exchange(0) /
 FrameLatency frame_latency() { return {latency_frames.load(), latency_total_ns.load(), latency_max_ns.load()}; }
 uint64_t Packets::seal_batch(FramePacket packet) {
     std::unique_lock lock(mutex_);
+    if(scene_capture_) {
+        if(canceled_)throw Error(ErrorCode::canceled,0,0,0);
+        if(next_serial_==std::numeric_limits<uint64_t>::max())throw Error(ErrorCode::sequence,0,0,0);
+        const auto serial=next_serial_++; packet.serial=serial;
+        if(auto scene=scene_capture_->record(std::move(packet));scene && !scene->presentation.replay) {
+            latest_scene_=std::move(scene); ready_.notify_one();
+        }
+        return serial;
+    }
     const auto wait_start = std::chrono::steady_clock::now();
     space_.wait(lock, [&] { return canceled_ || outstanding_.size() < kMaxOutstandingPackets; });
     const auto window_done = std::chrono::steady_clock::now();
@@ -36,6 +57,11 @@ uint64_t Packets::seal_batch(FramePacket packet) {
 }
 std::unique_ptr<const FramePacket> Packets::try_take() {
     std::lock_guard lock(mutex_);
+    if(scene_capture_) {
+        if(!latest_scene_)return {};
+        auto packet=std::make_unique<FramePacket>(latest_scene_->presentation);
+        packet->scene=std::move(latest_scene_); return packet;
+    }
     if (queued_.empty()) return {};
     outstanding_.at(queued_.front()->serial) = true;
     if (frames_in_flight_.count(queued_.front()->serial)) taken_at_[queued_.front()->serial] = std::chrono::steady_clock::now();
@@ -65,13 +91,14 @@ bool Packets::complete(uint64_t serial) {
 }
 bool Packets::wait_ready(std::chrono::nanoseconds timeout) {
     std::unique_lock lock(mutex_);
-    ready_.wait_for(lock,timeout,[&]{return canceled_ || !queued_.empty();});
-    return !canceled_ && !queued_.empty();
+    ready_.wait_for(lock,timeout,[&]{return canceled_ || latest_scene_ || !queued_.empty();});
+    return !canceled_ && (latest_scene_ || !queued_.empty());
 }
 void Packets::cancel() {
     std::lock_guard lock(mutex_);
     canceled_ = true;
     queued_.clear();
+    latest_scene_.reset();
     outstanding_.clear(); taken_at_.clear();
     space_.notify_all();
     ready_.notify_all();

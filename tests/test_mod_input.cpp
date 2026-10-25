@@ -66,6 +66,18 @@ static void aim_override() {
     CHECK(f.throws([&] { f.set("input.aim_override", json::array({2.0, 0.0})); }) && f.throws([&] { f.set("input.aim_override", json::array({0.1})); }) && f.throws([&] { f.set("input.aim_override", 3); }));
 }
 
+static void pulses_survive_filtering() {
+    Fixture f;
+    constexpr uint32_t weapon_step=0x08000000;
+    auto v=Fixture::sample(0,0,0,weapon_step|kB,kB);
+    filter_input(v);
+    CHECK(v.held==0 && v.pressed==(weapon_step|kB) && v.released==kB);
+    f.set("input.block_held",int(kB));
+    v=Fixture::sample(0,0,0,weapon_step|kB,kB);
+    filter_input(v);
+    CHECK(v.held==0 && v.pressed==weapon_step && v.released==kB);
+}
+
 // What a mod sets belongs to it: two mods add up, and a mod that goes takes its part back.
 static void owners() {
     Fixture f;
@@ -94,6 +106,6 @@ static void no_filter_without_the_api() {
 }
 
 int main() {
-    reads_what_the_game_sees(); force_and_block_change_the_sample(); aim_override(); owners(); no_filter_without_the_api();
+    reads_what_the_game_sees(); force_and_block_change_the_sample(); pulses_survive_filtering(); aim_override(); owners(); no_filter_without_the_api();
     std::puts("ok");
 }

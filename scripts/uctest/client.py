@@ -20,15 +20,17 @@ PINNED_SAVES = Path(__file__).resolve().parents[2] / "build" / "autotest" / "sav
 SAVE_SOURCE = Path(os.environ["UC_SAVE_SOURCE"]) if os.environ.get("UC_SAVE_SOURCE") else (PINNED_SAVES if PINNED_SAVES.is_dir() else LIVE_SAVES)
 CHECKPOINTS = ROOT / "build" / "autotest" / "checkpoints"
 GUEST_CPU = 26
+NETPLAY_CLIENT_CPU = 28  # shortcut: CPU26/28 are verified distinct here; reselect from topology on another machine.
 
 
 def guest_cpu_args(extra):
-    # Keep every harness entry point on the same measured CPU, including explicit game arguments.
+    # Preserve the measured offline CPU; the authorized two-game test uses separate physical cores.
+    cpu = NETPLAY_CLIENT_CPU if "--net-join" in extra else GUEST_CPU
     for index, arg in enumerate(extra):
         if arg.startswith("--guest-cpu=") or (arg == "--guest-cpu" and
-                (index+1 == len(extra) or extra[index+1] != str(GUEST_CPU))):
-            raise ValueError(f"test harness requires --guest-cpu {GUEST_CPU}")
-    return [] if "--guest-cpu" in extra else ["--guest-cpu", str(GUEST_CPU)]
+                (index+1 == len(extra) or extra[index+1] != str(cpu))):
+            raise ValueError(f"test harness requires --guest-cpu {cpu}")
+    return [] if "--guest-cpu" in extra else ["--guest-cpu", str(cpu)]
 
 
 
@@ -66,6 +68,8 @@ class Game:
         self.frame = {}
         self.history = collections.deque(maxlen=600)
         self.timing = collections.deque(maxlen=40000)   # (arrival time, frame event) of every frame event, for fine-grained rate measurements
+        self.input_timing = collections.deque(maxlen=40000)
+        self._input_sent = {}
         self.exited = False
         self.steps = []
         self.counters = collections.Counter()   # e.g. press_retries: menu presses the game dropped
@@ -143,6 +147,8 @@ class Game:
             args.append("--skip-tutorials")
         log = open(self.run_dir / "run.log", "wb")
         env = dict(os.environ)
+        if "--net-host" in self.game_args or "--net-join" in self.game_args:
+            env["UC_FRAME_LOG"] = str(self.run_dir / "frames.csv")
         if "--frame-generation" in self.game_args:
             env["UC_FG_UNFOCUSED"] = "1"   # Streamline's frame generation only runs for a focused window: tell it the game's window is, without focusing it
         self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -233,6 +239,9 @@ class Game:
                 elif kind == "exit":
                     self.exited = True
                 elif isinstance(message, dict) and "id" in message:
+                    sent = self._input_sent.pop(message["id"], None)
+                    if sent is not None:
+                        self.input_timing.append((sent, time.perf_counter(), "consumed_frame" in message and "error" not in message))
                     if message["id"] in self._ignored:
                         self._ignored.discard(message["id"])
                     else:
@@ -250,6 +259,8 @@ class Game:
     def request(self, cmd, seconds=30):
         with self._cond:
             request_id = self._take_id()
+            if cmd.get("cmd") == "input":
+                self._input_sent[request_id] = time.perf_counter()
         self.transport.send_line(json.dumps({**cmd, "id": request_id}))
         deadline = time.monotonic() + seconds
         with self._cond:
@@ -298,6 +309,7 @@ class Game:
         with self._cond:
             request_id = self._take_id()
             self._ignored.add(request_id)
+            self._input_sent[request_id] = time.perf_counter()
         self.transport.send_line(json.dumps({**cmd, "id": request_id}))
         return None
 

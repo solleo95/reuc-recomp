@@ -89,5 +89,29 @@ int main() {
         CHECK(t.find("UC_ENTER(0x80003100u);") != std::string::npos);
         CHECK(t.find("UC_ENTER") < t.find("L_80003100:;"));
     }
+    {   // Resume after direct/indirect calls without splitting the original function.
+        Asm a;
+        const auto direct=a.emit(0);
+        a.emit(0x4E800421u); // bctrl
+        a.emit(addi(3,3,1));
+        a.emit(blr);
+        const auto callee=a.here(); a.emit(blr);
+        a.patch_b(direct,callee); a.w[direct]|=1;
+        auto q=make_prog(a.w);
+        const auto functions=q.an.functions.size();
+        uc::add_resume_entries(q);
+        CHECK(q.an.functions.size()==functions);
+        CHECK(q.an.secondary.at(a.addr(0)).count(a.addr(1))==1);
+        CHECK(q.an.secondary.at(a.addr(0)).count(a.addr(2))==1);
+        CHECK(q.an.secondary.at(a.addr(0)).count(a.addr(3))==0);
+        const auto before=q.an.secondary;
+        uc::add_resume_entries(q);
+        CHECK(q.an.secondary==before);
+        auto emitted=uc::emit_program(q,150,st);
+        bool registered=false;
+        for (const auto& [name,source]:emitted.files)
+            if(name=="game_table.cpp") registered=source.find("{0x80003104u, fn_80003100_80003104}")!=std::string::npos;
+        CHECK(registered);
+    }
     return 0;
 }

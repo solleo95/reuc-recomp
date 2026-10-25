@@ -12,6 +12,7 @@ Their licence texts are in the `licenses` folder next to the game.
 | [SMAA](https://github.com/iryoku/smaa) (commit 71c806a, `third_party/smaa/SOURCE.md` lists the files and hashes) | SMAA 1x anti-aliasing | `licenses/SMAA/LICENSE.txt` |
 | [SDL3](https://github.com/libsdl-org/SDL) | window, input | `licenses/SDL3/LICENSE.txt` |
 | [Dear ImGui](https://github.com/ocornut/imgui) | launcher, in-game menu | `licenses/imgui/LICENSE.txt` |
+| [MiniUPnPc](https://github.com/miniupnp/miniupnp) 2.3.3 | automatic router port forwarding | `licenses/miniupnpc/LICENSE` |
 | [Lua](https://www.lua.org) 5.4.7 | Lua scripts of mods | `licenses/lua/license-and-readme.html` (the licence is at the end of the page) |
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) 0.10.1 | JavaScript scripts of mods | `licenses/quickjs-ng/LICENSE` |
 | [miniz](https://github.com/richgel999/miniz) 3.0.2 | zip files of mods | `licenses/miniz/LICENSE` |

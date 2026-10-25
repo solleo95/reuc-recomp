@@ -13,9 +13,23 @@ static std::string num(long long v) { return std::to_string(v); }
 static std::string fn_name(uint32_t a) { return "fn_" + hex8(a); }
 static std::string sec_name(uint32_t owner, uint32_t t) { return "fn_" + hex8(owner) + "_" + hex8(t); }
 
+void add_resume_entries(Program& p) {
+    for (const auto& f:p.an.functions) {
+        if(p.cfg.hle.count(f.entry)) continue;
+        for(uint32_t pc=f.entry;pc+4<f.end;pc+=4) {
+            uint32_t word=0;
+            if(!p.img.word(pc,word) || !ppc::lk(word)) continue;
+            const auto* op=ppc::decode(word);
+            if(op && (op->kind==ppc::Kind::BR || op->kind==ppc::Kind::BC ||
+                      op->kind==ppc::Kind::BCLR || op->kind==ppc::Kind::BCCTR))
+                p.an.secondary[f.entry].insert(pc+4);
+        }
+    }
+}
+
 static std::string callee(const Program& p, uint32_t target) {
     auto it = p.cfg.hle.find(target);
-    return it != p.cfg.hle.end() ? "hle_" + it->second : fn_name(target);
+    return it != p.cfg.hle.end() ? "uc::invoke_hle<hle_" + it->second + ">" : fn_name(target);
 }
 
 static std::string trap_str(uint32_t pc, const std::string& what) { return "ppc::trap(0x" + hex8(pc) + ", \"" + what + "\");"; }

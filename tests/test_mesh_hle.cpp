@@ -77,6 +77,63 @@ int main() {
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         ppc::wrf32(c,0x8000350C,5);
 
+        // A replay mesh still validates its resource and loads matrices, without building render packets.
+        uc::gx_set_replaying(true);
+        ppc::wrf32(c,0x8000350C,35);
+        c.r[3]=0x80002000; hle_ResMeshDraw(c);
+        c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+        const auto skipped=packets.try_take(); CHECK(skipped && skipped->replay && skipped->draws.empty());
+        CHECK(packets.complete(skipped->serial)); uc::gx_completed(skipped->serial);
+        uc::gx_set_replaying(false);
+        c.r[3]=0x80002000; hle_ResMeshDraw(c);
+        c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+        packet=packets.try_take(); CHECK(packet && packet->draws.size()==1);
+        CHECK(packet->draws[0].transforms->position_rows[0][3]==35);
+        CHECK(packet->draws[0].uniforms->tex_rows[0][3]==35);
+        CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
+        ppc::wrf32(c,0x8000350C,5);
+
+        // Restore revalidates retained immutable geometry against RAM, including bulk writes without barriers.
+        const auto retained_mesh=packet->draws[0].mesh;
+        const auto saved_gx=uc::gx_checkpoint();
+        auto restored_draw=[&] {
+            c.r[3]=0x80002000; hle_ResMeshDraw(c);
+            c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
+            auto result=packets.try_take(); CHECK(result && result->draws.size()==1);
+            CHECK(packets.complete(result->serial)); uc::gx_completed(result->serial);
+            return result;
+        };
+        auto restore_hits=uc::gx_stats().geometry_hits;
+        uc::gx_restore(*saved_gx);
+        packet=restored_draw();
+        CHECK(uc::gx_stats().geometry_hits==restore_hits+1);
+        CHECK(packet->draws[0].mesh==retained_mesh);
+
+        const uint32_t restored_position=_byteswap_ulong(std::bit_cast<uint32_t>(77.f));
+        std::memcpy(ppc::hp(c,0x80003000),&restored_position,sizeof restored_position);
+        auto restore_misses=uc::gx_stats().geometry_misses;
+        uc::gx_restore(*saved_gx);
+        packet=restored_draw();
+        CHECK(uc::gx_stats().geometry_misses==restore_misses+1);
+        CHECK(packet->draws[0].vertex_view()[0].position[0]==77);
+        CHECK(retained_mesh->vertices[0].position[0]==1);
+
+        *ppc::hp(c,0x80002531)=2; // Restored encoded indices also bypass the guest store barrier.
+        restore_misses=uc::gx_stats().geometry_misses;
+        uc::gx_restore(*saved_gx);
+        packet=restored_draw();
+        CHECK(uc::gx_stats().geometry_misses==restore_misses+1);
+        CHECK(packet->draws[0].vertex_view()[0].position[0]==3);
+
+        uc::gx_restore(*saved_gx);
+        c.r[3]=9; c.r[4]=0x80002FF4; c.r[5]=12; hle_GXSetArray(c);
+        restore_misses=uc::gx_stats().geometry_misses;
+        packet=restored_draw();
+        CHECK(uc::gx_stats().geometry_misses==restore_misses+1);
+        CHECK(packet->draws[0].vertex_view()[0].position[0]==2);
+        ppc::wr8(c,0x80002531,0); ppc::wrf32(c,0x80003000,1);
+        uc::gx_restore(*saved_gx);
+
         // Cached immutable state survives reuse, host array changes, and a later SDK viewport write.
         const auto previous_state=packet->draws[0].state.block();
         c.r[3]=24; c.r[4]=0x80003500; c.r[5]=48; hle_GXSetArray(c);
@@ -192,5 +249,5 @@ int main() {
         CHECK(packet->draws[1].transforms->position_rows[30][3]==0 && packet->draws[2].transforms->position_rows[30][3]==0.25f);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
-    sched.run(thread); CHECK(uc::gx_stats().draws==16);
+    sched.run(thread); CHECK(uc::gx_stats().draws==22);
 }

@@ -55,7 +55,7 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
     std::error_code ignored;std::filesystem::remove(output,ignored);
     return last_json_line(text);
 }
-GameProcess launch_game(const std::filesystem::path& executable,const std::filesystem::path& config,const Options* diagnostic,int guest_cpu) {
+GameProcess launch_game(const std::filesystem::path& executable,const std::filesystem::path& config,const Options* diagnostic,int guest_cpu,std::optional<net::Endpoint> network) {
     if(guest_cpu < -1 || guest_cpu>=63)throw std::invalid_argument("guest CPU must be -1 or 0..62");
     const auto exe=std::filesystem::absolute(executable),settings=std::filesystem::absolute(config);
     if(!std::filesystem::is_regular_file(exe))throw std::runtime_error("uc.exe is missing");
@@ -63,6 +63,11 @@ GameProcess launch_game(const std::filesystem::path& executable,const std::files
     const auto options=options_from_config(load_config(settings));
     if(!std::filesystem::is_regular_file(options.game/"DATA"/"sys"/"main.dol"))throw std::runtime_error("game folder does not contain DATA/sys/main.dol");
     auto command=quote_windows_arg(exe.wstring())+L" --config "+quote_windows_arg(settings.wstring());
+    if(network) {
+        if(!network->port || (!network->host && !net::valid_address(network->address)))throw std::invalid_argument("invalid network endpoint");
+        command+=network->host ? L" --net-host" : L" --net-join "+quote_windows_arg(std::wstring(network->address.begin(),network->address.end()));
+        command+=L" --net-port "+std::to_wstring(network->port);
+    }
     if(guest_cpu>=0)command+=L" --guest-cpu "+std::to_wstring(guest_cpu);
     if(diagnostic) {
         if(diagnostic->test_control.empty() || diagnostic->save_root.empty())throw std::invalid_argument("diagnostic launch requires isolated input/save paths");

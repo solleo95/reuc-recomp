@@ -1,8 +1,10 @@
 #include "check.h"
 #include "dispatch.h"
 #include "gx.h"
+#include "gx_scene.h"
 #include "hle/os.h"
 #include "ppc_fixture.h"
+#include "clock.h"
 #include <chrono>
 #include <bit>
 #include <thread>
@@ -26,7 +28,8 @@ void hle_GXSetChanCtrl(ppc::Ctx&); void hle_GXSetNumChans(ppc::Ctx&);
 void hle_ResPixelApply(ppc::Ctx&); void hle_GXSetAlphaCompare(ppc::Ctx&);
 
 static int calls = 0;
-static void callback(ppc::Ctx& ctx) { CHECK(!uc::os_sched().interrupts_enabled()); CHECK(ppc::rd8(ctx, ctx.r[13] - 25328) == 1); ++calls; }
+static std::vector<std::pair<unsigned,uint64_t>>* completion_trace=nullptr;
+static void callback(ppc::Ctx& ctx) { CHECK(!uc::os_sched().interrupts_enabled()); CHECK(ppc::rd8(ctx, ctx.r[13] - 25328) == 1); ++calls; if(completion_trace)completion_trace->emplace_back(1,uc::det_clock_checkpoint()); }
 static void flush(ppc::Ctx&) { for (int i=0;i<8;++i) uc::gx_fifo_write(4,0); }
 static void flush_primitive(ppc::Ctx& ctx) { ppc::wr16(ctx,0x80001002,1); } // fixture omits the SDK's dummy geometry
 static void tlut_region(ppc::Ctx& ctx) { CHECK(ctx.r[3]==7); ctx.r[3]=0x80006500; }
@@ -41,6 +44,113 @@ template<class Fn> static void rejects(gx::ErrorCode code, Fn fn) {
     bool caught = false;
     try { fn(); } catch (const gx::Error& error) { caught = true; CHECK(error.code==code); }
     CHECK(caught);
+}
+static auto deterministic_submission(ppc::Ctx& initial,bool delay_retirement) {
+    uc::set_deterministic_clock(true);
+    uc::Sched scheduler(initial.mem); scheduler.set_deterministic(true);
+    uc::os_hle_init(scheduler,initial.mem,0x817F0000);
+    gx::Packets packets;
+    scheduler.set_shutdown_hook([&] { packets.cancel(); });
+    uc::gx_hle_init(scheduler,initial.mem,&packets);
+    std::vector<std::pair<unsigned,uint64_t>> trace;
+    completion_trace=&trace;
+    const int before=calls;
+    std::promise<void> requested,logical_checked,retired;
+    auto request_ready=requested.get_future(),may_retire=logical_checked.get_future(),retired_ready=retired.get_future();
+    auto* main=scheduler.create(0,16,[&](ppc::Ctx& ctx) {
+        uc::det_clock_restore(0);
+        ppc::wr32(ctx,0x800015FC,0);
+        hle_GXSetDrawDone(ctx); requested.set_value();
+        hle_GXWaitDrawDone(ctx);
+        CHECK(calls==before+1 && packets.depth().outstanding==1);
+        trace.emplace_back(2,uc::det_clock_checkpoint());
+        scheduler.drain_async();
+        CHECK(scheduler.checkpoint() && uc::gx_checkpoint());
+        logical_checked.set_value();
+        scheduler.sleep_ticks(6075);
+        trace.emplace_back(3,uc::det_clock_checkpoint());
+        CHECK(retired_ready.wait_for(2s)==std::future_status::ready);
+        scheduler.safe_point(); scheduler.drain_async();
+        CHECK(calls==before+1 && packets.depth().outstanding==0);
+        CHECK(scheduler.checkpoint() && uc::gx_checkpoint());
+        trace.emplace_back(4,uc::det_clock_checkpoint());
+    },&initial);
+    std::thread consumer([&] {
+        std::unique_ptr<const gx::FramePacket> packet;
+        const auto deadline=std::chrono::steady_clock::now()+2s;
+        while(!(packet=packets.try_take())) { CHECK(std::chrono::steady_clock::now()<deadline); std::this_thread::yield(); }
+        CHECK(request_ready.wait_for(2s)==std::future_status::ready);
+        uc::gx_completed(packet->serial); // Logical submission completion, before the physical fence.
+        CHECK(may_retire.wait_for(2s)==std::future_status::ready);
+        if(delay_retirement)std::this_thread::sleep_for(20ms);
+        CHECK(packets.complete(packet->serial));
+        uc::gx_completed(packet->serial); uc::gx_completed(packet->serial);
+        CHECK(!packets.complete(packet->serial));
+        retired.set_value();
+    });
+    scheduler.run(main); consumer.join();
+    CHECK(calls==before+1 && trace.size()==4);
+    completion_trace=nullptr;
+    uc::set_deterministic_clock(false);
+    return trace;
+}
+static void deterministic_detached(ppc::Ctx& initial,bool recorded) {
+    uc::set_deterministic_clock(true);
+    uc::Sched scheduler(initial.mem); scheduler.set_deterministic(true);
+    uc::os_hle_init(scheduler,initial.mem,0x817F0000);
+    gx::Packets packets(true);
+    scheduler.set_shutdown_hook([&] { packets.cancel(); });
+    uc::gx_hle_init(scheduler,initial.mem,&packets);
+    const int before=calls;
+    auto* main=scheduler.create(0,16,[&](ppc::Ctx& ctx) {
+        uc::det_clock_restore(0); ppc::wr32(ctx,0x800015FC,0);
+        const auto draw_done=[&] {
+            if(recorded) { ctx.r[3]=0x80002400; ctx.r[4]=128; hle_GXBeginDisplayList(ctx); }
+            ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; hle_GXBegin(ctx);
+            for(uint32_t word:{0u,0u,0u,0xFF0000FFu,0x3F800000u,0u,0u,0x00FF00FFu,0u,0x3F800000u,0u,0x0000FFFFu})uc::gx_fifo_write(4,word);
+            if(recorded) { hle_GXEndDisplayList(ctx); ctx.r[4]=ctx.r[3]; ctx.r[3]=0x80002400; hle_GXCallDisplayList(ctx); }
+            hle_GXSetDrawDone(ctx); hle_GXWaitDrawDone(ctx);
+            scheduler.drain_async();
+        };
+        draw_done();
+        CHECK(calls==before+1);
+        CHECK(packets.depth().queued==0 && packets.depth().outstanding==0);
+        const auto scene=packets.checkpoint();
+        CHECK(scene && scene->state && scene->state->command->draws.size()==1);
+        const auto guest=scheduler.checkpoint();
+        const auto gx=uc::gx_checkpoint();
+        CHECK(guest && gx);
+        const auto guest_hash=uc::Sched::checkpoint_hash(*guest);
+        const auto tick=uc::det_clock_checkpoint();
+        scheduler.sleep_ticks(6075); draw_done();
+        CHECK(calls==before+2 && packets.checkpoint()->state!=scene->state);
+        const auto advanced=uc::det_clock_checkpoint();
+        scheduler.restore(*guest); uc::gx_restore(*gx);
+        CHECK(uc::det_clock_checkpoint()==tick && packets.checkpoint()->state==scene->state);
+        CHECK(uc::Sched::checkpoint_hash(*scheduler.checkpoint())==guest_hash);
+        uc::gx_set_replaying(true);
+        // Raw XF commands must still target the SDK block selected by a replay draw.
+        std::memcpy(ppc::hp(ctx,0x80005000),ppc::hp(ctx,0x80001000),0x600);
+        ppc::wr32(ctx,ctx.r[2]-8968,0x80005000);
+        scheduler.sleep_ticks(6075); draw_done();
+        CHECK(calls==before+3 && uc::det_clock_checkpoint()==advanced);
+        CHECK(packets.checkpoint()->state->command->draws.empty());
+        const auto texgen=ppc::rd32(ctx,0x800010C8);
+        std::memset(ppc::hp(ctx,0x80004800),0,32);
+        ppc::wr8(ctx,0x80004800,0x10); ppc::wr32(ctx,0x80004801,0x1040); ppc::wr32(ctx,0x80004805,texgen^4);
+        uc::gx_fifo_write(1,0x40); uc::gx_fifo_write(4,0x80004800); uc::gx_fifo_write(4,32);
+        CHECK(ppc::rd32(ctx,0x800050C8)==(texgen^4) && ppc::rd32(ctx,0x800010C8)==texgen);
+        ppc::wr32(ctx,ctx.r[2]-8968,0x80001000);
+        uc::gx_set_replaying(false);
+        draw_done();
+        CHECK(packets.checkpoint()->state->command->draws.size()==1);
+        uc::gx_completed(3); uc::gx_completed(3);
+        scheduler.safe_point(); scheduler.drain_async();
+        CHECK(calls==before+4 && uc::gx_checkpoint());
+    },&initial);
+    scheduler.run(main); // No renderer or packet-consumer thread exists in this fixture.
+    CHECK(calls==before+4);
+    uc::set_deterministic_clock(false);
 }
 int main() {
     Fix memory;
@@ -383,7 +493,9 @@ int main() {
         rejects(gx::ErrorCode::array_bounds,[&]{hle_GXCopyDisp(ctx);});
         ppc::wr32(ctx,0x80001230,0x49000000);
         ppc::wr32(ctx,0x80001234,0x4A000000u|639u|(359u<<10));
+        uc::gx_set_replaying(true);
         ctx.r[3]=0x80008000; ctx.r[4]=1; hle_GXCopyDisp(ctx);
+        uc::gx_set_replaying(false);
         CHECK(ppc::rd8(ctx,ctx.r[13]-25328)==1); // copy is not a GX finish
         hle_GXSetDrawDone(ctx); hle_GXWaitDrawDone(ctx);
         CHECK(calls==2);
@@ -393,7 +505,7 @@ int main() {
         std::unique_ptr<const gx::FramePacket> packet;
         while (!(packet = packets.try_take())) { CHECK(std::chrono::steady_clock::now() < until); std::this_thread::yield(); }
         CHECK(packet->draws.size() == 10 && packet->draws[0].vertices.size() == 3);
-        CHECK(!packet->present);
+        CHECK(!packet->present && !packet->replay);
         CHECK(packet->draws[0].vertices[1].position[0] == 1 && packet->draws[0].vertices[2].position[1] == 1);
         CHECK(packet->draws[0].callsite==0x80029000 && packet->draws[1].vertices[0].position[0]==2);
         CHECK(packet->draws[2].vertices[0].position[0]==4 && packet->draws[3].vertices[0].position[0]==3);
@@ -431,16 +543,20 @@ int main() {
         uc::gx_completed(packet->serial); uc::gx_completed(packet->serial);
         until=std::chrono::steady_clock::now()+2s;
         while (!(packet=packets.try_take())) { CHECK(std::chrono::steady_clock::now()<until); std::this_thread::yield(); }
-        CHECK(packet->present && packet->clear_after_copy && packet->draws.empty() && packet->xfb==0x80008000);
+        CHECK(packet->present && packet->replay && packet->clear_after_copy && packet->draws.empty() && packet->xfb==0x80008000);
         CHECK((packet->display_source==std::array<uint32_t,4>{0,0,640,360}));
         CHECK((packet->clear_color==std::array<uint8_t,4>{32,64,96,255}) && packet->clear_depth==0xABCDEF);
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
         until=std::chrono::steady_clock::now()+2s;
         while (!(packet=packets.try_take())) { CHECK(std::chrono::steady_clock::now()<until); std::this_thread::yield(); }
-        CHECK(!packet->present && packet->draws.empty());
+        CHECK(!packet->present && !packet->replay && packet->draws.empty());
         CHECK(packets.complete(packet->serial)); uc::gx_completed(packet->serial);
     });
     sched.run(main); consumer.join();
     auto stats = uc::gx_stats();
     CHECK(stats.draws == 10 && stats.vertices == 30 && stats.submitted == 2 && stats.completed == 2 && stats.copies==1 && calls == 2);
+    const auto immediate=deterministic_submission(c,false);
+    CHECK(deterministic_submission(c,true)==immediate);
+    deterministic_detached(c,false);
+    deterministic_detached(c,true);
 }

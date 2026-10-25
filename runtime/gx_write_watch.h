@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "rollback_memory.h"
 
 namespace gx {
 // Guest write barrier. Every guest store (and every native bulk write into guest RAM) records the current epoch in its 4 KiB page, so a cache
@@ -10,9 +11,10 @@ inline constexpr uint32_t kWatchPages = 1u << 18;   // 1 GiB of guest address sp
 inline uint32_t write_epoch = 2;
 inline uint32_t page_epoch[kWatchPages];
 
-inline void note_write(uint32_t address) { page_epoch[(address & 0x3FFFFFFFu) >> 12] = write_epoch; }
+inline void note_write(uint32_t address) { page_epoch[(address & 0x3FFFFFFFu) >> 12] = write_epoch; uc::rollback_note_write(address); }
 inline void note_write_range(uint32_t address, size_t size) {
     if (!size) return;
+    uc::rollback_note_range(address,size);
     const uint64_t first = (address & 0x3FFFFFFFu) >> 12, last = ((address & 0x3FFFFFFFu) + uint64_t(size) - 1) >> 12;
     for (uint64_t page = first; page <= last && page < kWatchPages; ++page) page_epoch[page] = write_epoch;
 }

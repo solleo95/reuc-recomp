@@ -7,7 +7,8 @@
 namespace uc {
 inline constexpr std::array<std::string_view,size_t(Action::count)> action_names={
     "interact","fire","weapon_previous","weapon_next","reload","grenade","knife",
-    "pause","confirm","back","release_cursor","screenshot","qte_shake"};
+    "pause","confirm","back","release_cursor","screenshot","qte_shake",
+    "camera_up","camera_down","camera_left","camera_right"};
 struct ConfigDocument {
     nlohmann::ordered_json properties=nlohmann::ordered_json::object();
     Bindings input=default_bindings();

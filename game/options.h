@@ -5,6 +5,7 @@
 #include "hdr_math.h"
 #include "input_prompts.h"
 #include "upscale_mode.h"
+#include "netplay.h"
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -14,6 +15,7 @@
 namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
 struct Options {
+    std::optional<net::Endpoint> netplay;
     std::filesystem::path game = "S:\\Games\\Umbrella Chronicles\\game";
     uint32_t width = 0, height = 0, seconds = 0; //0 resolves to the monitor size at startup.
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.

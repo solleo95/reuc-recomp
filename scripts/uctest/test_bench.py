@@ -85,6 +85,17 @@ class BenchStatistics(unittest.TestCase):
             self.assertEqual(manifest["exe_sha256"], hashlib.sha256(exe.read_bytes()).hexdigest())
             self.assertEqual(manifest["demo_sha256"], hashlib.sha256(recording.read_bytes()).hexdigest())
 
+    def test_netplay_pair_uses_distinct_cores_without_changing_offline_pin(self):
+        from .client import guest_cpu_args
+        self.assertEqual(guest_cpu_args([]), ["--guest-cpu", "26"])
+        self.assertEqual(guest_cpu_args(["--net-host"]), ["--guest-cpu", "26"])
+        self.assertEqual(guest_cpu_args(["--net-join", "127.0.0.1"]), ["--guest-cpu", "28"])
+        self.assertEqual(guest_cpu_args(["--net-join", "127.0.0.1", "--guest-cpu", "28"]), [])
+        with self.assertRaises(ValueError):
+            guest_cpu_args(["--net-join", "127.0.0.1", "--guest-cpu", "26"])
+        with self.assertRaises(ValueError):
+            guest_cpu_args(["--guest-cpu", "28"])
+
     def test_demo_peak_fps_uses_elapsed_wall_time_and_complete_fight_intervals(self):
         log = "\n".join([
             "[fps] window_ms 1000.000 retraces 0:60 presents 500 fps 500.000",

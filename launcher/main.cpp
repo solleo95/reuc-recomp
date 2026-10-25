@@ -7,6 +7,8 @@
 #include "rt_ui.h"
 #include "prompt_icons.h"
 #include "localization.h"
+#include "netplay.h"
+#include "nat_mapping.h"
 #include "graphite.h"
 #include "ui_fonts.h"
 #include "imgui.h"
@@ -30,6 +32,16 @@
 #include <dwmapi.h>
 namespace fs=std::filesystem;
 namespace {
+class SmokeNatGateway final : public uc::net::NatGateway {
+    std::map<std::string,uc::net::RouterRule> rules_;
+public:
+    uc::net::RouterAddress discover() override {return {"192.168.1.8","100.64.0.1"};}
+    std::optional<uc::net::RouterRule> get(const std::string&,const char* protocol) override {
+        auto it=rules_.find(protocol);return it==rules_.end() ? std::nullopt : std::optional(it->second);
+    }
+    bool add(const std::string&,const char* protocol,const uc::net::RouterRule& rule) override {rules_[protocol]=rule;rules_[protocol].lease=0;return true;}
+    void remove(const std::string&,const char* protocol) override {rules_.erase(protocol);}
+};
 std::string utf8(const fs::path& path) {auto value=path.u8string();return {value.begin(),value.end()};}
 fs::path executable_dir() {
     std::wstring value(32768,L'\0');const auto length=GetModuleFileNameW(nullptr,value.data(),DWORD(value.size()));
@@ -142,6 +154,15 @@ int run(int argc,wchar_t** argv) {
     }
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
     std::string error;bool blocked=false;
+    std::unique_ptr<uc::net::Lobby> lobby;
+    std::unique_ptr<uc::net::NatMapping> nat;
+    std::vector<std::unique_ptr<uc::net::NatMapping>> retiring_nat;
+    std::optional<uc::net::Endpoint> pending_network;
+    std::string network_address="127.0.0.1",network_error;
+    int network_port=uc::net::default_port;
+    bool network_modal=false,network_open_requested=false;
+    auto stop_nat=[&] {if(nat) {nat->stop();retiring_nat.push_back(std::move(nat));}};
+    auto cancel_network=[&] {lobby.reset();stop_nat();if(pending_network)launch_requested=false;pending_network.reset();};
     const auto system_language=uc::launcher::system_language();
     std::string language="system",saved_language="system";
     active_language=system_language;
@@ -168,16 +189,29 @@ int run(int argc,wchar_t** argv) {
     if(!monitor || monitor->w<=0 || monitor->h<=0)throw std::runtime_error("monitor mode unavailable");
     std::map<std::string,ImVec2> positions;
     auto track=[&](const std::string& name) {if(!smoke.empty()) {auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();positions[name]={(a.x+b.x)/2,(a.y+b.y)/2};
-        if((name=="launch" || name=="browse") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher footer clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
+        if((name=="launch" || name=="browse" || name=="network-cancel" || name=="network-ready") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher control clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
     }};
     auto button=[&](const char* label,const std::string& id,ImVec2 size=ImVec2{0,0}) {ImGui::PushID(id.c_str());bool clicked=ImGui::Button(label,size);track(id);ImGui::PopID();return clicked;};
     auto save=[&](const uc::Options& chosen) {
         try {auto next=document;next.input=editor.bindings();uc::store_options(next,chosen);uc::launcher::store_language(next,language);uc::save_config(config_path,next);
             document=std::move(next);saved_options=chosen;saved_language=language;error.clear();failed=false;return true;
-        } catch(const std::exception& e) {error=e.what();return false;}
+        } catch(const std::exception& e) {error=e.what();cancel_network();return false;}
     };
-    bool done=false,smoke_capture_wait_checked=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
+    bool done=false,background_host=false,smoke_capture_wait_checked=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
+    enum class SmokeNetwork { idle,open,create,connect,ready,one_ready,both_ready,handoff,verify,complete };
+    SmokeNetwork smoke_network=SmokeNetwork::idle;
+    SmokeNetwork smoke_network_logged=SmokeNetwork::idle;
+    constexpr const char* smoke_network_names[]={"idle","open","create","connect","ready","one-ready","both-ready","handoff","verify","complete"};
+    std::unique_ptr<uc::net::Lobby> smoke_peer;
+    Uint64 smoke_network_start=0;
+    bool smoke_ready_enabled=false,smoke_network_capture=false,smoke_network_timeout=false;
+    unsigned smoke_network_handoffs=0,smoke_click_frame=0;
     while(!done) {
+        std::erase_if(retiring_nat,[](const auto& item){return item->finished();});
+        if(background_host) {
+            if(!uc::game_running(process))break;
+            SDL_Delay(100);continue;
+        }
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
             if(event.type==SDL_EVENT_QUIT || (event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID==SDL_GetWindowID(ui.window)))done=true;
@@ -207,7 +241,7 @@ int run(int argc,wchar_t** argv) {
                 unsigned first=114+unsigned(i)*18;
                 clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);
             }
-            if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";}
+            if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";clicks[486]="language";clicks[490]="lang-en";clicks[494]="game";clicks[500]="network";clicks[508]="network-create";clicks[512]="network-connect";clicks[518]="network-cancel";}
             else {clicks[4]="launch";clicks[56]="reload";clicks[62]="defaults";}
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
@@ -218,6 +252,49 @@ int run(int argc,wchar_t** argv) {
             if(frame==32) {if(!editor.capturing())throw std::runtime_error("capture UI did not start");editor.event({uc::PhysicalKind::key,41},true);}
             if(frame==480) {if(editor.capturing()!=uc::Action::weapon_previous)throw std::runtime_error("grid replacement capture did not start");editor.event({uc::PhysicalKind::key,26},true);}
             if(frame==44) {auto other=uc::load_config(config_path);other.properties["smoke_external_edit"]=!other.properties.value("smoke_external_edit",false);uc::save_config(config_path,other);}
+            if(smoke_exe.empty() && frame==506) {if(!network_modal)throw std::runtime_error("network modal did not open");network_address="300.1.2.3";}
+            if(smoke_exe.empty() && smoke_network!=SmokeNetwork::idle) {
+                if(smoke_network!=smoke_network_logged) {
+                    std::fprintf(stderr,"[network-smoke] %s modal=%d lobby=%d ready-enabled=%d\n",smoke_network_names[size_t(smoke_network)],network_modal,bool(lobby),smoke_ready_enabled);
+                    smoke_network_logged=smoke_network;
+                }
+                smoke_network_timeout=SDL_GetTicks()-smoke_network_start>10000;
+                if(!network_error.empty() || !error.empty())throw std::runtime_error("network lobby smoke failed: "+network_error+error);
+                if(smoke_peer && smoke_peer->state().phase==uc::net::LobbyPhase::failed)throw std::runtime_error("network smoke peer: "+smoke_peer->state().error);
+                auto click=[&](const char* id) {
+                    if(!positions.contains(id))throw std::runtime_error(std::string("network smoke widget missing: ")+id);
+                    const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
+                    ++smoke_click_frame;
+                    if(smoke_click_frame>=3)io.AddMouseButtonEvent(0,smoke_click_frame==3);
+                    if(smoke_click_frame<4)return false;
+                    smoke_click_frame=0;return true;
+                };
+                switch(smoke_network) {
+                case SmokeNetwork::open: if(click("network"))smoke_network=SmokeNetwork::create;break;
+                case SmokeNetwork::create: if(network_modal && click("network-create"))smoke_network=SmokeNetwork::connect;break;
+                case SmokeNetwork::connect:
+                    if(lobby && !smoke_peer)smoke_peer=std::make_unique<uc::net::Lobby>(uc::net::Endpoint{false,network_address,uint16_t(network_port)});
+                    if(smoke_peer && smoke_ready_enabled && smoke_peer->state().phase==uc::net::LobbyPhase::connected)smoke_network=SmokeNetwork::ready;
+                    break;
+                case SmokeNetwork::ready: if(click("network-ready"))smoke_network=SmokeNetwork::one_ready;break;
+                case SmokeNetwork::one_ready:
+                    if(launch_requested || pending_network || !lobby)throw std::runtime_error("one ready player requested launch");
+                    if(lobby->state().local_ready && smoke_peer->state().remote_ready) {
+                        if(lobby->state().remote_ready || smoke_peer->state().local_ready)throw std::runtime_error("network peer became ready without input");
+                        smoke_network_capture=true;smoke_network=SmokeNetwork::both_ready;
+                    }
+                    break;
+                case SmokeNetwork::both_ready: smoke_peer->ready(true);smoke_network=SmokeNetwork::handoff;break;
+                case SmokeNetwork::verify:
+                    if(smoke_peer->state().phase==uc::net::LobbyPhase::launching) {
+                        const auto endpoint=smoke_peer->take_start();
+                        if(!endpoint || endpoint->host || endpoint->address!=network_address || endpoint->port!=network_port || smoke_peer->take_start())throw std::runtime_error("network peer handoff was not exactly once");
+                        smoke_peer.reset();smoke_network=SmokeNetwork::complete;
+                    }
+                    break;
+                case SmokeNetwork::idle: case SmokeNetwork::handoff: case SmokeNetwork::complete: break;
+                }
+            }
         }
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
         if(!smoke.empty() && frame==2) {
@@ -344,7 +421,7 @@ int run(int argc,wchar_t** argv) {
         if(page==0) {
             toggle("##skip-game",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
-            ImGui::Dummy({0,25*unit});ImGui::TextWrapped("%s",tr("alt"));
+            ImGui::Dummy({0,8*unit});ImGui::TextWrapped("%s",tr("alt"));
         } else if(page==1) {
             const float column_gap=88*unit;
             const float column=(ImGui::GetContentRegionAvail().x-column_gap)/2;
@@ -668,15 +745,104 @@ int run(int argc,wchar_t** argv) {
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found);
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || lobby || pending_network);
+        push_font(ui.serif,22);
+        const float launch_gap=8*unit,launch_width=(width*.395f-launch_gap)/2;
+        if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
+        ImGui::SameLine(0,launch_gap);
         ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
-        push_font(ui.serif,26);
-        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{width*.395f,74*unit}) && save(options)) {
+        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{launch_width,74*unit}) && save(options)) {
             launch_requested=true;
             std::fprintf(stderr,"[cpu-calibration] Play requested: %s\n",cpu_ready ? "ready" : "waiting");
         }
         ImGui::PopFont();ImGui::PopStyleColor(3);ImGui::EndDisabled();
         ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
+        const std::string network_title=std::string(tr("network_play"))+"###network-lobby";
+        if(network_open_requested) {ImGui::OpenPopup(network_title.c_str());network_modal=true;network_open_requested=false;}
+        ImGui::SetNextWindowSize({600*unit,0},ImGuiCond_Always);
+        ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x/2,ImGui::GetIO().DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{12*unit,12*unit});
+        push_font(ui.sans,28);
+        if(ImGui::BeginPopupModal(network_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+            push_font(ui.sans,22);
+            ImGui::TextWrapped("%s",tr("network_help"));ImGui::Spacing();
+            ImGui::BeginDisabled(bool(lobby));
+            ImGui::TextUnformatted(tr("network_address"));ImGui::SetNextItemWidth(-1);
+            ImGui::InputText("##network-address",&network_address,ImGuiInputTextFlags_CharsDecimal);track("network-address");
+            ImGui::TextUnformatted(tr("network_port"));ImGui::SetNextItemWidth(-1);
+            ImGui::InputInt("##network-port",&network_port,0,0);track("network-port");
+            ImGui::EndDisabled();
+            const bool valid_endpoint=uc::net::valid_address(network_address) && network_port>0 && network_port<=65535;
+            if(!valid_endpoint)ImGui::TextWrapped("%s",tr("network_invalid"));
+            if(nat) {
+                const auto state=nat->state();
+                ImGui::TextWrapped("%s",tr(state.phase==uc::net::NatPhase::discovering ? "nat_discovering" : state.phase==uc::net::NatPhase::mapped ? "nat_mapped" : "nat_unavailable"));
+                if(state.phase==uc::net::NatPhase::mapped) {
+                    ImGui::Text("%s:%d (TCP + UDP)",state.external.c_str(),network_port);
+                    ImGui::SameLine();if(button(tr("nat_copy"),"nat-copy"))SDL_SetClipboardText(state.external.c_str());
+                    if(!state.public_address)ImGui::TextWrapped("%s",tr("nat_private"));
+                    if(state.permanent)ImGui::TextWrapped("%s",tr("nat_permanent"));
+                }
+                if(!state.error.empty())ImGui::TextWrapped("%s",state.error.c_str());
+            }
+            if(lobby) {
+                auto state=lobby->state();
+                const bool can_ready=!blocked && !failed && cpu_ready && game_found && !running && !launch_requested && !editor.capturing()
+                    && same_options(options,saved_options) && editor.bindings()==document.input && language==saved_language;
+                if(!smoke.empty() && smoke_network==SmokeNetwork::connect && !can_ready && frame%60==0)
+                    std::fprintf(stderr,"[network-smoke] readiness blocked: config=%d save-failed=%d cpu=%d game=%d child=%d launch=%d capture=%d options-saved=%d bindings-saved=%d language-saved=%d\n",
+                        blocked,failed,cpu_ready,game_found,running,launch_requested,bool(editor.capturing()),same_options(options,saved_options),editor.bindings()==document.input,language==saved_language);
+                if(!can_ready && state.local_ready) {lobby->ready(false);state.local_ready=false;}
+                if(state.phase==uc::net::LobbyPhase::failed) {network_error=state.error;cancel_network();}
+                else {
+                    ImGui::TextWrapped("%s",tr(state.phase==uc::net::LobbyPhase::waiting ? "network_waiting" : "network_connected"));
+                    ImGui::Text("%s: %s",tr("network_local"),tr(state.local_ready ? "network_ready" : "network_not_ready"));
+                    ImGui::Text("%s: %s",tr("network_remote"),tr(state.remote_ready ? "network_ready" : "network_not_ready"));
+                    if(!can_ready)ImGui::TextWrapped("%s",tr("network_prepare"));
+                    ImGui::BeginDisabled(!can_ready || state.phase!=uc::net::LobbyPhase::connected);
+                    smoke_ready_enabled=can_ready && state.phase==uc::net::LobbyPhase::connected;
+                    bool ready=state.local_ready;
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{ImGui::GetStyle().FramePadding.x,0});
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,{8*unit,ImGui::GetStyle().ItemInnerSpacing.y});
+                    if(ImGui::Checkbox(tr("network_ready"),&ready)) {if(!ready || save(options))lobby->ready(ready);}
+                    track("network-ready");
+                    ImGui::PopStyleVar(2);
+                    ImGui::EndDisabled();
+                    if(lobby && can_ready)if(auto endpoint=lobby->take_start()) {
+                        if(!smoke.empty() && smoke_exe.empty() && lobby->take_start())throw std::runtime_error("network host handoff repeated");
+                        pending_network=std::move(endpoint);launch_requested=true;lobby.reset();network_modal=false;ImGui::CloseCurrentPopup();
+                    }
+                }
+            }
+            if(!network_error.empty() || !error.empty()) {
+                ImGui::TextWrapped("%s",tr("error"));
+                ImGui::TextWrapped("%s",network_error.empty() ? error.c_str() : network_error.c_str());
+            }
+            ImGui::Spacing();
+            ImGui::BeginDisabled(!valid_endpoint || bool(lobby) || !retiring_nat.empty());
+            const bool create=button(tr("network_create"),"network-create");
+            ImGui::SameLine();const bool connect=button(tr("network_connect"),"network-connect");
+            ImGui::EndDisabled();
+            if(create || connect) {
+                network_error.clear();
+                try {
+                    lobby=std::make_unique<uc::net::Lobby>(uc::net::Endpoint{create,network_address,uint16_t(network_port)});
+                    if(create)nat=std::make_unique<uc::net::NatMapping>(uint16_t(network_port),smoke.empty() ? uc::net::upnp_gateway() : std::make_unique<SmokeNatGateway>());
+                }
+                catch(const std::exception& e) {cancel_network();network_error=e.what();}
+            }
+            const float cancel_width=ImGui::CalcTextSize(tr("network_cancel")).x+2*ImGui::GetStyle().FramePadding.x;
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),ImGui::GetWindowContentRegionMax().x-cancel_width));
+            if(button(tr("network_cancel"),"network-cancel")) {cancel_network();network_modal=false;network_error.clear();ImGui::CloseCurrentPopup();}
+            if(!smoke.empty() && smoke_exe.empty() && (frame==510 || frame==514)) {
+                if(valid_endpoint || lobby || pending_network || launch_requested)throw std::runtime_error("invalid network endpoint accepted");
+                if(frame==510) {network_address="127.0.0.1";network_port=0;}
+            }
+            ImGui::PopFont();ImGui::EndPopup();
+        }
+        ImGui::PopFont();ImGui::PopStyleVar(2);
         // Every change is saved at once. An unfinished game folder is not saved (the last good one stays); a refused save is not retried until something changes.
         if(!blocked && !editor.capturing()) {
             auto chosen=options;if(!game_found)chosen.game=saved_options.game;
@@ -686,12 +852,21 @@ int run(int argc,wchar_t** argv) {
         }
         const bool check_capture_wait=!smoke_exe.empty() && !smoke_capture_wait_checked && launch_requested && cpu_ready && !editor.capturing();
         if(check_capture_wait)editor.begin_capture(uc::Action::fire,false);
+        if(!smoke.empty() && smoke_exe.empty() && pending_network) {
+            if(smoke_network!=SmokeNetwork::handoff || !launch_requested || !pending_network->host || pending_network->address!=network_address || pending_network->port!=network_port || ++smoke_network_handoffs!=1)
+                throw std::runtime_error("network launcher handoff failed");
+            if(!nat || nat->state().phase!=uc::net::NatPhase::mapped)throw std::runtime_error("NAT mapping lost at game handoff");
+            stop_nat();launch_requested=false;pending_network.reset();smoke_network=SmokeNetwork::verify;
+        }
         if(launch_requested && cpu_ready && !done && !blocked && !editor.capturing() && game_found) {
             launch_requested=false;
             if(save(options)) {
-                try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu);}
-                catch(const std::exception& e) {error=e.what();}
-                if(process && smoke.empty() && smoke_exe.empty())done=true;   // the launcher closes once the game has started; smoke runs keep it to watch the game
+                try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu,pending_network);pending_network.reset();}
+                catch(const std::exception& e) {error=e.what();cancel_network();}
+                if(process && smoke.empty() && smoke_exe.empty()) {
+                    if(nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep router leases alive until the child game exits.
+                    else done=true;
+                }
             }
         }
         if(check_capture_wait) {
@@ -702,6 +877,10 @@ int run(int argc,wchar_t** argv) {
         if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
         if(!smoke.empty()) {
+            if(smoke_network_timeout) {
+                ui.capture(smoke/L"network-timeout.bmp");
+                throw std::runtime_error(std::string("network lobby smoke timed out in ")+smoke_network_names[size_t(smoke_network)]+": "+network_error+error);
+            }
             if(frame==24) {if(!editor.bindings()[size_t(uc::Action::fire)].empty())throw std::runtime_error("Clear All UI failed");ui.capture(smoke/L"cleared.bmp");}
             if(frame==14)ui.capture(smoke/L"tab.bmp");
             if(frame==42) {if(uc::load_config(config_path).input[size_t(uc::Action::fire)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,41},{}}})throw std::runtime_error("Esc capture/save UI failed");ui.capture(smoke/L"saved.bmp");}
@@ -746,8 +925,20 @@ int run(int argc,wchar_t** argv) {
                 ui.capture(smoke/L"grid-replaced.bmp");
             }
             if(frame==466)ui.capture(smoke/L"graphics-bottom.bmp");
-            if(frame>=492) {
-                if(smoke_exe.empty())done=true;
+            if(smoke_exe.empty() && frame==504)ui.capture(smoke/L"network-open.bmp");
+            if(smoke_exe.empty() && frame==516)ui.capture(smoke/L"network-invalid.bmp");
+            if(smoke_network_capture) {ui.capture(smoke/L"network-connected.bmp");smoke_network_capture=false;}
+            if(frame==522 && (network_modal || lobby || pending_network))throw std::runtime_error("network cancel did not reset lobby");
+            if(frame>=524) {
+                if(smoke_exe.empty()) {
+                    if(smoke_network==SmokeNetwork::idle) {
+                        network_address="127.0.0.1";network_port=30000+int(GetCurrentProcessId()%20000);
+                        smoke_network_start=SDL_GetTicks();smoke_network=SmokeNetwork::open;
+                    } else if(smoke_network==SmokeNetwork::complete) {
+                        if(process || launch_requested || pending_network || lobby || smoke_network_handoffs!=1)throw std::runtime_error("network smoke launched a game or repeated handoff");
+                        done=true;
+                    }
+                }
                 else {
                     if(!process && !launch_requested)throw std::runtime_error("launch button failed: "+error);
                     if(!process) {
@@ -763,7 +954,7 @@ int run(int argc,wchar_t** argv) {
         ++frame;
     }
     if(!smoke_exe.empty() && !smoke_capture_wait_checked)throw std::runtime_error("pending Play capture check did not run");
-    if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage; no OS input\n");
+    if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage/network validation, cancel and readiness handoff; no OS input\n");
     return 0;
 }
 }

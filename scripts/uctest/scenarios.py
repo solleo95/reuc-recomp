@@ -71,6 +71,66 @@ def controls(g, args):
     return {**result, "accepted": accepted}
 
 
+def weapon_switch(g, args):
+    """Keyboard and wheel must change the guest's selected weapon through the full input pipeline."""
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    actor = g.frame["player"]["address"]
+
+    def selected():
+        return int(g.request({"cmd": "peek", "addr": actor + 0x784, "size": 4})["hex"], 16)
+
+    changes = []
+    for name, command in (
+        ("previous_key", {"key": {"code": 26, "down": True}, "hold_frames": 3}),
+        ("next_key", {"key": {"code": 22, "down": True}, "hold_frames": 3}),
+        ("previous_wheel", {"wheel": {"delta": 1}}),
+        ("next_wheel", {"wheel": {"delta": -1}}),
+    ):
+        with g.step(name):
+            steps.wait_gameplay(g)
+            before = selected()
+            for _ in range(3):
+                g.request({"cmd": "input", **command})
+                g.advance(30)
+                after = selected()
+                if after != before:
+                    break
+            else:
+                g.fail(f"{name} left weapon slot at {before}", "weapon slot changed")
+            changes.append({"binding": name, "before": before, "after": after})
+    return {"changes": changes, "capture": g.capture()}
+
+
+def camera_stick(g, args):
+    """Camera keys reach the guest's Nunchuk stick and return to neutral on release."""
+    import struct
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    manager = 0x8043A82C   # fn80068DBC channel 0; fn8003B558 copies Nunchuk samples to +4228.
+
+    def axes():
+        return struct.unpack(">ff", bytes.fromhex(g.request({"cmd": "peek", "addr": manager + 4228, "size": 8})["hex"]))
+
+    result = {}
+    for name, key, expected in (("up", 82, (0., 1.)), ("down", 81, (0., -1.)),
+                               ("left", 80, (-1., 0.)), ("right", 79, (1., 0.))):
+        with g.step(name):
+            steps.wait_gameplay(g)
+            before = g.state()["view"]
+            g.key(key, frames=600, wait=False)
+            g.advance(20)
+            observed = axes()
+            if any(abs(a-b) > .01 for a, b in zip(observed, expected)):
+                g.fail(f"{name}: Nunchuk stick {observed}, expected {expected}", "Nunchuk stick")
+            result[name] = {"axes": observed, "view_before": before, "view_after": g.state()["view"], "capture": g.capture()}
+            g.request({"cmd": "input", "key": {"code": key, "down": False}})
+            g.advance(6)
+            if axes() != (0., 0.):
+                g.fail(f"{name}: Nunchuk stick did not return to center", "neutral stick")
+    return result
+
+
 def perf(g, args):
     g.set_speed(8)   # menus and loading at 8x; the measurement itself runs at speed 1
     reach_gameplay(g, args.chapter)
@@ -1236,8 +1296,10 @@ def guest_api(g, args):
     return result
 
 
-SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
+SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "weapon_switch": weapon_switch, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
              "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a fixture that leaves input unchanged
+SCENARIOS["camera_stick"] = camera_stick
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
 SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}, "randomizer_live": {"randomizer": {"seed": 1, "strength": 100, "start_weapon": True}}}   # stored settings of the mods a scenario installs

@@ -39,8 +39,9 @@ int main() {
         for(const auto& choice:uc::dlss5_field("hook")->choices) CHECK(!text(language.code,"dlss5_hook_desc_"+std::string(choice.name)).empty());
     }
     CHECK(text("ru","dlss5_hook")=="Метод подключения" && text("en","dlss5_hook_desc_off")=="Off: Disabled");
-    CHECK(text("ru","play")=="ИГРАТЬ");
-    CHECK(text("ja","play")=="プレイ");
+    CHECK(text("en","play")=="Singleplayer");
+    CHECK(text("ru","play")=="Одиночная игра");
+    CHECK(text("ja","play")=="シングルプレイ");
     // Checked = bloom on (a positive option with a strength slider), in the launcher and the in-game menu.
     CHECK(text("en","bloom")=="Bloom (glow around lights)" && text("en","bloom_strength")=="Bloom strength");
     CHECK(text("ru","bloom")=="Bloom (свечение вокруг источников света)" && text("ru","bloom_strength")=="Сила bloom");

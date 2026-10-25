@@ -13,6 +13,6 @@ void hle_DSPAddTask(Ctx& c) {
     wr32(c, task + kFlags, 1);
     if (cb) {
         uc::Sched& s = uc::os_sched();
-        s.post_external([&s, cb, task] { uc::call_guest(s.irq_ctx(), cb, {task}); });   // interrupt context, like the DSP's reply
+        s.post_external([&s, cb, task] { uc::call_guest(s.irq_ctx(), cb, {task}); },uc::Sched::EventKind::Dsp);
     }
 }

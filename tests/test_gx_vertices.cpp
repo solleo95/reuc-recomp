@@ -131,5 +131,30 @@ int main() {
     collected.begin(state,0xB8,0,1,7,0);
     collected.write_attribute(7,bytes(source_indices).first(1)); collected.take_draw();
     CHECK(collected.sources()[0]->address==0x80000028 && collected.sources()[0]->size==2);
+    // Replay validates the same indexed input without allocating render geometry.
+    for(size_t split=0;split<source_indices.size();++split) {
+        gx::Vertices discarded({ram,{},{}},true);
+        discarded.begin(state,0x90,0,3,7,0,true);
+        discarded.write_attribute(7,bytes(source_indices).first(split));
+        discarded.write_attribute(7,bytes(source_indices).subspan(split));
+        CHECK(!discarded.active() && discarded.vertex_count()==3);
+        const auto empty=discarded.take_draw();
+        CHECK(empty.vertices.empty() && empty.indices.empty());
+        CHECK(discarded.sources()[0]->address==0x80000020 && discarded.sources()[0]->size==10);
+        discarded.begin(state,0x90,0,3,7,0);
+        discarded.write_attribute(7,bytes(source_indices));
+        CHECK(discarded.take_draw().vertices.size()==3);
+    }
+    gx::Vertices discarded({ram,{},{}});
+    discarded.begin(state,0x90,0,3,7,0,true);
+    rejects(gx::ErrorCode::producer,[&] { discarded.write_attribute(8,bytes(source_indices)); });
+    rejects(gx::ErrorCode::truncated,[&] { discarded.write_attribute(7,bytes(quad)); });
+    discarded.write_attribute(7,bytes(source_indices).first(1));
+    rejects(gx::ErrorCode::truncated,[&] { discarded.finish(); });
+    discarded.write_attribute(7,bytes(source_indices).subspan(1));
+    discarded.take_draw();
+    state.arrays[0]={0x800000FF,2};
+    discarded.begin(state,0xB8,0,1,7,0,true);
+    rejects(gx::ErrorCode::array_bounds,[&] { discarded.write_attribute(7,bytes(index)); });
     return 0;
 }

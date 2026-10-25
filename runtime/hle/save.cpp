@@ -60,7 +60,7 @@ void complete(ppc::Ctx& c,void (*fn)(ppc::Ctx&),uint32_t callback,uint32_t argum
 #ifdef UC_TRACE
         std::fprintf(stderr,"[save] callback %08X returned\n",callback);
 #endif
-    });
+    },uc::Sched::EventKind::Save);
     c.r[3]=0;
 }
 int create(ppc::Ctx& c,bool directory) {
@@ -86,6 +86,8 @@ void hle_NANDInit(ppc::Ctx& c) {
         }
         std::memcpy(c.mem+0x004291C0,kHome,sizeof(kHome));
         std::memcpy(c.mem+0x0061F6C0,kHome,sizeof(kHome));
+        gx::note_write_range(0x004291C0,sizeof(kHome));
+        gx::note_write_range(0x0061F6C0,sizeof(kHome));
         ppc::wr32(c,c.r[13]-25056,2);
         std::fprintf(stderr,"[save] native NAND home %s ready\n",kHome);
         return 0;
@@ -97,7 +99,12 @@ void hle_ISFS_CreateFile(ppc::Ctx& c) { call(c,[&] { return create(c,false); });
 void hle_ISFS_Open(ppc::Ctx& c) { call(c,[&] { return files->open(path(c,c.r[3]),c.r[4]); }); }
 void hle_ISFS_Close(ppc::Ctx& c) { call(c,[&] { return files->close(int32_t(c.r[3])); }); }
 void hle_ISFS_Read(ppc::Ctx& c) {
-    call(c,[&] { check(c,c.r[4],c.r[5]); return files->read(int32_t(c.r[3]),{c.mem+(c.r[4]&0x3FFFFFFF),c.r[5]}); });
+    call(c,[&] {
+        check(c,c.r[4],c.r[5]);
+        const auto count=files->read(int32_t(c.r[3]),{c.mem+(c.r[4]&0x3FFFFFFF),c.r[5]});
+        if(count>0) gx::note_write_range(c.r[4],size_t(count));
+        return count;
+    });
 }
 void hle_ISFS_Write(ppc::Ctx& c) {
     call(c,[&] { check(c,c.r[4],c.r[5]); return files->write(int32_t(c.r[3]),{c.mem+(c.r[4]&0x3FFFFFFF),c.r[5]}); });
@@ -147,6 +154,7 @@ void hle_ISFS_ReadDir(ppc::Ctx& c) {
                 std::memcpy(c.mem+(c.r[4]&0x3FFFFFFF)+offset,name.c_str(),name.size()+1);
                 offset+=name.size()+1;
             }
+            gx::note_write_range(c.r[4],offset);
         }
         ppc::wr32(c,c.r[5],uint32_t(count)); return 0;
     });

@@ -30,6 +30,7 @@ struct Ctx {
     uint32_t spr[1024];  // SPRs without a dedicated field
     uint32_t reserve_addr;
     uint32_t poll_count;   // backward branches taken; every 2048th one is a safe point
+    uint32_t native_depth=0; // Native HLE frames cannot be reconstructed from guest LR alone.
     uint8_t* mem;
 };
 
@@ -80,9 +81,9 @@ PPC_INLINE uint32_t rd8_ram(Ctx& c, uint32_t ea) { return *hp(c, ea); }
 PPC_INLINE void wr32_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); if ((ea & 0xFFFu) > 0xFFCu) [[unlikely]] gx::note_write(ea + 3); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
 PPC_INLINE void wr16_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); if ((ea & 0xFFFu) == 0xFFFu) [[unlikely]] gx::note_write(ea + 1); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
 PPC_INLINE void wr8_ram(Ctx& c, uint32_t ea, uint32_t v) { gx::note_write(ea); *hp(c, ea) = uint8_t(v); }
-PPC_INLINE void wr32_stack(Ctx& c, uint32_t ea, uint32_t v) { v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
-PPC_INLINE void wr16_stack(Ctx& c, uint32_t ea, uint32_t v) { uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
-PPC_INLINE void wr8_stack(Ctx& c, uint32_t ea, uint32_t v) { *hp(c, ea) = uint8_t(v); }
+PPC_INLINE void wr32_stack(Ctx& c, uint32_t ea, uint32_t v) { uc::rollback_note_range(ea,4); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
+PPC_INLINE void wr16_stack(Ctx& c, uint32_t ea, uint32_t v) { uc::rollback_note_range(ea,2); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+PPC_INLINE void wr8_stack(Ctx& c, uint32_t ea, uint32_t v) { uc::rollback_note_write(ea); *hp(c, ea) = uint8_t(v); }
 PPC_INLINE float rdf32(Ctx& c, uint32_t ea) { uint32_t b = rd32(c, ea); float f; std::memcpy(&f, &b, 4); return f; }
 PPC_INLINE double rdf64(Ctx& c, uint32_t ea) {
     if (is_mmio(ea)) [[unlikely]] { uint64_t hi = mmio_read(ea, 4), lo = mmio_read(ea + 4, 4); uint64_t b = hi << 32 | lo; double d; std::memcpy(&d, &b, 8); return d; }
@@ -320,7 +321,7 @@ PPC_INLINE void op_stfs(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea
 PPC_INLINE void op_stfsu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); wrf32(c, e, float(c.f[t])); c.r[a] = e; }
 PPC_INLINE void op_stfsx(Ctx& c, int t, int a, int b) { wrf32(c, ea_x(c, a, b), float(c.f[t])); }
 PPC_INLINE void op_stfsux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf32(c, e, float(c.f[t])); c.r[a] = e; }
-PPC_INLINE void op_stfd(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (ram_base(a)) { uint64_t v; std::memcpy(&v, &c.f[t], 8); v = _byteswap_uint64(v); if (!stack_base(a)) { gx::note_write(e); if ((e & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(e + 7); } std::memcpy(hp(c, e), &v, 8); } else wrf64(c, e, c.f[t]); }
+PPC_INLINE void op_stfd(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (ram_base(a)) { uint64_t v; std::memcpy(&v, &c.f[t], 8); v = _byteswap_uint64(v); if (!stack_base(a)) { gx::note_write(e); if ((e & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(e + 7); } else uc::rollback_note_range(e,8); std::memcpy(hp(c, e), &v, 8); } else wrf64(c, e, c.f[t]); }
 PPC_INLINE void op_stfdu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); wrf64(c, e, c.f[t]); c.r[a] = e; }
 PPC_INLINE void op_stfdx(Ctx& c, int t, int a, int b) { wrf64(c, ea_x(c, a, b), c.f[t]); }
 PPC_INLINE void op_stfdux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf64(c, e, c.f[t]); c.r[a] = e; }
@@ -474,6 +475,7 @@ PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i, bool stack =
         const float f0 = float(c.f[t]), f1 = float(c.ps1[t]); uint32_t b0, b1; std::memcpy(&b0, &f0, 4); std::memcpy(&b1, &f1, 4);
         const uint64_t v = uint64_t(_byteswap_ulong(b0)) | uint64_t(_byteswap_ulong(b1)) << 32;
         if (!stack) { gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7); }
+        else uc::rollback_note_range(ea,8);
         std::memcpy(hp(c, ea), &v, 8); return;
     }
     gq_store1(c, ea, type, scale, c.f[t]);

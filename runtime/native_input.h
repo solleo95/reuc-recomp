@@ -4,7 +4,9 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <mutex>
+#include <memory>
 #include <vector>
 
 namespace uc {
@@ -13,7 +15,9 @@ struct InputSample {
     float x=0,y=0,dx=0,dy=0;
     uint32_t held=0,pressed=0,released=0;
     bool valid=false;
+    float stick_x=0,stick_y=0; // Derived from camera actions after raw input/demo/network sampling.
 };
+struct InputFrame { InputSample sample; ActionFrame actions; uint64_t generation=0; bool host=true; };
 enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus };
 struct HostEvent { HostEventKind kind; uint32_t code; int value; float x=0,y=0; };
 using InputProbe=void(*)(const ppc::Ctx&,const InputSample&);
@@ -41,6 +45,11 @@ public:
     uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
+    InputFrame capture_frame();
+    void install_frame(const InputFrame&);
+    struct Snapshot;
+    std::shared_ptr<const Snapshot> checkpoint();
+    void restore(const Snapshot&);
     std::array<float,2> latest_aim();     // any thread: the pointer as of now
     std::array<float,2> consumed_aim();   // the pointer of the last sample the guest read
     // Demo (determinism): every value the guest reads from this object (consume, consume_actions, using_host_input, generation) is appended to one
@@ -77,8 +86,12 @@ private:
     bool legacy_test_input_=false;
     uint64_t generation_=0;
     InputContext context_=InputContext::inactive;
+    std::optional<InputFrame> network_frame_;
 };
-void input_hle_init(NativeInput* input);
+void input_hle_init(NativeInput* input,NativeInput* second=nullptr);
+void input_hle_set_poll(std::function<void(const ppc::Ctx&)>);
+unsigned input_hle_channel(); // Guest baton owns the currently sampled channel.
+void input_hle_restore_channel(unsigned channel);
 std::array<float,2> input_consumed_aim();   // the pointer the guest read last (zero without input)
 uint32_t input_demo_speed(uint32_t live);   // the clock speed factor the deterministic game pacing uses (recorded and replayed with the demo; live without input)
 }

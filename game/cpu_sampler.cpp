@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +18,10 @@ constexpr int kDepth = 10;
 struct Stack { uint32_t frame[kDepth]; uint32_t count; };
 // Open-addressing table of distinct stacks, sized up front: the target may hold the heap lock while it is suspended.
 constexpr size_t kSlots = 1u << 17;
+std::atomic<bool> replaying{false};
 }  // namespace
+
+void cpu_sampler_set_replaying(bool value) { replaying.store(value,std::memory_order_relaxed); }
 
 void cpu_sampler_start_once(const char* thread) {
     const char* want = std::getenv("UC_CPU_SAMPLE");
@@ -34,12 +38,16 @@ void cpu_sampler_start_once(const char* thread) {
         const char* delay = std::getenv("UC_CPU_SAMPLE_DELAY");   // seconds to skip first (boot, menus)
         const auto begin = last + std::chrono::seconds(delay ? std::atoi(delay) : 0);
         const char* flag = std::getenv("UC_CPU_SAMPLE_FLAG");   // sample only once this file exists (a test scenario creates it at the scene of interest)
+        const bool only_replay=std::getenv("UC_CPU_SAMPLE_REPLAY")!=nullptr;
         bool armed = !flag;
         for (unsigned tick = 0;; ++tick) {
             std::this_thread::sleep_for(std::chrono::microseconds(500));
             if (std::chrono::steady_clock::now() < begin) continue;
             if (!armed) { if (tick % 100 == 0) armed = GetFileAttributesA(flag) != INVALID_FILE_ATTRIBUTES; if (!armed) continue; }
+            if(only_replay && !replaying.load(std::memory_order_relaxed))continue;
             if (SuspendThread(target) == DWORD(-1)) continue;
+            // Recheck after suspension so the sample cannot slip into forward simulation.
+            if(only_replay && !replaying.load(std::memory_order_relaxed)) { ResumeThread(target);continue; }
             CONTEXT context{};
             context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
             Stack stack{};

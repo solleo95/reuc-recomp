@@ -6,6 +6,14 @@
 
 namespace uc {
 using Fn = void (*)(ppc::Ctx&);
+template<Fn Function> void invoke_hle(ppc::Ctx& c) {
+    struct Scope {
+        ppc::Ctx& c;
+        explicit Scope(ppc::Ctx& c):c(c) { ++c.native_depth; }
+        ~Scope() { --c.native_depth; }
+    } scope(c);
+    Function(c);
+}
 struct FnEntry { uint32_t addr; Fn fn; };
 
 void dispatch_init(const FnEntry* table, size_t count, uint32_t text_begin, uint32_t text_end);

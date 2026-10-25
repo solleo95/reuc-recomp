@@ -1,5 +1,6 @@
 #include "check.h"
 #include "game_pacing.h"
+#include "clock.h"
 #include "dispatch.h"
 #include "ppc_fixture.h"
 #include <cmath>
@@ -252,6 +253,15 @@ static void prop_body(ppc::Ctx& c) {
     ++prop_runs; c.r[3]=ppc::rd32(c,c.r[3]+84)+1; c.r[1]+=96;
 }
 int main() {
+    for(const auto ticks:{uint64_t(1),uc::kTimebaseHz/120-1,uc::kTimebaseHz/20+1}) {
+        bool rejected=false;
+        try {uc::game_pacing_set_network_period(ticks);}catch(const std::invalid_argument&) {rejected=true;}
+        CHECK(rejected);
+    }
+    uc::game_pacing_set_network_period(uc::kTimebaseHz/120);
+    uc::game_pacing_set_network_period(uc::kTimebaseHz/60);
+    uc::game_pacing_set_network_period(uc::kTimebaseHz/20);
+    uc::game_pacing_set_network_period(0);
     Fix fixture; auto& c=fixture.c;
     const uc::FnEntry entries[]={{0x80158208,original_tail},{0x8026E194,retrace},{0x800C7910,actor_step_body},{0x8014D36C,hud_body},{0x8021027C,prop_body},{0x801172A8,physics_body},{0x80117468,physics_hit_body},{0x801490FC,flight_selector},{0x80044D18,raycast_body},{0x801C44BC,flight_path_body},{0x80123D18,jump_blend_tail},{0x801C56F4,flight_phase_body},{0x800EA9B4,physics_destroy_body},{0x801B0AEC,camera_history_tail},{0x800ACB54,deferred_action},{0x801A5168,deferred_tail}};
     const uc::FnEntry rumble_entry{0x80136EF0,rumble_body};

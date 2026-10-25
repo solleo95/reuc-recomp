@@ -23,9 +23,27 @@ std::string_view upscale_mode_name(UpscaleMode mode) { return size_t(mode) < kUp
 bool valid_sharpness(double sharpness) { return std::isfinite(sharpness) && sharpness >= 0.01 && sharpness <= 1.0; }
 bool valid_frame_generation_multiplier(uint64_t multiplier) { return multiplier >= 2 && multiplier <= 6; }
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options) {
+    uint16_t net_port=net::default_port;
+    bool port_set=false;
     for (size_t i = 0; i < arguments.size(); ++i) {
         auto arg = arguments[i];
-        if (arg == "--headless") options.headless = true;
+        if(arg=="--net-host" || arg=="--net-join") {
+            if(options.netplay)return "choose only one of --net-host and --net-join";
+            net::Endpoint endpoint; endpoint.host=arg=="--net-host";
+            if(!endpoint.host) {
+                if(++i>=arguments.size())return "missing value for --net-join";
+                endpoint.address=std::string(arguments[i]);
+                if(!net::valid_address(endpoint.address))return "--net-join requires a numeric IPv4 address";
+            }
+            options.netplay=endpoint;
+        }
+        else if(arg=="--net-port") {
+            if(++i>=arguments.size())return "missing value for --net-port";
+            unsigned port=0;const auto value=arguments[i];const auto parsed=std::from_chars(value.data(),value.data()+value.size(),port);
+            if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || !port || port>65535)return "invalid value for --net-port";
+            net_port=uint16_t(port);port_set=true;
+        }
+        else if (arg == "--headless") options.headless = true;
         else if (arg == "--validation") options.validation = true;
         else if (arg == "--log-dvd") options.log_dvd = true;
         else if (arg == "--log-sleep") options.log_sleep = true;
@@ -162,6 +180,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }
             else options.seconds = number;
         } else return "unknown option " + std::string(arg);
+    }
+    if(port_set && !options.netplay)return "--net-port requires --net-host or --net-join";
+    if(options.netplay) {
+        options.netplay->port=net_port;
+        if(!options.demo_play.empty() || !options.demo_record.empty())return "network play cannot record or replay demos";
+        options.deterministic=true;options.no_mods=true;options.game_hz=120;options.unlock_60fps=false;
+        options.skip_intro=true;options.skip_tutorials=true;
     }
     if (!options.demo_play.empty() && !options.demo_record.empty()) return "--demo-play and --demo-record exclude each other";
     if (!options.demo_play.empty() && !options.deterministic && options.det_out.empty()) return "--demo-play requires --deterministic";

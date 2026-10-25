@@ -160,23 +160,24 @@ int main(int argc, char** argv) {
         }
         CHECK(renderer.presentation_count()==19);
         CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+6); // one pool per frame slot
-        auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr) {
+        auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr,bool display=true) {
             auto& target=selected ? *selected : renderer;
             auto until=std::chrono::steady_clock::now()+3s;
             bool sent=false,done=false;
             while (!done) {
                 CHECK(std::chrono::steady_clock::now()<until);
-                if (!sent) sent=target.render(work);
+                if (!sent) sent=target.render(work,display);
                 for (auto serial : target.poll_completions()) { CHECK(serial==work.serial && !done); done=true; }
                 SDL_PumpEvents(); std::this_thread::sleep_for(1ms);
             }
         };
-        gx::FramePacket work=packet; work.serial=20; work.present=false; work.clear_after_copy=false;
-        submit(work); CHECK(renderer.presentation_count()==19);
+        gx::FramePacket work=packet; work.serial=20; work.present=true; work.clear_after_copy=false;
+        // A hidden semantic frame still completes and retains its EFB for the next copy.
+        submit(work,nullptr,false); CHECK(renderer.presentation_count()==19);
         bool unavailable=false;
         try { renderer.capture(20); } catch (const std::runtime_error&) { unavailable=true; }
         CHECK(unavailable);
-        work.serial=21; work.draws.clear(); submit(work);
+        work.serial=21; work.present=false; work.draws.clear(); submit(work);
         CHECK(renderer.presentation_count()==19);
         resize_window(960,540);
         renderer.resize(960,540);
@@ -189,7 +190,8 @@ int main(int argc, char** argv) {
         work.serial=23; work.clear_after_copy=true; work.clear_color={32,64,96,255}; submit(work);
         retained=renderer.capture(23);
         CHECK(retained.rgba[center+2]>=115); // copy precedes the EFB clear
-        work.serial=24; work.present=false; work.clear_after_copy=false; submit(work);
+        work.serial=24; work.present=true; work.clear_after_copy=true; submit(work,nullptr,false);
+        CHECK(renderer.presentation_count()==21);
         work.serial=25; work.present=true; submit(work);
         auto cleared=renderer.capture(25);
         CHECK(cleared.rgba[center]==32 && cleared.rgba[center+1]==64 && cleared.rgba[center+2]==96);

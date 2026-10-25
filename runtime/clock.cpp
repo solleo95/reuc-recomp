@@ -26,6 +26,14 @@ constexpr uint64_t kDetStep = 60;   // about 1 microsecond of guest time per tim
 void set_deterministic_clock(bool on) { det_ticks = 0; det_mode = on; }
 bool deterministic_clock() { return det_mode.load(std::memory_order_relaxed); }
 void det_clock_advance_to(uint64_t tick) { uint64_t cur = det_ticks.load(); while (cur < tick && !det_ticks.compare_exchange_weak(cur, tick)) {} }
+uint64_t det_clock_checkpoint() {
+    if(!deterministic_clock()) throw std::logic_error("checkpoint requires deterministic clock");
+    return det_ticks.load();
+}
+void det_clock_restore(uint64_t tick) {
+    if(!deterministic_clock() || !is_guest_thread()) throw std::logic_error("clock restore requires deterministic guest baton");
+    det_ticks.store(tick);
+}
 void mark_guest_thread() { guest_thread = true; }
 bool is_guest_thread() { return guest_thread; }
 

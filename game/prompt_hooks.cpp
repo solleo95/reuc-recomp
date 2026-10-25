@@ -40,6 +40,11 @@ void prompt_hooks_set_bindings(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
     std::lock_guard lock(pending_mutex);pending=bindings;has_pending=true;
 }
+struct PromptSnapshot { PromptRegistry registry; Bindings assignments; };
+std::shared_ptr<const PromptSnapshot> prompt_checkpoint() {
+    return std::make_shared<PromptSnapshot>(PromptSnapshot{registry,assignments});
+}
+void prompt_restore(const PromptSnapshot& saved) { registry=saved.registry; assignments=saved.assignments; }
 PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),exceptions_(std::uncaught_exceptions()) {
     if(!initialized || !c.mem)return;
     if(has_pending.exchange(false)) {std::lock_guard lock(pending_mutex);if(pending)assignments=std::move(*pending);pending.reset();}

@@ -28,6 +28,9 @@ public:
     uint32_t read(uint32_t ea, int size);
     void write(uint32_t ea, int size, uint32_t v);
     size_t unmapped_count() const { return unmapped_.load(std::memory_order_relaxed); }
+    using RegisterSnapshot=std::vector<std::pair<RegFile*,std::vector<uint8_t>>>;
+    RegisterSnapshot checkpoint_registers() const;
+    void restore_registers(const RegisterSnapshot&);
 private:
     struct Range { uint32_t base, size; MmioDevice* dev; std::string name; };
     const Range* find(uint32_t ea, int size) const;

@@ -14,7 +14,7 @@ constexpr uint64_t kKnifeWindowNs=60000000ull,kKnifeReportNs=8000000ull;
 // (a slow wave is aiming) and may pause at most kShakeGapNs between reports.
 constexpr double kShakeStroke=20,kShakeMinPath=24,kShakePathSeconds=.06;
 constexpr uint64_t kShakeGapNs=100000000ull;
-enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,count };
+enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,count };
 enum class InputContext:uint8_t { inactive,menu,gameplay,qte };
 enum class PhysicalKind:uint8_t { key,mouse,wheel };
 struct PhysicalInput { PhysicalKind kind=PhysicalKind::key; uint16_t code=0; bool operator==(const PhysicalInput&) const=default; };

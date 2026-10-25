@@ -14,7 +14,7 @@ void finish_async(Ctx& c, int32_t result, uint32_t cb, uint32_t arg) {
     uc::Sched& s = uc::os_sched();
     s.post_external([&s, result, cb, arg] {                    // interrupt context, like the real IPC reply
         if (cb) uc::call_guest(s.irq_ctx(), cb, {uint32_t(result), arg});
-    });
+    },uc::Sched::EventKind::Ios);
     c.r[3] = 0;
 }
 std::string cstr(Ctx& c, uint32_t a) { std::string s; for (uint32_t i = 0; i < 128; ++i) { char ch = char(rd8(c, a + i)); if (!ch) break; s += ch; } return s; }

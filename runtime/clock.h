@@ -8,6 +8,8 @@ uint64_t now_ticks();
 void set_deterministic_clock(bool on);
 bool deterministic_clock();
 void det_clock_advance_to(uint64_t tick);   // never moves time backwards
+uint64_t det_clock_checkpoint();
+void det_clock_restore(uint64_t tick); // Guest baton only.
 void mark_guest_thread();                   // the calling thread is a guest host thread (the baton holder reads advance time)
 bool is_guest_thread();
 void set_clock_speed(uint32_t factor);   // test mode: 1..32, virtual time = base + real elapsed * factor

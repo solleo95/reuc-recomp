@@ -82,23 +82,25 @@ class Vertices {
 public:
     struct SourceRange { uint32_t address; size_t size; };
     explicit Vertices(Memory memory, bool collect_sources=false) : memory_(memory), collect_sources_(collect_sources) {}
-    void begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite) { begin(Shared<State>(state), primitive, vat, count, producer, callsite); }
-    void begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite);   // shares the block with the draw
+    void begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard=false) { begin(Shared<State>(state), primitive, vat, count, producer, callsite, discard); }
+    void begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard=false);   // shares the block with the draw
     void write_attribute(uint32_t producer, std::span<const std::byte> bytes);
     DrawPacket take_draw();
     void finish() const;
     bool active() const { return active_; }
+    uint16_t vertex_count() const { return decoded_; }
     const auto& sources() const { return sources_; }
 private:
-    Vertex decode(std::span<const std::byte> data);
+    void decode(std::span<const std::byte> data);
     Memory memory_;
     DrawPacket draw_;
     std::vector<std::byte> vertex_bytes_;
     size_t vertex_size_ = 0;
-    uint16_t count_ = 0;
+    uint16_t count_ = 0, decoded_ = 0;
     uint32_t producer_ = 0;
     bool active_ = false, ready_ = false;
     bool collect_sources_;
+    bool discard_ = false;
     std::array<std::optional<SourceRange>,12> sources_{};
 };
 

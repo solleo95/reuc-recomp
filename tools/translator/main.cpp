@@ -56,6 +56,7 @@ int main(int argc, char** argv) {
         if (!uc::load_config(cp, p.cfg, err)) { std::fprintf(stderr, "config error in %s: %s\n", cp.c_str(), err.c_str()); return 1; }
     p.img = uc::Image{file, &dol.image};
     p.an = uc::analyze(p.img, p.cfg);
+    uc::add_resume_entries(p);
 
     uc::EmitStats st;
     uc::Output out = uc::emit_program(p, shard, st);

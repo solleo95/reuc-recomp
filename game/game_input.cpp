@@ -12,18 +12,37 @@
 #include <deque>
 #include <limits>
 namespace {
-uc::NativeInput* input; // Setup before scheduler starts; clear after join.
-uc::InputContext current_context=uc::InputContext::inactive;
-uint64_t generation=0;
-uint64_t qte_token=0;
-uint64_t native_holds=0;
-uint32_t actor=0;
+struct PadState {
+    uc::NativeInput* input=nullptr;
+    uc::InputContext context=uc::InputContext::inactive;
+    uint64_t generation=0,qte_token=0,native_holds=0;
+    uint32_t actor=0;
+    std::deque<uc::ActionEvent> requests;
+};
+// Guest baton owns both states. Scoped selection also preserves nested guest calls.
+PadState active_pad,other_pad;
+unsigned player=0;
+auto& input=active_pad.input;
+auto& current_context=active_pad.context;
+auto& generation=active_pad.generation;
+auto& qte_token=active_pad.qte_token;
+auto& native_holds=active_pad.native_holds;
+auto& actor=active_pad.actor;
+auto& requests=active_pad.requests;
+struct PadScope {
+    unsigned previous=player;
+    explicit PadScope(unsigned next) { select(next); }
+    ~PadScope() { select(previous); }
+    static void select(unsigned next) { if(next!=player) {std::swap(active_pad,other_pad);player=next;} }
+};
+unsigned owner(uint32_t object,uint32_t offset) {
+    return other_pad.actor && object==other_pad.actor+offset ? 1-player : player;
+}
 bool trace_actions=false;
 unsigned trace_records=0;
 unsigned request_records=0,wrapper_records=0,gate_records=0;
 unsigned tutorial_records=0;
 uint32_t traced_tutorial=0;
-std::deque<uc::ActionEvent> requests;
 bool weapon(uc::Action action) { return action==uc::Action::weapon_previous || action==uc::Action::weapon_next; }
 bool semantic(uc::Action action) { return weapon(action) || action==uc::Action::reload || action==uc::Action::grenade || action==uc::Action::knife || action==uc::Action::qte_shake; }
 uint64_t bit(uc::Action action) { return uint64_t(1)<<unsigned(action); }
@@ -46,7 +65,7 @@ std::optional<uc::ActionEvent> take(uc::Action action) {
 bool ready(const ppc::Ctx& c,uint32_t expected_actor) {
     if(!current_requests() || actor!=expected_actor || current_context!=uc::InputContext::gameplay)return false;
     const auto state=uc::input_probe_snapshot(c);
-    return state.players[0].address==expected_actor && uc::game_input_context(state)==uc::InputContext::gameplay;
+    return state.players[player].address==expected_actor && uc::game_input_context(state,player)==uc::InputContext::gameplay;
 }
 struct NativeResult { uint32_t word; double scalar; };
 NativeResult invoke(ppc::Ctx& c,uint32_t address,std::initializer_list<uint32_t> args) {
@@ -69,7 +88,13 @@ void action_log(const char* action,uint32_t object,bool accepted) {
 }
 }
 namespace uc {
-InputContext game_input_context(const InputProbeSnapshot& state) {
+struct GameInputSnapshot { PadState active,other; unsigned player; };
+std::shared_ptr<const GameInputSnapshot> game_input_checkpoint() {
+    return std::make_shared<GameInputSnapshot>(GameInputSnapshot{active_pad,other_pad,player});
+}
+void game_input_restore(const GameInputSnapshot& saved) { active_pad=saved.active; other_pad=saved.other; player=saved.player; }
+InputContext game_input_context(const InputProbeSnapshot& state,unsigned index) {
+    if(index>=state.players.size())return InputContext::inactive;
     if(!state.ui_valid || !state.ui_enabled)return InputContext::inactive;
     // UI update dispatch801483D8: HUD2 and draw-only3/6 persist in active gameplay.
     for(size_t slot:{0u,1u,4u,5u,7u,8u,9u,10u})
@@ -77,8 +102,8 @@ InputContext game_input_context(const InputProbeSnapshot& state) {
     if(int32_t(state.ui_states[11])>0)return InputContext::menu;
     if(state.game_mode_valid && (state.pause_state==2 || state.game_mode==3))return InputContext::menu; // Original801FBAAC pause state and scene substate gate.
     if(state.tutorial_loaded && state.tutorial_state!=0x00100000)return InputContext::menu; // Original8024F558 busy getter.
-    const auto& player=state.players[0];
-    if(!player.valid || player.player_790!=0 || player.state_794!=1)return InputContext::menu;
+    const auto& player=state.players[index];
+    if(!player.valid || player.player_790!=index || player.state_794!=1)return InputContext::menu;
     // Timed-action mode set by800677A0/8006786C and consumed by800DB2D4.
     if(player.mode_630==1 || player.mode_630==2)return InputContext::qte;
     if(player.mode_630!=0)return InputContext::inactive;
@@ -117,35 +142,42 @@ InputSample game_input_buttons(InputContext context,const ActionFrame& frame) {
     if(frame.released&bit(Action::pause))result.released|=0x10;
     if(frame.released&bit(Action::back))result.released|=0x1000;
     result.released&=~result.held;
+    if(context==InputContext::gameplay) {
+        const auto actions=frame.held|frame.pressed;
+        result.stick_x=float(bool(actions&bit(Action::camera_right)))-float(bool(actions&bit(Action::camera_left)));
+        result.stick_y=float(bool(actions&bit(Action::camera_up)))-float(bool(actions&bit(Action::camera_down)));
+    }
     return result;
 }
 static InputSample game_input_sample_unfiltered(const ppc::Ctx& c,const InputSample& raw) {
     if(!input)return raw;
     const auto state=input_probe_snapshot(c);
-    const auto context=game_input_context(state);
-    test_state_publish(state,uint8_t(context));
-    test_state_apply_god(const_cast<ppc::Ctx&>(c),state);   // cheat for --god only; guest memory is written through the shared mapping
+    const auto context=game_input_context(state,player);
+    if(player==0) {
+        test_state_publish(state,uint8_t(context));
+        test_state_apply_god(const_cast<ppc::Ctx&>(c),state);
+    }
     if(trace_actions && state.tutorial_loaded && state.tutorial_state!=traced_tutorial) {
         traced_tutorial=state.tutorial_state;
         if(tutorial_records++<64)std::fprintf(stderr,"[native-tutorial] %08X\n",traced_tutorial);
     }
-    if(trace_actions && (current_context!=context || actor!=state.players[0].address)) {
+    if(trace_actions && (current_context!=context || actor!=state.players[player].address)) {
         const char* names[]={"inactive","menu","gameplay","qte"};
-        std::fprintf(stderr,"[native-context] %s actor %08X ui6 %08X ui4 %08X\n",names[unsigned(context)],state.players[0].address,state.ui_states[6],state.ui_states[4]);
+        std::fprintf(stderr,"[native-context] %s actor %08X ui6 %08X ui4 %08X\n",names[unsigned(context)],state.players[player].address,state.ui_states[6],state.ui_states[4]);
     }
     input->context(context);
-    const uint64_t token=(uint64_t(state.players[0].mode_630)<<32)|state.players[0].qte_target_79C;
-    if(actor!=state.players[0].address || qte_token!=token) {
+    const uint64_t token=(uint64_t(state.players[player].mode_630)<<32)|state.players[player].qte_target_79C;
+    if(actor!=state.players[player].address || qte_token!=token) {
         input->qte_window(false);
         std::erase_if(requests,[](auto request){return request.action==Action::qte_shake;});
     }
     qte_token=token;
-    const bool qte_window=context==InputContext::qte && (state.players[0].flags_798&2);
+    const bool qte_window=context==InputContext::qte && (state.players[player].flags_798&2);
     input->qte_window(qte_window);
-    if(!input->using_host_input()) { requests.clear(); native_holds=0; current_context=context; actor=state.players[0].address; return raw; }
+    if(!input->using_host_input()) { requests.clear(); native_holds=0; current_context=context; actor=state.players[player].address; return raw; }
     const auto frame=input->consume_actions();
-    if(current_context!=context || generation!=frame.generation || actor!=state.players[0].address)requests.clear();
-    current_context=context; generation=frame.generation; actor=state.players[0].address; native_holds=frame.held;
+    if(current_context!=context || generation!=frame.generation || actor!=state.players[player].address)requests.clear();
+    current_context=context; generation=frame.generation; actor=state.players[player].address; native_holds=frame.held;
     if(!qte_window)std::erase_if(requests,[](auto request){return request.action==Action::qte_shake;});
     if(trace_actions && (frame.pressed&bit(Action::pause))) {
         std::fprintf(stderr,"[native-pause] context %u scene %08X:%08X ui",unsigned(context),state.scene_words[0],state.scene_words[1]);
@@ -161,25 +193,28 @@ static InputSample game_input_sample_unfiltered(const ppc::Ctx& c,const InputSam
     const auto buttons=game_input_buttons(context,frame);
     auto result=raw;
     result.held=buttons.held; result.pressed=buttons.pressed; result.released=buttons.released;
+    result.stick_x=buttons.stick_x; result.stick_y=buttons.stick_y;
     if(context==InputContext::gameplay && std::any_of(requests.begin(),requests.end(),[](auto request){return weapon(request.action);}))result.pressed|=kNativeWeaponStep;
     return result;
 }
 // Every pad sample the guest reads, host input or the harness's pad: the mods' input overrides (input.force_held and the others) apply last.
 InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
+    PadScope selected(input_hle_channel());
     auto sample=game_input_sample_unfiltered(c,raw);
     uc::mods::InputView view{sample.x,sample.y,sample.held,sample.pressed,sample.released};
     uc::mods::filter_input(view);
     sample.x=view.x; sample.y=view.y; sample.held=view.held; sample.pressed=view.pressed; sample.released=view.released;
     return sample;
 }
-void game_input_init(NativeInput* source,bool trace) { input=source; requests.clear(); generation=native_holds=qte_token=0; actor=traced_tutorial=0; trace_actions=trace; trace_records=request_records=wrapper_records=gate_records=tutorial_records=0; current_context=InputContext::inactive; input_hle_set_map(source ? game_input_sample : nullptr); }
-void game_input_shutdown() { input_hle_set_map(nullptr); input=nullptr; requests.clear(); }
+void game_input_init(NativeInput* source,bool trace,NativeInput* second) { active_pad={};other_pad={};player=0;input=source;other_pad.input=second;traced_tutorial=0; trace_actions=trace; trace_records=request_records=wrapper_records=gate_records=tutorial_records=0; input_hle_set_map(source ? game_input_sample : nullptr); }
+void game_input_shutdown() { input_hle_set_map(nullptr); active_pad={};other_pad={};player=0; }
 }
 void hle_GameActionMask(ppc::Ctx& c) {
+    PadScope selected(c.r[3]==0x8044A870 ? 1u : 0u);
     auto index=int32_t(c.r[4]); if(index<0 || index>=20)index=0;
     gx::Memory memory{{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}};
     memory.read(c.r[3],0x68);
-    if(input && input->using_host_input() && c.r[3]==0x8044A808 &&
+    if(input && input->using_host_input() && c.r[3]==0x8044A808+player*0x68 &&
         ((index==4 && c.lr==0x80068510) || (index==5 && c.lr==0x8006854C))) {
         if(input->generation()!=generation)requests.clear();
         if(c.r[30]!=actor) {c.r[3]=0;return;} // Verified caller8006846C holds the original parent in r30.
@@ -192,10 +227,11 @@ void hle_GameActionMask(ppc::Ctx& c) {
         }
         return;
     }
-    if(input && input->using_host_input() && c.r[3]==0x8044A808 && c.lr==0x801AB590) { c.r[3]=0; return; }
+    if(input && input->using_host_input() && c.r[3]==0x8044A808+player*0x68 && c.lr==0x801AB590) { c.r[3]=0; return; }
     c.r[3]=(ppc::rd8(c,c.r[3]+0x54+index)&1) ? 0 : ppc::rd32(c,c.r[3]+4+index*4);
 }
 void hle_GameWeaponUpdate(ppc::Ctx& c) {
+    PadScope selected(owner(c.r[3],0x48));
     auto uc_post_scope=uc::mods::post_scope<0x8006C268u>(c);   // mod post hooks: run when this wrapper returns, whichever way
     if(uc::mods::hook_enter<0x8006C268u>(c)) return;   // mod hook point (pre, then replace): the guest's r3 (weapon object) and r4 are read after it
     const auto object=c.r[3],allow=c.r[4],expected_actor=actor;
@@ -216,7 +252,7 @@ void hle_GameWeaponUpdate(ppc::Ctx& c) {
     if(allow==1 && ready(c,expected_actor) && ppc::rd32(c,object+0x490)<=1 && ppc::rdf32(c,expected_actor+0x4F8+0xEC)>0) {
         const auto capacity=invoke(c,0x801D431C,{ppc::rd32(c,object+0x480)}).word;
         const auto amount=ppc::rd32(c,object+0x48C),inventory_key=ppc::rd32(c,object+0x484);
-        const bool refill=inventory_key==0 || (invoke(c,0x801BD014,{0x8056A2D0,0,inventory_key}).word&0xFFFF)>1;
+        const bool refill=inventory_key==0 || (invoke(c,0x801BD014,{0x8056A2D0,ppc::rd32(c,object+0x494),inventory_key}).word&0xFFFF)>1;
         if(int32_t(capacity)>0 && amount<capacity && refill && ready(c,expected_actor)) {
             invoke(c,0x8006D980,{object}); accepted=ppc::rd32(c,object+0x490)==2;
         }
@@ -224,6 +260,7 @@ void hle_GameWeaponUpdate(ppc::Ctx& c) {
     action_log("Reload",object,accepted);
 }
 void hle_GameActionOwnerUpdate(ppc::Ctx& c) {
+    PadScope selected(owner(c.r[3],0x4F8));
     const auto object=c.r[3],allow=c.r[4],expected_actor=actor;
     const bool player_owner=actor && object==actor+0x4F8;
     if(trace_actions && gate_records<32 && ((native_holds&bit(uc::Action::knife)) || !requests.empty())) {
@@ -239,11 +276,12 @@ void hle_GameActionOwnerUpdate(ppc::Ctx& c) {
         return;
     }
     if(grenade) {
-        const auto count=invoke(c,0x801BD014,{0x8056A2D0,0,3}).word&0xFFFF;
+        const auto inventory_player=ppc::rd32(c,object+0xFC);
+        const auto count=invoke(c,0x801BD014,{0x8056A2D0,inventory_player,3}).word&0xFFFF;
         bool accepted=false;
         if(count && ppc::rdf32(c,object+0xF0)<=0 && ready(c,expected_actor)) {
             invoke(c,0x801AB860,{object});
-            accepted=(invoke(c,0x801BD014,{0x8056A2D0,0,3}).word&0xFFFF)<count;
+            accepted=(invoke(c,0x801BD014,{0x8056A2D0,inventory_player,3}).word&0xFFFF)<count;
         }
         action_log("Grenade",object,accepted); return;
     }
@@ -261,6 +299,7 @@ void hle_GameMotionCount(ppc::Ctx& c) {
     const auto object=c.r[3];
     const bool first=c.lr==0x800672C0 || c.lr==0x800673A0;
     const bool second=c.lr==0x80067310 || c.lr==0x80067400;
+    PadScope selected(owner(object,first ? 0x5F8 : 0x610));
     if(!input || !input->using_host_input() || c.r[4]!=0 || (!first && !second)) {
         original_update(c,0x80171D3C,64,24); return;
     }
@@ -270,9 +309,9 @@ void hle_GameMotionCount(ppc::Ctx& c) {
     auto count=ppc::rd32(c,object+0x10);
     const auto state=uc::input_probe_snapshot(c);
     const bool window=current_requests() && current_context==uc::InputContext::qte &&
-        uc::game_input_context(state)==uc::InputContext::qte && state.players[0].address==actor && (state.players[0].flags_798&2) &&
-        ((uint64_t(state.players[0].mode_630)<<32)|state.players[0].qte_target_79C)==qte_token &&
-        state.players[0].mode_630==((c.lr==0x800672C0 || c.lr==0x80067310) ? 1u : 2u);
+        uc::game_input_context(state,player)==uc::InputContext::qte && state.players[player].address==actor && (state.players[player].flags_798&2) &&
+        ((uint64_t(state.players[player].mode_630)<<32)|state.players[player].qte_target_79C)==qte_token &&
+        state.players[player].mode_630==((c.lr==0x800672C0 || c.lr==0x80067310) ? 1u : 2u);
     unsigned steps=0;
     for(auto i=requests.begin();i!=requests.end();) {
         if(i->action==uc::Action::qte_shake) {if(window)++steps;i=requests.erase(i);}else ++i;

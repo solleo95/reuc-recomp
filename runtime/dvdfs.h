@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -64,6 +65,9 @@ DvdStats dvd_stats();
 void dvd_log(bool on);          // print "[dvd] open <path>" lines to stderr
 void dvd_hle_init(DvdFs& fs);   // defined in hle/dvd.cpp
 void dvd_hle_shutdown();       // call after guests stop, while their scheduler and file tree remain alive
+struct DvdSnapshot;
+std::shared_ptr<const DvdSnapshot> dvd_checkpoint();
+void dvd_restore(const DvdSnapshot&);
 
 class DvdSession {
 public:

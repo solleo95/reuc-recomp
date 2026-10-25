@@ -77,14 +77,16 @@ inline RtPathPacked rt_path_pack(const RtPathSettings& settings, uint32_t frame=
     return {(settings.divisor&255u)|((frame&255u)<<8),(settings.paths&255u)|((settings.bounces&255u)<<8)|((settings.ao_rays&255u)<<16)|((std::min(settings.light_count,kRtPathMaxLights)&255u)<<24)};
 }
 // The lit surface's colour after the path tracer: the game's own colour (its textures, which the albedo target does not always carry) scaled by the gathered light relative
-// to a reference white, within [kRtPathMinScale, kRtPathMaxScale]; `mix` blends the scale toward 1 and the game's fog keeps its colour (fog 1: unchanged). The shader has the same constants.
+// to a reference white, within [kRtPathMinScale, kRtPathMaxScale]; `mix` blends the scale toward 1 and the game's fog keeps its colour (fog 1: unchanged).
+// Positive gain rolls off toward white, preserving bright texture detail in the already lit SDR colour. The shader uses the same curve.
 constexpr float kRtPathReference=0.45f, kRtPathMinScale=0.25f, kRtPathMaxScale=1.8f;
 inline std::array<float,3> rt_path_compose(const std::array<float,3>& game, const std::array<float,3>& light, float mix, float fog) {
     const float weight=std::clamp(mix,0.f,1.f)*(1.f-std::clamp(fog,0.f,1.f));
     std::array<float,3> out{};
     for (int i=0;i<3;++i) {
         const float scale=std::clamp(light[i]/kRtPathReference,kRtPathMinScale,kRtPathMaxScale);
-        out[i]=game[i]*(1.f+(scale-1.f)*weight);
+        const float gain=1.f+(scale-1.f)*weight;
+        out[i]=game[i]*gain/(1.f+game[i]*std::max(gain-1.f,0.f));
     }
     return out;
 }

@@ -58,7 +58,9 @@ public:
     VulkanRenderer(const VulkanRenderer&) = delete;
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
     void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9);
-    bool render(const gx::FramePacket& packet);
+    // Suppressing display preserves guest-frame rendering, copies, clears and completion.
+    bool render(const gx::FramePacket& packet, bool display = true,uint64_t submission_serial=0);
+    bool copy_ready(const std::shared_ptr<const gx::TexturePixels>& texture,bool previous_frame=false);
     // Freshest pointer in aim units: reticle draws are re-aimed to it when their commands are recorded (late_aim.h).
     void set_aim_source(std::function<std::array<float,2>()> source) { aim_source_ = std::move(source); }
     uint64_t late_aim_draws() const { return late_aim_draws_.load(); }
@@ -399,6 +401,10 @@ private:
     std::vector<PipelineKey> warm_keys_;
     std::vector<std::thread> compilers_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
+    struct CopyAlias { std::weak_ptr<const gx::TexturePixels> requested; std::shared_ptr<const gx::TexturePixels> rendered; };
+    std::unordered_map<const gx::TexturePixels*,CopyAlias> copy_aliases_;
+    std::unordered_map<uint32_t,std::weak_ptr<const gx::TexturePixels>> latest_copies_;
+    bool detached_copies_=false;
     std::unordered_set<const gx::TexturePixels*> lost_copies_;   // EFB copies made by a previous renderer (lost_copies)
     std::shared_ptr<const gx::TexturePixels> blank_;             // what a lost copy is drawn as
     std::unordered_map<const gx::MeshBuffers*,GpuMesh> meshes_;

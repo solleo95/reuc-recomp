@@ -5,6 +5,11 @@
 
 template<size_t N> static auto parse(const std::array<std::string_view, N>& args) { return uc::parse_options(args); }
 int main() {
+    CHECK(std::holds_alternative<uc::Options>(parse(std::array<std::string_view,3>{"--net-host","--net-port","27888"})));
+    CHECK(std::holds_alternative<uc::Options>(parse(std::array<std::string_view,4>{"--net-join","127.0.0.1","--net-port","27888"})));
+    for(auto port:{"0","65536","-1","12junk"})CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-host","--net-port",port})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-host","--net-join","127.0.0.1"})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--net-join","bad address"})));
     auto defaults = uc::parse_options({});
     CHECK(std::get<uc::Options>(defaults).width == 0 && std::get<uc::Options>(defaults).height==0 && !std::get<uc::Options>(defaults).headless);
     CHECK(!std::get<uc::Options>(defaults).skip_intro);

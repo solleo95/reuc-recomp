@@ -17,22 +17,30 @@ void arm(uint32_t alarm, uint64_t at, uint64_t period, uint32_t handler, uint64_
         if (it == g_alarms.end() || it->second.gen != gen) return;   // cancelled or re-armed
         if (period) arm(alarm, next_periodic(at, period, now_ticks()), period, handler, gen);   // absolute schedule: a late tick must not shift later ticks
         call_guest(os_sched().irq_ctx(), handler, {alarm, os_dummy_context()});
-    });
+    },Sched::EventKind::Alarm);
 }
 }  // namespace
 
+namespace uc {
+struct OsAlarmSnapshot { std::map<uint32_t, Alarm> alarms; };
+std::shared_ptr<const OsAlarmSnapshot> os_alarm_checkpoint() { return std::make_shared<OsAlarmSnapshot>(OsAlarmSnapshot{g_alarms}); }
+void os_alarm_restore(const OsAlarmSnapshot& saved) { g_alarms=saved.alarms; }
+}
+
 void hle_OSDisableInterrupts(ppc::Ctx& c) { c.r[3] = os_sched().set_interrupts(false) ? 1 : 0; }
-void hle_OSEnableInterrupts(ppc::Ctx& c) { c.r[3] = os_sched().set_interrupts(true) ? 1 : 0; }
-void hle_OSRestoreInterrupts(ppc::Ctx& c) { c.r[3] = os_sched().set_interrupts(c.r[3] != 0) ? 1 : 0; }
+void hle_OSEnableInterrupts(ppc::Ctx& c) { PendingHle pending(os_sched(),c); c.r[3]=os_sched().interrupts_enabled(); os_sched().set_interrupts(true); }
+void hle_OSRestoreInterrupts(ppc::Ctx& c) { PendingHle pending(os_sched(),c); const bool enabled=c.r[3]!=0; c.r[3]=os_sched().interrupts_enabled(); os_sched().set_interrupts(enabled); }
 
 void hle_OSGetTime(ppc::Ctx& c) {
     uint64_t t = now_ticks();
     c.r[3] = uint32_t(t >> 32);
     c.r[4] = uint32_t(t);
+    PendingHle pending(os_sched(),c);
     os_sched().safe_point();   // a guest that polls the time may be waiting for an event
 }
 void hle_OSGetTick(ppc::Ctx& c) {
     c.r[3] = uint32_t(now_ticks());
+    PendingHle pending(os_sched(),c);
     os_sched().safe_point();
 }
 

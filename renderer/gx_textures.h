@@ -45,6 +45,7 @@ struct TexturePixels {
     // guest_width/height keep the game's size for code that recognises textures by it (late_aim.h).
     bool bc7=false; uint32_t guest_width=0, guest_height=0;
     std::shared_ptr<TextureJob> job;   // set while a worker still fills `levels`
+    uint32_t guest_address=0; // Identity of an immutable EFB copy version; ordinary textures leave this zero.
     // Blocks until the pixels are decoded (no-op for finished textures) and rethrows a decode error. Call before reading `levels`.
     void wait() const {
         if (!job || job->done.load(std::memory_order_acquire)) { if (job && job->error) std::rethrow_exception(job->error); return; }

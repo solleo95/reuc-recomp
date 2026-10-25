@@ -1,4 +1,6 @@
 #include "savefs.h"
+#include "save_rollback.h"
+#include <stdexcept>
 #include <algorithm>
 #include <limits>
 #include <array>
@@ -105,6 +107,7 @@ int SaveFs::pin(const fs::path& directory,Pins& pins) {
     return 0;
 }
 int SaveFs::initialize() {
+    if(rollback_) return 0;
     Pins pins;
     if (auto result=pin(root_.parent_path(),pins)) return result;
     if (!CreateDirectoryW(root_.c_str(),nullptr) && GetLastError()!=ERROR_ALREADY_EXISTS) return error(GetLastError());
@@ -168,16 +171,19 @@ int SaveFs::backup(const fs::path& path) {
     return backup(source);
 }
 int SaveFs::create_dir(const std::string& path) {
+    if(rollback_) return writable().create(path,true);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     return CreateDirectoryW(host.c_str(),nullptr) ? 0 : error(GetLastError());
 }
 int SaveFs::create_file(const std::string& path) {
+    if(rollback_) return writable().create(path,false);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     HANDLE file=CreateFileW(host.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     if (file==INVALID_HANDLE_VALUE) return error(GetLastError());
     return CloseHandle(file) ? 0 : error(GetLastError());
 }
 int SaveFs::open(const std::string& path,uint32_t mode) {
+    if(rollback_) return writable().open(path,mode);
     if (mode<1 || mode>3 || next_fd_==INT_MAX) return -101;
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     HANDLE file=CreateFileW(host.c_str(),GENERIC_READ|(mode&2 ? GENERIC_WRITE : 0),FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
@@ -190,18 +196,21 @@ int SaveFs::open(const std::string& path,uint32_t mode) {
     files_.emplace(fd,File{file,mode,std::move(pins)}); return fd;
 }
 int SaveFs::close(int fd) {
+    if(rollback_) return writable().close(fd);
     auto found=files_.find(fd); if (found==files_.end()) return -101;
     if ((found->second.mode&2) && !FlushFileBuffers(found->second.handle)) return error(GetLastError());
     if (!CloseHandle(found->second.handle)) return error(GetLastError());
     files_.erase(found); return 0;
 }
 int SaveFs::read(int fd,std::span<uint8_t> bytes) {
+    if(rollback_) return writable().read(fd,bytes);
     auto found=files_.find(fd); if (found==files_.end() || bytes.size()>INT_MAX) return -101;
     if (!(found->second.mode&1)) return -102;
     DWORD read=0;
     return ReadFile(found->second.handle,bytes.data(),DWORD(bytes.size()),&read,nullptr) ? int(read) : error(GetLastError());
 }
 int SaveFs::write(int fd,std::span<const uint8_t> bytes) {
+    if(rollback_) return writable().write(fd,bytes);
     auto found=files_.find(fd); if (found==files_.end() || bytes.size()>INT_MAX) return -101;
     auto& file=found->second;
     if (!(file.mode&2)) return -102;
@@ -209,6 +218,7 @@ int SaveFs::write(int fd,std::span<const uint8_t> bytes) {
     return WriteFile(file.handle,bytes.data(),DWORD(bytes.size()),&written,nullptr) ? int(written) : error(GetLastError());
 }
 int SaveFs::seek(int fd,int32_t offset,int32_t whence) {
+    if(rollback_) return writable().seek(fd,offset,whence);
     auto found=files_.find(fd); if (found==files_.end() || whence<0 || whence>2) return -101;
     LARGE_INTEGER zero{},base{},position{};
     if (whence==1 && !SetFilePointerEx(found->second.handle,zero,&base,FILE_CURRENT)) return error(GetLastError());
@@ -219,6 +229,7 @@ int SaveFs::seek(int fd,int32_t offset,int32_t whence) {
     return int(position.QuadPart);
 }
 SaveFs::Stats SaveFs::stats(int fd) {
+    if(rollback_) return rollback_->stats(fd);
     auto found=files_.find(fd); if (found==files_.end()) return {-101};
     LARGE_INTEGER size{},zero{},position{};
     if (!GetFileSizeEx(found->second.handle,&size) || !SetFilePointerEx(found->second.handle,zero,&position,FILE_CURRENT)) return {error(GetLastError())};
@@ -226,6 +237,7 @@ SaveFs::Stats SaveFs::stats(int fd) {
     return {0,uint32_t(size.QuadPart),uint32_t(position.QuadPart)};
 }
 int SaveFs::attributes(const std::string& path,bool& directory) {
+    if(rollback_) return rollback_->attributes(path,directory);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     auto attributes=GetFileAttributesW(host.c_str());
     if (attributes==INVALID_FILE_ATTRIBUTES) return error(GetLastError());
@@ -233,6 +245,7 @@ int SaveFs::attributes(const std::string& path,bool& directory) {
     directory=(attributes&FILE_ATTRIBUTE_DIRECTORY)!=0; return 0;
 }
 SaveFs::Directory SaveFs::read_dir(const std::string& path) {
+    if(rollback_) return rollback_->read_dir(path);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return {result};
     bool directory; if (auto result=attributes(path,directory)) return {result};
     if (!directory) return {-101};
@@ -247,6 +260,7 @@ SaveFs::Directory SaveFs::read_dir(const std::string& path) {
     std::sort(result.names.begin(),result.names.end()); return result;
 }
 SaveFs::Usage SaveFs::usage(const std::string& path) {
+    if(rollback_) return rollback_->usage(path);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return {result};
     bool directory; if (auto result=attributes(path,directory)) return {result};
     Usage result{0}; std::error_code ec;
@@ -278,6 +292,7 @@ SaveFs::Usage SaveFs::usage(const std::string& path) {
     return {0,uint32_t(blocks),uint32_t(entries)};
 }
 int SaveFs::rename(const std::string& from,const std::string& to) {
+    if(rollback_) return writable().rename(from,to);
     Pins pins; fs::path source,target; if (auto result=resolve(to,target,pins)) return result; if (auto result=resolve(from,source,pins)) return result;
     if (source==root_ || target==root_) return -102;
     if (source==target) return GetFileAttributesW(source.c_str())==INVALID_FILE_ATTRIBUTES ? error(GetLastError()) : 0;
@@ -285,11 +300,55 @@ int SaveFs::rename(const std::string& from,const std::string& to) {
     return move(source,target,true,pins);
 }
 int SaveFs::remove(const std::string& path) {
+    if(rollback_) return writable().remove(path);
     Pins pins; fs::path host; if (auto result=resolve(path,host,pins)) return result;
     if (host==root_) return -102;
     auto attr=GetFileAttributesW(host.c_str()); if (attr==INVALID_FILE_ATTRIBUTES) return error(GetLastError());
     if (attr&FILE_ATTRIBUTE_DIRECTORY) { auto contents=read_dir(path); if (contents.result) return contents.result; if (!contents.names.empty()) return -115; }
     try { const auto target=revision(L".deleted",pins); return move(host,target,false,pins); }
     catch (const fs::filesystem_error& failure) { return error(DWORD(failure.code().value())); }
+}
+void SaveFs::commit(const Snapshot& saved) {
+    if(!rollback_ || saved.owner!=this || saved.revision<committed_->revision)
+        throw std::logic_error("invalid confirmed save checkpoint");
+    if(saved.revision==committed_->revision) return;
+    SaveFs disk(root_);
+    const auto require=[](int result,const char* operation) {
+        if(result) throw std::runtime_error(std::string("confirmed save ")+operation+" failed: "+std::to_string(result));
+    };
+    // Children retire first; backups preserve each replaced or deleted version.
+    for(auto it=committed_->nodes.rbegin();it!=committed_->nodes.rend();++it) {
+        if(it->first=="/") continue;
+        const auto next=saved.nodes.find(it->first);
+        if(next==saved.nodes.end() || bool(next->second.bytes)!=bool(it->second.bytes)) {
+            const int result=disk.remove(it->first);
+            if(result!=-106) require(result,"delete");
+        }
+    }
+    for(const auto& [path,node]:saved.nodes) {
+        if(path=="/") continue;
+        const auto old=committed_->nodes.find(path);
+        if(!node.bytes) {
+            const int result=disk.create_dir(path);
+            if(result!=-105) require(result,"mkdir");
+            continue;
+        }
+        if(old!=committed_->nodes.end() && old->second.bytes &&
+           (old->second.bytes==node.bytes || *old->second.bytes==*node.bytes)) continue;
+        Pins pins; fs::path target;
+        require(disk.resolve(path,target,pins),"resolve");
+        if(GetFileAttributesW(target.c_str())!=INVALID_FILE_ATTRIBUTES) require(disk.backup(target),"backup");
+        const auto temporary=disk.revision(L".backups",pins);
+        HANDLE handle=CreateFileW(temporary.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+        if(handle==INVALID_HANDLE_VALUE) require(error(GetLastError()),"create staged file");
+        int result=0; DWORD written=0;
+        if(!WriteFile(handle,node.bytes->data(),DWORD(node.bytes->size()),&written,nullptr)) result=error(GetLastError());
+        else if(written!=node.bytes->size()) result=-103;
+        if(!result && !FlushFileBuffers(handle)) result=error(GetLastError());
+        if(!CloseHandle(handle) && !result) result=error(GetLastError());
+        require(result,"write staged file");
+        require(move(temporary,target,true,pins),"publish");
+    }
+    committed_=std::make_shared<Snapshot>(saved);
 }
 }

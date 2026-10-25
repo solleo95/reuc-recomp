@@ -990,6 +990,7 @@ bool VulkanRenderer::set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sha
 std::vector<const gx::TexturePixels*> VulkanRenderer::copy_keys() const {
     std::vector<const gx::TexturePixels*> keys;
     for (const auto& [key,texture] : copy_textures_) keys.push_back(key);
+    for(const auto& [key,alias]:copy_aliases_)if(!alias.requested.expired())keys.push_back(key);
     keys.insert(keys.end(), lost_copies_.begin(), lost_copies_.end());
     return keys;
 }
@@ -1683,11 +1684,38 @@ void VulkanRenderer::configure_generation() {
         }
     }
 }
-bool VulkanRenderer::render(const gx::FramePacket& packet) {
+bool VulkanRenderer::copy_ready(const std::shared_ptr<const gx::TexturePixels>& texture,bool previous_frame) {
+    owner();
+    if(!texture || !texture->gpu_only || texture->levels.empty())throw std::invalid_argument("invalid scene texture copy");
+    detached_copies_=true;
+    const auto found=copy_textures_.find(texture.get());
+    if((found!=copy_textures_.end() && found->second.initialized) || lost_copies_.contains(texture.get()))return true;
+    if(const auto alias=copy_aliases_.find(texture.get());alias!=copy_aliases_.end()) {
+        if(!alias->second.requested.expired())return true;
+        copy_aliases_.erase(alias);
+    }
+    if(previous_frame && texture->guest_address) {
+        const auto latest=latest_copies_.find(texture->guest_address);
+        const auto rendered=latest==latest_copies_.end() ? nullptr : latest->second.lock();
+        if(rendered && rendered->channels==texture->channels &&
+           rendered->levels.front().width==texture->levels.front().width &&
+           rendered->levels.front().height==texture->levels.front().height) {
+            // Temporal GPU effects advance at presentation rate; guest simulation never reads these pixels.
+            copy_aliases_.emplace(texture.get(),CopyAlias{texture,rendered});
+            return true;
+        }
+        if(!blank_) { auto blank=std::make_shared<gx::TexturePixels>(); blank->levels.push_back({1,1,{0,0,0,0}}); blank_=std::move(blank); }
+        copy_aliases_.emplace(texture.get(),CopyAlias{texture,blank_});
+        return true;
+    }
+    return false;
+}
+bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t submission_serial) {
     owner();
     if (!device) throw std::logic_error("renderer not initialized");
     if (!requested_.width || !requested_.height) return false;
-    if (!packet.serial || packet.serial <= last_serial_) throw std::invalid_argument("frame serial must increase");
+    const auto serial=submission_serial ? submission_serial : packet.serial;
+    if (!serial || serial <= last_serial_) throw std::invalid_argument("frame serial must increase");
     if(packet.clear_depth>0xFFFFFF) throw std::invalid_argument("invalid native EFB clear depth");
     for(const auto& prompt:packet.prompts) {
         for(float value:prompt.efb_corners)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt geometry");
@@ -1696,8 +1724,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         for(float value:prompt.clip)if(!std::isfinite(value))throw std::invalid_argument("nonfinite native prompt clip");
         if(prompt.clip[2]<prompt.clip[0] || prompt.clip[3]<prompt.clip[1])throw std::invalid_argument("invalid native prompt clip");
     }
-    const auto& display=packet.display_source;
-    if(packet.present && (!display[2] || !display[3] || display[0]>=640 || display[2]>640-display[0] || display[1]>=480 || display[3]>480-display[1])) throw std::invalid_argument("invalid native display source rectangle");
+    const auto& display_source=packet.display_source;
+    if(packet.present && (!display_source[2] || !display_source[3] || display_source[0]>=640 || display_source[2]>640-display_source[0] || display_source[1]>=480 || display_source[3]>480-display_source[1])) throw std::invalid_argument("invalid native display source rectangle");
     if (const auto now = std::chrono::steady_clock::now(); uc::rebuild_due(resized_, swapchain_ != VK_NULL_HANDLE, now, last_rebuild_)) {
         last_rebuild_ = now; rebuild();        if (resized_) return false;
     }
@@ -1711,6 +1739,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     slot.copy_sources.clear();
     slot.mesh_refs.clear();   // the submission that used these meshes completed (fence checked above)
     if ((++renders_ & 255)==0) sweep_meshes(false);
+    std::erase_if(copy_aliases_,[](const auto& entry){return entry.second.requested.expired();});
     for(auto it=copy_textures_.begin();it!=copy_textures_.end();) {
         if(it->second.source.use_count()==1) {
             auto retired=std::move(it->second); it=copy_textures_.erase(it);
@@ -1718,6 +1747,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         }
         else ++it;
     }
+    std::erase_if(latest_copies_,[](const auto& entry){return entry.second.expired();});
     Texture* copy_target=nullptr;
     if(packet.texture_copy) {
         const auto& request=*packet.texture_copy;
@@ -1944,6 +1974,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             std::array<VkDescriptorImageInfo,8> image{};
             for(size_t map=0;map<8;++map) {
                 const auto* chosen=&draw_texture(packet.draws[i],map);
+                if(*chosen)if(const auto alias=copy_aliases_.find(chosen->get());alias!=copy_aliases_.end() && !alias->second.requested.expired())chosen=&alias->second.rendered;
                 if(*chosen && (*chosen)->gpu_only) {
                     auto copied=copy_textures_.find(chosen->get());
                     if(copied!=copy_textures_.end() && copied->second.initialized) {
@@ -2001,7 +2032,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     uint32_t image_index = 0;
     bool suboptimal=false;
     PresentImage* present_image=nullptr;
-    if (packet.present) {
+    if (packet.present && display) {
         const auto acquire_start = std::chrono::steady_clock::now();
         VkResult acquired = present_.acquire(device, swapchain_, 1000000ull, slot.acquired, VK_NULL_HANDLE, &image_index);
         timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
@@ -2315,15 +2346,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         else if (!packet.draws.empty() || (copy_target && packet.clear_after_copy)) scene_restore_copy_.reset();
     }
     bool ui_layer=false;   // HDR: the overlays went to the slot's UI layer, the encode composites them
-    if (packet.present) {
+    if (packet.present && display) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
         ui_layer=hdr_active_ && (prompts || menu);
         if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
         if(menu)menu_overlay_.initialize(window_,instance_,physical_,device,queue_,family_,uint32_t(slots_.size()),menu_setup_);
         if(!packet.black_output && dlss5_scene_.ready && dlss5_requested() && dlss5_settings_.hook==Dlss5Hook::present) {   // DLSS 5 on the finished frame, HUD included
             const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
-            const VkOffset2D origin{int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480)};
-            const VkExtent2D size{uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)-origin.x)),uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)-origin.y))};
+            const VkOffset2D origin{int32_t(uint64_t(display_source[0])*efb_extent_.width/640),int32_t(uint64_t(display_source[1])*efb_extent_.height/480)};
+            const VkExtent2D size{uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display_source[0]+display_source[2])*efb_extent_.width/640)-origin.x)),uint32_t(std::max<int64_t>(1,int64_t(uint64_t(display_source[1]+display_source[3])*efb_extent_.height/480)-origin.y))};
             const VkImageUsageFlags usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT;
             barrier(slot.command,efb_,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,all,any,all,any);
             record_dlss5(slot.command,Dlss5Hook::present,{efb_,efb_view_,VK_FORMAT_R8G8B8A8_UNORM,efb_extent_,usage},origin,size,{0,0},packet.black_output);
@@ -2332,8 +2363,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 slot.initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE,slot.initialized ? VK_ACCESS_2_TRANSFER_READ_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageBlit copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
-        copy.srcOffsets[0]={int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480),0};
-        copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(display[1]+display[3])*efb_extent_.height/480)),1};
+        copy.srcOffsets[0]={int32_t(uint64_t(display_source[0])*efb_extent_.width/640),int32_t(uint64_t(display_source[1])*efb_extent_.height/480),0};
+        copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(display_source[0]+display_source[2])*efb_extent_.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(display_source[1]+display_source[3])*efb_extent_.height/480)),1};
         copy.dstOffsets[1]={int32_t(extent_.width),int32_t(extent_.height),1};
         if(packet.black_output) {
             const VkClearColorValue black{}; const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
@@ -2343,7 +2374,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};color.imageView=view;color.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;color.loadOp=load;color.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo ui{VK_STRUCTURE_TYPE_RENDERING_INFO};ui.renderArea.extent=extent_;ui.layerCount=1;ui.colorAttachmentCount=1;ui.pColorAttachments=&color;
             vkCmdBeginRendering(slot.command,&ui);
-            if(prompts)prompt_overlay_.record(slot.command,packet.prompts,extent_,display,prompt_style_);
+            if(prompts)prompt_overlay_.record(slot.command,packet.prompts,extent_,display_source,prompt_style_);
             if(menu)menu_overlay_.record(slot.command,extent_,menu_build_);
             vkCmdEndRendering(slot.command);
         };
@@ -2391,7 +2422,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             vkCmdEndRendering(slot.command);
             barrier(slot.command,active.color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
     };
-    if (packet.clear_after_copy && (packet.present || copy_target)) {
+    if (packet.clear_after_copy && (packet.present || copy_target || packet.clear_only)) {
         clear_region(active,true);
         // The scene targets keep this frame until it is presented (frame generation reads depth and vectors there); the next frame's first
         // scene pass applies this clear to them.
@@ -2403,8 +2434,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
             const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
             barrier(slot.command, present_image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             barrier(slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, all, any, all, any);
-            const VkOffset2D glow_from{int32_t(uint64_t(display[0])*efb_extent_.width/640),int32_t(uint64_t(display[1])*efb_extent_.height/480)};   // the EFB rectangle the slot image shows (the blit above)
-            const VkOffset2D glow_to{std::max(glow_from.x+1,int32_t(uint64_t(display[0]+display[2])*efb_extent_.width/640)),std::max(glow_from.y+1,int32_t(uint64_t(display[1]+display[3])*efb_extent_.height/480))};
+            const VkOffset2D glow_from{int32_t(uint64_t(display_source[0])*efb_extent_.width/640),int32_t(uint64_t(display_source[1])*efb_extent_.height/480)};   // the EFB rectangle the slot image shows (the blit above)
+            const VkOffset2D glow_to{std::max(glow_from.x+1,int32_t(uint64_t(display_source[0]+display_source[2])*efb_extent_.width/640)),std::max(glow_from.y+1,int32_t(uint64_t(display_source[1]+display_source[3])*efb_extent_.height/480))};
             hdr_pass_.record(slot.command, slot.view, {0, 0}, extent_, ui_layer ? slot.ui_view : VK_NULL_HANDLE, present_image->view, extent_, hdr_settings_,
                              packet.black_output ? BloomLayer{} : bloom_layer(glow_from,{uint32_t(glow_to.x-glow_from.x),uint32_t(glow_to.y-glow_from.y)}));   // a blanked frame is black: the scene boundary came in an earlier packet and could not know
             bloom_pass_.invalidate(0);   // this frame's glow is spent: a later frame without a scene must not find it
@@ -2436,10 +2467,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet) {
     const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
-    if(copy_target) copy_target->initialized=true;
+    if(copy_target) {
+        copy_target->initialized=true;
+        if(detached_copies_ && packet.texture_copy->target->guest_address)latest_copies_[packet.texture_copy->target->guest_address]=packet.texture_copy->target;
+    }
     for (auto& texture : slot.textures) texture->initialized=true;
     if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); dlss5_scene_.ready=false; }
-    slot.serial = packet.serial; slot.submitted = true; slot.initialized |= packet.present; slot.copied=packet.present; slot.reported = false; last_serial_ = packet.serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
+    slot.serial = serial; slot.submitted = true; slot.initialized |= packet.present && display; slot.copied=packet.present && display; slot.reported = false; last_serial_ = serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
     if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
     // With DLSS-G Streamline presents (and paces) the frames itself and never signals a present fence: its swapchain images are not tracked here.
@@ -2469,6 +2503,7 @@ void VulkanRenderer::shutdown() {
         menu_overlay_.shutdown();
         for(auto& [source,texture]:copy_textures_) destroy_texture(texture);
         copy_textures_.clear();
+        copy_aliases_.clear(); latest_copies_.clear();
         for(auto& texture:recycled_copies_) destroy_texture(texture);
         recycled_copies_.clear(); recycled_copy_bytes_=0;
         if(depth_view_) vkDestroyImageView(device,depth_view_,nullptr);

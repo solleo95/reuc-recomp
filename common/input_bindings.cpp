@@ -33,6 +33,10 @@ Bindings default_bindings() {
         {BindingKind::physical,{PhysicalKind::key,8},{{PhysicalKind::key,224}}},
         {BindingKind::physical,{PhysicalKind::key,8},{{PhysicalKind::key,228}}}};
     result[size_t(Action::qte_shake)]={{BindingKind::qte_motion,{},{}}};
+    result[size_t(Action::camera_up)]={key(82)};
+    result[size_t(Action::camera_down)]={key(81)};
+    result[size_t(Action::camera_left)]={key(80)};
+    result[size_t(Action::camera_right)]={key(79)};
     return result;
 }
 std::optional<std::string> validate_bindings(const Bindings& bindings) {

@@ -6,11 +6,17 @@
 #include <cstring>
 #include <cstdio>
 #include <chrono>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 
 namespace {
+constexpr size_t kDemoSampleBytes=32; // Existing raw sample format; stick axes are reconstructed from recorded actions.
+static_assert(offsetof(uc::InputSample,stick_x)==kDemoSampleBytes);
 uc::NativeInput* input; // set before guest execution; cleared after all guest threads join
+uc::NativeInput* second_input;
+unsigned sampled_channel=0;
+std::function<void(const ppc::Ctx&)> input_poll;
 uc::InputProbe input_probe;
 uc::InputMap input_map;
 uint64_t motion_time() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
@@ -23,6 +29,34 @@ namespace uc {
 void input_hle_set_probe(InputProbe probe) { input_probe=probe; }
 void input_hle_set_map(InputMap map) { input_map=map; }
 NativeInput::NativeInput() { bindings(default_bindings()); }
+struct NativeInput::Snapshot {
+    BindingResolver actions,services;
+    InputSample state;
+    float previous_x,previous_y;
+    uint64_t sequence,host_sequence,consumed_sequence,generation;
+    bool legacy;
+    InputContext context;
+    std::optional<InputFrame> network;
+    size_t sample_at,action_at,speed_at;
+    uint8_t host;
+    uint64_t demo_generation,speed_calls;
+    uint32_t speed_now,speed_last;
+};
+std::shared_ptr<const NativeInput::Snapshot> NativeInput::checkpoint() {
+    std::lock_guard lock(mutex_);
+    if(demo_out_) throw std::logic_error("rollback cannot rewind an input recording");
+    return std::make_shared<Snapshot>(Snapshot{actions_,services_,state_,previous_x_,previous_y_,sequence_,host_sequence_,
+        consumed_sequence_,generation_,legacy_test_input_,context_,network_frame_,demo_sample_at_,demo_action_at_,demo_speed_at_,
+        demo_host_,demo_generation_,speed_calls_,speed_now_,speed_last_});
+}
+void NativeInput::restore(const Snapshot& saved) {
+    std::lock_guard lock(mutex_);
+    actions_=saved.actions; services_=saved.services; state_=saved.state; previous_x_=saved.previous_x; previous_y_=saved.previous_y;
+    sequence_=saved.sequence; host_sequence_=saved.host_sequence; consumed_sequence_=saved.consumed_sequence;
+    generation_=saved.generation; legacy_test_input_=saved.legacy; context_=saved.context; network_frame_=saved.network;
+    demo_sample_at_=saved.sample_at; demo_action_at_=saved.action_at; demo_speed_at_=saved.speed_at; demo_host_=saved.host;
+    demo_generation_=saved.demo_generation; speed_calls_=saved.speed_calls; speed_now_=saved.speed_now; speed_last_=saved.speed_last;
+}
 NativeInput::~NativeInput() { if(demo_out_)std::fclose(demo_out_); }
 void NativeInput::demo_record(const std::filesystem::path& path) {
     std::lock_guard lock(mutex_);
@@ -41,7 +75,7 @@ void NativeInput::demo_play(const std::filesystem::path& path) {
     for(size_t at=0;at<data.size();) {
         const Tag tag=Tag(data[at++]);
         switch(tag) {
-        case Tag::sample: { need(at,sizeof(InputSample)); DemoSample item{}; std::memcpy(&item.sample,&data[at],sizeof(InputSample)); at+=sizeof(InputSample); item.host=host; item.generation=generation; demo_samples_.push_back(item); seen=true; break; }
+        case Tag::sample: { need(at,kDemoSampleBytes); DemoSample item{}; std::memcpy(&item.sample,&data[at],kDemoSampleBytes); at+=kDemoSampleBytes; item.host=host; item.generation=generation; demo_samples_.push_back(item); seen=true; break; }
         case Tag::host: need(at,1); host=data[at++]; if(seen)demo_samples_.back().host=host; else demo_host_=host; break;
         case Tag::generation: need(at,8); std::memcpy(&generation,&data[at],8); at+=8; if(seen)demo_samples_.back().generation=generation; else demo_generation_=generation; break;
         case Tag::actions: {
@@ -120,6 +154,7 @@ void NativeInput::cancel_host() {
 }
 ActionFrame NativeInput::consume_actions() {
     std::lock_guard lock(mutex_);
+    if(network_frame_)return network_frame_->actions;
     if(replaying_) {
         ActionFrame result;
         if(demo_action_at_>=demo_actions_.size()) { result.generation=demo_generation_; return result; }
@@ -172,6 +207,7 @@ std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); 
 std::array<float,2> input_consumed_aim() { return input ? input->consumed_aim() : std::array<float,2>{}; }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
+    if(network_frame_)return network_frame_->sample;
     if(replaying_) {
         if(demo_sample_at_>=demo_samples_.size()) { InputSample idle; idle.valid=true; return idle; }   // the demo is over: an idle pad
         const auto& item=demo_samples_[demo_sample_at_++];
@@ -183,7 +219,7 @@ InputSample NativeInput::consume() {
     previous_x_=result.x; previous_y_=result.y;
     state_.pressed=state_.released=0;
     if(host_sequence_!=sequence_)consumed_sequence_=sequence_;
-    if(demo_out_)demo_put(Tag::sample,&result,sizeof result);
+    if(demo_out_)demo_put(Tag::sample,&result,kDemoSampleBytes);
     return result;
 }
 bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t held) {
@@ -199,6 +235,7 @@ bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t 
 }
 bool NativeInput::using_host_input() {
     std::lock_guard lock(mutex_);
+    if(network_frame_)return network_frame_->host;
     uint8_t flag=!legacy_test_input_;
     if(replaying_)flag=demo_host_;
     else if(demo_out_)demo_put(Tag::host,&flag,1);
@@ -206,6 +243,7 @@ bool NativeInput::using_host_input() {
 }
 uint64_t NativeInput::generation() {
     std::lock_guard lock(mutex_);
+    if(network_frame_)return network_frame_->generation;
     uint64_t value=generation_;
     if(replaying_)value=demo_generation_;
     else if(demo_out_)demo_put(Tag::generation,&value,8);
@@ -251,19 +289,35 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
     return true;
 }
 uint64_t NativeInput::last_consumed_sequence() { std::lock_guard lock(mutex_); return consumed_sequence_; }
-void input_hle_init(NativeInput* source) { input=source; }
+InputFrame NativeInput::capture_frame() {
+    InputFrame frame; frame.sample=consume(); frame.host=using_host_input();
+    frame.actions=consume_actions(); frame.generation=frame.actions.generation;
+    return frame;
+}
+void NativeInput::install_frame(const InputFrame& frame) { std::lock_guard lock(mutex_); network_frame_=frame; previous_x_=frame.sample.x;previous_y_=frame.sample.y; }
+void input_hle_init(NativeInput* source,NativeInput* second) { input=source; second_input=second; sampled_channel=0; }
+void input_hle_set_poll(std::function<void(const ppc::Ctx&)> poll) { input_poll=std::move(poll); }
+unsigned input_hle_channel() { return sampled_channel; }
+void input_hle_restore_channel(unsigned channel) {
+    if(channel>1) throw std::invalid_argument("invalid rollback input channel");
+    sampled_channel=channel;
+}
 }
 void hle_KPADRead(ppc::Ctx& c) {
     uc::gx_audit_enter(0x802F21EC,c);
     const auto channel=c.r[3],buffer=c.r[4],count=c.r[5]; c.r[3]=0;
-    if (!input || channel!=0 || !count || count>16) return;
+    auto* source=channel==0 ? input : channel==1 ? second_input : nullptr;
+    if (!source || !count || count>16) return;
     try { check(c,buffer,132); } catch (const gx::Error&) { return; }
-    auto sample=input->consume();
+    sampled_channel=channel;
+    if(channel==0 && input_poll)input_poll(c);
+    auto sample=source->consume();
     if(input_map)sample=input_map(c,sample);
 #ifdef UC_TRACE
     if (sample.pressed) std::fprintf(stderr,"[input] pressed %08X aim %.3f %.3f\n",sample.pressed,sample.x,sample.y);
 #endif
     std::memset(c.mem+(buffer&0x3FFFFFFF),0,132);
+    gx::note_write_range(buffer,132);
     ppc::wr32(c,buffer,sample.held); ppc::wr32(c,buffer+4,sample.pressed); ppc::wr32(c,buffer+8,sample.released);
     ppc::wrf32(c,buffer+0x20,sample.x); ppc::wrf32(c,buffer+0x24,sample.y);
     ppc::wrf32(c,buffer+0x28,sample.dx); ppc::wrf32(c,buffer+0x2C,sample.dy);
@@ -271,17 +325,20 @@ void hle_KPADRead(ppc::Ctx& c) {
     // shortcut: mouse has no motion sensor; neutral gravity/horizon/distance until native action mapping (TD-041).
     ppc::wrf32(c,buffer+0x10,-1); ppc::wrf32(c,buffer+0x18,1);
     ppc::wrf32(c,buffer+0x34,1); ppc::wrf32(c,buffer+0x48,1); ppc::wrf32(c,buffer+0x58,-1);
-    ppc::wr8(c,buffer+0x5E,sample.valid ? 1 : 0); ppc::wr8(c,buffer+0x5F,2);
+    ppc::wr8(c,buffer+0x5C,1); // Nunchuk, matching WPADProbe.
+    ppc::wr8(c,buffer+0x5E,sample.valid ? 1 : 0); ppc::wr8(c,buffer+0x5F,5);
+    ppc::wrf32(c,buffer+0x60,sample.stick_x); ppc::wrf32(c,buffer+0x64,sample.stick_y);
+    ppc::wrf32(c,buffer+0x6C,-1); ppc::wrf32(c,buffer+0x74,1); // Neutral Nunchuk gravity.
     c.r[3]=1;
-    if(input_probe) input_probe(c,sample);
+    if(channel==0 && input_probe) input_probe(c,sample);
 }
 void hle_WPADProbe(ppc::Ctx& c) {
     const auto channel=c.r[3],type=c.r[4];
-    const bool connected=input && channel==0;
+    const bool connected=channel==0 ? input!=nullptr : channel==1 && second_input!=nullptr;
     if (channel>3) { c.r[3]=uint32_t(-4); return; }
     if (type) {
         try { check(c,type,4); } catch (const gx::Error&) { c.r[3]=uint32_t(-4); return; }
-        ppc::wr32(c,type,connected ? 0 : 0xFD);
+        ppc::wr32(c,type,connected ? 1 : 0xFD);
     }
     c.r[3]=connected ? 0 : uint32_t(-1);
 }

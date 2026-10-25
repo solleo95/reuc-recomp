@@ -53,10 +53,22 @@ int main() {
     CHECK(uc::rt_path_compose(game,reference_light,1.f,0.f)==game);   // the reference light changes nothing
     const std::array<float,3> mixed_light{100.f,ref*0.5f,-1.f};
     const auto full=uc::rt_path_compose(game,mixed_light,1.f,0.f);
-    CHECK(std::fabs(full[0]-game[0]*uc::kRtPathMaxScale)<1e-6f && std::fabs(full[1]-game[1]*0.5f)<1e-6f && std::fabs(full[2]-game[2]*uc::kRtPathMinScale)<1e-6f);   // clamped above, proportional, clamped below
+    CHECK(std::fabs(full[0]-0.31034483f)<1e-6f && std::fabs(full[1]-game[1]*0.5f)<1e-6f && std::fabs(full[2]-game[2]*uc::kRtPathMinScale)<1e-6f);
     CHECK(uc::rt_path_compose(game,mixed_light,0.f,0.f)==game && uc::rt_path_compose(game,mixed_light,1.f,1.f)==game);
     const auto half=uc::rt_path_compose(game,mixed_light,0.5f,0.f);
-    CHECK(std::fabs(half[0]-game[0]*(1.f+0.5f*(uc::kRtPathMaxScale-1.f)))<1e-6f);
+    CHECK(std::fabs(half[0]-0.25925926f)<1e-6f);
+    // Bright texture steps must survive even maximum RT light, without clipping into a white patch.
+    const std::array<float,3> strong_light{100.f,100.f,100.f};
+    for(float mix:{0.f,0.65f,1.f}) {
+        float previous=-1.f;
+        for(int value=0;value<=255;++value) {
+            const float channel=float(value)/255.f;
+            const auto lit=uc::rt_path_compose({channel,channel,channel},strong_light,mix,0.f);
+            CHECK(lit[0]>previous && lit[0]>=channel && lit[0]<=1.f);
+            if(value<255) CHECK(lit[0]<1.f);
+            previous=lit[0];
+        }
+    }
     // the texture detail survives: two game colours keep their ratio under the same light
     const auto a=uc::rt_path_compose({0.2f,0.2f,0.2f},mixed_light,1.f,0.f), b=uc::rt_path_compose({0.4f,0.4f,0.4f},mixed_light,1.f,0.f);
     CHECK(std::fabs(b[1]/a[1]-2.f)<1e-5f);
