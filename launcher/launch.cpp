@@ -67,6 +67,7 @@ GameProcess launch_game(const std::filesystem::path& executable,const std::files
         if(!network->port || (!network->host && !net::valid_address(network->address)))throw std::invalid_argument("invalid network endpoint");
         command+=network->host ? L" --net-host" : L" --net-join "+quote_windows_arg(std::wstring(network->address.begin(),network->address.end()));
         command+=L" --net-port "+std::to_wstring(network->port);
+        if(network->loopback)command+=L" --net-loopback";
     }
     if(guest_cpu>=0)command+=L" --guest-cpu "+std::to_wstring(guest_cpu);
     if(diagnostic) {

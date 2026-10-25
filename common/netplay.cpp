@@ -114,7 +114,7 @@ Socket::Socket(const Endpoint& endpoint, std::stop_token stop, std::chrono::mill
         const BOOL exclusive = TRUE;
         if (setsockopt(listener.value, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == SOCKET_ERROR)
             socket_error("Cannot reserve listening port");
-        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        address.sin_addr.s_addr = htonl(endpoint.loopback ? INADDR_LOOPBACK : INADDR_ANY);
         if (bind(listener.value, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) socket_error("Cannot bind listening port");
         if (listen(listener.value, 1) == SOCKET_ERROR) socket_error("Cannot listen for peer");
         nonblocking(listener.value);

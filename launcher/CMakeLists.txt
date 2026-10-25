@@ -23,9 +23,20 @@ FetchContent_Declare(miniupnpc URL "${miniupnpc_archive}"
   URL_HASH SHA256=f6e7fad0c42c5a0434ef721228e5eee6e62bed6adbb1f785ba16082787c80e5f
   SOURCE_SUBDIR miniupnpc DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(miniupnpc)
-add_library(uc_nat STATIC nat_mapping.cpp nat_upnp.cpp)
+set(enet_archive "https://codeload.github.com/lsalzman/enet/zip/refs/tags/v1.3.18")
+if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/enet-1.3.18.zip")
+  set(enet_archive "${CMAKE_SOURCE_DIR}/build/deps/enet-1.3.18.zip")
+endif()
+FetchContent_Declare(enet URL "${enet_archive}"
+  URL_HASH SHA256=32d6b15611c2667b88cd865e0cb48c3c011ddefcff6dfbdb266b8e0b04fffab3
+  DOWNLOAD_EXTRACT_TIMESTAMP FALSE EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(enet)
+target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
+target_link_libraries(enet PUBLIC ws2_32 winmm)
+install(FILES ${enet_SOURCE_DIR}/LICENSE DESTINATION licenses/enet)
+add_library(uc_nat STATIC nat_mapping.cpp nat_upnp.cpp stun.cpp nat_tunnel.cpp)
 target_include_directories(uc_nat PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_nat PRIVATE miniupnpc::miniupnpc ws2_32 ole32)
+target_link_libraries(uc_nat PUBLIC uc_netplay PRIVATE miniupnpc::miniupnpc enet ws2_32 ole32 bcrypt)
 install(FILES ${miniupnpc_SOURCE_DIR}/LICENSE DESTINATION licenses/miniupnpc)
 set(imgui_archive "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9b.zip")
 if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/imgui-1.92.9b.zip")

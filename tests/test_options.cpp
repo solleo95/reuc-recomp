@@ -5,6 +5,11 @@
 
 template<size_t N> static auto parse(const std::array<std::string_view, N>& args) { return uc::parse_options(args); }
 int main() {
+    auto loopback=parse(std::array<std::string_view,2>{"--net-loopback","--net-host"});
+    CHECK(std::holds_alternative<uc::Options>(loopback));
+    CHECK(std::get<uc::Options>(loopback).netplay->loopback);
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-loopback","--net-join","1.2.3.4"})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--net-loopback"})));
     CHECK(std::holds_alternative<uc::Options>(parse(std::array<std::string_view,3>{"--net-host","--net-port","27888"})));
     CHECK(std::holds_alternative<uc::Options>(parse(std::array<std::string_view,4>{"--net-join","127.0.0.1","--net-port","27888"})));
     for(auto port:{"0","65536","-1","12junk"})CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-host","--net-port",port})));

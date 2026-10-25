@@ -283,7 +283,7 @@ void RtScene::shutdown() {
         for (auto blas : frame.blas) destroy_as_(device_,blas,nullptr);
         if (frame.tlas) destroy_as_(device_,frame.tlas,nullptr);
         for (auto& buffer : frame.retired) destroy(buffer);
-        for (Buffer* buffer : {&frame.positions,&frame.scratch,&frame.blas_storage,&frame.tlas_storage,&frame.instances}) destroy(*buffer);
+        for (Buffer* buffer : {&frame.positions,&frame.scratch,&frame.blas_storage,&frame.tlas_storage,&frame.instances,&frame.hits,&frame.bases}) destroy(*buffer);
     }
     for (auto& [key,blas] : cached_) { destroy_as_(device_,blas.as,nullptr); destroy(blas.storage); }
     for (auto& retired : retired_) { destroy_as_(device_,retired.blas.as,nullptr); destroy(retired.blas.storage); }

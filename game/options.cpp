@@ -24,7 +24,7 @@ bool valid_sharpness(double sharpness) { return std::isfinite(sharpness) && shar
 bool valid_frame_generation_multiplier(uint64_t multiplier) { return multiplier >= 2 && multiplier <= 6; }
 std::variant<Options, std::string> parse_options(std::span<const std::string_view> arguments,Options options) {
     uint16_t net_port=net::default_port;
-    bool port_set=false;
+    bool port_set=false,net_loopback=false;
     for (size_t i = 0; i < arguments.size(); ++i) {
         auto arg = arguments[i];
         if(arg=="--net-host" || arg=="--net-join") {
@@ -37,6 +37,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             }
             options.netplay=endpoint;
         }
+        else if(arg=="--net-loopback")net_loopback=true;
         else if(arg=="--net-port") {
             if(++i>=arguments.size())return "missing value for --net-port";
             unsigned port=0;const auto value=arguments[i];const auto parsed=std::from_chars(value.data(),value.data()+value.size(),port);
@@ -182,8 +183,11 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         } else return "unknown option " + std::string(arg);
     }
     if(port_set && !options.netplay)return "--net-port requires --net-host or --net-join";
+    if(net_loopback && !options.netplay)return "--net-loopback requires --net-host or --net-join";
     if(options.netplay) {
         options.netplay->port=net_port;
+        options.netplay->loopback=net_loopback;
+        if(net_loopback && options.netplay->address!="127.0.0.1")return "--net-loopback requires 127.0.0.1";
         if(!options.demo_play.empty() || !options.demo_record.empty())return "network play cannot record or replay demos";
         options.deterministic=true;options.no_mods=true;options.game_hz=120;options.unlock_60fps=false;
         options.skip_intro=true;options.skip_tutorials=true;

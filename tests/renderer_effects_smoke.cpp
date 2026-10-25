@@ -1674,6 +1674,7 @@ int main(int argc, char** argv) {
         }
         CHECK(renderer.validation_errors()==0);
         renderer.shutdown();
+        CHECK(renderer.validation_errors()==0);   // device teardown also reports leaked Vulkan resources
         SDL_DestroyWindow(window);
         SDL_Quit();
         std::fprintf(stderr,"renderer_effects_smoke: ok\n");

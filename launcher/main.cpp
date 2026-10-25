@@ -9,6 +9,8 @@
 #include "localization.h"
 #include "netplay.h"
 #include "nat_mapping.h"
+#include "nat_tunnel.h"
+#include "stun.h"
 #include "graphite.h"
 #include "ui_fonts.h"
 #include "imgui.h"
@@ -155,14 +157,15 @@ int run(int argc,wchar_t** argv) {
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
     std::string error;bool blocked=false;
     std::unique_ptr<uc::net::Lobby> lobby;
+    std::unique_ptr<uc::net::NatTunnel> tunnel;
     std::unique_ptr<uc::net::NatMapping> nat;
     std::vector<std::unique_ptr<uc::net::NatMapping>> retiring_nat;
     std::optional<uc::net::Endpoint> pending_network;
-    std::string network_address="127.0.0.1",network_error;
+    std::string network_address="127.0.0.1",network_error,punch_address;
     int network_port=uc::net::default_port;
-    bool network_modal=false,network_open_requested=false;
+    bool network_modal=false,network_open_requested=false,network_host=false;
     auto stop_nat=[&] {if(nat) {nat->stop();retiring_nat.push_back(std::move(nat));}};
-    auto cancel_network=[&] {lobby.reset();stop_nat();if(pending_network)launch_requested=false;pending_network.reset();};
+    auto cancel_network=[&] {lobby.reset();tunnel.reset();stop_nat();if(pending_network)launch_requested=false;pending_network.reset();};
     const auto system_language=uc::launcher::system_language();
     std::string language="system",saved_language="system";
     active_language=system_language;
@@ -198,18 +201,22 @@ int run(int argc,wchar_t** argv) {
         } catch(const std::exception& e) {error=e.what();cancel_network();return false;}
     };
     bool done=false,background_host=false,smoke_capture_wait_checked=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
-    enum class SmokeNetwork { idle,open,create,connect,ready,one_ready,both_ready,handoff,verify,complete };
+    enum class SmokeNetwork { idle,failed_open,failed_focus,failed_type,failed_connect,failed_wait,failed_cancel,open,create,punch_focus,punch_type,punch_send,punch_verify,connect,ready,one_ready,both_ready,handoff,verify,complete };
     SmokeNetwork smoke_network=SmokeNetwork::idle;
     SmokeNetwork smoke_network_logged=SmokeNetwork::idle;
-    constexpr const char* smoke_network_names[]={"idle","open","create","connect","ready","one-ready","both-ready","handoff","verify","complete"};
+    constexpr const char* smoke_network_names[]={"idle","failed-open","failed-focus","failed-type","failed-connect","failed-wait","failed-cancel","open","create","punch-focus","punch-type","punch-send","punch-verify","connect","ready","one-ready","both-ready","handoff","verify","complete"};
     std::unique_ptr<uc::net::Lobby> smoke_peer;
+    std::unique_ptr<uc::net::NatTunnel> smoke_tunnel;
     Uint64 smoke_network_start=0;
-    bool smoke_ready_enabled=false,smoke_network_capture=false,smoke_network_timeout=false;
+    bool smoke_ready_enabled=false,smoke_network_capture=false,smoke_network_timeout=false,smoke_punch_enabled=false,smoke_nat_capture=false;
     unsigned smoke_network_handoffs=0,smoke_click_frame=0;
+    std::string smoke_join_address;
+    size_t smoke_typed=0;
     while(!done) {
         std::erase_if(retiring_nat,[](const auto& item){return item->finished();});
         if(background_host) {
             if(!uc::game_running(process))break;
+            if(tunnel && tunnel->state().phase==uc::net::TunnelPhase::failed)tunnel.reset();
             SDL_Delay(100);continue;
         }
         SDL_Event event;
@@ -258,7 +265,7 @@ int run(int argc,wchar_t** argv) {
                     std::fprintf(stderr,"[network-smoke] %s modal=%d lobby=%d ready-enabled=%d\n",smoke_network_names[size_t(smoke_network)],network_modal,bool(lobby),smoke_ready_enabled);
                     smoke_network_logged=smoke_network;
                 }
-                smoke_network_timeout=SDL_GetTicks()-smoke_network_start>10000;
+                smoke_network_timeout=SDL_GetTicks()-smoke_network_start>20000;
                 if(!network_error.empty() || !error.empty())throw std::runtime_error("network lobby smoke failed: "+network_error+error);
                 if(smoke_peer && smoke_peer->state().phase==uc::net::LobbyPhase::failed)throw std::runtime_error("network smoke peer: "+smoke_peer->state().error);
                 auto click=[&](const char* id) {
@@ -270,10 +277,41 @@ int run(int argc,wchar_t** argv) {
                     smoke_click_frame=0;return true;
                 };
                 switch(smoke_network) {
+                case SmokeNetwork::failed_open:if(click("network"))smoke_network=SmokeNetwork::failed_focus;break;
+                case SmokeNetwork::failed_focus:if(network_modal && click("network-address"))smoke_network=SmokeNetwork::failed_type;break;
+                case SmokeNetwork::failed_type:
+                    if(smoke_typed<smoke_join_address.size())io.AddInputCharacter(smoke_join_address[smoke_typed++]);
+                    else smoke_network=SmokeNetwork::failed_connect;
+                    break;
+                case SmokeNetwork::failed_connect:
+                    if(network_address!=smoke_join_address)throw std::runtime_error("typed IP:port was corrupted");
+                    if(click("network-connect"))smoke_network=SmokeNetwork::failed_wait;
+                    break;
+                case SmokeNetwork::failed_wait:
+                    if(tunnel && tunnel->state().phase==uc::net::TunnelPhase::needs_punch && !tunnel->state().discovery_error.empty()) {
+                        if(lobby)throw std::runtime_error("failed UDP connection started a TCP lobby");
+                        smoke_nat_capture=true;smoke_network=SmokeNetwork::failed_cancel;
+                    }
+                    break;
+                case SmokeNetwork::failed_cancel:
+                    if(click("network-cancel"))smoke_network=SmokeNetwork::open;
+                    break;
                 case SmokeNetwork::open: if(click("network"))smoke_network=SmokeNetwork::create;break;
-                case SmokeNetwork::create: if(network_modal && click("network-create"))smoke_network=SmokeNetwork::connect;break;
+                case SmokeNetwork::create: if(network_modal && click("network-create"))smoke_network=SmokeNetwork::punch_focus;break;
+                case SmokeNetwork::punch_focus:
+                    if(tunnel && lobby) {
+                        if(smoke_punch_enabled)throw std::runtime_error("empty NAT endpoint accepted");
+                        if(click("punch-address"))smoke_network=SmokeNetwork::punch_type;
+                    }
+                    break;
+                case SmokeNetwork::punch_type:io.AddInputCharactersUTF8("127.0.0.1:9");smoke_network=SmokeNetwork::punch_send;break;
+                case SmokeNetwork::punch_send:if(smoke_punch_enabled && click("punch-action"))smoke_network=SmokeNetwork::punch_verify;break;
+                case SmokeNetwork::punch_verify:
+                    if(tunnel->state().punching){smoke_nat_capture=true;smoke_network=SmokeNetwork::connect;}
+                    break;
                 case SmokeNetwork::connect:
-                    if(lobby && !smoke_peer)smoke_peer=std::make_unique<uc::net::Lobby>(uc::net::Endpoint{false,network_address,uint16_t(network_port)});
+                    if(lobby && !smoke_tunnel)smoke_tunnel=std::make_unique<uc::net::NatTunnel>(uc::net::Endpoint{false,network_address,uint16_t(network_port)},std::vector<std::string>{});
+                    if(smoke_tunnel && smoke_tunnel->state().phase==uc::net::TunnelPhase::connected && !smoke_peer)smoke_peer=std::make_unique<uc::net::Lobby>(smoke_tunnel->state().local);
                     if(smoke_peer && smoke_ready_enabled && smoke_peer->state().phase==uc::net::LobbyPhase::connected)smoke_network=SmokeNetwork::ready;
                     break;
                 case SmokeNetwork::ready: if(click("network-ready"))smoke_network=SmokeNetwork::one_ready;break;
@@ -288,8 +326,8 @@ int run(int argc,wchar_t** argv) {
                 case SmokeNetwork::verify:
                     if(smoke_peer->state().phase==uc::net::LobbyPhase::launching) {
                         const auto endpoint=smoke_peer->take_start();
-                        if(!endpoint || endpoint->host || endpoint->address!=network_address || endpoint->port!=network_port || smoke_peer->take_start())throw std::runtime_error("network peer handoff was not exactly once");
-                        smoke_peer.reset();smoke_network=SmokeNetwork::complete;
+                        if(!endpoint || endpoint->host || !endpoint->loopback || endpoint->port!=smoke_tunnel->state().local.port || smoke_peer->take_start())throw std::runtime_error("network peer handoff was not exactly once");
+                        smoke_peer.reset();smoke_tunnel.reset();tunnel.reset();smoke_network=SmokeNetwork::complete;
                     }
                     break;
                 case SmokeNetwork::idle: case SmokeNetwork::handoff: case SmokeNetwork::complete: break;
@@ -745,7 +783,7 @@ int run(int argc,wchar_t** argv) {
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || lobby || pending_network);
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || tunnel || lobby || pending_network);
         push_font(ui.serif,22);
         const float launch_gap=8*unit,launch_width=(width*.395f-launch_gap)/2;
         if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
@@ -759,32 +797,68 @@ int run(int argc,wchar_t** argv) {
         ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
         const std::string network_title=std::string(tr("network_play"))+"###network-lobby";
         if(network_open_requested) {ImGui::OpenPopup(network_title.c_str());network_modal=true;network_open_requested=false;}
-        ImGui::SetNextWindowSize({600*unit,0},ImGuiCond_Always);
+        ImGui::SetNextWindowSize({660*unit,0},ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints({0,0},{10000,ImGui::GetIO().DisplaySize.y-32});
         ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x/2,ImGui::GetIO().DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{12*unit,12*unit});
         push_font(ui.sans,28);
         if(ImGui::BeginPopupModal(network_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
             push_font(ui.sans,22);
+            if(!tunnel) {
             ImGui::TextWrapped("%s",tr("network_help"));ImGui::Spacing();
-            ImGui::BeginDisabled(bool(lobby));
             ImGui::TextUnformatted(tr("network_address"));ImGui::SetNextItemWidth(-1);
-            ImGui::InputText("##network-address",&network_address,ImGuiInputTextFlags_CharsDecimal);track("network-address");
+            ImGui::InputText("##network-address",&network_address);
+            track("network-address");
             ImGui::TextUnformatted(tr("network_port"));ImGui::SetNextItemWidth(-1);
             ImGui::InputInt("##network-port",&network_port,0,0);track("network-port");
-            ImGui::EndDisabled();
-            const bool valid_endpoint=uc::net::valid_address(network_address) && network_port>0 && network_port<=65535;
+            } else ImGui::Text("%s: %s:%d",tr(network_host ? "network_create" : "network_connect"),network_address.c_str(),network_port);
+            const auto combined_address=uc::net::parse_peer_address(network_address);
+            const bool valid_endpoint=bool(combined_address) || (uc::net::valid_address(network_address) && network_port>0 && network_port<=65535);
             if(!valid_endpoint)ImGui::TextWrapped("%s",tr("network_invalid"));
-            if(nat) {
+            if(nat && tunnel && tunnel->state().phase!=uc::net::TunnelPhase::connected) {
                 const auto state=nat->state();
                 ImGui::TextWrapped("%s",tr(state.phase==uc::net::NatPhase::discovering ? "nat_discovering" : state.phase==uc::net::NatPhase::mapped ? "nat_mapped" : "nat_unavailable"));
                 if(state.phase==uc::net::NatPhase::mapped) {
-                    ImGui::Text("%s:%d (TCP + UDP)",state.external.c_str(),network_port);
-                    ImGui::SameLine();if(button(tr("nat_copy"),"nat-copy"))SDL_SetClipboardText(state.external.c_str());
+                    if(state.public_address) {
+                        const auto endpoint=state.external+":"+std::to_string(network_port);
+                        ImGui::TextUnformatted(endpoint.c_str());
+                        ImGui::SameLine();if(button(tr("punch_copy"),"nat-copy"))SDL_SetClipboardText(endpoint.c_str());
+                    }
                     if(!state.public_address)ImGui::TextWrapped("%s",tr("nat_private"));
                     if(state.permanent)ImGui::TextWrapped("%s",tr("nat_permanent"));
                 }
                 if(!state.error.empty())ImGui::TextWrapped("%s",state.error.c_str());
+            }
+            if(tunnel) {
+                const auto state=tunnel->state();
+                if(state.phase==uc::net::TunnelPhase::failed){network_error=state.error;cancel_network();}
+                else {
+                    if(!lobby && state.local.port && (network_host || state.phase==uc::net::TunnelPhase::connected))lobby=std::make_unique<uc::net::Lobby>(state.local);
+                    if(state.phase!=uc::net::TunnelPhase::connected) {
+                        if(state.phase==uc::net::TunnelPhase::needs_punch)ImGui::TextWrapped("%s",tr("punch_help"));
+                        else if(!network_host)ImGui::TextWrapped("%s",tr("network_waiting"));
+                        if(network_host || state.phase==uc::net::TunnelPhase::needs_punch) {
+                            if(!state.public_address.empty()) {
+                                ImGui::TextWrapped("%s",tr("punch_public"));
+                                ImGui::TextUnformatted(state.public_address.c_str());
+                                ImGui::SameLine();if(button(tr("punch_copy"),"punch-copy"))SDL_SetClipboardText(state.public_address.c_str());
+                            } else ImGui::TextWrapped("%s",tr(state.discovery_error.empty() ? "punch_discovering" : "punch_unavailable"));
+                            if(state.symmetric)ImGui::TextWrapped("%s",tr("punch_symmetric"));
+                        }
+                        if(network_host) {
+                            ImGui::TextWrapped("%s",tr("punch_peer"));ImGui::SetNextItemWidth(-1);
+                            ImGui::InputText("##punch-address",&punch_address);track("punch-address");
+                            smoke_punch_enabled=bool(uc::net::parse_peer_address(punch_address)) && !state.punching && state.phase==uc::net::TunnelPhase::waiting;
+                            ImGui::BeginDisabled(!smoke_punch_enabled);
+                            if(button(tr(state.punching ? "punch_active" : "punch_action"),"punch-action")) {
+                                try {tunnel->punch(punch_address);network_error.clear();}
+                                catch(const std::exception& e){network_error=e.what();}
+                            }
+                            ImGui::EndDisabled();
+                        }
+                    }
+                }
             }
             if(lobby) {
                 auto state=lobby->state();
@@ -797,6 +871,7 @@ int run(int argc,wchar_t** argv) {
                 if(state.phase==uc::net::LobbyPhase::failed) {network_error=state.error;cancel_network();}
                 else {
                     ImGui::TextWrapped("%s",tr(state.phase==uc::net::LobbyPhase::waiting ? "network_waiting" : "network_connected"));
+                    if(state.phase!=uc::net::LobbyPhase::waiting) {
                     ImGui::Text("%s: %s",tr("network_local"),tr(state.local_ready ? "network_ready" : "network_not_ready"));
                     ImGui::Text("%s: %s",tr("network_remote"),tr(state.remote_ready ? "network_ready" : "network_not_ready"));
                     if(!can_ready)ImGui::TextWrapped("%s",tr("network_prepare"));
@@ -809,6 +884,7 @@ int run(int argc,wchar_t** argv) {
                     track("network-ready");
                     ImGui::PopStyleVar(2);
                     ImGui::EndDisabled();
+                    }
                     if(lobby && can_ready)if(auto endpoint=lobby->take_start()) {
                         if(!smoke.empty() && smoke_exe.empty() && lobby->take_start())throw std::runtime_error("network host handoff repeated");
                         pending_network=std::move(endpoint);launch_requested=true;lobby.reset();network_modal=false;ImGui::CloseCurrentPopup();
@@ -820,14 +896,17 @@ int run(int argc,wchar_t** argv) {
                 ImGui::TextWrapped("%s",network_error.empty() ? error.c_str() : network_error.c_str());
             }
             ImGui::Spacing();
-            ImGui::BeginDisabled(!valid_endpoint || bool(lobby) || !retiring_nat.empty());
+            ImGui::BeginDisabled(!valid_endpoint || bool(tunnel) || !retiring_nat.empty());
             const bool create=button(tr("network_create"),"network-create");
             ImGui::SameLine();const bool connect=button(tr("network_connect"),"network-connect");
             ImGui::EndDisabled();
             if(create || connect) {
                 network_error.clear();
                 try {
-                    lobby=std::make_unique<uc::net::Lobby>(uc::net::Endpoint{create,network_address,uint16_t(network_port)});
+                    if(combined_address){network_address=combined_address->address;network_port=combined_address->port;}
+                    network_host=create;
+                    const uc::net::Endpoint endpoint{create,network_address,uint16_t(network_port)};
+                    tunnel=smoke.empty() ? std::make_unique<uc::net::NatTunnel>(endpoint) : std::make_unique<uc::net::NatTunnel>(endpoint,std::vector<std::string>{},std::chrono::milliseconds(100));
                     if(create)nat=std::make_unique<uc::net::NatMapping>(uint16_t(network_port),smoke.empty() ? uc::net::upnp_gateway() : std::make_unique<SmokeNatGateway>());
                 }
                 catch(const std::exception& e) {cancel_network();network_error=e.what();}
@@ -853,7 +932,7 @@ int run(int argc,wchar_t** argv) {
         const bool check_capture_wait=!smoke_exe.empty() && !smoke_capture_wait_checked && launch_requested && cpu_ready && !editor.capturing();
         if(check_capture_wait)editor.begin_capture(uc::Action::fire,false);
         if(!smoke.empty() && smoke_exe.empty() && pending_network) {
-            if(smoke_network!=SmokeNetwork::handoff || !launch_requested || !pending_network->host || pending_network->address!=network_address || pending_network->port!=network_port || ++smoke_network_handoffs!=1)
+            if(smoke_network!=SmokeNetwork::handoff || !launch_requested || !pending_network->host || !pending_network->loopback || pending_network->port!=tunnel->state().local.port || ++smoke_network_handoffs!=1)
                 throw std::runtime_error("network launcher handoff failed");
             if(!nat || nat->state().phase!=uc::net::NatPhase::mapped)throw std::runtime_error("NAT mapping lost at game handoff");
             stop_nat();launch_requested=false;pending_network.reset();smoke_network=SmokeNetwork::verify;
@@ -864,7 +943,7 @@ int run(int argc,wchar_t** argv) {
                 try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu,pending_network);pending_network.reset();}
                 catch(const std::exception& e) {error=e.what();cancel_network();}
                 if(process && smoke.empty() && smoke_exe.empty()) {
-                    if(nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep router leases alive until the child game exits.
+                    if(tunnel || nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep the punched socket and router lease alive until the child exits.
                     else done=true;
                 }
             }
@@ -928,12 +1007,14 @@ int run(int argc,wchar_t** argv) {
             if(smoke_exe.empty() && frame==504)ui.capture(smoke/L"network-open.bmp");
             if(smoke_exe.empty() && frame==516)ui.capture(smoke/L"network-invalid.bmp");
             if(smoke_network_capture) {ui.capture(smoke/L"network-connected.bmp");smoke_network_capture=false;}
+            if(smoke_nat_capture) {ui.capture(smoke/(network_host ? L"network-nat-punch.bmp" : L"network-nat-help.bmp"));smoke_nat_capture=false;}
             if(frame==522 && (network_modal || lobby || pending_network))throw std::runtime_error("network cancel did not reset lobby");
             if(frame>=524) {
                 if(smoke_exe.empty()) {
                     if(smoke_network==SmokeNetwork::idle) {
-                        network_address="127.0.0.1";network_port=30000+int(GetCurrentProcessId()%20000);
-                        smoke_network_start=SDL_GetTicks();smoke_network=SmokeNetwork::open;
+                        network_address.clear();network_port=30000+int(GetCurrentProcessId()%20000);
+                        smoke_join_address="127.0.0.1:"+std::to_string(network_port);
+                        smoke_network_start=SDL_GetTicks();smoke_network=SmokeNetwork::failed_open;
                     } else if(smoke_network==SmokeNetwork::complete) {
                         if(process || launch_requested || pending_network || lobby || smoke_network_handoffs!=1)throw std::runtime_error("network smoke launched a game or repeated handoff");
                         done=true;

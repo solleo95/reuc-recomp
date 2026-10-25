@@ -13,6 +13,7 @@ Their licence texts are in the `licenses` folder next to the game.
 | [SDL3](https://github.com/libsdl-org/SDL) | window, input | `licenses/SDL3/LICENSE.txt` |
 | [Dear ImGui](https://github.com/ocornut/imgui) | launcher, in-game menu | `licenses/imgui/LICENSE.txt` |
 | [MiniUPnPc](https://github.com/miniupnp/miniupnp) 2.3.3 | automatic router port forwarding | `licenses/miniupnpc/LICENSE` |
+| [ENet](https://github.com/lsalzman/enet) 1.3.18 | reliable UDP transport and manual NAT punching | `licenses/enet/LICENSE` |
 | [Lua](https://www.lua.org) 5.4.7 | Lua scripts of mods | `licenses/lua/license-and-readme.html` (the licence is at the end of the page) |
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) 0.10.1 | JavaScript scripts of mods | `licenses/quickjs-ng/LICENSE` |
 | [miniz](https://github.com/richgel999/miniz) 3.0.2 | zip files of mods | `licenses/miniz/LICENSE` |

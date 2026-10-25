@@ -1,5 +1,6 @@
 build/
 dist/
+dist-raw/
 generated/
 *.spv
 .superpowers/

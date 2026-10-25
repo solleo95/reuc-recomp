@@ -31,7 +31,7 @@ int main(int argc,char** argv) {
     for(int mode:{0,1,2}) {
         const int cpu=mode==1 ? 7 : -1;
         std::optional<uc::net::Endpoint> network;
-        if(mode)network=uc::net::Endpoint{mode==1,"127.0.0.1",27889};
+        if(mode)network=uc::net::Endpoint{mode==1,"127.0.0.1",27889,mode==1};
         auto process=uc::launch_game(executable,directory/"config.json",nullptr,cpu,network);
         CHECK(WaitForSingleObject(process.get(),10000)==WAIT_OBJECT_0);
         DWORD code=1;CHECK(GetExitCodeProcess(process.get(),&code) && code==0);
@@ -41,6 +41,7 @@ int main(int argc,char** argv) {
         if(cpu==-1)CHECK(args.find("--guest-cpu")==std::string::npos);
         if(mode) {
             CHECK(args.find("--net-port\n27889\n")!=std::string::npos);
+            CHECK((args.find("--net-loopback\n")!=std::string::npos)==network->loopback);
             CHECK(args.find(cpu==7 ? "--net-host\n" : "--net-join\n127.0.0.1\n")!=std::string::npos);
         } else CHECK(args.find("--net-")==std::string::npos);
     }

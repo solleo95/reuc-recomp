@@ -11,7 +11,7 @@
 namespace uc::net {
 constexpr uint16_t default_port=27888;
 constexpr size_t max_packet=32768;
-struct Endpoint { bool host=false; std::string address="127.0.0.1"; uint16_t port=default_port; };
+struct Endpoint { bool host=false; std::string address="127.0.0.1"; uint16_t port=default_port; bool loopback=false; };
 bool valid_address(const std::string&);
 // At most one sender and one receiver may run concurrently; join both before destruction.
 // A stop token cancels connect, accept and packet I/O.

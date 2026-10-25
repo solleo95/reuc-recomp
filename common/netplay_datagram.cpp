@@ -49,7 +49,7 @@ Datagram::Datagram(const Endpoint& endpoint, std::array<uint8_t, 16> session, st
         socket_error("Cannot reserve datagram port");
     sockaddr_in local{};
     local.sin_family = AF_INET;
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_addr.s_addr = htonl(endpoint.loopback ? INADDR_LOOPBACK : INADDR_ANY);
     local.sin_port = endpoint.host ? htons(endpoint.port) : 0;
     if (bind(impl_->socket.value, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) == SOCKET_ERROR)
         socket_error("Cannot bind datagram port");
