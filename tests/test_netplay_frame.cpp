@@ -73,16 +73,16 @@ int main() {
         };
         uc::NetTickPolicy policy;
         CHECK(policy.update(60,8000)==0);
-        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
+        for(int second=0;second<3;++second)CHECK(policy.update(60,16000)==0);
         CHECK(policy.update(60,8000)==0);                                 // A calm second resets the count.
-        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
-        CHECK(policy.update(60,15000)==30);
+        for(int second=0;second<3;++second)CHECK(policy.update(60,16000)==0);
+        CHECK(policy.update(60,16000)==30);
         // The heavy seconds still count when 60 Hz is considered again: about 35 s to fade below the 60 Hz budget, then 45 calm ones.
         int waited=climb_seconds(policy,30,9000,60);
         CHECK(waited>=60 && waited<=110);
         // The return fails at once: the next wait doubles.
-        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
-        CHECK(policy.update(60,15000)==30);
+        for(int second=0;second<3;++second)CHECK(policy.update(60,16000)==0);
+        CHECK(policy.update(60,16000)==30);
         waited=climb_seconds(policy,30,9000,60);
         CHECK(waited>=100 && waited<=170);
         CHECK(policy.update(60,9000)==0);                                 // Back at 60 with the counters clear.
