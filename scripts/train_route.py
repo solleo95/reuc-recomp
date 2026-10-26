@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -88,7 +89,8 @@ def main():
     exe = (args.exe or root / "dist" / "uc.exe").resolve()
     folder = root / "build" / "autotest" / str(time.time_ns())
     folder.mkdir(parents=True)
-    shutil.copytree(pathlib.Path(r"S:\Games\Umbrella Chronicles\saves"), folder / "saves")
+    import localenv   # imported here because tests load this file by path
+    shutil.copytree(localenv.saves_dir() or sys.exit(localenv.NOT_SET), folder / "saves")
     control = folder / "control.txt"
     log_path = folder / "run.log"
     config_path=folder/"config.json"

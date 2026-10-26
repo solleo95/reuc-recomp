@@ -2,6 +2,7 @@
 import argparse
 import ctypes
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -25,12 +26,15 @@ def capture_script(output):
 
 
 def main():
+    import localenv  # noqa: F401  (reads local.env into the environment; imported here because tests load this file by path)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path)
-    parser.add_argument("--dolphin", type=Path, default=Path(r"D:\Tools\Dolphin-scripting\Dolphin.exe"))
+    parser.add_argument("--dolphin", type=Path, default=os.environ.get("UC_DOLPHIN"), help="a Dolphin build with the scripting API (default: UC_DOLPHIN in local.env)")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dump-efb", action="store_true", help="also dump every EFB copy (Dolphin DumpEFBTarget)")
     args = parser.parse_args()
+    if args.dolphin is None:
+        parser.error("pass --dolphin or set UC_DOLPHIN in local.env")
     capture = args.capture.resolve(strict=True)
     dolphin = args.dolphin.resolve(strict=True)
     output = args.output.resolve()

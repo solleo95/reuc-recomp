@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "upscaler_probe.h"
+#include "public_release.h"
 #include "ngx_dlss5.h"
 #include "streamline.h"
 #include "streamline_api.h"
@@ -222,7 +223,8 @@ void probe_dlss5(const std::filesystem::path& directory, UpscalerSupport& suppor
         else {
             NgxInit init; init.instance = instance; init.physical = chosen; init.device = device;
             init.instance_proc = vkGetInstanceProcAddr; init.device_proc = vkGetDeviceProcAddr;
-            init.runtime_directory = directory; init.log_file = directory / "debug" / "ngx_dlss5_probe.log";
+            init.runtime_directory = directory;
+            if (!uc::public_release()) init.log_file = directory / "debug" / "ngx_dlss5_probe.log";   // a release client writes no NGX log file
             std::string reason;
             if (auto runtime = Dlss5Runtime::open(make_ngx_backend(), init, reason)) {
                 VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pool_info.queueFamilyIndex = family;

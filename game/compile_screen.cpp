@@ -1,4 +1,5 @@
 #include "compile_screen.h"
+#include "localization.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -14,6 +15,7 @@ struct CompileScreen::State {
     size_t done=0, total=0;
     bool shown=false;
     std::wstring peer_message;
+    std::wstring starting_title, starting_detail, compile_title, compile_detail;   // the launcher's language
     std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
 };
 namespace {
@@ -36,10 +38,10 @@ void paint(HWND window,const CompileScreen::State& state) {
     SelectObject(dc,state.title); SetTextColor(dc,kText);
     const bool starting=state.total==0;   // before the first progress report: the renderer is still starting
     RECT title{28,18,client.right-28,state.peer_message.empty() ? 56 : 70};
-    DrawTextW(dc,state.peer_message.empty() ? (starting ? L"Запуск игры" : L"Компиляция шейдеров") : state.peer_message.c_str(),-1,&title,DT_LEFT|DT_WORDBREAK);
+    DrawTextW(dc,state.peer_message.empty() ? (starting ? state.starting_title : state.compile_title).c_str() : state.peer_message.c_str(),-1,&title,DT_LEFT|DT_WORDBREAK);
     SelectObject(dc,state.detail); SetTextColor(dc,kMuted);
     RECT detail{28,state.peer_message.empty() ? 60 : 76,client.right-28,100};
-    DrawTextW(dc,state.peer_message.empty() ? (starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.") : L"Resident Evil: The Umbrella Chronicles",-1,&detail,DT_LEFT|DT_SINGLELINE);
+    DrawTextW(dc,state.peer_message.empty() ? (starting ? state.starting_detail : state.compile_detail).c_str() : L"Resident Evil: The Umbrella Chronicles",-1,&detail,DT_LEFT|DT_SINGLELINE);
     if(starting) { BitBlt(target,0,0,client.right,client.bottom,dc,0,0,SRCCOPY); SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc); EndPaint(window,&paint); return; }
     const RECT track{28,96,client.right-28,102};
     HBRUSH track_brush=CreateSolidBrush(kTrack); FillRect(dc,&track,track_brush); DeleteObject(track_brush);
@@ -60,9 +62,17 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM w,LPARAM l) {
 }
 }
 
-CompileScreen::CompileScreen() {
+CompileScreen::CompileScreen(std::string_view language) {
     state_=new State;
     try {
+        const auto wide=[&](std::string_view key) {
+            const auto text=launcher::text(language,key);
+            std::wstring result(text.size(),L'\0');   // UTF-16 never needs more units than UTF-8 bytes
+            result.resize(size_t(MultiByteToWideChar(CP_UTF8,0,text.data(),int(text.size()),result.data(),int(result.size()))));
+            return result;
+        };
+        state_->starting_title=wide("compile_starting"); state_->starting_detail=wide("compile_starting_detail");
+        state_->compile_title=wide("compile_title"); state_->compile_detail=wide("compile_detail");
         WNDCLASSW cls{}; cls.lpfnWndProc=procedure; cls.hInstance=GetModuleHandleW(nullptr); cls.lpszClassName=L"UcCompileScreen"; cls.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));
         if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("compile screen: window class registration failed");
         state_->title=CreateFontW(-28,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Georgia");

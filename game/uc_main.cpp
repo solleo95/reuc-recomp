@@ -2,6 +2,7 @@
 #include "client_update_lock.h"
 #include "cpu_topology.h"
 #include "compile_screen.h"
+#include "public_release.h"
 #include "dispatch.h"
 #include "dol.h"
 #include "dvdfs.h"
@@ -162,6 +163,7 @@ fs::path exe_path() {
     return fs::path(buf);
 }
 fs::path exe_dir() { return exe_path().parent_path(); }
+const bool kPublicRelease = uc::public_release();   // an installed release client (release.json next to the exe) writes no logs, crash reports or debug files
 std::vector<uint8_t> slurp(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -239,6 +241,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::ConfigDocument diagnostic_options;uc::store_options(diagnostic_options,options);
     std::fprintf(stderr,"[settings] graphics=%s\n",diagnostic_options.properties["graphics"].dump().c_str());
     std::fprintf(stderr,"[settings] dlss5=%s\n",diagnostic_options.properties["dlss5"].dump().c_str());
+    if(kPublicRelease) { options.gx_audit=false; options.capture_scene_passes=false; options.audio_audit=false; options.gx_gaps=false; }   // developer reports that write files
     { std::error_code ignored; if(!std::filesystem::exists(exe_dir()/uc::kDlss5Runtime,ignored)) options.dlss5_enabled=false; }   // the player supplies nvngx_dlssnr.dll; without it DLSS 5 stays off
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
         const auto support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
@@ -268,7 +271,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::gx_gap_audit_enable(options.gx_gaps);
     uc::install_crash_handlers();
     uc::set_exit_hook(print_stats);
-    uc::crash_report_init((uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory())/"crashes", [] {
+    uc::crash_report_init(kPublicRelease ? fs::path() : (uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory())/"crashes", [] {   // an empty directory writes no report
         const auto vi = uc::vi_stats(); const auto d = uc::dvd_stats(); const auto gx = uc::gx_stats(); const auto sound = uc::audio_stats();
         char text[512];
         std::snprintf(text, sizeof text, "retraces %llu\ndvd opens %llu reads %llu\ngx draws %llu submitted %llu completed %llu copies %llu unowned fifo bytes %llu\naudio frames %llu nonzero samples %llu\n",
@@ -393,12 +396,13 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::optional<uc::VulkanRenderer> renderer_storage; renderer_storage.emplace();
     uc::VulkanRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
     double render_aspect=16.0/9;
+    const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();   // the launcher's language: menus and start screens
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
         const auto renderer_start=std::chrono::steady_clock::now();
         std::fprintf(stderr,"[startup] renderer initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
         std::optional<uc::CompileScreen> screen;
-        if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
+        if(compile_screen) { screen.emplace(menu_language); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.set_aim_history([&input](double seconds) { return input.aim_ago(seconds); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
@@ -517,7 +521,6 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         }
     }
     sched.set_shutdown_hook([&packets,&network] { if(network)network->cancel(); packets.cancel(); });
-    const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();
     uc::mods::ModMenuUi mod_menu([&mods] { return mods.registry(); },[&mods] { return mods.host(); },menu_language);   // the Mods tab and the mods' own tabs and widgets
     mods.set_texture_handler([] { uc::gx_set_texture_budget(size_t(2) << 30); });   // textures of a mod switched on live need the larger cache too
     mod_menu.set_status_line([&mods](const std::string& id) { return mods.mod_status(id); });   // audio conversion progress and the audio and text problems under the mod
@@ -551,7 +554,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const char* path=std::getenv("UC_FRAME_LOG");
         if(path) frame_log=std::make_unique<uc::FrameLog>(fs::path(path));
         else if(!uc::diagnostic_directory().empty())frame_log=std::make_unique<uc::FrameLog>(uc::diagnostic_directory()/"frames.csv");
-        else if(fs::exists(exe_dir()/"frame_log.on")) frame_log=std::make_unique<uc::FrameLog>(exe_dir()/"debug"/("frames-"+std::to_string(GetCurrentProcessId())+".csv"));
+        else if(!kPublicRelease && fs::exists(exe_dir()/"frame_log.on")) frame_log=std::make_unique<uc::FrameLog>(exe_dir()/"debug"/("frames-"+std::to_string(GetCurrentProcessId())+".csv"));
     } catch(const std::exception& error) {std::fprintf(stderr,"[diagnostics] frame CSV unavailable: %s\n",error.what());}
     uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0,frame_idle_last=0,frame_thread_last[8]={}; uint32_t frame_events=0;
     const auto thread_cycles=[]() -> uint64_t { ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); return cycles; };
@@ -686,9 +689,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 } else if (frame_log) frame_cpu_last=thread_cycles();
                 last_present_at=presented_at; frame_limit.presented(presented_at);
             }
-            if (packet_dump.scene_sampled()) scene_dump_serial=pending_serial;
+            if (!kPublicRelease && packet_dump.scene_sampled()) scene_dump_serial=pending_serial;
             if (pending->present && display && debug_capture_requested) {
-                debug_capture_serial=shown_serial;
+                if (!kPublicRelease) debug_capture_serial=shown_serial;   // no screenshot files in the public release
                 debug_capture_requested=false;
             }
             audit_seen_geometry |= !pending->draws.empty();
@@ -702,7 +705,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             if (packets.complete(serial)) uc::gx_completed(serial);
             if(serial==scene_capture_serial) {
                 const auto pixels=renderer.capture(serial,true);
-                const auto directory=fs::path(L"S:\\Games\\Umbrella Chronicles\\debug");
+                const auto directory=exe_dir()/"debug";
                 const auto path=directory/("pass-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(scene_capture_pass)+"-"+std::to_string(serial)+".png");
                 try {
                     fs::create_directories(directory); uc::save_png(pixels,path);
@@ -712,7 +715,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             }
             if (serial==scene_dump_serial) {
                 const auto pixels=renderer.capture(serial);
-                const auto directory=options.capture_dir.empty() ? fs::path(L"S:\\Games\\Umbrella Chronicles\\debug") : options.capture_dir;
+                const auto directory=options.capture_dir.empty() ? exe_dir()/"debug" : options.capture_dir;
                 try { fs::create_directories(directory); uc::save_png(pixels,directory/("scene-"+std::to_string(serial)+".png")); }
                 catch(const std::exception& error) { std::fprintf(stderr,"scene dump screenshot failed: %s\n",error.what()); }
                 scene_dump_serial=0;
@@ -720,7 +723,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             if (serial==debug_capture_serial) {
                 const auto pixels=renderer.capture(serial);
                 if (!pixels.width || !pixels.height || pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4) throw std::runtime_error("invalid debug-frame readback");
-                const auto directory=options.capture_dir.empty() ? fs::path(L"S:\\Games\\Umbrella Chronicles\\debug") : options.capture_dir;
+                const auto directory=options.capture_dir.empty() ? exe_dir()/"debug" : options.capture_dir;
                 const auto stamp=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 const auto path=directory/("frame-"+std::to_string(stamp)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(serial)+".png");
                 try {
@@ -814,7 +817,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         },monitor_width,monitor_height);
         settings_menu->set_mod_menu(&mod_menu);
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
-        settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
+        if(!kPublicRelease)settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
             const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
             ShellExecuteW(nullptr,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
         });
@@ -846,7 +849,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     auto service_frame = [&] {
         if(network && network->waiting()) {
             if(!network_wait_screen) {
-                network_wait_screen.emplace();
+                network_wait_screen.emplace(menu_language);
                 network_wait_screen->wait_for_peer(uc::launcher::text(menu_language,"network_waiting"));
                 std::fprintf(stderr,"[netplay] waiting screen shown\n");
             }
@@ -1087,7 +1090,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if(frame_log) { char text[64]; std::string notes="# guest thread entry points:"; for(int t=1;t<=8;++t) {std::snprintf(text,sizeof text," %d=%08X",t,sched.thread_entry(t)); notes+=text;} std::snprintf(text,sizeof text,"\n# frame t_ms 0 = %.1f ms steady\n",double(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count())/1e6); notes+=text; frame_log->note(notes+sched.idle_report()); }
     frame_log.reset();   // joins the writer thread after the last rows
     std::fprintf(stderr,"audio stats: native frames %llu nonzero samples %llu\n",(unsigned long long)sound_stats.frames,(unsigned long long)sound_stats.nonzero_samples);
-    if(options.audio_audit) {
+    if(options.audio_audit) {   // off in the public release (cleared at startup)
         fs::create_directories(exe_dir()/"debug");
         const auto path=exe_dir()/"debug"/("audio-gaps-"+std::to_string(GetCurrentProcessId())+".txt");
         std::FILE* out=_wfopen(path.c_str(),L"w");
@@ -1129,7 +1132,7 @@ int wmain(int argc, wchar_t** argv) {
             std::fprintf(stderr,"[update] Client is updating or requires recovery. Start uc_launcher.exe: %s\n",error->message().c_str());
             return 2;
         }
-        diagnostics.emplace("game",exe_dir()/"logs");
+        if(!kPublicRelease)diagnostics.emplace("game",exe_dir()/"logs");
         std::vector<std::string> encoded;
         std::vector<char*> arguments;
         encoded.reserve(size_t(argc));arguments.reserve(size_t(argc));
@@ -1145,7 +1148,7 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr,"[session] game exit=%d\n",result);
         return result;
     } catch (const std::exception& e) {
-        const auto logs=uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory();
+        const auto logs=kPublicRelease ? fs::path() : uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory();
         std::fprintf(stderr,"[startup] %s\n",e.what());
         if(const auto message=uc::startup_error_message(startup_options,e.what(),logs)) {
             if(!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Umbrella Chronicles",message->c_str(),nullptr))

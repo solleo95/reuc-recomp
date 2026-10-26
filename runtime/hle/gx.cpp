@@ -25,6 +25,7 @@
 #include <list>
 #include <unordered_map>
 #include "clock.h"
+#include "public_release.h"
 
 namespace {
 uc::Sched* scheduler;
@@ -1591,12 +1592,12 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     for(uint32_t map=0;map<8;++map) if(maps&(1u<<map)) {
         if(!textures[map]) textures[map]=snapshot_texture(bound_textures[map],palettes);
     }
-    if(profile_this_mesh && mesh_profile_count==1) for(size_t map=0;map<2;++map) {
+    if(profile_this_mesh && mesh_profile_count==1 && !uc::public_release()) for(size_t map=0;map<2;++map) {   // a release client writes no debug files
         if(textures[map]) textures[map]->wait();
         if(!textures[map] || textures[map]->gpu_only || textures[map]->levels.empty()) continue;
         const auto& level=textures[map]->levels[0];
         try {
-            const auto directory=std::filesystem::path(L"S:\\Games\\Umbrella Chronicles\\debug");
+            const auto directory=std::filesystem::path("debug");   // profiling dump: relative to the working directory
             std::filesystem::create_directories(directory);
             const auto path=directory/("mesh-map-"+std::to_string(map)+"-"+std::to_string(uc::now_ticks())+".ppm");
             std::ofstream file(path,std::ios::binary);

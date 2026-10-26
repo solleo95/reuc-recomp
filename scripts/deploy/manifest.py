@@ -1,7 +1,7 @@
 """Update the deployed release manifest for every file of dist/ that differs from it (tools/ excluded).
 Writes release.json and changed.json (the list install.ps1 copies) into the folder given as argv[1]."""
 import hashlib, json, os, sys
-root = r'D:\Projects\Native Ports\Umbrella-chronicles-recomp'
+root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 out = sys.argv[1]
 manifest = json.load(open(os.path.join(root, 'dist-raw', 'release.json')))
 changed = []

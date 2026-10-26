@@ -59,7 +59,7 @@ def write_manifest(stage: Path, version: str, helper_files: list[str]) -> dict:
     parse_version(version)
     paths = files_in(stage)
     names = {path.relative_to(stage).as_posix() for path in paths}
-    required = {"uc.exe", "uc_launcher.exe", "uc_updater.exe", "data/uc.map", "assets/launcher/graphite-atlas.png"}
+    required = {"uc.exe", "uc_launcher.exe", "uc_updater.exe", "data/uc.map", "assets/launcher/graphite-train.png", "assets/launcher/graphite-brand.png"}
     if not required <= names or not any(name.startswith("data/shaders/") and name.endswith(".spv") for name in names):
         raise ValueError("Clean install is missing required client files or shaders")
     if "release.json" in names:

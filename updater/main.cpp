@@ -1,4 +1,5 @@
 #include "update_process.h"
+#include "localization.h"
 #include <shellapi.h>
 #include <future>
 #include <limits>
@@ -6,7 +7,8 @@
 using namespace uc::update;
 namespace {
 struct WindowState {
-    bool russian=false,recover=false;
+    bool recover=false;
+    std::wstring updating,restoring,wait,failsafe;   // the launcher's language
     UINT dpi=96;
     HFONT heading=nullptr,body=nullptr,caption=nullptr;
     ~WindowState() {for(auto font:{heading,body,caption}) if(font) DeleteObject(font);}
@@ -32,18 +34,15 @@ struct WindowState {
             SelectObject(dc,previous);
         };
         text(L"UMBRELLA CHRONICLES",caption,24,20,RGB(146,152,153));
-        text(recover?(russian?L"Восстанавливаем клиент":L"Restoring your client"):
-            (russian?L"Обновляем клиент":L"Updating your client"),heading,52,36,RGB(238,233,220));
-        text(russian?L"Пожалуйста, подождите. Лаунчер откроется\nавтоматически, когда всё будет готово.":
-            L"Please wait. The launcher will open automatically\nwhen everything is ready.",body,102,48,RGB(182,187,187));
+        text((recover?restoring:updating).c_str(),heading,52,36,RGB(238,233,220));
+        text(wait.c_str(),body,102,48,RGB(182,187,187));
         RECT track{px(32),px(172),area.right-px(32),px(178)};
         fill(track,RGB(48,54,56));
         const int width=track.right-track.left,segment=width/4;
         const int offset=int((GetTickCount64()%2400)*(width+segment)/2400)-segment;
         RECT progress{track.left+std::max(0,offset),track.top,track.left+std::min(width,offset+segment),track.bottom};
         fill(progress,RGB(179,35,49));
-        text(russian?L"При ошибке восстановим предыдущую версию.":L"If anything fails, your previous version will be restored.",
-            caption,198,28,RGB(146,152,153));
+        text(failsafe.c_str(),caption,198,28,RGB(146,152,153));
     }
 };
 LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
@@ -95,11 +94,24 @@ std::wstring wide(const std::string& text) {
     std::wstring result(size,L' ');
     MultiByteToWideChar(CP_UTF8,0,text.data(),static_cast<int>(text.size()),result.data(),size);return result;
 }
+// The launcher's language (launcher.language in the client's config.json, "system" or unreadable: Windows' language). The client is two levels
+// above the operation folder (<client>/.uc-update/<id>).
+std::string updater_language(const fs::path& operation) {
+    try {
+        const auto configured=uc::launcher::config_language(uc::load_config(operation.parent_path().parent_path()/L"config.json"));
+        if(configured!="system") return configured;
+    } catch(const std::exception&) {}
+    return uc::launcher::system_language();
+}
+std::wstring tr(const std::string& language,std::string_view key) {
+    const auto text=uc::launcher::text(language,key);
+    return wide(std::string(text));
+}
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
-    bool russian=PRIMARYLANGID(GetUserDefaultUILanguage())==LANG_RUSSIAN;
-    const wchar_t* title=russian?L"Обновление Umbrella Chronicles":L"Umbrella Chronicles update";
+    std::string language=uc::launcher::system_language();   // until the operation folder (and so the client's config) is known
+    std::wstring title=tr(language,"updater_title");
     try {
         wchar_t module[32768]{};
         if(!GetModuleFileNameW(nullptr,module,32768)) throw std::runtime_error("Cannot find updater location");
@@ -111,10 +123,12 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             operation=fs::path(module).parent_path().parent_path();recover=true;
             if(fs::path(module).parent_path().filename()!=L"recovery")
                 throw std::runtime_error("Start updates from uc_launcher.exe. Recovery copies are under .uc-update/<operation>/recovery/.");
-            if(MessageBoxW(nullptr,russian?L"Восстановить клиент после прерванного обновления?":L"Recover the client after an interrupted update?",
-                title,MB_YESNO|MB_ICONQUESTION)!=IDYES) return 0;
+            language=updater_language(operation);title=tr(language,"updater_title");
+            if(MessageBoxW(nullptr,tr(language,"updater_recover_ask").c_str(),
+                title.c_str(),MB_YESNO|MB_ICONQUESTION)!=IDYES) return 0;
         } else if((argc==5 || argc==3) && (std::wstring_view(argv[1])==L"--apply" || std::wstring_view(argv[1])==L"--recover")) {
             operation=fs::absolute(argv[2]).lexically_normal();recover=std::wstring_view(argv[1])==L"--recover";
+            language=updater_language(operation);title=tr(language,"updater_title");
             if(argc==5) {parent=Handle(inherited_handle(argv[3]));ready=Handle(inherited_handle(argv[4]));}
             else if(!recover) throw std::runtime_error("Apply requires a launcher handshake");
         } else throw std::runtime_error("Invalid updater arguments");
@@ -124,13 +138,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         cls.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(1));
         if(!RegisterClassW(&cls)) throw std::runtime_error("Cannot register updater window");
         RECT area{};SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
-        WindowState state;state.russian=russian;state.recover=recover;
+        WindowState state;state.recover=recover;
+        state.updating=tr(language,"updater_updating");state.restoring=tr(language,"updater_restoring");
+        state.wait=tr(language,"updater_wait");state.failsafe=tr(language,"updater_failsafe");
         const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU;
         const auto dpi=GetDpiForSystem();
         RECT bounds{0,0,MulDiv(560,dpi,96),MulDiv(248,dpi,96)};
         AdjustWindowRectExForDpi(&bounds,style,FALSE,WS_EX_DLGMODALFRAME,dpi);
         const auto width=bounds.right-bounds.left,height=bounds.bottom-bounds.top;
-        HWND window=CreateWindowExW(WS_EX_DLGMODALFRAME,cls.lpszClassName,title,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+        HWND window=CreateWindowExW(WS_EX_DLGMODALFRAME,cls.lpszClassName,title.c_str(),WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
             area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,nullptr,nullptr,instance,&state);
         if(!window) throw std::runtime_error("Cannot create updater window");
         struct WindowOwner {HWND handle;~WindowOwner(){DestroyWindow(handle);}} owner{window};
@@ -150,8 +166,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         auto status=work.get();
         if(failed(status)) {
             auto message=wide(std::get<Error>(status).detail)+L"\n\n"+operation.wstring();
-            MessageBoxW(window,message.c_str(),title,MB_OK|MB_ICONERROR);
+            MessageBoxW(window,message.c_str(),title.c_str(),MB_OK|MB_ICONERROR);
         }
         return failed(status)?2:0;
-    } catch(const std::exception& e) {MessageBoxW(nullptr,wide(e.what()).c_str(),title,MB_OK|MB_ICONERROR);return 2;}
+    } catch(const std::exception& e) {MessageBoxW(nullptr,wide(e.what()).c_str(),title.c_str(),MB_OK|MB_ICONERROR);return 2;}
 }

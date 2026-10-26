@@ -5,7 +5,8 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "BUILD=%ROOT%\build"
 set "DIST=%ROOT%\dist"
 set "GEN=%ROOT%\generated"
-if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
+call "%ROOT%\scripts\local.bat"
+if not defined UC_INSTALL_DIR goto :no_install_var
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
 set "NO_INSTALL="
 if /I "%~1"=="--no-install" set "NO_INSTALL=1"
@@ -45,6 +46,9 @@ exit /b 0
 echo [6/6] Skipping copy (--no-install)
 exit /b 0
 
+:no_install_var
+echo ERROR: UC_INSTALL_DIR is not set. Copy local.env.example to local.env and set it to the folder with game\DATA\sys\main.dol (docs\building.md).
+exit /b 1
 :no_install_dir
 echo ERROR: install directory not found: %UC_INSTALL_DIR%
 exit /b 1

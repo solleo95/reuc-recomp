@@ -4,6 +4,7 @@ from ctypes import wintypes
 import hashlib
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -18,6 +19,7 @@ del sys.argv[1:6]
 spec = importlib.util.spec_from_file_location("build_release", REPO / "scripts/build_release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+os.environ["UC_LOGS"] = "1"   # a release layout (release.json) writes no logs; the real launcher's runtime.log is how this test sees it exit
 ID = "11111111-1111-4111-8111-111111111111"
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -105,7 +107,8 @@ class UpdateTests(unittest.TestCase):
             (folder / "data/shaders/test.spv").write_bytes(b"shader")
             (folder / "data/uc.map").write_bytes(b"map")
             (folder / "assets/launcher").mkdir(parents=True)
-            (folder / "assets/launcher/graphite-atlas.png").write_bytes(b"fixture")
+            for artwork in ("graphite-train.png", "graphite-brand.png"):
+                (folder / "assets/launcher" / artwork).write_bytes(b"fixture")
             (folder / "payload.bin").write_bytes((b"A" if folder == self.root else b"B") * (32 * 1024 * 1024))
             if folder == self.root:
                 (folder / "obsolete.txt").write_bytes(b"OLD")
@@ -195,11 +198,12 @@ class UpdateTests(unittest.TestCase):
         for folder in (self.root, self.stage):
             shutil.copy2(LAUNCHER, folder / "uc_launcher.exe")
             shutil.copy2(LAUNCHER.parent / "SDL3.dll", folder / "SDL3.dll")
-            shutil.copy2(REPO / "assets/launcher/graphite-atlas.png", folder / "assets/launcher/graphite-atlas.png")
+            artwork = ("assets/launcher/graphite-train.png", "assets/launcher/graphite-brand.png")
+            for name in artwork:
+                shutil.copy2(REPO / name, folder / name)
             manifest = json.loads((folder / "release.json").read_text())
-            manifest["files"] = [entry for entry in manifest["files"] if entry["path"] not in {
-                "uc_launcher.exe", "SDL3.dll", "assets/launcher/graphite-atlas.png"}]
-            for name in ("uc_launcher.exe", "SDL3.dll", "assets/launcher/graphite-atlas.png"):
+            manifest["files"] = [entry for entry in manifest["files"] if entry["path"] not in {"uc_launcher.exe", "SDL3.dll", *artwork}]
+            for name in ("uc_launcher.exe", "SDL3.dll", *artwork):
                 manifest["files"].append({"path": name, "size": (folder / name).stat().st_size, "sha256": release.sha256(folder / name)})
             (folder / "release.json").write_text(json.dumps(manifest), encoding="utf-8")
         self.start()

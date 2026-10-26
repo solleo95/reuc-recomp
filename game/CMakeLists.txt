@@ -28,7 +28,7 @@ target_include_directories(uc_host_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_host_input PUBLIC uc_runtime SDL3::SDL3)
 add_library(uc_game_mods STATIC game_mods.cpp)   # the port's side of the mod platform (modding/)
 target_include_directories(uc_game_mods PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_game_mods PUBLIC uc_mods uc_diagnostics)
+target_link_libraries(uc_game_mods PUBLIC uc_mods uc_diagnostics PRIVATE uc_public_release)
 add_library(uc_game_input STATIC game_input.cpp test_state.cpp)
 add_library(uc_netplay_game STATIC netplay_game.cpp netplay_saves.cpp game_checkpoint.cpp)
 target_include_directories(uc_netplay_game PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -74,7 +74,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
   add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static)
+  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static uc_public_release)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm shell32
     uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch uc_game_mods uc_mod_menu uc_netplay_game)
   add_custom_command(TARGET uc POST_BUILD

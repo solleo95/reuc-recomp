@@ -1,4 +1,5 @@
 #include "dlss5_pass.h"
+#include "public_release.h"
 #include "dlss5_math.h"
 #include <algorithm>
 #include <cstdio>
@@ -127,7 +128,8 @@ bool Dlss5Pass::record(const Dlss5Frame& frame) {
         if (!runtime_) {
             NgxInit init; init.instance=context_.instance; init.physical=context_.physical; init.device=context_.device;
             init.instance_proc=context_.instance_proc; init.device_proc=context_.device_proc;
-            init.runtime_directory=context_.directory; init.log_file=context_.directory/"debug"/"ngx_dlss5.log";
+            init.runtime_directory=context_.directory; 
+            if(!public_release())init.log_file=context_.directory/"debug"/"ngx_dlss5.log";   // a release client writes no NGX log file
             std::string reason;
             runtime_=Dlss5Runtime::open(context_.backend ? context_.backend() : make_ngx_backend(),init,reason);
             if (!runtime_) { open_failed_=true; fail(reason); return false; }

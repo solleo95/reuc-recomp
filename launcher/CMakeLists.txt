@@ -77,6 +77,7 @@ find_package(Vulkan 1.3 REQUIRED)
 target_link_libraries(uc_imgui_vulkan PUBLIC uc_imgui Vulkan::Vulkan)
 # The launcher's look and fonts, shared with the in-game settings menu (uc.exe).
 add_library(uc_ui_style STATIC graphite_style.cpp ui_fonts.cpp dlss5_panel.cpp)
+target_link_libraries(uc_ui_style PRIVATE uc_public_release)
 target_include_directories(uc_ui_style PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)   # dlss5_panel draws the table of renderer/dlss5_settings.h
 target_link_libraries(uc_ui_style PUBLIC uc_imgui)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
@@ -86,7 +87,7 @@ add_library(uc_update_ui STATIC update_ui.cpp)
 target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale uc_imgui)
 target_compile_definitions(uc_update_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(uc_launcher WIN32 main.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-target_link_libraries(uc_launcher PRIVATE uc_update_ui)
+target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_public_release)
 set(uc_launcher_libraries uc_binding_editor uc_launch uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
 target_link_libraries(uc_launcher PRIVATE ${uc_launcher_libraries})
 add_executable(test_launcher_update_bootstrap WIN32 ${CMAKE_SOURCE_DIR}/tests/test_launcher_update_bootstrap.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
@@ -104,5 +105,6 @@ add_custom_command(TARGET uc_launcher POST_BUILD
 install(TARGETS uc_launcher RUNTIME DESTINATION .)
 add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-atlas.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-atlas.png)
-install(FILES ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-atlas.png DESTINATION assets/launcher)
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-brand.png)
+install(FILES ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png DESTINATION assets/launcher)

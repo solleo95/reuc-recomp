@@ -1,5 +1,6 @@
 #include "game_mods.h"
 #include "diagnostic_log.h"
+#include "public_release.h"
 #include "arc/u8.h"
 #include "audio/brstm.h"
 #include "mod_guest_call.h"
@@ -182,6 +183,7 @@ void GameMods::log(std::string_view mod_id, std::string_view line) {
     if (written > kMaxLinesPerMod + 1) return;
     const std::string text = written > kMaxLinesPerMod ? "log limit reached (" + std::to_string(kMaxLinesPerMod) + " lines): further lines of this mod are dropped" : std::string(line);
     std::fprintf(stderr, "[mod %.*s] %s\n", int(mod_id.size()), mod_id.data(), text.c_str());
+    if (public_release()) return;   // a release client writes no mod log file
     if (!log_file_.is_open()) {
         std::error_code error;
         const auto dir=diagnostic_directory().empty() ? exe_dir_/"logs" : diagnostic_directory();

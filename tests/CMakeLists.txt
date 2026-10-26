@@ -1,6 +1,6 @@
 add_library(test_support STATIC mmio_stub.cpp)
 add_executable(test_updater_window test_updater_window.cpp ${CMAKE_SOURCE_DIR}/updater/app.manifest)
-target_link_libraries(test_updater_window PRIVATE uc_update_process shell32 user32 gdi32 dwmapi)
+target_link_libraries(test_updater_window PRIVATE uc_update_process uc_launcher_locale shell32 user32 gdi32 dwmapi)
 target_compile_definitions(test_updater_window PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_test(NAME test_updater_window COMMAND test_updater_window)
 add_executable(test_update_ui test_update_ui.cpp)

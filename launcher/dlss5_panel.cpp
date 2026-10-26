@@ -1,4 +1,5 @@
 #include "dlss5_panel.h"
+#include "public_release.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
@@ -119,7 +120,7 @@ bool dlss5_panel(Dlss5Settings& settings, const Dlss5Ui& ui, const Dlss5PanelHoo
     section(Dlss5Section::main,nullptr);
     section(Dlss5Section::scaling,"dlss5_section_scaling");
     section(Dlss5Section::advanced,"dlss5_section_advanced");
-    if(ImGui::CollapsingHeader(hooks.tr("dlss5_section_debug"),ImGuiTreeNodeFlags_DefaultOpen)) {
+    if(!public_release() && ImGui::CollapsingHeader(hooks.tr("dlss5_section_debug"),ImGuiTreeNodeFlags_DefaultOpen)) {   // a release client has no debug folder to open
         ImGui::Dummy({0,style.ItemSpacing.y*.4f});
         if(ImGui::Button(hooks.tr("dlss5_open_debug"),{control,0}) && hooks.open_debug) hooks.open_debug();
         if(hooks.track) hooks.track("##d5-open-debug");

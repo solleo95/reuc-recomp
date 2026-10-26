@@ -926,7 +926,8 @@ def _record_500_bytes(g):
     import importlib.util
     import os
     from pathlib import Path
-    candidates = [os.environ.get("UC_GAME_DIR"), r"S:\Games\Umbrella Chronicles\game", str(g.exe.parent / "game")]
+    from .client import localenv
+    candidates = [os.environ.get("UC_GAME_DIR"), str(localenv.game_dir() or ""), str(g.exe.parent / "game")]
     for folder in candidates:
         path = Path(folder or "") / "DATA" / "files" / "Data" / "message" / "mes_us.txtres"
         if folder and path.exists():
@@ -970,7 +971,8 @@ def _game_files_dir():
     """<game folder>/DATA/files/Data of the owner's install (UC_GAME_DIR, the usual place, or next to the exe), or None."""
     import os
     from pathlib import Path
-    for folder in (os.environ.get("UC_GAME_DIR"), r"S:\Games\Umbrella Chronicles\game"):
+    from .client import localenv
+    for folder in (os.environ.get("UC_GAME_DIR"), str(localenv.game_dir() or "")):
         path = Path(folder or "") / "DATA" / "files" / "Data"
         if folder and (path / ARC_FILE).exists():
             return path

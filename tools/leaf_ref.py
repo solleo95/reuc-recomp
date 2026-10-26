@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def reference_generation():
     out = ROOT / "build" / "leaf_ref"
-    install = Path(os.environ.get("UC_INSTALL_DIR", r"S:\Games\Umbrella Chronicles"))
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import localenv
+    install = localenv.install_dir() or sys.exit(localenv.NOT_SET)
     dol = install / "game" / "DATA" / "sys" / "main.dol"
     translator = ROOT / "build" / "tools" / "translator" / "translator.exe"
     cfg = ROOT / "project" / "uc.cfg"

@@ -6,14 +6,18 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 from .transport import PipeTransport
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import localenv  # noqa: E402  (reads local.env into the environment)
+
 ROOT = Path(__file__).resolve().parents[2]
-LIVE_SAVES = Path(r"S:\Games\Umbrella Chronicles\saves")
+LIVE_SAVES = localenv.saves_dir()   # None until UC_INSTALL_DIR is set
 # Tests start from a pinned snapshot, not the live saves: the owner plays on those, and a mid-chapter checkpoint or another progress state changes the
 # intro, the loading and the menu flow (and with it every recorded demo). UC_SAVE_SOURCE overrides; without a snapshot the live saves are copied.
 PINNED_SAVES = Path(__file__).resolve().parents[2] / "build" / "autotest" / "saves-pinned"
@@ -112,7 +116,10 @@ class Game:
         pin = guest_cpu_args(self.game_args)
         saves = self.run_dir / "saves"
         if not saves.exists():
-            shutil.copytree(self.saves or SAVE_SOURCE, saves)
+            source = self.saves or SAVE_SOURCE
+            if source is None:
+                raise SystemExit(localenv.NOT_SET)
+            shutil.copytree(source, saves)
         config = self.run_dir / "config.json"   # the in-game menu saves settings: a run writes its own copy, never the dist config
         if not config.exists() and (self.exe.parent / "config.json").exists():
             shutil.copyfile(self.exe.parent / "config.json", config)
@@ -127,6 +134,12 @@ class Game:
                 "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
         if "--config" not in self.game_args:   # no dist config: the game starts from defaults and saves its first change here
             args.extend(["--config", str(config)])
+        if "--game" not in self.game_args:   # the game's own default is "game" next to the exe, which a dev build folder lacks
+            beside = Path(self.exe).parent / "game"
+            game = os.environ.get("UC_GAME_DIR") or (beside if beside.is_dir() else localenv.game_dir())
+            if game is None:
+                raise SystemExit(localenv.NOT_SET)
+            args.extend(["--game", str(game)])
         if "--window-mode" not in self.game_args:
             args.extend(["--window-mode", "windowed"])   # saved borderless settings must not cover the owner's desktop during tests
         if self.skip_intro:

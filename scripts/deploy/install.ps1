@@ -2,12 +2,19 @@ param([Parameter(Mandatory)][string]$Stage,[Parameter(Mandatory)][string]$Suffix
 # Copies the files listed in $Stage\changed.json (relative to dist\) and $Stage\release.json to dist-raw, dist-release and the laptop.
 # All targets are checked for locks and backed up (.before-$Suffix) first; any failure restores what was replaced.
 $ErrorActionPreference = 'Stop'
-$root = 'D:\Projects\Native Ports\Umbrella-chronicles-recomp'
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $destinations = @(
     @{ Root = (Join-Path $root 'dist-raw'); Remote = $false },
-    @{ Root = (Join-Path $root 'dist-release'); Remote = $false },
-    @{ Root = '\\192.168.50.170\dist-raw'; Remote = $true }
+    @{ Root = (Join-Path $root 'dist-release'); Remote = $false }
 )
+# More folders to update (a laptop's share): UC_DEPLOY_EXTRA in local.env or the environment, ";" separates several.
+$extra = $env:UC_DEPLOY_EXTRA
+$localEnv = Join-Path $root 'local.env'
+if (-not $extra -and (Test-Path -LiteralPath $localEnv)) {
+    $line = Get-Content -LiteralPath $localEnv | Where-Object { $_ -like 'UC_DEPLOY_EXTRA=*' } | Select-Object -First 1
+    if ($line) { $extra = $line.Substring('UC_DEPLOY_EXTRA='.Length).Trim() }
+}
+foreach ($folder in @($extra -split ';' | Where-Object { $_ })) { $destinations += @{ Root = $folder; Remote = $true } }
 $changed = @(Get-Content -Raw (Join-Path $Stage 'changed.json') | ConvertFrom-Json)
 $files = @(foreach ($relative in $changed) {
     $name = $relative -replace '/','\'

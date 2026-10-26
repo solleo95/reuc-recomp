@@ -5,13 +5,14 @@ its source line (`ppc::op_lwz`, a branch, a call, ...) and to the innermost inli
 Samples in the runtime or in HLE functions are reported as one lump."""
 import collections
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import localenv
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-SYMBOLIZER = shutil.which("llvm-symbolizer") or "C:/Program Files/LLVM/bin/llvm-symbolizer.exe"
+SYMBOLIZER = localenv.llvm_tool("llvm-symbolizer")
 BASE = 0x140000000
 samples, exe = sys.argv[1], sys.argv[2]
 top = int(sys.argv[3]) if len(sys.argv) > 3 else 25

@@ -1,9 +1,11 @@
 """python scripts/resolve_cpu_samples.py <cpu-samples.txt> <uc.exe built with /Z7 + pdb> [top]
 Self and inclusive time per function, plus the hottest source lines (llvm-symbolizer). Sample file: "rva rva ... = count" per distinct stack."""
-import collections, shutil, subprocess, sys
+import collections, subprocess, sys
+
+import localenv
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-SYMBOLIZER = shutil.which("llvm-symbolizer") or "C:/Program Files/LLVM/bin/llvm-symbolizer.exe"
+SYMBOLIZER = localenv.llvm_tool("llvm-symbolizer")
 BASE = 0x140000000
 exe, top = sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 40
 stacks = []

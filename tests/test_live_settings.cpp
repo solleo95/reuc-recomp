@@ -11,7 +11,7 @@
 namespace fs=std::filesystem;
 int main() {
     const auto path=fs::temp_directory_path()/("uc-live-settings-"+std::to_string(GetCurrentProcessId())+".json");
-    { std::ofstream(path,std::ios::binary) << R"({"game":"S:/Games/Test/game","graphics":{"render_scale":0,"bloom":true,"upscaler":"dlss","upscale_mode":"quality","frame_generation":true,"frame_generation_multiplier":3}})"; }
+    { std::ofstream(path,std::ios::binary) << R"({"game":"C:/Games/Test/game","graphics":{"render_scale":0,"bloom":true,"upscaler":"dlss","upscale_mode":"quality","frame_generation":true,"frame_generation_multiplier":3}})"; }
     std::vector<std::string> calls;
     uc::SettingsTargets targets;
     targets.render_scale=[&](double){ calls.push_back("render_scale"); };

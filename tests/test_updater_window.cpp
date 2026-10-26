@@ -22,17 +22,24 @@ int main(int argc,char** argv) {
         auto dc=GetDC(window),memory=CreateCompatibleDC(dc);
         auto bitmap=CreateCompatibleBitmap(dc,area.right,area.bottom);CHECK(bitmap && memory);
         auto old=SelectObject(memory,bitmap);
-        for(bool russian:{false,true}) for(bool recover:{false,true}) {
-            state.russian=russian;state.recover=recover;
+        for(const auto& language:uc::launcher::languages()) for(bool recover:{false,true}) {
+            const std::string code(language.code);
+            state.updating=tr(code,"updater_updating");state.restoring=tr(code,"updater_restoring");
+            state.wait=tr(code,"updater_wait");state.failsafe=tr(code,"updater_failsafe");state.recover=recover;
             SendMessageW(window,WM_PRINTCLIENT,reinterpret_cast<WPARAM>(memory),PRF_CLIENT);
             CHECK(GetPixel(memory,0,0)==RGB(28,33,34));
-            auto old_font=SelectObject(memory,state.heading);
-            RECT text_area{0,0,state.px(496),0};
-            auto title=recover?(russian?L"Восстанавливаем клиент":L"Restoring your client"):
-                (russian?L"Обновляем клиент":L"Updating your client");
-            CHECK(DrawTextW(memory,title,-1,&text_area,DT_CALCRECT|DT_WORDBREAK)>0);
-            CHECK(text_area.bottom<=state.px(36));SelectObject(memory,old_font);
-            if(argc==2 && dpi==120 && russian && !recover) {
+            // Every text of every language fits the box it is drawn in (the window draws with DT_WORDBREAK and does not scroll).
+            const auto fits=[&](HFONT font,const std::wstring& text,int height) {
+                auto old_font=SelectObject(memory,font);
+                RECT text_area{0,0,state.px(496),0};
+                CHECK(DrawTextW(memory,text.c_str(),-1,&text_area,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX)>0);
+                SelectObject(memory,old_font);
+                return text_area.bottom<=state.px(height);
+            };
+            CHECK(fits(state.heading,recover ? state.restoring : state.updating,36));
+            CHECK(fits(state.body,state.wait,48));
+            CHECK(fits(state.caption,state.failsafe,28));
+            if(argc==2 && dpi==120 && code=="ru" && !recover) {
                 SelectObject(memory,old);
                 BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=area.right;
                 info.bmiHeader.biHeight=-area.bottom;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
@@ -48,5 +55,5 @@ int main(int argc,char** argv) {
         SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(window,dc);
     }
     SendMessageW(window,WM_CLOSE,0,0);CHECK(IsWindow(window));CHECK(DestroyWindow(window));
-    std::puts("updater window: 100/125/150/200% DPI, RU/EN, restore, repaint and close guard passed");
+    std::puts("updater window: 100/125/150/200% DPI, all 13 languages, restore, repaint and close guard passed");
 }

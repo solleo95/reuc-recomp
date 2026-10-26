@@ -9,7 +9,7 @@ add_library(uc_update_process STATIC process.cpp)
 target_link_libraries(uc_update_process PUBLIC uc_update_core uc_client_update_lock uc_windows_args)
 target_compile_definitions(uc_update_process PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(uc_updater WIN32 main.cpp app.manifest ${CMAKE_SOURCE_DIR}/assets/app.rc)
-target_link_libraries(uc_updater PRIVATE uc_update_process shell32 user32 gdi32 dwmapi)
+target_link_libraries(uc_updater PRIVATE uc_update_process uc_launcher_locale shell32 user32 gdi32 dwmapi)   # uc_launcher_locale: the window's texts in the launcher's language
 target_compile_definitions(uc_updater PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_options(uc_updater PRIVATE /DEPENDENTLOADFLAG:0xA00)
 install(TARGETS uc_updater RUNTIME DESTINATION .)

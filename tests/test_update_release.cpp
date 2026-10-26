@@ -37,7 +37,7 @@ int main() {
     CHECK(failed(validate_managed_path(std::string("a\0b",3))));
     CHECK(failed(validate_managed_path(std::string("a\xff",2))));
     CHECK(!failed(validate_managed_path("data/shaders/example.spv")));
-    CHECK(!failed(validate_managed_path("assets/launcher/graphite-atlas.png")));
+    CHECK(!failed(validate_managed_path("assets/launcher/graphite-train.png")));
     CHECK(ok(path_key("Data/A.dll")) == ok(path_key("data/a.DLL")));
     CHECK(ok(path_key("\xd0\xa4.dll")) == ok(path_key("\xd1\x84.DLL")));
     auto good = manifest();

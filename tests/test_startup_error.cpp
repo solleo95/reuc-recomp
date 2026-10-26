@@ -8,6 +8,8 @@ int main() {
     CHECK(message->find("game-123")!=std::string::npos);
     const auto utf8=logs.u8string();
     CHECK(message->find(std::string(utf8.begin(),utf8.end()))!=std::string::npos);
+    const auto without_logs=uc::startup_error_message(options,"Vulkan device initialization failed",{});   // the public release writes no logs
+    CHECK(without_logs && without_logs->find("Vulkan device initialization failed")!=std::string::npos && without_logs->find("Diagnostic logs")==std::string::npos);
     for(int mode=0;mode<6;++mode) {
         options={};
         if(mode==0)options.features=true;

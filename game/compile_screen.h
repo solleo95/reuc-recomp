@@ -7,7 +7,7 @@ namespace uc {
 // It stays hidden for the first 400 ms, so a start with a warm driver cache never flashes it.
 class CompileScreen {
 public:
-    CompileScreen();
+    explicit CompileScreen(std::string_view language);   // the launcher's language code (launcher/localization.h)
     ~CompileScreen();
     CompileScreen(const CompileScreen&)=delete;
     CompileScreen& operator=(const CompileScreen&)=delete;

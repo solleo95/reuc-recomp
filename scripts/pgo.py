@@ -5,6 +5,8 @@ set, and merges the raw profiles into project/pgo/uc.profdata. Normal builds the
 import argparse, glob, os, shutil, subprocess, sys
 from pathlib import Path
 
+import localenv
+
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build-pgo-gen"
 PROFILES = BUILD / "profiles"
@@ -39,7 +41,7 @@ def main():
     raw = glob.glob(str(PROFILES / "*.profraw"))
     if not raw:
         sys.exit("no raw profiles were written")
-    llvm_profdata = r"C:\Program Files\LLVM\bin\llvm-profdata.exe"
+    llvm_profdata = localenv.llvm_tool("llvm-profdata")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([llvm_profdata, "merge", "--sparse", "-o", str(OUT), *raw], check=True)
     staged.unlink(missing_ok=True)

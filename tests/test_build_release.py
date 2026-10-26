@@ -45,7 +45,7 @@ class ReleaseTests(unittest.TestCase):
             stage = Path(args[args.index("--prefix") + 1])
             stage.mkdir(parents=True, exist_ok=True)
             files = ["uc.exe", "uc_launcher.exe", "uc_updater.exe", "msvcp140.dll", "data/uc.map",
-                     "data/shaders/test.spv", "assets/launcher/graphite-atlas.png"]
+                     "data/shaders/test.spv", "assets/launcher/graphite-train.png", "assets/launcher/graphite-brand.png"]
             for name in files:
                 path = stage / name
                 path.parent.mkdir(parents=True, exist_ok=True)

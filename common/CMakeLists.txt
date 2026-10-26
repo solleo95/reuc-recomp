@@ -17,6 +17,8 @@ target_include_directories(uc_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_input_prompts STATIC input_prompts.cpp)
 target_include_directories(uc_input_prompts PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_input_prompts PUBLIC uc_input)
+add_library(uc_public_release INTERFACE)   # public_release.h: a release client writes no logs or debug files
+target_include_directories(uc_public_release INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 include(FetchContent)
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 set(json_archive "https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz")

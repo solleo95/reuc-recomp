@@ -1,4 +1,5 @@
 #include "binding_editor.h"
+#include "public_release.h"
 #include "launch.h"
 #include "cpu_calibration.h"
 #include "options_config.h"
@@ -60,7 +61,8 @@ struct Ui {
     SDL_Window* window=nullptr;SDL_Renderer* renderer=nullptr;
     bool context=false,platform=false,backend=false;
     uc::ui::Fonts fonts;
-    SDL_Texture* banner=nullptr;
+    SDL_Texture* banner=nullptr;   // assets/launcher/graphite-train.png: the header
+    SDL_Texture* brand=nullptr;    // assets/launcher/graphite-brand.png: the sidebar logo (0,0)-(342,446) and the company footer (0,446)-(304,502)
     ImFont* sans=nullptr;
     ImFont* serif=nullptr;
     std::string artwork_error;
@@ -68,7 +70,7 @@ struct Ui {
         if(backend)ImGui_ImplSDLRenderer3_Shutdown();
         if(platform)ImGui_ImplSDL3_Shutdown();
         if(context)ImGui::DestroyContext();
-        SDL_DestroyTexture(banner);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
+        SDL_DestroyTexture(brand);SDL_DestroyTexture(banner);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
     }
     void init(bool diagnostic) {
         if(!SDL_Init(SDL_INIT_VIDEO))throw std::runtime_error(SDL_GetError());
@@ -108,8 +110,10 @@ struct Ui {
         platform=ImGui_ImplSDL3_InitForSDLRenderer(window,renderer);
         backend=ImGui_ImplSDLRenderer3_Init(renderer);
         if(!platform || !backend)throw std::runtime_error("ImGui backend initialization failed");
-        try {banner=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-atlas.png");}
-        catch(const std::exception& e) {artwork_error=e.what();std::fprintf(stderr,"launcher artwork: %s\n",e.what());}
+        try {
+            banner=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-train.png");
+            brand=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-brand.png");
+        } catch(const std::exception& e) {artwork_error=e.what();std::fprintf(stderr,"launcher artwork: %s\n",e.what());}
         if(diagnostic) {
             auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
             if(!hwnd)throw std::runtime_error("launcher window handle unavailable");
@@ -127,9 +131,16 @@ struct Ui {
         const bool saved=SDL_SaveBMP(surface,utf8(path).c_str());SDL_DestroySurface(surface);
         if(!saved)throw std::runtime_error(SDL_GetError());
     }
-    void art(ImDrawList& draw,ImVec2 at,ImVec2 size,ImVec2 source,ImVec2 end) {
-        if(banner)draw.AddImage((ImTextureID)(intptr_t)banner,at,{at.x+size.x,at.y+size.y},
-            {source.x/banner->w,source.y/banner->h},{end.x/banner->w,end.y/banner->h});
+    void art(SDL_Texture* texture,ImDrawList& draw,ImVec2 at,ImVec2 size,ImVec2 source,ImVec2 end) {
+        if(texture)draw.AddImage((ImTextureID)(intptr_t)texture,at,{at.x+size.x,at.y+size.y},
+            {source.x/texture->w,source.y/texture->h},{end.x/texture->w,end.y/texture->h});
+    }
+    // The header fills its area like CSS "cover": the whole picture scaled to touch both sides, the overflow cut off equally at the edges.
+    void cover(ImDrawList& draw,ImVec2 at,ImVec2 size) {
+        if(!banner || size.x<=0 || size.y<=0)return;
+        const float width=float(banner->w),height=float(banner->h),wanted=size.x/size.y;
+        if(wanted>width/height) {const float shown=width/wanted;art(banner,draw,at,size,{0,(height-shown)/2},{width,(height+shown)/2});}
+        else {const float shown=height*wanted;art(banner,draw,at,size,{(width-shown)/2,0},{(width+shown)/2,height});}
     }
 };
 std::string active_language="en";
@@ -196,7 +207,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     uc::Options diagnostic;
     if(!smoke_exe.empty()) {
         diagnostic.test_control=fs::absolute(smoke/L"control.txt");diagnostic.save_root=fs::absolute(smoke/L"saves");
-        fs::copy(L"S:/Games/Umbrella Chronicles/saves",diagnostic.save_root,fs::copy_options::recursive|fs::copy_options::skip_existing);
+        const char* source=std::getenv("UC_SAVE_SOURCE");   // else the saves next to the launcher
+        const fs::path saves=source ? fs::u8path(source) : directory/L"saves";
+        std::error_code saves_error;
+        if(fs::is_directory(saves,saves_error))fs::copy(saves,diagnostic.save_root,fs::copy_options::recursive|fs::copy_options::skip_existing);
     }
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
     std::string error;bool blocked=false;
@@ -460,7 +474,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         background->AddRectFilledMultiColor({sidebar,0},available,IM_COL32(25,29,30,255),IM_COL32(19,23,24,255),IM_COL32(15,19,20,255),IM_COL32(22,26,27,255));
         ImGui::BeginChild("sidebar",{sidebar,0},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         auto* draw=ImGui::GetWindowDrawList();
-        if(ui.banner)ui.art(*draw,{0,0},{sidebar,std::round(446*unit)},{17,75},{359,521});
+        if(ui.brand)ui.art(ui.brand,*draw,{0,0},{sidebar,std::round(446*unit)},{0,0},{342,446});
         else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
         const char* sections[]={"game","graphics","controls","audio"};
         ImGui::SetCursorPos({6*unit,455*unit});
@@ -494,7 +508,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::EndCombo();
         }
         ImGui::PopFont();active_language=language=="system" ? system_language : language;
-        if(ui.banner)ui.art(*draw,{20*unit,available.y-67*unit},{304*unit,56*unit},{36,902},{340,958});
+        if(ui.brand)ui.art(ui.brand,*draw,{20*unit,available.y-67*unit},{304*unit,56*unit},{0,446},{304,502});
         ImGui::EndChild();ImGui::SetCursorPos({sidebar,0});
         ImGui::BeginChild("main",{0,0},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         const auto main_size=ImGui::GetContentRegionAvail();
@@ -504,8 +518,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             // Give the binding editor the full height; artwork stays in the sidebar.
         } else if(ui.banner) {
             auto at=ImGui::GetCursorScreenPos();
-            const float source_top=page==2 ? 130.f : 75.f,source_bottom=page==2 ? 226.f : 307.f;
-            ui.art(*ImGui::GetWindowDrawList(),at,{main_size.x,hero_height},{360,source_top},{1520,source_bottom});
+            ui.cover(*ImGui::GetWindowDrawList(),at,{main_size.x,hero_height});
             ImGui::Dummy({main_size.x,hero_height});
         } else {ImGui::TextWrapped("%s",tr("artwork"));ImGui::Dummy({0,hero_height-ImGui::GetTextLineHeightWithSpacing()});}
         auto* main_draw=ImGui::GetWindowDrawList();
@@ -1166,7 +1179,7 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         }
         auto session=uc::enter_client_session(executable_dir(),resume?std::optional{resume->ticket}:std::nullopt);
         if(auto* error=std::get_if<std::error_code>(&session)) throw std::runtime_error("Client is updating or requires recovery: "+error->message());
-        diagnostics.emplace("launcher",executable_dir()/L"logs");
+        if(!uc::public_release())diagnostics.emplace("launcher",executable_dir()/L"logs");   // a release client writes no logs
         result=run(resume?1:count,arguments,resume?&*resume:nullptr);
     } catch(const std::exception& e) {
         std::fprintf(stderr,"launcher failed: %s\n",e.what());
