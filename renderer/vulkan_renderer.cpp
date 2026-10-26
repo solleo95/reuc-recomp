@@ -1759,12 +1759,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (overlay_frame && !reticle_layer_ready()) return false;
     if (layer_on && !overlay_frame) ensure_held_frame();
     const bool hold=layer_on && !overlay_frame && packet.present && display && !packet.black_output && held_.image;   // this frame is kept, not presented: the overlay frame after it is
-    if (layer_on && !overlay_frame) for (const auto& draw:packet.draws) if (draw.layer) frame_reticle_.push_back(draw);
     reap_retired(false);
     Slot& slot = slots_[next_slot_];
     VkResult fence_status = vkGetFenceStatus(device, slot.fence);
     if (fence_status == VK_NOT_READY) return false;
     vk_check(fence_status, "frame slot fence");
+    const size_t reticle_before=frame_reticle_.size();
+    if (layer_on && !overlay_frame) for (const auto& draw:packet.draws) if (draw.layer) frame_reticle_.push_back(draw);   // after every early return: a packet that is retried must not be counted twice
     collect();   // after the check: a fence that finishes between an earlier collect() and the check would be reused unreported and its packet would never complete
     slot.copy_sources.clear();
     slot.mesh_refs.clear();   // the submission that used these meshes completed (fence checked above)
@@ -2077,6 +2078,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             motion_cleared_=upscale_before.motion_cleared; gbuffer_cleared_=upscale_before.gbuffer_cleared; reset_next_=upscale_before.reset_next; jitter_=upscale_before.jitter; whole_frame_upscales_=upscale_before.whole_frame_upscales; frame_projection_=upscale_before.frame_projection; shadow_fit_=upscale_before.shadow_fit; shadow_cleared_=upscale_before.shadow_cleared;
             rt_material_cleared_=upscale_before.rt_material_cleared; rt_record_slot_=upscale_before.rt_record_slot; rt_record_count_=upscale_before.rt_record_count;
             tracker_.rollback(upscale_before.tracker);
+            frame_reticle_.resize(reticle_before);
             return false;
         }
         if (acquired == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;   // stale swapchain while the window is resized: the frame is rendered but not shown, the guest must not wait for the rebuild
@@ -2450,6 +2452,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         barrier(slot.command,held_.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
         held_.image_ready=true; held_.valid=true; held_.presented=false; held_.display_source=display_source;
         held_.draws=std::move(frame_reticle_); frame_reticle_.clear();
+        if (std::getenv("UC_RETICLE_DUMP")) { static std::map<size_t,uint64_t> counts; ++counts[held_.draws.size()]; static uint64_t holds=0; if ((++holds%200)==0) { std::fprintf(stderr,"[reticle-layer] reticle draws per held frame:"); for (const auto& [n,c]:counts) std::fprintf(stderr," %zu x%llu",n,(unsigned long long)c); std::fprintf(stderr,"\n"); } }
     } else if (overlay_frame) {   // the held picture again, the reticle drawn over it where the mouse is now
         const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
         barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2588,6 +2591,10 @@ void VulkanRenderer::destroy_held_frame() {   // the device is idle or every slo
 }
 bool VulkanRenderer::render_overlay(uint64_t serial) {
     if (!reticle_layer_ready()) return false;
+    // The overlay frames share the slot ring with the game's packets and come far more often: they leave the next two slots to the packets (a slow GPU
+    // would otherwise keep every slot busy with reticle frames and the simulation would wait for one).
+    for (size_t k=0;k<2 && k<slots_.size();++k)
+        if (vkGetFenceStatus(device,slots_[(next_slot_+k)%slots_.size()].fence)==VK_NOT_READY) return false;
     gx::FramePacket packet;
     packet.serial=serial; packet.present=true; packet.clear_after_copy=false; packet.display_source=held_.display_source; packet.overlay_only=true;
     for (const auto& draw:held_.draws) packet.draws.push_back(draw);

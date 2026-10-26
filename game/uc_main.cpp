@@ -630,7 +630,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             static const bool finish_at_submit=(!deterministic || network) && !std::getenv("UC_FINISH_AT_GPU");
             if (finish_at_submit && !packets.detached()) uc::gx_completed(pending_serial);
             uint64_t shown_serial=pending_serial;   // what a debug capture reads: with the reticle layer, the overlay frame that presents this packet's picture
-            if (network && renderer.reticle_layer_ready() && !renderer.held_presented() && renderer.render_overlay(render_serial+1)) shown_serial=++render_serial;
+            if (network && renderer.reticle_layer_ready() && !renderer.held_presented() && renderer.render_overlay(render_serial+1)) {
+                shown_serial=++render_serial;
+                // This present is one of the refresh slots: when the next idle slot is due within half a period, it is this one, so the presents keep the display's rate instead of
+                // the display's rate plus one per tick.
+                if (const auto at=std::chrono::steady_clock::now(); overlay_due<=at+overlay_period/2) overlay_due=std::max(overlay_due+overlay_period,at+overlay_period/2);
+            }
             packet_dump.packet(*pending);
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
