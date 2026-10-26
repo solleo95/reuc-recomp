@@ -4,10 +4,18 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 namespace uc {
 namespace {
 constexpr std::array<std::string_view,5> kUpscalerNames{"off","dlss","fsr","blit","smaa"};
 constexpr std::array<std::string_view,5> kUpscaleModeNames{"native","quality","balanced","performance","ultra_performance"};
+}
+std::filesystem::path default_game_folder() {
+    std::wstring value(32768,L'\0');
+    value.resize(GetModuleFileNameW(nullptr,value.data(),DWORD(value.size())));
+    return std::filesystem::path(value).parent_path()/"game";
 }
 std::optional<UpscalerKind> upscaler_from_name(std::string_view name, bool allow_test) {
     for (size_t i = 0; i < kUpscalerNames.size(); ++i)

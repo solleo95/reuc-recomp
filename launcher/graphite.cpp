@@ -59,13 +59,18 @@ void draw_navigation_icon(ImDrawList& draw,int icon,ImVec2 at,float size,unsigne
     auto p=[&](float x,float y){return ImVec2{at.x+x*s,at.y+y*s};};
     auto line=[&](float x,float y,float a,float b){draw.AddLine(p(x,y),p(a,b),color,stroke);};
     if(icon==0) {
-        draw.PathLineTo(p(7,6));draw.PathLineTo(p(23,6));
-        draw.PathBezierCubicCurveTo(p(27,6),p(31,24),p(26,25));
-        draw.PathBezierCubicCurveTo(p(23,26),p(21,20),p(19,20));draw.PathLineTo(p(11,20));
-        draw.PathBezierCubicCurveTo(p(9,20),p(7,26),p(4,25));
-        draw.PathBezierCubicCurveTo(p(-1,24),p(3,6),p(7,6));draw.PathStroke(color,ImDrawFlags_Closed,stroke);
-        line(6,13,12,13);line(9,10,9,16);
-        draw.AddCircleFilled(p(22,11),1.5f*s,color);draw.AddCircleFilled(p(25,15),1.5f*s,color);
+        // gamepad: wide body with two rounded grips, d-pad on the left, two buttons on the right
+        draw.PathLineTo(p(9,7));draw.PathLineTo(p(21,7));
+        draw.PathBezierCubicCurveTo(p(26,7),p(29,11),p(28.5,19));
+        draw.PathBezierCubicCurveTo(p(28.2,22.5),p(25.5,24),p(23.5,21.5));
+        draw.PathLineTo(p(21.5,18.5));
+        draw.PathBezierCubicCurveTo(p(20.8,17.6),p(20,17.5),p(19,17.5));draw.PathLineTo(p(11,17.5));
+        draw.PathBezierCubicCurveTo(p(10,17.5),p(9.2,17.6),p(8.5,18.5));
+        draw.PathLineTo(p(6.5,21.5));
+        draw.PathBezierCubicCurveTo(p(4.5,24),p(1.8,22.5),p(1.5,19));
+        draw.PathBezierCubicCurveTo(p(1,11),p(4,7),p(9,7));draw.PathStroke(color,ImDrawFlags_Closed,stroke);
+        line(6.5,12,11.5,12);line(9,9.5,9,14.5);
+        draw.AddCircleFilled(p(20.5,10.5),1.4f*s,color);draw.AddCircleFilled(p(23,13.5),1.4f*s,color);
     } else if(icon==1) {
         draw.AddRect(p(2,3),p(28,22),color,1*s,0,stroke);line(15,22,15,27);line(8,28,22,28);
     } else if(icon==2) {

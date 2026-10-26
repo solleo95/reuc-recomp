@@ -323,7 +323,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             io.AddMousePosEvent(-100,-100);
             std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{48,"clear1"},
                 {80,"controls"},{84,"style"},{88,"style3"},{98,"style"},{102,"style2"},{110,"general"},
-                {366,"game"},{374,"audio"},{382,"controls"},{390,"general"},
+                {366,"game"},{382,"controls"},{390,"general"},
                 {400,"window"},{404,"mode1"},{410,"scale"},{414,"scale1.5"},{418,"fps"},{422,"fps144"},{426,"framegen"},{430,"framegen-dlss"},
                 {434,"framegen"},{438,"framegen-off"},{442,"framegen"},{446,"framegen-fsr"},{450,"framegen"},{454,"framegen-off"},
                 {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"}};
@@ -478,7 +478,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
         const char* sections[]={"game","graphics","controls","audio"};
         ImGui::SetCursorPos({6*unit,455*unit});
-        for(int i=0;i<4;++i) {
+        constexpr int kNavigationTabs=3;   // the Sound tab (index 3, page code below) is hidden; set to 4 to bring it back
+        for(int i=0;i<kNavigationTabs;++i) {
             ImGui::SetCursorPosX(std::round(6*unit));
             ImGui::PushID(i);auto p=ImGui::GetCursorScreenPos();
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
@@ -774,10 +775,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             push_font(ui.sans,22);
             ImGui::TextUnformatted(tr("style"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
-            const char* styles[]={tr("gray"),tr("cyan")};
+            const char* styles[]={tr("gray"),tr("cyan")};   // indexed by PromptStyle; listed cyan first (Style 1), gray second (Style 2)
             const bool style_combo=combo("##style",styles[size_t(options.prompt_style)]);track("style");
             if(style_combo) {
-                for(size_t i=0;i<2;++i) {if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i))options.prompt_style=uc::PromptStyle(i);track(i ? "style3" : "style2");}
+                for(size_t i=2;i-->0;) {if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i))options.prompt_style=uc::PromptStyle(i);track(i ? "style3" : "style2");}
                 ImGui::EndCombo();
             }
             ImGui::SameLine(0,25*unit);

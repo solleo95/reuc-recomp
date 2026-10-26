@@ -14,14 +14,15 @@
 #include <variant>
 namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
+std::filesystem::path default_game_folder();   // "game" next to the executable
 struct Options {
     std::optional<net::Endpoint> netplay;
     uint32_t net_tick=60;   // Simulation steps per second both players run in network play: 60 or 30 (the original rate).
-    std::filesystem::path game = "S:\\Games\\Umbrella Chronicles\\game";
+    std::filesystem::path game = default_game_folder();
     uint32_t width = 0, height = 0, seconds = 0; //0 resolves to the monitor size at startup.
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.
     WindowMode window_mode=WindowMode::windowed;
-    PromptStyle prompt_style=PromptStyle::monochrome;
+    PromptStyle prompt_style=PromptStyle::sculpted;   // cyan highlight ("Style 1"); monochrome is "Style 2"
     bool bloom=true;   // the glow around lights (graphics.bloom); the renderer's own bloom replaces the game's, off means no bloom at all
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }

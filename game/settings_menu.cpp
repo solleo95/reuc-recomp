@@ -189,15 +189,6 @@ void SettingsMenu::main_tab(float unit) {
     int crosshair=int(options.crosshair_scale);
     if(ImGui::SliderInt("##crosshair",&crosshair,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.crosshair_scale=uint32_t(std::clamp(crosshair,0,100));
     ImGui::PopItemWidth();
-    ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("other"));
-    compact_checkbox("##bloom",tr("bloom"),options.bloom,unit);
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
-    ImGui::BeginDisabled(!options.bloom);
-    ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr("bloom_strength"));
-    int bloom_strength=int(options.bloom_strength);
-    if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(kBloomStrengthMax)));
-    ImGui::EndDisabled();
-    ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("hdr"));
     compact_checkbox("##hdr",tr("hdr"),options.hdr.enabled,unit);
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hdr_hint"));
@@ -279,6 +270,13 @@ void SettingsMenu::effects_tab(float unit) {
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
+    ImGui::Dummy({0,6*unit});
+    compact_checkbox("##bloom",tr("bloom"),options.bloom,unit);
+    ImGui::BeginDisabled(!options.bloom);
+    ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr("bloom_strength"));
+    int bloom_strength=int(options.bloom_strength);
+    if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(kBloomStrengthMax)));
+    ImGui::EndDisabled();
     ImGui::PopItemWidth();
     ImGui::EndChild();
     pending_=options;
@@ -315,7 +313,7 @@ void SettingsMenu::controls_tab(float unit) {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     const char* styles[]={tr("gray"),tr("cyan")};
     if(ImGui::BeginCombo("##style",styles[size_t(options.prompt_style)])) {
-        for(size_t i=0;i<2;++i) if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i)) options.prompt_style=PromptStyle(i);
+        for(size_t i=2;i-->0;) if(ImGui::Selectable(styles[i],size_t(options.prompt_style)==i)) options.prompt_style=PromptStyle(i);   // cyan (Style 1) first
         ImGui::EndCombo();
     }
     {   // the three mouse pictures of the chosen style

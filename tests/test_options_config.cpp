@@ -3,7 +3,8 @@
 int main() {
     auto document=uc::parse_config(R"({"graphics":{"render_scale":2,"window_mode":"borderless","future_dlss":7},"skip_intro":true,"game":"C:/Games/Test/game"})");
     auto options=uc::options_from_config(document);
-    CHECK(options.prompt_style==uc::PromptStyle::monochrome);
+    CHECK(options.prompt_style==uc::PromptStyle::sculpted);   // absent: the default is the cyan style
+    CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{"prompt_style":"monochrome"}})")).prompt_style==uc::PromptStyle::monochrome);
     CHECK(options.bloom);   // absent: the game's own look
     CHECK(options.render_scale==2 && options.skip_intro && options.window_mode==uc::WindowMode::borderless);
     auto override=uc::parse_options(std::array<std::string_view,2>{"--render-scale","1.5"},options);

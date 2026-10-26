@@ -81,8 +81,8 @@ int main() {
         next.fps_limit=0u; live.apply(next); CHECK(saved().fps_limit==0u);
     }
     {   // render scale and prompt style
-        calls.clear(); auto next=live.options(); next.render_scale=2; next.prompt_style=uc::PromptStyle::sculpted; live.apply(next);
-        CHECK((calls==std::vector<std::string>{"render_scale","prompt_style"}) && saved().render_scale==2 && saved().prompt_style==uc::PromptStyle::sculpted);
+        calls.clear(); auto next=live.options(); next.render_scale=2; next.prompt_style=uc::PromptStyle::monochrome; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"render_scale","prompt_style"}) && saved().render_scale==2 && saved().prompt_style==uc::PromptStyle::monochrome);
     }
     {   // bindings
         calls.clear(); auto bindings=live.bindings(); bindings[size_t(uc::Action::fire)].clear(); live.apply(bindings);
