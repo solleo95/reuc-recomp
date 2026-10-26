@@ -2,7 +2,7 @@
 
 # Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
 
-**The Wii game running natively on Windows: unlocked FPS, mouse aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+**The Wii game running natively on Windows: very fast loading, unlocked FPS, mouse aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
 
 **English** · [Русский](README.ru.md)
 
@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/njy2CqecyY)
 [![Download](https://img.shields.io/badge/download-latest%20release-brightgreen)](https://github.com/solleo95/reuc-recomp/releases/latest)
 
-[Features](#features) · [Installation](#installation) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
+[Video](#gameplay-video) · [Features](#features) · [Installation](#installation) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
 
 <img src="assets/launcher/graphite-train.png" alt="The Ecliptic Express train at night" width="100%">
 
@@ -32,8 +32,15 @@ When you report a problem, please say what GPU, driver and Windows version you u
 > [!IMPORTANT]
 > **No game files are included and none will ever be.** This is not a piracy tool. You need your **own copy** of the game (a disc image of _Resident Evil: The Umbrella Chronicles_ for the Wii, region **NTSC-U, game ID `RBUE08`**), and you unpack it yourself with [Wit](https://wit.wiimm.de/wit/). See [Installation](#installation). The project is not affiliated with, endorsed by or connected to Capcom, Nintendo, NVIDIA or AMD.
 
+## Gameplay video
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=CSk3iaN37Rw"><img src="assets/readme/video.jpg" alt="Watch the gameplay video on YouTube" width="80%"></a>
+</p>
+
 ## Contents
 
+- [Gameplay video](#gameplay-video)
 - [Features](#features)
 - [System requirements](#system-requirements)
 - [Installation](#installation)
@@ -57,6 +64,7 @@ When you report a problem, please say what GPU, driver and Windows version you u
 
 - **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own Windows runtime and a Vulkan renderer instead of the Wii's GPU.
 - **High performance and unlocked FPS.** Frame-rate limit presets up to 240 FPS or no limit at all, instead of the original 30. The build uses ThinLTO and profile-guided optimisation, and the hot paths of the Wii SDK are replaced by native code.
+- **Very fast loading.** Scenes, menus and chapter changes load far quicker than on the console: the game's files are read straight from your drive by native code.
 - Shaders and pipelines are warmed up before the game starts, so shader compilation does not cause stutters during play.
 - Windowed, borderless and exclusive fullscreen modes, any resolution and an adjustable internal render scale.
 
@@ -277,8 +285,8 @@ Found something else? Tell us: [Reporting problems](#reporting-problems).
 
 ## Reporting problems
 
-- **Bugs and suggestions:** [GitHub Issues](https://github.com/solleo95/reuc-recomp/issues) (there is a form for bug reports).
-- **Questions, help and chat:** [Discord](https://discord.gg/njy2CqecyY).
+- **[GitHub Issues](https://github.com/solleo95/reuc-recomp/issues)** — bug reports (there is a form) and suggestions.
+- **[Discord](https://discord.gg/njy2CqecyY)** — bug reports and suggestions are welcome here too, as well as questions, help and chat.
 
 A useful report has: the **version** of the port (shown in the launcher), your **GPU, driver, Windows version**, which graphics options were on (upscaler, frame generation, ray tracing, HDR), how to repeat the problem, and a screenshot or a short video if it is visual. The released builds do not write log files; builds from source do (the `logs` and `debug` folders next to `uc.exe`), attach them if you have them. Do not attach any game files.
 
@@ -329,7 +337,7 @@ The source code of this project is licensed under the **[GNU General Public Lice
 | Optional NVIDIA DLSS 5 runtime (`nvngx_dlssnr.dll`)                                                                                              | Not distributed by this project; you obtain it yourself under NVIDIA's terms                                                                                 |
 | **The game itself**: code, models, textures, audio, video, text of _Resident Evil: The Umbrella Chronicles_                                      | © Capcom. **Not covered by this licence and not included in the repository.**                                                                                |
 
-**The original game files.** To build or run the port you need the game's files from **your own legally obtained copy**: the build translates your `main.dol` into native code, and the game reads the rest of its data from the unpacked disc at run time. The repository contains no game code, no game assets and no output of the translation (`generated/` is git-ignored). Release archives contain the compiled port and **no** game assets (textures, models, audio, video).[^1] Do not post or request disc images, assets or decompiled game code in the issues, pull requests or the Discord server.
+**The original game files.** To build or run the port you need the game's files from **your own legally obtained copy**: the build translates your `main.dol` into native code, and the game reads the rest of its data from the unpacked disc at run time. The repository contains no game code, no game assets and no output of the translation (`generated/` is git-ignored). Release archives contain the compiled port and **no** game assets (textures, models, audio, video). Do not post or request disc images, assets or decompiled game code in the issues, pull requests or the Discord server.
 
 _Resident Evil_ and _The Umbrella Chronicles_ are trademarks of Capcom Co., Ltd. Nintendo and Wii are trademarks of Nintendo. NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. All other names belong to their owners; this project is not affiliated with any of them.
 
@@ -344,5 +352,3 @@ _Resident Evil_ and _The Umbrella Chronicles_ are trademarks of Capcom Co., Ltd.
 - **AMD** — [FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) (FSR 3.1 and FSR Frame Generation).
 - **Open-source libraries:** [SDL3](https://github.com/libsdl-org/SDL), [Dear ImGui](https://github.com/ocornut/imgui), [SMAA](https://github.com/iryoku/smaa) by Jorge Jimenez et al., [ENet](https://github.com/lsalzman/enet), [MiniUPnPc](https://github.com/miniupnp/miniupnp), [Lua](https://www.lua.org), [QuickJS-ng](https://github.com/quickjs-ng/quickjs), [mimalloc](https://github.com/microsoft/mimalloc), [miniz](https://github.com/richgel999/miniz), [stb_vorbis](https://github.com/nothings/stb), [nlohmann/json](https://github.com/nlohmann/json). Full list and licence texts: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 - **Capcom** — for creating the game.
-
-[^1]: The `uc.exe` in the release archives also contains the game's program code, translated to native code by this project's translator. That part is not covered by the GPL grant and remains subject to the rights of its owner.
