@@ -1,7 +1,7 @@
 add_library(uc_runtime STATIC guest_mem.cpp dispatch.cpp trace.cpp fatal.cpp guest_call.cpp hle/nop.cpp clock.cpp mmio.cpp lowmem.cpp sched.cpp hle/os_thread.cpp hle/os_sync.cpp hle/os_misc.cpp hle/format_guest.cpp dvdfs.cpp hle/dvd.cpp hle/vi.cpp hle/exi.cpp hle/ios.cpp hle/dsp.cpp)
 target_include_directories(uc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_sources(uc_runtime PRIVATE gx_audit.cpp)
-target_sources(uc_runtime PRIVATE hle/gx.cpp hle/sdk_math.cpp hle/leaf_gen.cpp)
+target_sources(uc_runtime PRIVATE hle/gx.cpp hle/sdk_math.cpp hle/sdk_regs.cpp hle/leaf_gen.cpp)
 target_sources(uc_runtime PRIVATE savefs.cpp save_rollback.cpp hle/save.cpp)
 target_sources(uc_runtime PRIVATE native_input.cpp)
 target_sources(uc_runtime PRIVATE ax_audio.cpp audio_gap_audit.cpp)
