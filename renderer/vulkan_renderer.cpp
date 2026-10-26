@@ -1061,6 +1061,7 @@ void VulkanRenderer::retire_for_resize() {
         destroy_slot_images(slot);
         slot.initialized = slot.copied = false;
     }
+    destroy_held_frame();
 }
 void VulkanRenderer::destroy_slot_images(Slot& slot) {
     for (auto [view,image,memory] : {std::tuple{&slot.view,&slot.image,&slot.memory},std::tuple{&slot.ui_view,&slot.ui_image,&slot.ui_memory}}) {
@@ -1119,6 +1120,7 @@ void VulkanRenderer::retire_images(bool keep_buffers) {
         destroy_slot_images(slot);
         slot.submitted = slot.reported = slot.initialized = slot.copied = false; slot.serial = 0;
     }
+    destroy_held_frame();
 }
 UpscaleImage VulkanRenderer::hudless_image() const {   // this frame's HUD-less copy (alternating: the interpolation of the previous frame may still read the other one)
     const auto slot=frame_index_&1;
@@ -1752,6 +1754,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         last_rebuild_ = now; rebuild();        if (resized_) return false;
     }
     if (!swapchain_) return false;   // while a resize storm postpones the rebuild the old swapchain keeps presenting
+    const bool overlay_frame=packet.overlay_only;
+    const bool layer_on=reticle_layer_active();   // the reticle quads leave the game's frame and are drawn over a held copy of it (reticle_layer_ready)
+    if (overlay_frame && !reticle_layer_ready()) return false;
+    if (layer_on && !overlay_frame) ensure_held_frame();
+    const bool hold=layer_on && !overlay_frame && packet.present && display && !packet.black_output && held_.image;   // this frame is kept, not presented: the overlay frame after it is
+    if (layer_on && !overlay_frame) for (const auto& draw:packet.draws) if (draw.layer) frame_reticle_.push_back(draw);
     reap_retired(false);
     Slot& slot = slots_[next_slot_];
     VkResult fence_status = vkGetFenceStatus(device, slot.fence);
@@ -1790,7 +1798,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     gx::PacketSummary summary;
     size_t scene_draws=0;          // draws [0, scene_draws) of this packet go to the scene targets
     bool upscale_here=false;       // the upscale runs after those draws, before the rest and before the packet's copy/present
-    if (upscaler_) {
+    if (upscaler_ && !overlay_frame) {
         if (frame_start_) {
             const bool scene=boundary_.frame_had_scene();
             if (scene!=scene_mode_) reset_next_=true;
@@ -2055,7 +2063,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     uint32_t image_index = 0;
     bool suboptimal=false;
     PresentImage* present_image=nullptr;
-    if (packet.present && display) {
+    if (packet.present && display && !hold) {
         const bool legacy_retirement=!present_fences_ && !retired_.empty();
         if(legacy_retirement && !retirement_acquired_) {
             VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -2111,7 +2119,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     }
     // A render target of the frame: efb_ (output resolution) or the internal scene targets. Between passes color is TRANSFER_SRC, depth
     // DEPTH_ATTACHMENT and motion COLOR_ATTACHMENT; *initialized false means never written (cleared on first use).
-    struct PassTarget { VkImage color, depth; VkImageView color_view, depth_view, motion_view, gbuffer_view; VkExtent2D extent; bool* initialized; };
+    struct PassTarget { VkImage color, depth; VkImageView color_view, depth_view, motion_view, gbuffer_view; VkExtent2D extent; bool* initialized; bool clear_depth=false; };   // clear_depth: a scratch depth buffer, cleared by every pass
     const PassTarget efb_target{efb_,depth_,efb_view_,depth_view_,VK_NULL_HANDLE,VK_NULL_HANDLE,efb_extent_,&efb_initialized_};
     const PassTarget scene_target{scene_color_,scene_depth_,scene_color_view_,scene_depth_view_,scene_motion_view_,scene_gbuffer_view_,scene_extent_,&scene_initialized_};
     const auto depth_stages=VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
@@ -2170,7 +2178,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
     if (scene) scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; depth.imageView=target.depth_view; depth.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depth.loadOp=initialized ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; depth.storeOp=VK_ATTACHMENT_STORE_OP_STORE; depth.clearValue.depthStencil={packet.clear_depth/float(0xFFFFFF),0};
+    depth.loadOp=initialized && !target.clear_depth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; depth.storeOp=VK_ATTACHMENT_STORE_OP_STORE; depth.clearValue.depthStencil={packet.clear_depth/float(0xFFFFFF),0};
     rendering.pDepthAttachment=&depth;
     vkCmdBeginRendering(slot.command, &rendering);
     if (scene && scene_clear_.pending) {   // the last present's clear, which GX applied to the EFB this scene renders into
@@ -2202,14 +2210,20 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             const auto& draw=packet.draws[d]; const auto& info=gpu_draws[d];
             const size_t set_index=d;
             if (!info.index_count) continue;
+            if (layer_on && !overlay_frame && draw.layer) continue;   // drawn later, over the held frame
+            if (overlay_frame && !draw.layer) continue;
             if (gx::bloom_composite(draw) && (motion_outputs_ || !bloom_active())) continue;   // the game's own bloom is replaced by bloom_pass_ (off means none); a device without the scene-target path cannot run it and keeps the game's
             if (scene && effects_need_lights()) scene_lights_.add(*draw.uniforms);
             if (std::find(skipped_callsites.begin(),skipped_callsites.end(),draw.callsite)!=skipped_callsites.end()) continue;
             const auto v=draw.state->viewport.value_or(std::array<float,6>{0,0,640,480,0,1});
-            const auto area=uc::efb_viewport(v,target.extent.width,target.extent.height);
+            auto area=uc::efb_viewport(v,target.extent.width,target.extent.height);
+            if (overlay_frame) {   // EFB coordinates onto the output: the part of the EFB the held frame shows, stretched over the whole picture
+                const float sx=target.extent.width/float(display_source[2]),sy=target.extent.height/float(display_source[3]);
+                area={(v[0]-1.f/12-display_source[0])*sx,(v[1]-1.f/12-display_source[1])*sy,v[2]*sx,v[3]*sy};
+            }
             VkViewport draw_viewport{area.x,area.y,area.width,area.height,v[4],v[5]};
             auto draw_scissor=scissor;
-            if(draw.state->scissor) {
+            if(draw.state->scissor && !overlay_frame) {
                 const auto& s=*draw.state->scissor;
                 const auto x=std::clamp<int64_t>(int64_t(s[0])*target.extent.width/640,0,target.extent.width);
                 const auto y=std::clamp<int64_t>(int64_t(s[1])*target.extent.height/480,0,target.extent.height);
@@ -2338,8 +2352,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         if (upscale_here) rt_as_open_=true;   // the boundary's TLAS build follows in this submission: one timed span (a query is written once per submission)
         else pass_timer_.end(slot.command,timer_slot,GpuPass::rt_as);
     };
-    const bool scene_only=scene_phase_ && !upscale_here;   // the whole packet belongs to the scene: copy and clear act on the scene targets
-    const bool writes_scene=scene_phase_ && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
+    const bool scene_only=scene_phase_ && !upscale_here && !overlay_frame;   // the whole packet belongs to the scene: copy and clear act on the scene targets
+    const bool writes_scene=scene_phase_ && !overlay_frame && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
     if (writes_scene) { record_pass(scene_target,0,scene_draws,true); record_shadow(0,scene_draws); record_rt(0,scene_draws); }
     if (upscale_here) {
         if (scene_draws || packet.present) scene_restore_copy_.reset();   // another draw changed the scene since the saved copy
@@ -2373,9 +2387,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         if (dlss_generation_enabled()) dlss_g_->tag_hudless(slot.command,hudless);
         hudless_taken_=true;
     };
-    const bool hudless_wanted=(dlss_generation_enabled() || (fsr_generation_enabled() && fsr_g_->active())) && hudless_[0] && scene_mode_ && !scene_phase_ && !hudless_taken_;
+    const bool hudless_wanted=(dlss_generation_enabled() || (fsr_generation_enabled() && fsr_g_->active())) && hudless_[0] && scene_mode_ && !scene_phase_ && !hudless_taken_ && !overlay_frame;
     if (hudless_wanted && efb_initialized_ && hud_packet) take_hudless();
-    if (!scene_only && (!efb_initialized_ || scene_draws<packet.draws.size())) record_pass(efb_target,scene_draws,packet.draws.size(),false);
+    if (!scene_only && !overlay_frame && (!efb_initialized_ || scene_draws<packet.draws.size())) record_pass(efb_target,scene_draws,packet.draws.size(),false);
     if (hudless_wanted && !hudless_taken_ && packet.present) take_hudless();
     const PassTarget& active=scene_only ? scene_target : efb_target;
     if(copy_target) record_texture_copy(slot.command,active.color,active.extent,packet.texture_copy->source,*copy_target,VK_IMAGE_LAYOUT_UNDEFINED);
@@ -2384,7 +2398,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         else if (!packet.draws.empty() || (copy_target && packet.clear_after_copy)) scene_restore_copy_.reset();
     }
     bool ui_layer=false;   // HDR: the overlays went to the slot's UI layer, the encode composites them
-    if (packet.present && display) {
+    if (packet.present && display && !overlay_frame) {
         const bool prompts=!packet.prompts.empty() && !packet.black_output, menu=bool(menu_build_);
         ui_layer=hdr_active_ && (prompts || menu);
         if(prompts)prompt_overlay_.initialize(instance_,physical_,device,queue_,family_,uint32_t(slots_.size()));
@@ -2427,6 +2441,26 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             record_overlays(slot.ui_view,VK_ATTACHMENT_LOAD_OP_CLEAR);
             barrier(slot.command,slot.ui_image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         }
+    }
+    if (hold) {   // keep the finished picture (without the reticle) and the reticle draws that belong on it: the overlay frame after this one presents them
+        const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barrier(slot.command,held_.image,held_.image_ready ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,all,any,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkImageBlit whole{}; whole.srcSubresource=whole.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; whole.srcOffsets[1]=whole.dstOffsets[1]={int32_t(extent_.width),int32_t(extent_.height),1};
+        vkCmdBlitImage(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,held_.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&whole,VK_FILTER_NEAREST);
+        barrier(slot.command,held_.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
+        held_.image_ready=true; held_.valid=true; held_.presented=false; held_.display_source=display_source;
+        held_.draws=std::move(frame_reticle_); frame_reticle_.clear();
+    } else if (overlay_frame) {   // the held picture again, the reticle drawn over it where the mouse is now
+        const auto all=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; const auto any=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barrier(slot.command,slot.image,slot.initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                slot.initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE,slot.initialized ? VK_ACCESS_2_TRANSFER_READ_BIT : 0,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        barrier(slot.command,held_.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,all,any,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);   // after the copy that made it
+        VkImageBlit whole{}; whole.srcSubresource=whole.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; whole.srcOffsets[1]=whole.dstOffsets[1]={int32_t(extent_.width),int32_t(extent_.height),1};
+        vkCmdBlitImage(slot.command,held_.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&whole,VK_FILTER_NEAREST);
+        barrier(slot.command,slot.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT);
+        bool overlay_initialized=true;
+        const PassTarget overlay_target{slot.image,held_.depth,slot.view,held_.depth_view,VK_NULL_HANDLE,VK_NULL_HANDLE,extent_,&overlay_initialized,true};
+        if (!packet.draws.empty()) record_pass(overlay_target,0,packet.draws.size(),false);
     }
     auto clear_region=[&](const PassTarget& active, bool with_motion) {   // after a copy: GX clears the copied EFB region when asked
             barrier(slot.command,active.depth,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -2501,7 +2535,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command.commandBuffer = slot.command;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = wait_count; submit.signalSemaphoreInfoCount = present_image ? 1 : 0; submit.commandBufferInfoCount = 1;
     submit.pWaitSemaphoreInfos = waits; submit.pSignalSemaphoreInfos = &signal; submit.pCommandBufferInfos = &command;
-    if (packet.present && upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
+    if (packet.present && !overlay_frame && upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
     const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
@@ -2510,7 +2544,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         if(detached_copies_ && packet.texture_copy->target->guest_address)latest_copies_[packet.texture_copy->target->guest_address]=packet.texture_copy->target;
     }
     for (auto& texture : slot.textures) texture->initialized=true;
-    if (packet.present) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); dlss5_scene_.ready=false; }
+    if (packet.present && !overlay_frame) { frame_start_=true; ++frame_index_; scene_restore_copy_.reset(); dlss5_scene_.ready=false; frame_reticle_.clear(); }
     slot.serial = serial; slot.submitted = true; slot.initialized |= packet.present && display; slot.copied=packet.present && display; slot.reported = false; last_serial_ = serial; next_slot_ = (next_slot_ + 1) % slots_.size();   // efb_initialized_/scene_initialized_ are set by the passes that wrote them
     if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
@@ -2520,7 +2554,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; present.pNext = fenced ? &present_fence : nullptr; present.waitSemaphoreCount = 1; present.pWaitSemaphores = &present_image->ready;
     present.swapchainCount = 1; present.pSwapchains = &swapchain_; present.pImageIndices = &image_index;
     const auto present_start = std::chrono::steady_clock::now();
-    const bool marked = upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active();
+    const bool marked = upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active() && (!overlay_frame || !held_.presented);   // a held frame is marked once, however often it is shown
+    if (overlay_frame) held_.presented=true;
     if (marked) streamline_->marker(Streamline::Marker::present_start);
     VkResult result = present_.present(queue_, &present);   // with DLSS-G Streamline presents the generated frames here too
     if (marked) streamline_->marker(Streamline::Marker::present_end);
@@ -2531,6 +2566,32 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     else if (result != VK_ERROR_OUT_OF_DATE_KHR) vk_check(result, "present frame");
     if (suboptimal || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;
     return true;
+}
+void VulkanRenderer::ensure_held_frame() {
+    if (held_.image) return;   // a window resize destroys it (destroy_held_frame) with the other output-sized images
+    make_attachment(held_.image,held_.memory,held_.view,extent_);
+    make_attachment(held_.depth,held_.depth_memory,held_.depth_view,extent_,true);
+    held_.extent=extent_; held_.valid=held_.image_ready=held_.presented=false;
+    run_commands([&](VkCommandBuffer command) {   // the scratch depth rests in DEPTH_ATTACHMENT like the EFB's: the reticle pass clears it before every use
+        barrier(command,held_.depth,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_NONE,0,VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+    });
+}
+void VulkanRenderer::destroy_held_frame() {   // the device is idle or every slot fence was waited for
+    for (auto [view,image,memory] : {std::tuple{&held_.view,&held_.image,&held_.memory},std::tuple{&held_.depth_view,&held_.depth,&held_.depth_memory}}) {
+        if (*view) vkDestroyImageView(device, *view, nullptr);
+        if (*image) vkDestroyImage(device, *image, nullptr);
+        if (*memory) vkFreeMemory(device, *memory, nullptr);
+        *view = VK_NULL_HANDLE; *image = VK_NULL_HANDLE; *memory = VK_NULL_HANDLE;
+    }
+    held_.extent={}; held_.valid=held_.image_ready=held_.presented=false; held_.draws.clear(); frame_reticle_.clear();
+}
+bool VulkanRenderer::render_overlay(uint64_t serial) {
+    if (!reticle_layer_ready()) return false;
+    gx::FramePacket packet;
+    packet.serial=serial; packet.present=true; packet.clear_after_copy=false; packet.display_source=held_.display_source; packet.overlay_only=true;
+    for (const auto& draw:held_.draws) packet.draws.push_back(draw);
+    return render(packet,true,serial);
 }
 void VulkanRenderer::shutdown() {
     if (!instance_ && !device) return;

@@ -808,3 +808,17 @@ pad 1; the white quads at the same place belong to the tinted ring; a lone pad o
 reticle (callsite 8006CED4, 182 vertices, tinted, alpha fading) is shifted with the local one. A shot still lands where the mouse was when the
 button went down: the aim and the button travel together in one input sample. The crosshair size setting is local and visual: it scales both players'
 reticles (`DrawPacket::reticle`), only the local one is shifted (`late_aim`). `UC_AIM_LOG=1` prints one `[aim]` line per shifted draw.
+
+### Reticle layer (monitor-rate reticle)
+
+The game draws at the tick (30-60 steps a second), so a reticle drawn inside its frame moves at that rate however fast the monitor is. In network play
+the renderer keeps the reticle out of the game's frame: the reticle quads and wakes (`DrawPacket::layer`, set by `mark_reticle_draws`) are skipped in
+the passes, the finished picture is copied to a held image (`HeldFrame`, SDR output size) and the reticle is drawn over a copy of it in a separate frame
+(`FramePacket::overlay_only`, `VulkanRenderer::render_overlay`): the tick's own picture is presented that way, and between ticks `uc_main` presents
+the held picture again once per display refresh (fixed cadence from the refresh rate, `precise_sleep_until`, serviced between the packets of a drained
+burst) with the reticle re-aimed to the mouse and the wake laid along the mouse path. The reticle pass uses the game's own pipelines on the output
+image with a scratch depth buffer (`PassTarget::clear_depth`) and the EFB-to-output mapping of the held frame's display rectangle.
+
+Off (the reticle is then drawn in the game's frame as before) with HDR output, frame generation (DLSS-G/FSR) and Streamline's swapchain; idle presents
+also off while `--fps-limit` is below the refresh rate. `UC_RETICLE_LAYER=0` turns the layer off. The exit log has `[reticle-layer]` interval statistics.
+Single-player never uses it.

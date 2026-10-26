@@ -170,12 +170,13 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
         // A ring far from its player's pointer is something else (the HUD draws other square textures through the same callsite).
         if (std::abs(group.center[0] - (*consumed[owner])[0] * kAimToNdcX) > 0.6f || std::abs(group.center[1] - (*consumed[owner])[1] * kAimToNdcY) > 0.6f) continue;
         for (const auto index : group.members) {
-            draws[index].reticle = true; draws[index].late_aim = unsigned(owner) == local; ++marked;
+            draws[index].reticle = draws[index].layer = true; draws[index].late_aim = unsigned(owner) == local; ++marked;
             if (draws[index].late_aim && anchor) { draws[index].aim_ref = *anchor; draws[index].aim_exact = true; }
         }
     }
     for (size_t i = 0; i < draws.size(); ++i) {   // the wake of the local reticle moves with it (not scaled: it has no centre of its own)
         if (!reticle_tail_callsite(draws[i].callsite)) continue;
+        draws[i].layer = true;   // every player's wake belongs to the reticle layer, only the local one is re-aimed
         int owner = reticle_tint_owner(draws[i]);
         if (owner == 1 && !consumed[1]) owner = 0;
         if (owner >= 0 && unsigned(owner) == local && consumed[owner]) {

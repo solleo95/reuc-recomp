@@ -115,6 +115,10 @@ static void replaced_chains_are_freed_and_never_under_a_running_hook() {
     stop = true;
     guest.join();
     CHECK(bad == 0 && calls > 0);
+    // While the guest thread spins inside hooks on a loaded machine nothing may be freed for a while (a chain is freed once no reader is inside); with the
+    // reader gone one more replacement frees what is left.
+    hook_registry().add(0x8006C268u, &owners[0], [](ppc::Ctx&) {});
+    hook_registry().remove_owner(&owners[0]);
     CHECK(hook_registry().retired_chains() < 64);   // not one per add/remove ever made (48000)
 }
 

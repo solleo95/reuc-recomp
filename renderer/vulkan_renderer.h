@@ -155,6 +155,15 @@ public:
     void shutdown();
     uint32_t validation_errors() const { return errors_.load(); }
     uint64_t presentation_count() const { return presentations_.load(); }
+    // Reticle layer (network play): the reticle quads are left out of the game's frame and drawn over a held copy of the finished picture, which is shown
+    // again between ticks with the reticle re-aimed to the mouse, so the reticle runs at the display's rate. Off with HDR output, frame generation and
+    // Streamline's swapchain (those present through paths that keep their own frame state).
+    void set_reticle_layer(bool on) { reticle_layer_ = on; }
+    bool reticle_layer_active() const { return reticle_layer_ && !hdr_active_ && !streamline_swapchain() && !fsr_presentation_ && !frame_generation_active(); }
+    bool reticle_layer_ready() const { return reticle_layer_active() && held_.valid && held_.extent.width==extent_.width && held_.extent.height==extent_.height; }
+    bool held_presented() const { return held_.presented; }   // the held frame has been shown (render_overlay)
+    bool held_has_reticle() const { return !held_.draws.empty(); }
+    bool render_overlay(uint64_t serial);   // presents the held frame with the reticle re-aimed; false: nothing shown (no held frame, or the slot is busy)
     double take_gpu_window_ms() { return gpu_window_max_ns_.exchange(0) / 1e6; }   // longest single GPU submission retired since the last call (frame log)
     uint64_t pass_runs(GpuPass pass) const { return pass_timer_.runs(pass); }   // how often an effect pass was recorded
     double pass_ms(GpuPass pass) const { return pass_timer_.last_ms(pass); }   // latest GPU time of one effect pass (0 until it ran)
@@ -324,6 +333,17 @@ private:
     VkExtent2D hudless_extent_{};
     VkFormat hudless_format_=VK_FORMAT_R8G8B8A8_UNORM;   // the back buffer's: HDR10 while HDR is active (frame generation compares the two)
     HdrSettings hdr_settings_;
+    struct HeldFrame {   // the last presented picture without the reticle, and the reticle draws that belong on it
+        VkImage image=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; VkImageView view=VK_NULL_HANDLE;
+        VkImage depth=VK_NULL_HANDLE; VkDeviceMemory depth_memory=VK_NULL_HANDLE; VkImageView depth_view=VK_NULL_HANDLE;   // scratch depth of the reticle pass (cleared every use)
+        VkExtent2D extent{}; bool valid=false, image_ready=false, presented=false;
+        std::array<uint32_t,4> display_source{0,0,640,480};
+        std::vector<gx::DrawPacket> draws;
+    } held_;
+    std::vector<gx::DrawPacket> frame_reticle_;   // reticle draws of the frame being recorded (they may come in earlier packets than its present)
+    bool reticle_layer_=false;
+    void ensure_held_frame();
+    void destroy_held_frame();
     bool hdr_active_=false;       // this swapchain is HDR10 (settings on, Windows HDR on, surface offers it)
     VkExtent2D bloom_region_{};   // the part of the EFB the glow covers, in EFB pixels (set when the bloom is recorded)
     uint64_t bloom_generation_=0; // BloomPass::generation() the HDR pass's descriptor sets were last reset for

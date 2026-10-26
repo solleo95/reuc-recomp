@@ -32,6 +32,7 @@ struct FramePacket {
     std::array<float,2> aim_consumed{};   // pointer (aim units) the game read when it drew this batch; the reference of the late-aim shift
     bool replay = false; // Preserve GX work and frame boundaries without displaying intermediate rollback frames.
     bool clear_only = false;
+    bool overlay_only = false;   // reticle layer: the held frame again with the reticle draws re-aimed (VulkanRenderer::render_overlay); nothing of the frame state advances
     std::shared_ptr<const SceneFrame> scene;
 };
 

@@ -207,6 +207,17 @@ struct GuestRunner {
 };
 }  // namespace
 
+// Sleeps until `due` to within ~150 us: a high-resolution waitable timer for most of it, a spin for the rest (the reticle layer's refresh cadence).
+static void precise_sleep_until(std::chrono::steady_clock::time_point due) {
+    static thread_local HANDLE timer=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
+    const auto margin=std::chrono::microseconds(150);
+    const auto now=std::chrono::steady_clock::now();
+    if(timer && due-now>margin) {
+        LARGE_INTEGER relative; relative.QuadPart=-(std::chrono::duration_cast<std::chrono::nanoseconds>(due-margin-now).count()/100);
+        if(SetWaitableTimer(timer,&relative,0,nullptr,nullptr,FALSE)) WaitForSingleObject(timer,INFINITE);
+    }
+    while(std::chrono::steady_clock::now()<due) YieldProcessor();
+}
 static int real_main(int argc, char** argv,uc::Options& startup_options) {
     timeBeginPeriod(1);   // 1 ms timers: sleeps and the modal drag/resize loop's WM_TIMER tick (otherwise 15.6 ms granularity)
     {   // Windows 11 may run a window without focus in EcoQoS and ignore the timer request above; a game wants neither.
@@ -525,6 +536,13 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::shared_ptr<const gx::FramePacket> pending;
     std::deque<std::shared_ptr<const gx::FramePacket>> scene_commands;
     uint64_t render_serial=0,pending_serial=0;
+    auto overlay_due=std::chrono::steady_clock::now(),overlay_last=std::chrono::steady_clock::time_point{};
+    std::vector<double> overlay_intervals; overlay_intervals.reserve(1<<16);   // ms between the reticle layer's idle presents, summarised at exit
+    std::chrono::steady_clock::duration overlay_period=std::chrono::microseconds(16667);   // the display's refresh interval
+    if (network) {
+        if (const auto* mode=SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window.get())); mode && mode->refresh_rate>=24.f) overlay_period=std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0/mode->refresh_rate));
+        renderer.set_reticle_layer(!std::getenv("UC_RETICLE_LAYER") || std::string_view(std::getenv("UC_RETICLE_LAYER"))!="0");
+    }
     uc::FrameLimit frame_limit(options.fps_limit);
     std::chrono::steady_clock::time_point last_present_at{};
     // The session CSV is automatic; UC_FRAME_LOG retains its explicit override.
@@ -555,8 +573,29 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     // Takes the next guest frame, renders it and retires finished ones. Called from the loop and, while Windows runs its modal
     // move/resize loop inside SDL_PollEvent, from the event watch below, so the guest keeps running while the window is dragged.
     bool at_frame_boundary=false;   // the last rendered packet presented: a renderer restart starts the next frame cleanly
+    bool overlay_idle=false;   // set by service_overlay: the loop should wake in time for the next refresh
+    auto service_overlay=[&] {
+        overlay_idle=false;   // the reticle layer has a picture to show again before the next tick
+        if (network && !pending && renderer.reticle_layer_ready() && (!renderer.held_presented() || renderer.held_has_reticle()) && (frame_limit.interval().count()==0 || frame_limit.interval()<=overlay_period)) {
+            // Between the simulation's ticks the held picture is shown again with the reticle re-aimed, once per display refresh, on a fixed cadence
+            // (a fixed step, not "now + period", or the rate would wobble with the loop's wake-ups). A frame limit below the refresh rate switches this off.
+            overlay_idle=true;
+            auto now=std::chrono::steady_clock::now();
+            if (now+std::chrono::microseconds(1500)>=overlay_due) {
+                if (now<overlay_due) { precise_sleep_until(overlay_due); now=std::chrono::steady_clock::now(); }
+                if (renderer.render_overlay(render_serial+1)) {
+                    ++render_serial;
+                    if (overlay_last!=std::chrono::steady_clock::time_point{} && overlay_intervals.size()<overlay_intervals.capacity()) overlay_intervals.push_back(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-overlay_last).count());
+                    overlay_last=std::chrono::steady_clock::now();
+                    overlay_due+=overlay_period;
+                    if (overlay_due<now) overlay_due=now+overlay_period;   // fell behind (a long frame): start over instead of presenting a burst
+                }
+            }
+        }
+    };
     auto render_pending = [&]() -> bool {
         bool progressed = false;
+        service_overlay();   // the refresh cadence also holds between the packets of a drained burst
         if (!pending) {
             if(scene_commands.empty() && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now()))) {
                 auto next=packets.try_take();
@@ -583,13 +622,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             const bool rendered=renderer.render(*pending,display,pending_serial);
             profile_retries+=!rendered;
             const auto render_elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-render_start).count();
-            render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6; frame_busy_ns+=uint64_t(render_elapsed);
+            render_ns+=render_elapsed; last_render_ms=render_elapsed/1e6;
             if (rendered) {
             progressed = true;
             // GPU slots retain immutable inputs until their fences complete; detached GX already completed logically.
             // Offline real-time play releases GX at submission; deterministic playback retains fence completion.
             static const bool finish_at_submit=(!deterministic || network) && !std::getenv("UC_FINISH_AT_GPU");
             if (finish_at_submit && !packets.detached()) uc::gx_completed(pending_serial);
+            uint64_t shown_serial=pending_serial;   // what a debug capture reads: with the reticle layer, the overlay frame that presents this packet's picture
+            if (network && renderer.reticle_layer_ready() && !renderer.held_presented() && renderer.render_overlay(render_serial+1)) shown_serial=++render_serial;
             packet_dump.packet(*pending);
             if(options.capture_scene_passes && !scene_capture_started) scene_capture_started=std::any_of(pending->draws.begin(),pending->draws.end(),[](const auto& draw){return draw.callsite==0x80366E14;});
             if(options.capture_scene_passes && scene_capture_started && scene_capture_pass<24) {
@@ -642,7 +683,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             }
             if (packet_dump.scene_sampled()) scene_dump_serial=pending_serial;
             if (pending->present && display && debug_capture_requested) {
-                debug_capture_serial=pending_serial;
+                debug_capture_serial=shown_serial;
                 debug_capture_requested=false;
             }
             audit_seen_geometry |= !pending->draws.empty();
@@ -1003,12 +1044,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             else if (++stalled >= 10) { result = 4; close = true; }
             if (result==4) std::fprintf(stderr, "no progress: retrace count %llu\n", (unsigned long long)retraces);
         }
+        service_overlay();
         if(!options.headless && !pending && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now())) && packets.wait_ready(std::chrono::nanoseconds(0))) continue;
         const auto wait_start=std::chrono::steady_clock::now();
+        // With the reticle layer waiting for its next refresh the loop wakes a little before it is due (precise_sleep_until does the rest).
+        const auto wake_in=overlay_idle ? std::clamp<int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(overlay_due-wait_start-std::chrono::microseconds(1300)).count(),0,1000000) : int64_t(1000000);
         if(options.headless) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        else if(!renderer.wait_for_pending(1000000)) {
-            if(!pending && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now()))) packets.wait_ready(std::chrono::milliseconds(1));
-            else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        else if(!renderer.wait_for_pending(uint64_t(wake_in))) {
+            if(!pending && (!packets.detached() || frame_limit.ready(true,std::chrono::steady_clock::now()))) packets.wait_ready(overlay_idle ? std::chrono::nanoseconds(wake_in) : std::chrono::nanoseconds(std::chrono::milliseconds(1)));
+            else if(!overlay_idle) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         loop_wait_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count();
     }
@@ -1019,6 +1063,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if(!controlled)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Network play",network->error().c_str(),window.get());
     }
     if(test_pipes) { if(!test_released) test_server->release_all(); test_pipes->send("{\"type\":\"exit\",\"code\":"+std::to_string(result)+"}",false); }
+    if (!overlay_intervals.empty()) {
+        auto sorted=overlay_intervals; std::sort(sorted.begin(),sorted.end()); double sum=0; for(double v:sorted) sum+=v;
+        size_t late=0,very_late=0; for(double v:sorted) { late+=v>6.5; very_late+=v>10.5; }
+        std::fprintf(stderr,"[reticle-layer] intervals over 6.5 ms %zu, over 10.5 ms %zu of %zu\n",late,very_late,sorted.size());
+        std::fprintf(stderr,"[reticle-layer] idle presents %zu interval ms mean %.2f p50 %.2f p95 %.2f p99 %.2f max %.2f\n",sorted.size(),sum/sorted.size(),sorted[sorted.size()/2],sorted[sorted.size()*95/100],sorted[sorted.size()*99/100],sorted.back());
+    }
     const auto prompt_stats=uc::gx_stats();
     std::fprintf(stderr,"native prompt stats: annotations %llu present %llu fallback %llu\n",(unsigned long long)prompt_stats.prompt_annotations,(unsigned long long)prompt_stats.prompt_present,(unsigned long long)prompt_stats.prompt_fallback);
     uc::input_hle_set_probe(nullptr);
