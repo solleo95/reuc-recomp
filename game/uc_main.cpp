@@ -389,6 +389,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         renderer.set_aim_source([&input] { return input.latest_aim(); });
+        renderer.set_aim_history([&input](double seconds) { return input.aim_ago(seconds); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);
@@ -575,6 +576,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 const auto due=last_present_at+std::chrono::nanoseconds(1000000000/std::max<uint32_t>(1,network->tick()))-std::chrono::microseconds(300);
                 if (const auto now=std::chrono::steady_clock::now(); now<due) std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(due-now,std::chrono::milliseconds(4)));
             }
+            if (network) renderer.set_wake_seconds(4.0/std::max<uint32_t>(1,network->tick()));   // the game draws its wake through the last four simulated pointers
             const auto render_start=std::chrono::steady_clock::now();
             const bool display=!pending->replay && frame_limit.ready(pending->present,render_start);
             const auto prior_presents=renderer.presentation_count();

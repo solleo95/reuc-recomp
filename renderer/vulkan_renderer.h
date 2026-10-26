@@ -63,6 +63,9 @@ public:
     bool copy_ready(const std::shared_ptr<const gx::TexturePixels>& texture,bool previous_frame=false);
     // Freshest pointer in aim units: reticle draws are re-aimed to it when their commands are recorded (late_aim.h).
     void set_aim_source(std::function<std::array<float,2>()> source) { aim_source_ = std::move(source); }
+    // The pointer `seconds` ago, and how many seconds the local wake strip spans: the wake is laid along the mouse path (late_aim.h) while both are set.
+    void set_aim_history(std::function<std::array<float,2>(double)> history) { aim_history_ = std::move(history); }
+    void set_wake_seconds(double seconds) { wake_seconds_ = seconds; }
     uint64_t late_aim_draws() const { return late_aim_draws_.load(); }
     struct FrameTimings { double acquire_ms = 0, submit_ms = 0, present_ms = 0; };   // inside the last render(): the calls a layer or the driver can stall
     FrameTimings last_timings() const { return timings_; }
@@ -167,6 +170,8 @@ public:
 private:
     FrameTimings timings_;
     std::function<std::array<float,2>()> aim_source_;
+    std::function<std::array<float,2>(double)> aim_history_;
+    std::atomic<double> wake_seconds_{0};
     std::atomic<uint64_t> late_aim_draws_{0};
     struct Buffer { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; void* mapped = nullptr; VkDeviceSize size = 0; };
     struct Texture {

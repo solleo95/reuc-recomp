@@ -69,6 +69,22 @@ int main() {
         std::vector<gx::DrawPacket> single{tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue)};
         CHECK(mark(single, {aim, std::nullopt}, 0) == 1 && single[0].late_aim);
     }
+    {   // The wake strip is laid along the mouse path: centres on it, half-width and side kept, pairs turned square to the path.
+        std::vector<std::array<float,2>> strip;   // an old strip along +y (older pairs lower), 0.02 half-width on the right
+        for (int k = 0; k < 10; ++k) { strip.push_back({0.1f - 0.02f, -0.5f + 0.05f * k}); strip.push_back({0.1f + 0.02f, -0.5f + 0.05f * k}); }
+        const auto path = [](double age) { return std::array<float,2>{float(0.5 - age * 2.0), 0.25f}; };   // the mouse moved left along y = 0.25
+        const auto laid = gx::wake_strip_ndc(strip, 0.9, path);
+        CHECK(laid.size() == strip.size());
+        for (size_t k = 0; k < 10; ++k) {
+            const float cx = (laid[2*k][0] + laid[2*k+1][0]) / 2, cy = (laid[2*k][1] + laid[2*k+1][1]) / 2;
+            CHECK(std::abs(cx - (0.5f - 2.0f * 0.9f * k / 9)) < 1e-4f && std::abs(cy - 0.25f) < 1e-4f);
+            CHECK(std::abs(laid[2*k+1][0] - laid[2*k][0]) < 1e-4f);                                    // the width runs along y now
+            CHECK(std::abs(std::hypot(laid[2*k+1][0] - laid[2*k][0], laid[2*k+1][1] - laid[2*k][1]) - 0.04f) < 1e-4f);
+        }
+        CHECK(laid[1][1] > laid[0][1] || laid[1][1] < laid[0][1]);
+        std::vector<std::array<float,2>> tiny{{0,0},{0.1f,0}};
+        CHECK(gx::wake_strip_ndc(tiny, 1.0, path) == tiny);                                            // too short to be a strip: untouched
+    }
     // Crosshair scale: the viewport shrinks about the quad's centre, which keeps its pixel (pixel = x + (ndc * 0.5 + 0.5) * width).
     float x = 10, y = 20, width = 1280, height = 720;
     gx::scale_viewport_about({nx, ny}, 0.5f, x, y, width, height);

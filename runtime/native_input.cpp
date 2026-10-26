@@ -191,6 +191,7 @@ bool NativeInput::move_raw(float dx,float dy,uint32_t width,uint32_t height) {
     if (!state_.valid) return false;
     state_.x=std::clamp(state_.x+2*dx/width,-1.0f,1.0f);
     state_.y=std::clamp(state_.y+2*dy/height,-1.0f,1.0f);
+    note_aim();
     return true;
 }
 void NativeInput::button(uint32_t mask,bool down) {
@@ -202,7 +203,26 @@ bool NativeInput::aim(float x,float y) {
     if(!std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1) return false;
     std::lock_guard lock(mutex_);
     if(!state_.valid) return false;
-    state_.x=x; state_.y=y; return true;
+    state_.x=x; state_.y=y; note_aim(); return true;
+}
+void NativeInput::note_aim() { trail_[trail_head_]={int64_t(motion_time()),state_.x,state_.y}; trail_head_=(trail_head_+1)%trail_.size(); }
+std::array<float,2> NativeInput::aim_ago(double seconds) {
+    std::lock_guard lock(mutex_);
+    const int64_t target=int64_t(motion_time())-int64_t(seconds*1e9);
+    // Newest to oldest: the first point at or before the target and the one after it bracket it. Events are sparse while the mouse rests, so a
+    // target past the newest event is the latest position; past the oldest kept one, the oldest.
+    const AimPoint* after=nullptr;
+    for (size_t n=0;n<trail_.size();++n) {
+        const auto& point=trail_[(trail_head_+trail_.size()-1-n)%trail_.size()];
+        if (!point.ns) break;
+        if (point.ns<=target) {
+            if (!after) return {point.x,point.y};
+            const double span=double(after->ns-point.ns),mix=span>0 ? double(target-point.ns)/span : 1.0;
+            return {float(point.x+(after->x-point.x)*mix),float(point.y+(after->y-point.y)*mix)};
+        }
+        after=&point;
+    }
+    return after ? std::array<float,2>{after->x,after->y} : std::array<float,2>{state_.x,state_.y};
 }
 std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); return {state_.x,state_.y}; }
 std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
@@ -235,7 +255,7 @@ bool NativeInput::apply_test_command(uint64_t sequence,float x,float y,uint32_t 
     actions_.focus(false); services_.focus(false); actions_.focus(true); services_.focus(true);
     ++generation_;
     legacy_test_input_=true;
-    state_.x=x; state_.y=y;
+    state_.x=x; state_.y=y; note_aim();
     state_.pressed|=held&~state_.held; state_.released|=state_.held&~held;
     state_.held=held; sequence_=sequence; return true;
 }

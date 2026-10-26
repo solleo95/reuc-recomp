@@ -1934,6 +1934,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             const auto vertices = draw.vertex_view(); const auto indices = draw.index_view();
             auto* target=static_cast<gx::GpuMeshVertex*>(slot.vertices.mapped)+info.first_vertex;
             for (size_t i=0;i<vertices.size();++i) target[i]=gx::mesh_vertex(vertices[i]);
+            if (draw.wake && aim_history_ && wake_seconds_.load()>0) gx::retarget_wake(draw,target,vertices.size(),wake_seconds_.load(),aim_history_);
             if (!indices.empty()) std::memcpy(static_cast<uint32_t*>(slot.indices.mapped) + info.first_index, indices.data(), indices.size() * sizeof(uint32_t));
         }
     }
@@ -2221,7 +2222,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 if (const auto center=gx::draw_center_ndc(draw)) gx::scale_viewport_about(*center,crosshair_scale_,draw_viewport.x,draw_viewport.y,draw_viewport.width,draw_viewport.height);
             }
             float late_shift[2]{};   // clip-space translation of a late-aimed reticle quad, in NDC of the draw's viewport
-            if (draw.late_aim && aim_source_) {
+            if (draw.late_aim && aim_source_ && !(draw.wake && aim_history_ && wake_seconds_.load()>0)) {
                 const auto latest=aim_source_();
                 const auto& from=draw.aim_exact ? draw.aim_ref : packet.aim_consumed;
                 const float dx=(latest[0]-from[0])*gx::kAimToNdcX*0.5f*area.width, dy=(latest[1]-from[1])*gx::kAimToNdcY*0.5f*area.height;

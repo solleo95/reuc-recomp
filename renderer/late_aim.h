@@ -43,6 +43,64 @@ inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw
 }
 // The wake the game draws behind each reticle (a strip of its recent positions, in the player's tint): it follows the reticle when that is shifted.
 inline bool reticle_tail_callsite(uint32_t callsite) { return callsite == 0x8006CED4; }
+// NDC of an object-space point of this draw (the same chain as draw_center_ndc); nullopt behind the camera or with an unloaded row.
+inline std::optional<std::array<float,2>> project_ndc(const DrawPacket& draw, uint32_t row, const std::array<float,3>& p) {
+    const auto& t = draw.transforms;
+    if (row > 61) return std::nullopt;
+    float view[3];
+    for (int i = 0; i < 3; ++i) { const auto& m = t->position_rows[row + i]; view[i] = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3]; }
+    float clip[4];
+    for (int i = 0; i < 4; ++i) { const auto& m = t->projection[i]; clip[i] = m[0] * view[0] + m[1] * view[1] + m[2] * view[2] + m[3]; }
+    if (clip[3] <= 0) return std::nullopt;
+    return std::array<float,2>{clip[0] / clip[3], clip[1] / clip[3]};
+}
+// The new NDC positions of a wake strip (vertex pairs L,R, newest pair first) laid along `path` (NDC at an age in seconds, 0 = now) instead of along the
+// path the game's own simulation took: the pair k sits `duration * k / (pairs - 1)` seconds back, keeps its half-width and its side, and turns with the
+// path. Used for the local player's wake, whose reticle follows the mouse itself while the strip describes the lagging simulated one.
+template<class Path> std::vector<std::array<float,2>> wake_strip_ndc(const std::vector<std::array<float,2>>& ndc, double duration, const Path& path) {
+    const size_t pairs = ndc.size() / 2;
+    if (pairs < 3 || ndc.size() % 2) return ndc;
+    std::vector<std::array<float,2>> center(pairs);
+    for (size_t k = 0; k < pairs; ++k) { center[k] = path(duration * double(k) / double(pairs - 1)); }
+    std::vector<std::array<float,2>> out(ndc.size());
+    for (size_t k = 0; k < pairs; ++k) {
+        const size_t newer = k ? k - 1 : 0, older = k + 1 < pairs ? k + 1 : k;
+        const std::array<float,2> half{(ndc[2*k+1][0] - ndc[2*k][0]) / 2, (ndc[2*k+1][1] - ndc[2*k][1]) / 2};
+        const auto mid = [&](size_t i) { return std::array<float,2>{(ndc[2*i][0] + ndc[2*i+1][0]) / 2, (ndc[2*i][1] + ndc[2*i+1][1]) / 2}; };
+        const float ot_x = mid(newer)[0] - mid(older)[0], ot_y = mid(newer)[1] - mid(older)[1];   // the old path's direction (older -> newer)
+        const float nt_x = center[newer][0] - center[older][0], nt_y = center[newer][1] - center[older][1];
+        const float old_len = std::hypot(ot_x, ot_y), new_len = std::hypot(nt_x, nt_y), width = std::hypot(half[0], half[1]);
+        std::array<float,2> h = half;
+        if (old_len > 1e-6f && new_len > 1e-6f && width > 0) {
+            const float side = (ot_x * half[1] - ot_y * half[0]) >= 0 ? 1.f : -1.f;   // which side of the path this vertex pair's R lies on
+            h = {-side * width * nt_y / new_len, side * width * nt_x / new_len};
+        }
+        out[2*k] = {center[k][0] - h[0], center[k][1] - h[1]};
+        out[2*k+1] = {center[k][0] + h[0], center[k][1] + h[1]};
+    }
+    return out;
+}
+// Lays the wake draw's vertices (GPU copies in `target`) along `path_aim` (aim units at an age in seconds). False where the draw's chain is not invertible.
+template<class Path> bool retarget_wake(const DrawPacket& draw, GpuMeshVertex* target, size_t count, double duration, const Path& path_aim) {
+    const auto source = draw.vertex_view();
+    if (count != source.size() || count < 6 || count % 2) return false;
+    const uint32_t row = draw.state->descriptors[0] != Mode::none ? source[0].position_matrix : draw.transforms->current;
+    const std::array<float,3> p0 = source[0].position;
+    const auto f0 = project_ndc(draw, row, p0), fx = project_ndc(draw, row, {p0[0] + 1, p0[1], p0[2]}), fy = project_ndc(draw, row, {p0[0], p0[1] + 1, p0[2]});
+    if (!f0 || !fx || !fy) return false;
+    const float a = (*fx)[0] - (*f0)[0], c = (*fx)[1] - (*f0)[1], b = (*fy)[0] - (*f0)[0], d = (*fy)[1] - (*f0)[1];   // ndc = f0 + [a b; c d] * (obj - p0)
+    const float det = a * d - b * c;
+    if (std::abs(det) < 1e-12f) return false;
+    std::vector<std::array<float,2>> ndc(count);
+    for (size_t i = 0; i < count; ++i) { const auto n = project_ndc(draw, row, source[i].position); if (!n) return false; ndc[i] = *n; }
+    const auto moved = wake_strip_ndc(ndc, duration, [&](double age) { const auto aim = path_aim(age); return std::array<float,2>{aim[0] * kAimToNdcX, aim[1] * kAimToNdcY}; });
+    for (size_t i = 0; i < count; ++i) {
+        const float dx = moved[i][0] - (*f0)[0], dy = moved[i][1] - (*f0)[1];
+        target[i].position[0] = p0[0] + (d * dx - b * dy) / det;
+        target[i].position[1] = p0[1] + (-c * dx + a * dy) / det;
+    }
+    return true;
+}
 // A reticle quad candidate: the callsite and a decoded square texture of a known edge. Where it sits is judged by mark_reticle_draws.
 inline bool reticle_candidate(const DrawPacket& draw) { return reticle_callsite(draw.callsite) && draw.texture && reticle_texture(*draw.texture); }
 // The ring's vertex colour is the player's: red for the first, blue for the second (the harness saw 255,0,0 / 100,0,0 / 255,64,64 and 0,0,255 / 0,0,100 / 50,100,255).
@@ -121,7 +179,7 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
         int owner = reticle_tint_owner(draws[i]);
         if (owner == 1 && !consumed[1]) owner = 0;
         if (owner >= 0 && unsigned(owner) == local && consumed[owner]) {
-            draws[i].late_aim = true; ++marked;
+            draws[i].late_aim = true; draws[i].wake = exact; ++marked;
             if (anchor) { draws[i].aim_ref = *anchor; draws[i].aim_exact = true; }
         }
     }

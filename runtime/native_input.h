@@ -48,10 +48,12 @@ public:
     InputSample consume();
     InputFrame capture_frame();
     void install_frame(const InputFrame&);
+    struct AimPoint { int64_t ns=0; float x=0,y=0; };
     struct Snapshot;
     std::shared_ptr<const Snapshot> checkpoint();
     void restore(const Snapshot&);
     std::array<float,2> latest_aim();     // any thread: the pointer as of now
+    std::array<float,2> aim_ago(double seconds);   // any thread: the pointer `seconds` ago (the last second is kept), interpolated between mouse events
     std::array<float,2> consumed_aim();   // the pointer of the last sample the guest read
     // Demo (determinism): every value the guest reads from this object (consume, consume_actions, using_host_input, generation) is appended to one
     // ordered file while recording and returned from that file while playing, so a deterministic run needs neither the harness nor a window.
@@ -82,6 +84,9 @@ private:
     std::mutex mutex_;
     BindingResolver actions_,services_;
     InputSample state_;
+    std::array<AimPoint,1024> trail_{};   // recent pointer positions, a ring ordered by time: aim_ago()
+    size_t trail_head_=0;
+    void note_aim();
     float previous_x_=0,previous_y_=0;
     uint64_t sequence_=0,host_sequence_=0,consumed_sequence_=0;
     bool legacy_test_input_=false;
