@@ -606,8 +606,9 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
         frame.black_output=black;
         frame.replay=replaying;
         frame.aim_consumed=uc::input_consumed_aim();
+        gx::mark_reticle_draws(frame.draws,frame.aim_consumed);
         for(auto& draw:frame.draws) {
-            if(gx::is_reticle_draw(draw,frame.aim_consumed)) { draw.late_aim=true; continue; }
+            if(draw.late_aim) continue;
             if(profile_mesh && gx::reticle_callsite(draw.callsite) && draw.texture && !draw.texture->levels.empty()) {   // another weapon's reticle texture would show up here
                 static std::set<uint64_t> reported; const auto& level=draw.texture->levels[0];
                 if(reported.insert(uint64_t(draw.callsite)<<32|level.width<<16|level.height).second) std::fprintf(stderr,"[late-aim] reticle callsite %08X draws a %ux%u texture that is not shifted\n",draw.callsite,level.width,level.height);

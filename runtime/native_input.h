@@ -92,7 +92,8 @@ void input_hle_init(NativeInput* input,NativeInput* second=nullptr);
 void input_hle_set_poll(std::function<void(const ppc::Ctx&)>);
 unsigned input_hle_channel(); // Guest baton owns the currently sampled channel.
 void input_hle_restore_channel(unsigned channel);
-std::array<float,2> input_consumed_aim();   // the pointer the guest read last (zero without input)
+std::array<float,2> input_consumed_aim();   // the pointer the guest read last for the aim channel's pad (zero without input)
+void input_hle_set_aim_channel(unsigned channel);   // network play: the local player's pad (0 host, 1 client); reset to 0 by input_hle_init
 uint32_t input_demo_speed(uint32_t live);   // the clock speed factor the deterministic game pacing uses (recorded and replayed with the demo; live without input)
 }
 void hle_KPADRead(ppc::Ctx&);

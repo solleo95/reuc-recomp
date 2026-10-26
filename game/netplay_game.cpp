@@ -652,6 +652,7 @@ const std::filesystem::path& NetGame::save_root() const {return impl_->saves.roo
 void NetGame::install(Sched& scheduler,SaveFs& saves) {
     impl_->scheduler=&scheduler;impl_->files=&saves;scheduler.set_rollback(true);
     input_hle_init(&impl_->pads[0],&impl_->pads[1]);
+    input_hle_set_aim_channel(impl_->options.netplay->host ? 0 : 1);
     game_input_init(&impl_->pads[0],impl_->options.input_probe,&impl_->pads[1]);
     game_loop_set_boundary([this](ppc::Ctx& c){impl_->boundary(c);});
 }

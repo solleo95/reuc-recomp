@@ -388,7 +388,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         std::fprintf(stderr,"[startup] renderer initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
-        if(!options.netplay)renderer.set_aim_source([&input] { return input.latest_aim(); });
+        renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);

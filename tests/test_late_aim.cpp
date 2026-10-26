@@ -31,6 +31,13 @@ int main() {
     CHECK(!gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 64), aim));             // not a reticle texture
     CHECK(!gx::is_reticle_draw(quad(0x80123456, nx, ny, 154), aim));            // not a reticle callsite
     CHECK(!gx::is_reticle_draw(quad(0x80393B0C, nx, ny, 154, true), aim));      // still decoding: decided on a later frame
+    {   // Cooperative play: the other player's reticle (same callsite and texture) within the window is not shifted; one reticle's own quads all are.
+        std::vector<gx::DrawPacket> draws{quad(0x80393B0C, nx, ny, 154), quad(0x80393B0C, nx + 0.15f, ny - 0.05f, 154), quad(0x8006D174, nx + 0.01f, ny, 100), quad(0x80393B0C, nx + 0.01f, ny, 154)};
+        CHECK(gx::mark_reticle_draws(draws, aim) == 3);
+        CHECK(draws[0].late_aim && !draws[1].late_aim && draws[2].late_aim && draws[3].late_aim);
+        std::vector<gx::DrawPacket> alone{quad(0x80393B0C, 0.5f, 0.5f, 154)};
+        CHECK(gx::mark_reticle_draws(alone, aim) == 0 && !alone[0].late_aim);
+    }
     // Crosshair scale: the viewport shrinks about the quad's centre, which keeps its pixel (pixel = x + (ndc * 0.5 + 0.5) * width).
     float x = 10, y = 20, width = 1280, height = 720;
     gx::scale_viewport_about({nx, ny}, 0.5f, x, y, width, height);

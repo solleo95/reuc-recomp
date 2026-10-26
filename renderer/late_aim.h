@@ -2,6 +2,8 @@
 #include "gx_vertices.h"
 #include <array>
 #include <cmath>
+#include <map>
+#include <vector>
 #include <optional>
 
 namespace gx {
@@ -37,13 +39,39 @@ inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw
     if (!any) return std::nullopt;
     return std::array<float,2>{(x0 + x1) / 2, (y0 + y1) / 2};
 }
-// Is this draw a reticle quad of a frame whose game drew with `consumed` (aim units)?
-inline bool is_reticle_draw(const DrawPacket& draw, const std::array<float,2>& consumed) {
-    if (!reticle_callsite(draw.callsite) || !draw.texture || !reticle_texture(*draw.texture)) return false;
+// How far (NDC, larger axis) a reticle quad of a frame whose game drew with `consumed` (aim units) sits from that pointer; nullopt if the draw is no reticle.
+inline std::optional<float> reticle_distance(const DrawPacket& draw, const std::array<float,2>& consumed) {
+    if (!reticle_callsite(draw.callsite) || !draw.texture || !reticle_texture(*draw.texture)) return std::nullopt;
     const auto center = draw_center_ndc(draw);
-    if (!center) return false;
+    if (!center) return std::nullopt;
     // It must sit near the pointer the game drew with (recoil moves it a little): a ring elsewhere on the screen is something else.
-    return std::abs((*center)[0] - consumed[0] * kAimToNdcX) < 0.25f && std::abs((*center)[1] - consumed[1] * kAimToNdcY) < 0.25f;
+    const float dx = std::abs((*center)[0] - consumed[0] * kAimToNdcX), dy = std::abs((*center)[1] - consumed[1] * kAimToNdcY);
+    if (dx >= 0.25f || dy >= 0.25f) return std::nullopt;
+    return std::max(dx, dy);
+}
+inline bool is_reticle_draw(const DrawPacket& draw, const std::array<float,2>& consumed) { return reticle_distance(draw, consumed).has_value(); }
+// Flags the local player's reticle draws. In cooperative play both players' reticles use the same callsite and textures, and the other player's can
+// sit within the 0.25 window of ours: of the draws sharing a callsite and texture size only those next to the nearest one are the local reticle.
+template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<float,2>& consumed) {
+    struct Best { float distance; size_t index; };
+    std::map<uint64_t, Best> best;
+    std::vector<std::optional<float>> distance(draws.size());
+    for (size_t i = 0; i < draws.size(); ++i) {
+        distance[i] = reticle_distance(draws[i], consumed);
+        if (!distance[i]) continue;
+        const auto& level = draws[i].texture->levels[0];
+        const uint64_t key = uint64_t(draws[i].callsite) << 32 | (draws[i].texture->guest_width ? draws[i].texture->guest_width : level.width);
+        const auto found = best.find(key);
+        if (found == best.end() || *distance[i] < found->second.distance) best[key] = {*distance[i], i};
+    }
+    size_t marked = 0;   // draws of one reticle sit within a few hundredths of each other (recoil offsets, a glow drawn twice); the other player's is further away
+    for (size_t i = 0; i < draws.size(); ++i) {
+        if (!distance[i]) continue;
+        const auto& level = draws[i].texture->levels[0];
+        const uint64_t key = uint64_t(draws[i].callsite) << 32 | (draws[i].texture->guest_width ? draws[i].texture->guest_width : level.width);
+        if (*distance[i] <= best.at(key).distance + 0.03f) { draws[i].late_aim = true; ++marked; }
+    }
+    return marked;
 }
 // Crosshair scale (graphics.crosshair_scale): the draw's viewport is scaled about the reticle centre (draw NDC), so the quad keeps its place and changes size.
 inline void scale_viewport_about(const std::array<float,2>& center, float scale, float& x, float& y, float& width, float& height) {

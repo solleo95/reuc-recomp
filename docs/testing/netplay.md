@@ -796,3 +796,12 @@ while the game runs behind (a peer that cannot hold the tick).
 Diagnosis: `UC_AUDIO_DUMP=<prefix>` writes every block the game hands over to `<prefix>.<pid>`; `python -m uctest.audio_dump <file>` prints the
 write gaps, the queue left at each write and the largest sample steps per second (the same steps in a single-player dump mean the sound
 itself, not the transport).
+
+## Reticle in network play
+
+The renderer re-aims the local player's reticle at record time by (freshest mouse - pointer the game drew with), as in single-player, so it follows
+the mouse at the present rate whatever the tick (30 Hz tick: the game's own reticle steps 30 times a second). The pointer the game drew with is
+the one of the local player's pad (`input_hle_set_aim_channel`: slot 0 on the host, 1 on the client); the other player's reticle uses the same
+callsite and textures, so of the matching draws only those next to the one nearest the local pointer are shifted (`mark_reticle_draws`). A shot
+still lands where the mouse was when the button went down: the aim and the button travel together in one input sample.
+`UC_AIM_LOG=1` prints one `[aim]` line per shifted draw (consumed pointer, latest pointer) for diagnosis.
