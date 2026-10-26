@@ -58,8 +58,10 @@ inline int reticle_tint_owner(const DrawPacket& draw) {
 // reticle jumped). The quads of one reticle sit at one place (ring in the player's tint, white companions); the first tinted quad names the owner.
 // consumed[k]: the pointer pad k's last sample drew with (aim units), empty where the pad does not exist (single-player has only pad 0).
 // Flags every reticle quad (`reticle`: the local crosshair size applies to both players' reticles) and the local player's (`late_aim`: it follows the mouse).
-template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<std::optional<std::array<float,2>>,2>& consumed, unsigned local) {
-    struct Group { std::array<float,2> center; int owner; std::vector<size_t> members; };
+// exact: the local reticle is re-aimed to the mouse itself (aim_ref = the tinted ring's own centre, so every quad of that player moves by the same amount and
+// keeps its offsets) instead of by (mouse - consumed pointer): the game's easing and recoil behind the pointer change at the tick rate and showed as jitter.
+template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<std::optional<std::array<float,2>>,2>& consumed, unsigned local, bool exact = false) {
+    struct Group { std::array<float,2> center; int owner; std::vector<size_t> members; bool tinted = false; };
     std::vector<Group> groups;
     for (size_t i = 0; i < draws.size(); ++i) {
         if (!reticle_candidate(draws[i])) continue;
@@ -72,9 +74,13 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
             if (std::abs(g.center[0] - (*center)[0]) < 0.03f && std::abs(g.center[1] - (*center)[1]) < 0.03f) { group = &g; break; }
         if (!group) { groups.push_back({*center, tint, {}}); group = &groups.back(); }
         if (group->owner < 0) group->owner = tint;
+        if (tint >= 0 && !group->tinted) { group->tinted = true; group->center = *center; }   // the tinted ring is the anchor
         group->members.push_back(i);
     }
     size_t marked = 0;
+    std::optional<std::array<float,2>> anchor;   // the local ring's centre in aim units
+    for (auto& group : groups)
+        if (exact && group.tinted && group.owner >= 0 && unsigned(group.owner) == local && consumed[group.owner]) { anchor = std::array<float,2>{group.center[0] / kAimToNdcX, group.center[1] / kAimToNdcY}; break; }
     for (auto& group : groups) {
         int owner = group.owner;
         if (owner < 0) {   // no tinted quad: the pointer nearest to the group decides, within the old window
@@ -88,13 +94,19 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
         if (owner < 0 || !consumed[owner]) continue;
         // A ring far from its player's pointer is something else (the HUD draws other square textures through the same callsite).
         if (std::abs(group.center[0] - (*consumed[owner])[0] * kAimToNdcX) > 0.6f || std::abs(group.center[1] - (*consumed[owner])[1] * kAimToNdcY) > 0.6f) continue;
-        for (const auto index : group.members) { draws[index].reticle = true; draws[index].late_aim = unsigned(owner) == local; ++marked; }
+        for (const auto index : group.members) {
+            draws[index].reticle = true; draws[index].late_aim = unsigned(owner) == local; ++marked;
+            if (draws[index].late_aim && anchor) { draws[index].aim_ref = *anchor; draws[index].aim_exact = true; }
+        }
     }
     for (size_t i = 0; i < draws.size(); ++i) {   // the wake of the local reticle moves with it (not scaled: it has no centre of its own)
         if (!reticle_tail_callsite(draws[i].callsite)) continue;
         int owner = reticle_tint_owner(draws[i]);
         if (owner == 1 && !consumed[1]) owner = 0;
-        if (owner >= 0 && unsigned(owner) == local && consumed[owner]) { draws[i].late_aim = true; ++marked; }
+        if (owner >= 0 && unsigned(owner) == local && consumed[owner]) {
+            draws[i].late_aim = true; ++marked;
+            if (anchor) { draws[i].aim_ref = *anchor; draws[i].aim_exact = true; }
+        }
     }
     return marked;
 }

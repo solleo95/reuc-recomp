@@ -46,6 +46,14 @@ int main() {
         const std::array<float,2> near_other{aim[0] + 0.05f, aim[1]};
         CHECK(mark(overlap, {aim, near_other}, 1) == 4);   // the client owns pad 1: only the blue reticle follows its mouse, both are scaled
         CHECK(!overlap[0].late_aim && !overlap[1].late_aim && overlap[2].late_aim && overlap[3].late_aim && overlap[0].reticle && overlap[1].reticle);
+        {   // Exact mode: every quad and the wake of the local player move from the tinted ring's centre to the mouse, other players' quads are untouched.
+            std::vector<gx::DrawPacket> exact{tinted(quad(0x80393B0C, nx, ny, 120), red), tinted(quad(0x80393B0C, nx + 0.1f, ny + 0.02f, 120), blue), quad(0x8006D174, nx + 0.15f, ny + 0.02f, 100),
+                                              tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue), tinted(quad(0x8006CED4, 0.f, 0.f, 100), red)};
+            CHECK(gx::mark_reticle_draws(exact, Aims{aim, near_other}, 1, true) == 4);
+            const float ax = (nx + 0.1f) / gx::kAimToNdcX, ay = (ny + 0.02f) / gx::kAimToNdcY;
+            CHECK(!exact[0].aim_exact && exact[1].aim_exact && exact[2].aim_exact && exact[3].aim_exact && !exact[4].aim_exact);
+            CHECK(std::abs(exact[1].aim_ref[0] - ax) < 1e-5f && std::abs(exact[2].aim_ref[1] - ay) < 1e-5f && std::abs(exact[3].aim_ref[0] - ax) < 1e-5f);
+        }
         std::vector<gx::DrawPacket> far{tinted(quad(0x80393B0C, nx - 0.45f, ny, 120), red)};   // a fast flick: 0.45 from the pointer it was drawn from
         CHECK(mark(far, {aim, other}, 0) == 1 && far[0].late_aim);
     }

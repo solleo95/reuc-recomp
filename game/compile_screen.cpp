@@ -18,7 +18,8 @@ struct CompileScreen::State {
 };
 namespace {
 constexpr int kWidth=520, kHeight=150;
-constexpr COLORREF kBackground=RGB(22,24,28), kText=RGB(235,235,235), kMuted=RGB(150,155,165), kTrack=RGB(48,52,60), kFill=RGB(80,170,255);
+// The launcher's Graphite palette (launcher/graphite_style.cpp): the same ivory, grey, charcoal and Umbrella red, Georgia for the headline.
+constexpr COLORREF kBackground=RGB(0x14,0x18,0x19), kBorder=RGB(0x55,0x5a,0x5b), kText=RGB(0xee,0xe9,0xdc), kMuted=RGB(0x92,0x98,0x99), kTrack=RGB(0x24,0x2a,0x2c), kFill=RGB(0x9d,0x15,0x22), kAccent=RGB(0x9d,0x15,0x22);
 
 void paint(HWND window,const CompileScreen::State& state) {
     PAINTSTRUCT paint;
@@ -29,21 +30,23 @@ void paint(HWND window,const CompileScreen::State& state) {
     HGDIOBJ old=SelectObject(dc,bitmap);
     HBRUSH background=CreateSolidBrush(kBackground);
     FillRect(dc,&client,background); DeleteObject(background);
+    HBRUSH border=CreateSolidBrush(kBorder); FrameRect(dc,&client,border); DeleteObject(border);
+    const RECT accent{0,0,4,client.bottom}; HBRUSH accent_brush=CreateSolidBrush(kAccent); FillRect(dc,&accent,accent_brush); DeleteObject(accent_brush);
     SetBkMode(dc,TRANSPARENT);
     SelectObject(dc,state.title); SetTextColor(dc,kText);
     const bool starting=state.total==0;   // before the first progress report: the renderer is still starting
-    RECT title{24,18,client.right-24,state.peer_message.empty() ? 52 : client.bottom-18};
+    RECT title{28,18,client.right-28,state.peer_message.empty() ? 56 : 70};
     DrawTextW(dc,state.peer_message.empty() ? (starting ? L"Запуск игры" : L"Компиляция шейдеров") : state.peer_message.c_str(),-1,&title,DT_LEFT|DT_WORDBREAK);
     SelectObject(dc,state.detail); SetTextColor(dc,kMuted);
-    RECT detail{24,54,client.right-24,80};
-    if(state.peer_message.empty())DrawTextW(dc,starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.",-1,&detail,DT_LEFT|DT_SINGLELINE);
+    RECT detail{28,state.peer_message.empty() ? 60 : 76,client.right-28,100};
+    DrawTextW(dc,state.peer_message.empty() ? (starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.") : L"Resident Evil: The Umbrella Chronicles",-1,&detail,DT_LEFT|DT_SINGLELINE);
     if(starting) { BitBlt(target,0,0,client.right,client.bottom,dc,0,0,SRCCOPY); SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc); EndPaint(window,&paint); return; }
-    const RECT track{24,96,client.right-24,112};
+    const RECT track{28,96,client.right-28,102};
     HBRUSH track_brush=CreateSolidBrush(kTrack); FillRect(dc,&track,track_brush); DeleteObject(track_brush);
     RECT fill=track; fill.right=track.left+LONG((track.right-track.left)*(state.total ? double(std::min(state.done,state.total))/double(state.total) : 0.0));
     HBRUSH fill_brush=CreateSolidBrush(kFill); FillRect(dc,&fill,fill_brush); DeleteObject(fill_brush);
     const std::wstring count=std::to_wstring(state.done)+L" / "+std::to_wstring(state.total);
-    RECT counter{24,116,client.right-24,140}; DrawTextW(dc,count.c_str(),-1,&counter,DT_RIGHT|DT_SINGLELINE);
+    RECT counter{28,112,client.right-28,136}; DrawTextW(dc,count.c_str(),-1,&counter,DT_RIGHT|DT_SINGLELINE);
     BitBlt(target,0,0,client.right,client.bottom,dc,0,0,SRCCOPY);
     SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc);
     EndPaint(window,&paint);
@@ -62,7 +65,7 @@ CompileScreen::CompileScreen() {
     try {
         WNDCLASSW cls{}; cls.lpfnWndProc=procedure; cls.hInstance=GetModuleHandleW(nullptr); cls.lpszClassName=L"UcCompileScreen"; cls.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));
         if(!RegisterClassW(&cls) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) throw std::runtime_error("compile screen: window class registration failed");
-        state_->title=CreateFontW(-26,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+        state_->title=CreateFontW(-28,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Georgia");
         state_->detail=CreateFontW(-16,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
         const int x=(GetSystemMetrics(SM_CXSCREEN)-kWidth)/2, y=(GetSystemMetrics(SM_CYSCREEN)-kHeight)/2;
         state_->window=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,cls.lpszClassName,L"Resident Evil: The Umbrella Chronicles",WS_POPUP,x,y,kWidth,kHeight,nullptr,nullptr,cls.hInstance,state_);
@@ -85,6 +88,8 @@ void CompileScreen::wait_for_peer(std::string_view message) {
     state_->peer_message.resize(count);
     if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,message.data(),int(message.size()),state_->peer_message.data(),count)!=count)
         throw std::runtime_error("cannot decode peer waiting message");
+    constexpr int kPeerHeight=112;   // headline and one muted line, no progress bar
+    SetWindowPos(state_->window,nullptr,(GetSystemMetrics(SM_CXSCREEN)-kWidth)/2,(GetSystemMetrics(SM_CYSCREEN)-kPeerHeight)/2,kWidth,kPeerHeight,SWP_NOZORDER|SWP_NOACTIVATE);
     show();
 }
 void CompileScreen::update(size_t done,size_t total) {

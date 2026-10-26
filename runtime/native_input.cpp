@@ -17,6 +17,7 @@ uc::NativeInput* input; // set before guest execution; cleared after all guest t
 uc::NativeInput* second_input;
 unsigned sampled_channel=0;
 unsigned aim_channel=0;   // the pad whose pointer drives the local reticle (network play: the local player's slot)
+bool aim_exact=false;   // network play: the reticle follows the mouse exactly (late_aim.h)
 std::function<void(const ppc::Ctx&)> input_poll;
 uc::InputProbe input_probe;
 uc::InputMap input_map;
@@ -207,7 +208,8 @@ std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); re
 std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
 std::array<float,2> input_consumed_aim() { auto* source=aim_channel==1 ? second_input : input; return source ? source->consumed_aim() : std::array<float,2>{}; }
 std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? second_input : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
-void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; }
+void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; aim_exact=true; }
+bool input_aim_exact() { return aim_exact; }
 unsigned input_aim_channel() { return aim_channel; }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
@@ -299,7 +301,7 @@ InputFrame NativeInput::capture_frame() {
     return frame;
 }
 void NativeInput::install_frame(const InputFrame& frame) { std::lock_guard lock(mutex_); network_frame_=frame; previous_x_=frame.sample.x;previous_y_=frame.sample.y; }
-void input_hle_init(NativeInput* source,NativeInput* second) { input=source; second_input=second; sampled_channel=0; aim_channel=0; }
+void input_hle_init(NativeInput* source,NativeInput* second) { input=source; second_input=second; sampled_channel=0; aim_channel=0; aim_exact=false; }
 void input_hle_set_poll(std::function<void(const ppc::Ctx&)> poll) { input_poll=std::move(poll); }
 unsigned input_hle_channel() { return sampled_channel; }
 void input_hle_restore_channel(unsigned channel) {
