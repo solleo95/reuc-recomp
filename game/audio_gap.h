@@ -21,4 +21,17 @@ private:
     unsigned fed_=0,writes_=0;
     bool muted_=false;
 };
+// A queue that keeps growing (the game's clock runs a little ahead of the device's) used to be cut off at its cap, which clicks. Above 60% of
+// the cap the stream plays 3% faster (about half a semitone, inaudible for the second it takes) until the queue is back under 35%.
+class AudioCatchUp {
+public:
+    static constexpr float fast_ratio=1.03f;
+    float update(int queued_bytes,int cap_bytes) {
+        if(!fast_ && queued_bytes>cap_bytes*6/10) fast_=true;
+        else if(fast_ && queued_bytes<cap_bytes*35/100) fast_=false;
+        return fast_ ? fast_ratio : 1.f;
+    }
+private:
+    bool fast_=false;
+};
 }

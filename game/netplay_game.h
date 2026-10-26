@@ -29,14 +29,17 @@ bool same_net_input(const NetFrame&,const NetFrame&);
 constexpr std::array<uint32_t,5> net_ticks{30,60,120,144,240};
 // Host-side choice of the shared tick from the slowest player's smoothed wall time per simulated step.
 // Called about once a second. Returns the tick to switch to, or 0 to stay: a step costing over 85% of the current frame for
-// four seconds, or over 110% for two, drops one rung; a step under 65% of the next rung's frame for twenty seconds climbs one. A drop within two
-// minutes of a climb doubles the wait for the next climb (up to 160 s), so a PC whose cost depends on the tick does not flap.
+// four seconds, or over 110% for two, drops one rung; a step under 65% of the next rung's frame for 45 seconds climbs one; "a step" for a climb is the heaviest second of the last minutes
+// (70 s half-life), so a cheap menu does not trigger a climb that a fight undoes. A drop within two
+// minutes of a climb doubles the wait for the next climb (up to 360 s), so a PC whose cost depends on the tick does not flap.
 class NetTickPolicy {
 public:
     uint32_t update(uint32_t tick,double step_cost_us);
 private:
-    unsigned slow_=0,fast_=0,hold_=20;
+    static constexpr unsigned base_hold=45;   // The opening menus cost little; a fight shows the real step cost well after twenty seconds.
+    unsigned slow_=0,fast_=0,hold_=base_hold;
     uint64_t seconds_=0,last_up_=0;
+    double ceiling_=0;
 };
 class NetInputClock {
 public:

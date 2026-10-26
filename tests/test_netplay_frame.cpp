@@ -64,39 +64,48 @@ int main() {
     CHECK(uc::net_input_delay(200000000,60)==8);
     CHECK(uc::net_input_delay(200000000,30)==5);
     CHECK(uc::net_input_delay(433333333,30)==9);
-    {   // Tick policy: four slow seconds drop to 30 Hz, twenty fast ones return, a single odd second changes nothing.
+    {   // Tick policy: four slow seconds drop to 30 Hz, a climb needs 45 calm seconds after the heavy ones faded, a single odd second changes nothing.
+        const auto climb_seconds=[](uc::NetTickPolicy& policy,uint32_t tick,double cost,uint32_t expected) {
+            int seconds=0;uint32_t change=0;
+            while(!(change=policy.update(tick,cost)) && seconds<600)++seconds;
+            CHECK(change==expected);
+            return seconds;
+        };
         uc::NetTickPolicy policy;
         CHECK(policy.update(60,8000)==0);
         for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
         CHECK(policy.update(60,8000)==0);                                 // A calm second resets the count.
         for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
         CHECK(policy.update(60,15000)==30);
-        for(int second=1;second<20;++second)CHECK(policy.update(30,9000)==0);
-        CHECK(policy.update(30,12000)==0);                                // Not fast enough for 60 Hz: the count restarts.
-        for(int second=1;second<20;++second)CHECK(policy.update(30,9000)==0);
-        CHECK(policy.update(30,9000)==60);
-        // The return fails at once: the next wait doubles to forty seconds.
+        // The heavy seconds still count when 60 Hz is considered again: about 35 s to fade below the 60 Hz budget, then 45 calm ones.
+        int waited=climb_seconds(policy,30,9000,60);
+        CHECK(waited>=60 && waited<=110);
+        // The return fails at once: the next wait doubles.
         for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
         CHECK(policy.update(60,15000)==30);
-        for(int second=1;second<40;++second)CHECK(policy.update(30,9000)==0);
-        CHECK(policy.update(30,9000)==60);
+        waited=climb_seconds(policy,30,9000,60);
+        CHECK(waited>=100 && waited<=170);
         CHECK(policy.update(60,9000)==0);                                 // Back at 60 with the counters clear.
         CHECK(policy.update(60,1e9)==0);                                  // A loading hitch alone is one second, not a downshift.
+        uc::NetTickPolicy menu;                                            // Cheap menus alone do not climb for 45 s, and a fight second in between restarts the wait.
+        for(int second=0;second<44;++second)CHECK(menu.update(60,4000)==0);
+        CHECK(menu.update(60,12000)==0);
+        for(int second=0;second<44;++second)CHECK(menu.update(60,4000)==0);
         uc::NetTickPolicy overloaded;                                      // Over 110% of the frame (18.3 ms at 60 Hz): the game is already behind.
         CHECK(overloaded.update(60,20000)==0 && overloaded.update(60,20000)==30);
         uc::NetTickPolicy tight;                                           // Between 85% and 110%: the slower, surer path.
         for(int second=0;second<3;++second)CHECK(tight.update(60,16000)==0);
         CHECK(tight.update(60,16000)==30);
         uc::NetTickPolicy strong;                                          // Two fast PCs climb: 60 -> 120 needs a step under 5.4 ms, 120 -> 144 under 4.5 ms.
-        for(int second=1;second<20;++second)CHECK(strong.update(60,4000)==0);
+        for(int second=1;second<45;++second)CHECK(strong.update(60,4000)==0);
         CHECK(strong.update(60,4000)==120);
-        for(int second=1;second<20;++second)CHECK(strong.update(120,4400)==0);
+        for(int second=1;second<45;++second)CHECK(strong.update(120,4400)==0);
         CHECK(strong.update(120,4400)==144);
         for(int second=0;second<3;++second)CHECK(strong.update(144,7500)==0);   // Over 85% of 6.9 ms: one rung down after four seconds.
         CHECK(strong.update(144,7500)==120);
-        for(int second=0;second<50;++second)CHECK(strong.update(120,4400)!=144 || second>=39);   // The failed climb doubled the hold.
+        for(int second=0;second<130;++second)CHECK(strong.update(120,4400)!=144);   // The failed climb doubled the hold and the heavy second fades slowly.
         uc::NetTickPolicy top;                                             // 144 -> 240 needs a step under 2.7 ms; 240 is the last rung.
-        for(int second=1;second<20;++second)CHECK(top.update(144,2600)==0);
+        for(int second=1;second<45;++second)CHECK(top.update(144,2600)==0);
         CHECK(top.update(144,2600)==240);
         for(int second=0;second<100;++second)CHECK(top.update(240,100)==0);
     }

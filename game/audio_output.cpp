@@ -73,8 +73,13 @@ void AudioOutput::write(std::span<const int16_t> pcm) {
             std::fprintf(stderr,"[audio] %s\n",muted ? "the game runs behind: sound muted until it catches up" : "sound restored");
         }
     }
-    // shortcut: discard an overrun above100ms; native clock/device drift control is TD-042.
-    if (queued>32000*2*2/10 + (gap_mute_enabled_ ? 32000*4*50/1000 : 0)) {
+    const int cap=32000*2*2/10 + (gap_mute_enabled_ ? 32000*4*50/1000 : 0);
+    if (const float ratio=catch_up_.update(queued,cap); ratio!=ratio_) {
+        ratio_=ratio;
+        if (!SDL_SetAudioStreamFrequencyRatio(stream_,ratio)) throw std::runtime_error(SDL_GetError());
+    }
+    // shortcut: discard an overrun above the cap if the faster playback did not keep up; native clock/device drift control is TD-042.
+    if (queued>cap) {
         if(!SDL_ClearAudioStream(stream_)) throw std::runtime_error(SDL_GetError());
         ++overruns_;
     }

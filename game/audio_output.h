@@ -20,6 +20,8 @@ private:
     SDL_AudioStream* stream_=nullptr;
     bool gap_mute_enabled_=false,user_muted_=false,gap_muted_=false;
     AudioGapMute gaps_;
+    AudioCatchUp catch_up_;
+    float ratio_=1.f;
     std::atomic<uint64_t> blocks_{0},overruns_{0},dry_{0},refills_{0};
     std::atomic<int> max_queued_{0};
 };

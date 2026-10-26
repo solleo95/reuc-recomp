@@ -16,4 +16,11 @@ int main() {
     CHECK(behind.muted());
     behind.update(false);
     for(int write=0;write<80;++write)CHECK(behind.update(false));           // A single fed write does not restore it.
+    uc::AudioCatchUp catch_up;                                              // Cap 100 ms = 12800 bytes: faster above 60 ms, normal again under 35 ms.
+    CHECK(catch_up.update(5000,12800)==1.f && catch_up.update(7600,12800)==1.f);
+    CHECK(catch_up.update(7700,12800)==uc::AudioCatchUp::fast_ratio);
+    CHECK(catch_up.update(6000,12800)==uc::AudioCatchUp::fast_ratio);       // Hysteresis: no flapping around the threshold.
+    CHECK(catch_up.update(4480,12800)==uc::AudioCatchUp::fast_ratio);
+    CHECK(catch_up.update(4479,12800)==1.f);
+    CHECK(catch_up.update(7000,12800)==1.f);                                // Back to normal until it climbs above 60 ms again.
 }
