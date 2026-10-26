@@ -16,6 +16,7 @@ namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
 struct Options {
     std::optional<net::Endpoint> netplay;
+    uint32_t net_tick=60;   // Simulation steps per second both players run in network play: 60 or 30 (the original rate).
     std::filesystem::path game = "S:\\Games\\Umbrella Chronicles\\game";
     uint32_t width = 0, height = 0, seconds = 0; //0 resolves to the monitor size at startup.
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.

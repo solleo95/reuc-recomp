@@ -57,7 +57,7 @@ public:
     ~VulkanRenderer();
     VulkanRenderer(const VulkanRenderer&) = delete;
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
-    void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9);
+    void initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale = 0.5, double render_aspect = 16.0/9, bool exclusive_fullscreen = false);
     // Suppressing display preserves guest-frame rendering, copies, clears and completion.
     bool render(const gx::FramePacket& packet, bool display = true,uint64_t submission_serial=0);
     bool copy_ready(const std::shared_ptr<const gx::TexturePixels>& texture,bool previous_frame=false);
@@ -377,6 +377,9 @@ private:
     VkPhysicalDeviceMemoryProperties memory_{};
     VkCommandPool pool_ = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+    bool present_fences_=false;
+    bool disallow_exclusive_=false;
+    VkFence retirement_acquired_=VK_NULL_HANDLE;   // legacy resize: proves a successor presentation finished
     VkExtent2D extent_{};
     VkExtent2D requested_{};
     double configured_scale_=0.5, render_aspect_=16.0/9;

@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cmath>
 
-static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::function<void()>& frame,const std::function<void(const char*)>& capture) {
+static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureReport& features,const std::function<void()>& frame,const std::function<void(const char*)>& capture) {
     for(int i=0;i<4;++i) frame();
     const auto spacing=ImGui::GetStyle().ItemInnerSpacing.x;
     for(int i=0;i<120;++i) frame();
@@ -67,6 +67,19 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,const std::fu
     click({graphics->Pos.x+graphics->WorkRect.GetWidth()*.75f*.75f,graphics->Pos.y+checkbox+small_height+style.ItemSpacing.y+height*.5f});
     menu.commit(); CHECK(live.options().sharpness>.65 && !live.error());
     capture("rcas");
+    features.dlss=features.dlss_g=false;
+    frame();menu.commit();
+    CHECK(live.options().upscaler==uc::UpscalerKind::off && !live.options().frame_generation);
+    click({graphics->Pos.x+70,graphics->Pos.y+first+2*stride+height*.5f});
+    CHECK(popup->Active);
+    click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+2*(text+style.ItemSpacing.y)+text*.5f});
+    menu.commit();CHECK(live.options().upscaler==uc::UpscalerKind::off);   // clicking unsupported DLSS cannot restore it
+    capture("unsupported-dlss");
+    io.AddKeyEvent(ImGuiKey_Escape,true);frame();
+    io.AddKeyEvent(ImGuiKey_Escape,false);frame();menu.commit();
+    features.dlss=features.dlss_g=true;
+    auto restored=live.options();restored.upscaler=uc::UpscalerKind::dlss;live.apply(restored);
+    frame();
     const float generation=checkbox+small_height+height+text+4*style.ItemSpacing.y+std::floor(6*unit);
     io.AddMousePosEvent(graphics->InnerClipRect.GetCenter().x,graphics->InnerClipRect.GetCenter().y); frame();
     io.AddMouseWheelEvent(0,-4); frame(); frame();
@@ -217,14 +230,14 @@ int main(int argc,char** argv) {
             }
             CHECK(completed); ImGui::SetCurrentContext(context);
         };
-        exercise(menu,live,frame,[&](const char* name){uc::save_png(renderer.capture(packet.serial),std::filesystem::path(argv[3])/(std::string(name)+".png"));});
+        exercise(menu,live,features,frame,[&](const char* name){uc::save_png(renderer.capture(packet.serial),std::filesystem::path(argv[3])/(std::string(name)+".png"));});
         renderer.shutdown(); SDL_DestroyWindow(window); SDL_Quit();
     } else {
         ImGui::CreateContext(); auto& io=ImGui::GetIO();
         io.DisplaySize={2560,1440}; io.DeltaTime=1.f/60; io.IniFilename=nullptr;
         io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
         io.BackendFlags|=ImGuiBackendFlags_RendererHasTextures; menu.setup();
-        exercise(menu,live,[&] {
+        exercise(menu,live,features,[&] {
             ImGui::NewFrame(); menu.build(); ImGui::Render();
             for(auto* texture:ImGui::GetPlatformIO().Textures) {texture->SetTexID(1); texture->SetStatus(ImTextureStatus_OK);}
         },[](const char*){});

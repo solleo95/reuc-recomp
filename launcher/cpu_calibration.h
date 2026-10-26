@@ -6,7 +6,7 @@
 #include <optional>
 #include <thread>
 namespace uc {
-struct CpuScore {int cpu;std::array<double,3> samples;unsigned scheduling_class=0;};
+struct CpuScore {int cpu;std::array<double,3> samples;unsigned scheduling_class=0;unsigned efficiency=0;};
 int fastest_cpu(const std::vector<CpuScore>& scores);
 std::optional<int> load_cpu_profile(const std::filesystem::path&,const CpuTopology&);
 struct CpuCalibrationResult {

@@ -9,8 +9,8 @@
 #include <vector>
 
 namespace uc {
-// One row per presented frame: how long it took and where the time went. Written by a background thread every few seconds (and at exit) so
-// that logging adds no hitch of its own. Enabled by UC_FRAME_LOG=<file>, or by an empty file `frame_log.on` next to uc.exe (debug/frames-<pid>.csv).
+// One row per presented frame, written by a background thread each second and at exit.
+// Automatic in the diagnostic session; UC_FRAME_LOG can select a different destination.
 struct FrameRow {
     double t_ms = 0, interval_ms = 0;   // since start; since the previous present
     double busy_ms = 0;                 // time spent in render() for the packets of this frame
@@ -44,6 +44,8 @@ private:
     std::vector<FrameRow> rows_;
     std::string notes_;
     bool stop_ = false;
+    size_t dropped_=0;
+    bool write_error_reported_=false;
     std::thread writer_;
 };
 }

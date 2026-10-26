@@ -113,10 +113,31 @@ uint64_t net_work_estimate(std::array<uint64_t,3> recent,uint64_t previous) {
     // Ignore isolated hitches, react promptly to sustained load, release headroom gradually.
     return std::max(recent[1],(previous*31+recent[1])/32);
 }
-uint32_t net_input_delay(uint64_t max_rtt_ns) {
+uint32_t NetTickPolicy::update(uint32_t tick,double step_cost_us) {
+    ++seconds_;
+    size_t rung=1;
+    for(size_t i=0;i<net_ticks.size();++i)if(net_ticks[i]==tick)rung=i;
+    // A step that cannot fit the frame at all (over 110%) means the game already runs below real time and the sound stutters: two seconds.
+    const double frame_us=1000000.0/tick;
+    slow_=step_cost_us>frame_us*1.1 ? slow_+2 : step_cost_us>frame_us*0.85 ? slow_+1 : 0;
+    if(last_up_ && seconds_-last_up_>300)hold_=20;   // Five calm minutes: forget the backoff.
+    if(slow_>=4 && rung>0) {
+        slow_=fast_=0;
+        if(last_up_ && seconds_-last_up_<120)hold_=std::min(hold_*2,160u);   // The last rise failed: wait twice as long before the next.
+        return net_ticks[rung-1];
+    }
+    if(rung+1>=net_ticks.size()) {fast_=0;return 0;}
+    fast_=step_cost_us<1000000.0/net_ticks[rung+1]*0.65 ? fast_+1 : 0;   // Would the next tick still leave a third of its frame free?
+    if(fast_>=hold_) {fast_=0;last_up_=seconds_;return net_ticks[rung+1];}
+    return 0;
+}
+bool net_must_wait(uint64_t cursor,uint64_t remote_next) {
+    return cursor+1>remote_next && cursor+1-remote_next>net_prediction_limit;
+}
+uint32_t net_input_delay(uint64_t max_rtt_ns,uint32_t tick_hz) {
     if(max_rtt_ns>433333333)throw std::invalid_argument("Network RTT exceeds the input buffer budget");
     // Cover normal one-way transit; rollback handles exceptional late arrivals.
-    return 2+uint32_t((max_rtt_ns*120+1999999999)/2000000000);
+    return 2+uint32_t((max_rtt_ns*tick_hz+1999999999)/2000000000);
 }
 uint64_t net_startup_rtt(std::array<uint64_t,9> samples) {
     // Buffer ordinary jitter; one or two startup retransmissions must not add permanent input lag.
@@ -127,14 +148,19 @@ uint64_t net_repair_end(uint64_t peer_ack,uint64_t latest) {
     if(latest<4 || peer_ack>latest-4)return peer_ack;
     return peer_ack+std::min<uint64_t>(8,latest-3-peer_ack);
 }
-std::optional<uint64_t> NetInputClock::sample(uint64_t cursor,uint64_t now_ns,bool replay) {
+std::optional<uint64_t> NetInputClock::sample(uint64_t cursor,uint64_t now_ns,bool replay,uint64_t period) {
     if(cursor>next_-delay_)throw std::logic_error("input sampling skipped a frame");
+    head_=std::max(head_,cursor);
     const bool caught_up=cursor==next_-delay_;
     // Replay samples on wall time; forward progress drains that immutable backlog first.
     if(!caught_up && (!replay || now_ns<deadline_))return {};
-    constexpr uint64_t period=1000000000/120;
-    const auto count=caught_up ? 1 : (now_ns-deadline_)/period+1;
+    // Slots run ahead of the simulation by the pipeline plus a bounded replay lead: a stalled replay cannot queue unbounded input.
+    const auto limit=head_+delay_+replay_lead;
+    if(!caught_up && next_>limit) {deadline_=now_ns+period;return {};}
+    const auto due=caught_up ? 1 : (now_ns-deadline_)/period+1;
+    const auto count=std::min(due,limit-next_+1);
     deadline_=caught_up ? now_ns+period : deadline_+count*period;
+    if(count<due)deadline_=now_ns+period;
     next_+=count;
     return next_-1;
 }
@@ -217,7 +243,18 @@ struct NetGame::Impl {
     Sched* scheduler=nullptr;
     SaveFs* files=nullptr;
     std::unique_ptr<RollbackMemory> memory;
-    static constexpr uint64_t history_limit=240;
+    uint64_t tick;                  // Simulation steps per second: agreed in the hello message, changed only through `tick_changes`.
+    std::atomic<uint32_t> tick_now{0};   // The same for other threads (present pacing).
+    static constexpr uint64_t hash_interval=60,history_limit=120;   // Frames, whatever the tick: both peers hash and prune on the same frames.
+    std::map<uint64_t,uint32_t> tick_changes;   // Step -> tick that starts there; applied again by every replay through that step.
+    NetTickPolicy tick_policy;
+    const bool auto_tick=[]{const char* text=std::getenv("UC_NET_TICK_AUTO");return !(text && text[0]=='0');}();   // UC_NET_TICK_AUTO=0 pins the tick (tests that measure speed)
+    // UC_NET_CLIENT_STEP_US=<us>: the joining player's every step takes that much longer (tests of a weak PC).
+    const unsigned extra_step_us=[&]{const char* text=std::getenv("UC_NET_CLIENT_STEP_US");return text && !options.netplay->host ? unsigned(std::min(50000L,std::max(0L,std::strtol(text,nullptr,10)))) : 0u;}();
+    double cost_us=0,peer_cost_us=0;            // Smoothed wall time one simulated step takes here and on the other PC.
+    std::chrono::steady_clock::time_point last_forward{},next_policy{};
+    std::chrono::steady_clock::duration idle{};   // Waiting (lead limit, pacing sleep) since the last forward step: not step cost.
+    uint64_t forward_tick=0,simulated_ns=0;       // Tick of the latest forward step; game time it has run (replays do not rewind it).
     size_t input_delay=8;
     std::optional<NetInputClock> input_clock;
     uint64_t local_qte_epoch=0;
@@ -251,8 +288,8 @@ struct NetGame::Impl {
     bool step_replay=false;
     std::atomic<bool> waiting{false};
     std::chrono::steady_clock::time_point began{};
-    Impl(const Options& o,NativeInput& source,const std::filesystem::path& executable,const std::filesystem::path& root):options(o),local(source),saves(o.netplay->host,root) {
-        hello={{"game","UC-NET-12"},{"build",file_hash(executable)},{"dol",file_hash(o.game/"DATA/sys/main.dol")},{"speed",o.speed},{"god",o.god}};
+    Impl(const Options& o,NativeInput& source,const std::filesystem::path& executable,const std::filesystem::path& root):options(o),local(source),saves(o.netplay->host,root),tick(o.net_tick),tick_now(o.net_tick) {
+        hello={{"game","UC-NET-13"},{"build",file_hash(executable)},{"dol",file_hash(o.game/"DATA/sys/main.dol")},{"speed",o.speed},{"god",o.god},{"tick",o.net_tick}};
         if(!o.netplay->host)std::fprintf(stderr,"[netplay] temporary saves: %s\n",saves.root().string().c_str());
     }
     std::vector<uint8_t> exchange(std::span<const uint8_t> out) {
@@ -322,7 +359,7 @@ struct NetGame::Impl {
                 sample=last_rtt;
             }
             buffer_rtt=net_startup_rtt(samples);
-            input_delay=net_input_delay(buffer_rtt);
+            input_delay=net_input_delay(buffer_rtt,60);   // Sized for the 60 Hz tick whichever tick the session starts or ends with.
             stream->enqueue(bytes(Json{{"start","go"},{"rtt_ns",buffer_rtt},{"max_rtt_ns",max_rtt}}));
             start=std::chrono::steady_clock::now()+std::chrono::nanoseconds(buffer_rtt/2);
         } else {
@@ -334,7 +371,7 @@ struct NetGame::Impl {
             if(!go.is_object() || go.size()!=3 || go.at("start")!="go")throw std::runtime_error("invalid network start signal");
             buffer_rtt=integer(go.at("rtt_ns")); max_rtt=integer(go.at("max_rtt_ns"));
             if(buffer_rtt>max_rtt)throw std::runtime_error("invalid startup RTT range");
-            input_delay=net_input_delay(buffer_rtt);
+            input_delay=net_input_delay(buffer_rtt,60);
             start=std::chrono::steady_clock::now();
         }
         std::fprintf(stderr,"[netplay] input pipeline: %zu frames; max RTT %.1f ms; UDP prediction and rollback\n",input_delay,max_rtt/1e6);
@@ -347,7 +384,15 @@ struct NetGame::Impl {
         if(packet.size()==1 && packet[0]==0) return; // Last startup probe may still be in flight.
         if(!packet.empty() && packet.front()=='{') {
             const auto json=parse_packet(packet);
-            if(!json.is_object() || json.size()!=2 || !json.contains("ack"))throw std::runtime_error("invalid rollback acknowledgement");
+            if(json.is_object() && json.size()==2 && json.contains("tick") && json.contains("at")) {
+                const auto next=integer(json.at("tick"),1000),at=integer(json.at("at"));
+                if(options.netplay->host || std::find(net_ticks.begin(),net_ticks.end(),next)==net_ticks.end())throw std::runtime_error("invalid tick change");
+                if(at<=cursor || at>cursor+1000)throw std::runtime_error("tick change outside the planned window");
+                tick_changes[at]=uint32_t(next);
+                return;
+            }
+            if(!json.is_object() || json.size()!=3 || !json.contains("ack") || !json.contains("cost"))throw std::runtime_error("invalid rollback acknowledgement");
+            peer_cost_us=double(integer(json.at("cost"),10000000));
             const auto ack=integer(json.at("ack"));
             if(ack>input_clock->next())throw std::runtime_error("rollback acknowledgement exceeds sent history");
             peer_ack=std::max(peer_ack,ack);
@@ -390,11 +435,11 @@ struct NetGame::Impl {
         for(auto gap=history.lower_bound(peer_ack);gap!=history.end() && gap->first<repair_end;++gap)
             if(!gap->second.wire.empty() && gap->second.wire.size()<=net::max_datagram_payload)
                 datagram->send(gap->second.wire);
-        const auto confirmed=std::min(cursor,remote_next)/120*120;
+        const auto confirmed=std::min(cursor,remote_next)/hash_interval*hash_interval;
         Json hash=nullptr;
         if(auto state=history.find(confirmed);state!=history.end() && state->second.checkpoint)
             hash=Json::array({confirmed,state->second.state_hash});
-        const auto acknowledgement=bytes(Json{{"ack",remote_next},{"hash",hash}});
+        const auto acknowledgement=bytes(Json{{"ack",remote_next},{"hash",hash},{"cost",uint64_t(std::min(cost_us,1e7))}});
         datagram->send(acknowledgement);
         // A lost checksum interval must not look like an input-history outage.
         if(!hash.is_null() && (!sent_hash || confirmed>*sent_hash)) {
@@ -414,8 +459,9 @@ struct NetGame::Impl {
                 game_checkpoint_commit_saves(*state->second.checkpoint,*files);
                 verified=number;logged_initial=true;
                 std::fprintf(stderr,"[netplay] frame %llu hash %016llX\n",(unsigned long long)number,(unsigned long long)hash);
-                std::fprintf(stderr,"[netplay] rollback count %llu replayed %llu max_depth %llu confirmed %llu head %llu\n",
-                    (unsigned long long)rollback_count,(unsigned long long)replayed_frames,(unsigned long long)max_rollback,(unsigned long long)verified,(unsigned long long)head);
+                std::fprintf(stderr,"[netplay] rollback count %llu replayed %llu max_depth %llu confirmed %llu head %llu tick %llu step cost %.1f ms (peer %.1f ms)\n",
+                    (unsigned long long)rollback_count,(unsigned long long)replayed_frames,(unsigned long long)max_rollback,(unsigned long long)verified,(unsigned long long)head,
+                    (unsigned long long)tick,cost_us/1000,peer_cost_us/1000);
             }
             it=remote_hashes.erase(it);
         }
@@ -423,7 +469,7 @@ struct NetGame::Impl {
         // keeping every confirmed GX snapshot would pin hundreds of obsolete GPU texture copies.
         const auto settled=std::min(cursor,remote_next);
         for(auto it=history.begin();it!=history.end() && it->first<settled;++it)
-            if(it->first%120!=0 || it->first<verified)it->second.checkpoint.reset();
+            if(it->first%hash_interval!=0 || it->first<verified)it->second.checkpoint.reset();
         while(!history.empty() && history.begin()->first+history_limit<head) {
             const auto old=history.begin()->first;
             if(old>=verified || old>=peer_ack || old>=remote_next)
@@ -458,6 +504,30 @@ struct NetGame::Impl {
                 began=std::chrono::steady_clock::now(); start_tick=det_clock_checkpoint(); started=true;
             } else ++cursor;
             receive();
+            if(net_must_wait(cursor,remote_next)) {
+                // The peer's input is more than the prediction limit behind: wait for it, keeping our own flowing, and give the
+                // time back to the virtual clock so the game slows down instead of racing to catch up afterwards.
+                const auto wait_began=std::chrono::steady_clock::now();
+                for(unsigned spins=0;net_must_wait(cursor,remote_next);++spins) {
+                    if(stop.stop_requested())throw ThreadExit{};
+                    if(std::chrono::steady_clock::now()-wait_began>std::chrono::seconds(10))throw std::runtime_error("The other player's game stopped responding");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if(spins%8==0)send_inputs();
+                    receive();
+                }
+                const auto waited=std::chrono::steady_clock::now()-wait_began;
+                began+=waited;idle+=waited;
+            }
+            if(auto_tick && options.netplay->host && boundary_started>=next_policy && tick_changes.upper_bound(cursor)==tick_changes.end()) {
+                next_policy=boundary_started+std::chrono::seconds(1);
+                if(const auto wanted=tick_policy.update(uint32_t(tick),std::max(cost_us,peer_cost_us))) {
+                    // A second and a half beyond the furthest step either PC can be at, so a retransmitted TCP message still arrives in time.
+                    const uint64_t at=std::max<uint64_t>(head,remote_next)+input_delay+tick*3/2;
+                    tick_changes[at]=wanted;
+                    stream->enqueue(bytes(Json{{"tick",wanted},{"at",at}}));
+                    std::fprintf(stderr,"[netplay] tick %llu -> %u Hz at step %llu (step cost here %.1f ms, there %.1f ms)\n",(unsigned long long)tick,wanted,(unsigned long long)at,cost_us/1000,peer_cost_us/1000);
+                }
+            }
             if(correction && *correction<cursor) {
                 const auto number=*correction;
                 auto& old=history.at(number);
@@ -473,20 +543,37 @@ struct NetGame::Impl {
                 for(auto it=history.lower_bound(number);it!=history.end();++it) {it->second.simulated=false;it->second.checkpoint.reset();}
             }
             correction.reset();
+            {   // The tick in force at this step, also when a rollback replays steps from before or after a change.
+                uint32_t wanted=options.net_tick;
+                for(const auto& [at,value]:tick_changes) {if(at>cursor)break;wanted=value;}
+                if(wanted!=tick) {
+                    tick=wanted;tick_now.store(wanted);
+                    game_pacing_set_mode({wanted==60,wanted>60 ? wanted : 0});
+                    std::fprintf(stderr,"[netplay] simulation tick %u Hz from step %llu\n",wanted,(unsigned long long)cursor);
+                }
+            }
             const bool replay=cursor<head;
+            if(!replay) {   // Wall time per forward step: guest, replays, checkpoints and hashes; the lead wait and the pacing sleep are not cost.
+                if(last_forward!=std::chrono::steady_clock::time_point{}) {
+                    const double step_us=std::min(50000.0,std::max(0.0,std::chrono::duration<double,std::micro>(boundary_started-last_forward-idle).count()));
+                    cost_us=cost_us>0 ? cost_us*0.95+step_us*0.05 : step_us;
+                }
+                last_forward=boundary_started;idle={};
+                forward_tick=tick;
+            }
             cpu_sampler_set_replaying(replay);
             audio_set_replaying(replay);
             gx_set_replaying(replay);
             NativeInput* simulated[]={&pads[0],&pads[1]};
             auto& now=history[cursor];
             // A received input is immutable; only predictions can need a later rewind here.
-            if(cursor%120==0 || !received.contains(cursor))
+            if(cursor%hash_interval==0 || !received.contains(cursor))
                 now.checkpoint=game_checkpoint(*memory,*scheduler,*files,simulated);
             else {
                 scheduler->drain_async();
                 now.checkpoint.reset();
             }
-            if(cursor%120==0)now.state_hash=game_checkpoint_hash(*now.checkpoint);
+            if(cursor%hash_interval==0)now.state_hash=game_checkpoint_hash(*now.checkpoint);
             std::copy(std::begin(qte),std::end(qte),now.qte.begin());
             const auto state=input_probe_snapshot(c); const unsigned index=options.netplay->host ? 0 : 1;
             for(unsigned i=0;i<2;++i) {
@@ -495,7 +582,7 @@ struct NetGame::Impl {
                     game_input_context(state,i)==InputContext::qte && (actor.flags_798&2),!replay && i==index ? &local : nullptr);
             }
             if(!replay) {
-                simulation_ns.store(game_pacing_stats().timestep_ns);
+                simulated_ns+=1000000000/tick;simulation_ns.store(simulated_ns);   // Forward steps at the session tick: 1.0 per wall second is full speed.
                 if(profile && replay_started!=std::chrono::steady_clock::time_point{}) {
                     std::fprintf(stderr,"[rollback-cost] correction completed %.3f ms\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-replay_started).count());
                     replay_started={};
@@ -507,9 +594,9 @@ struct NetGame::Impl {
             // Keep sampling during replay; forward progress drains excess queued slots.
             const auto sample_ns=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
             const auto first_sample=input_clock->next();
-            if(profile && !replay && cursor%120==0)
+            if(profile && !replay && cursor%hash_interval==0)
                 std::fprintf(stderr,"[rollback-input] frame %llu sample_lead %llu configured %zu\n",(unsigned long long)cursor,(unsigned long long)(first_sample-cursor),input_delay);
-            if(const auto last_sample=input_clock->sample(cursor,sample_ns,replay)) {
+            if(const auto last_sample=input_clock->sample(cursor,sample_ns,replay,1000000000/forward_tick)) {
                 if(*last_sample>head+history_limit)throw std::runtime_error("input sampling exceeded rollback history");
                 for(auto number=first_sample;number<=*last_sample;++number) {
                     auto& future=history[number];
@@ -541,8 +628,11 @@ struct NetGame::Impl {
                 const auto ticks=det_clock_checkpoint()-start_tick;
                 const auto ns=(ticks/kTimebaseHz)*1000000000+(ticks%kTimebaseHz)*1000000000/kTimebaseHz;
                 const auto target=began+std::chrono::nanoseconds(ns);
+                const auto sleep_began=std::chrono::steady_clock::now();
                 while(!stop.stop_requested() && std::chrono::steady_clock::now()<target)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                idle+=std::chrono::steady_clock::now()-sleep_began;
             }
+            if(extra_step_us)std::this_thread::sleep_for(std::chrono::microseconds(extra_step_us));   // Diagnostic: stands in for a slower CPU.
             if(profile) {
                 ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); step_cycles=cycles;
                 step_wait=game_pacing_stats().wait_ns;
@@ -558,13 +648,15 @@ void NetGame::prepare() {impl_->prepare();}
 const std::filesystem::path& NetGame::save_root() const {return impl_->saves.root();}
 void NetGame::install(Sched& scheduler,SaveFs& saves) {
     impl_->scheduler=&scheduler;impl_->files=&saves;scheduler.set_rollback(true);
-    input_hle_init(&impl_->pads[0],&impl_->pads[1]);game_input_init(&impl_->pads[0],impl_->options.input_probe,&impl_->pads[1]);
+    input_hle_init(&impl_->pads[0],&impl_->pads[1]);
+    game_input_init(&impl_->pads[0],impl_->options.input_probe,&impl_->pads[1]);
     game_loop_set_boundary([this](ppc::Ctx& c){impl_->boundary(c);});
 }
 void NetGame::cancel() {impl_->cancelled.store(true);impl_->stop.request_stop();}
 std::string NetGame::error() const {std::lock_guard lock(impl_->mutex);return impl_->failure;}
 bool NetGame::waiting() const {return impl_->waiting.load();}
 uint64_t NetGame::frames() const {return impl_->frame.load();}
+uint32_t NetGame::tick() const {return impl_->tick_now.load();}
 uint64_t NetGame::simulation_ns() const {return impl_->simulation_ns.load();}
 uint64_t NetGame::consumed_sequence() const {return impl_->consumed_sequence.load();}
 }

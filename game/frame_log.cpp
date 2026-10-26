@@ -1,5 +1,5 @@
 #include "frame_log.h"
-#include "fatal.h"
+#include <stdexcept>
 #include <chrono>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -9,10 +9,10 @@ FrameLog::FrameLog(const std::filesystem::path& path) {
     std::error_code ignored;
     std::filesystem::create_directories(path.parent_path(), ignored);
     file_ = _wfopen(path.c_str(), L"wb");
-    if (!file_) fatal("cannot create the frame log %ls", path.c_str());
+    if (!file_) throw std::runtime_error("cannot create frame CSV");
     std::fprintf(file_, "t_ms,interval_ms,busy_ms,acquire_ms,submit_ms,present_ms,idle_ms,t1_ms,t2_ms,t3_ms,t4_ms,t5_ms,t6_ms,t7_ms,t8_ms,events_ms,events,cpu_mcycles,retraces,textures,decodes,dvd_reads,audio_blocks,seal_wait_ns,switches,queued,outstanding,sealed_to_done_ms,taken_to_done_ms,gpu_ms,gpu_upscale_ms,gpu_smaa_ms,gpu_occlusion_ms,gpu_rt_as_ms,rt_blas,rt_triangles,gpu_rt_shadows_ms,gpu_rt_reflections_ms,gpu_rt_lighting_ms,gpu_rt_path_ms\n");
-    rows_.reserve(4096);
-    writer_ = std::thread([this] { run(); });
+    try {rows_.reserve(4096);writer_ = std::thread([this] { run(); });}
+    catch(...) {std::fclose(file_);throw;}
 }
 FrameLog::~FrameLog() {
     { std::lock_guard lock(mutex_); stop_ = true; }
@@ -23,19 +23,22 @@ FrameLog::~FrameLog() {
 }
 void FrameLog::add(const FrameRow& row) {
     std::lock_guard lock(mutex_);
-    rows_.push_back(row);
+    if(rows_.size()<8192)rows_.push_back(row);else ++dropped_;
 }
 void FrameLog::run() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     std::vector<FrameRow> rows; rows.reserve(4096);
     for (;;) {
         bool stopping;
+        size_t dropped=0;
         {
             std::unique_lock lock(mutex_);
-            wake_.wait_for(lock, std::chrono::seconds(5), [this] { return stop_; });
+            wake_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_; });
             stopping = stop_;
             rows.swap(rows_);
+            dropped=dropped_;dropped_=0;
         }
+        if(dropped)std::fprintf(stderr,"[diagnostics] dropped %zu frame CSV rows: writer could not keep up\n",dropped);
         flush(rows);
         if (stopping) return;
     }
@@ -46,6 +49,6 @@ void FrameLog::flush(std::vector<FrameRow>& rows) {
                      (unsigned long long)r.retraces, (unsigned long long)r.textures, (unsigned long long)r.decodes, (unsigned long long)r.dvd_reads, (unsigned long long)r.audio_blocks, (unsigned long long)r.seal_wait_ns,
                      (unsigned long long)r.switches, r.queued, r.outstanding, r.sealed_to_done_ms, r.taken_to_done_ms, r.gpu_ms, r.gpu_upscale_ms, r.gpu_smaa_ms, r.gpu_occlusion_ms, r.gpu_rt_as_ms, r.rt_blas, (unsigned long long)r.rt_triangles, r.gpu_rt_shadows_ms, r.gpu_rt_reflections_ms, r.gpu_rt_lighting_ms, r.gpu_rt_path_ms);
     rows.clear();
-    std::fflush(file_);
+    if(std::fflush(file_) && !write_error_reported_) {write_error_reported_=true;std::fprintf(stderr,"[diagnostics] frame CSV write failed\n");}
 }
 }

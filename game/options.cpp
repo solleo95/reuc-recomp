@@ -44,6 +44,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || !port || port>65535)return "invalid value for --net-port";
             net_port=uint16_t(port);port_set=true;
         }
+        else if(arg=="--net-tick") {
+            if(++i>=arguments.size())return "missing value for --net-tick";
+            const auto value=arguments[i];unsigned tick=0;
+            const auto parsed=std::from_chars(value.data(),value.data()+value.size(),tick);
+            if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || (tick!=30 && tick!=60 && tick!=120 && tick!=144 && tick!=240))return "invalid value for --net-tick (30, 60, 120, 144 or 240)";
+            options.net_tick=tick;
+        }
         else if (arg == "--headless") options.headless = true;
         else if (arg == "--validation") options.validation = true;
         else if (arg == "--log-dvd") options.log_dvd = true;
@@ -189,7 +196,8 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         options.netplay->loopback=net_loopback;
         if(net_loopback && options.netplay->address!="127.0.0.1")return "--net-loopback requires 127.0.0.1";
         if(!options.demo_play.empty() || !options.demo_record.empty())return "network play cannot record or replay demos";
-        options.deterministic=true;options.no_mods=true;options.game_hz=120;options.unlock_60fps=false;
+        // Both players run identical fixed steps on the virtual clock: 30 Hz is the original, 60 Hz its doubling, above that timed steps.
+        options.deterministic=true;options.no_mods=true;options.game_hz=options.net_tick>60 ? options.net_tick : 0;options.unlock_60fps=options.net_tick==60;
         options.skip_intro=true;options.skip_tutorials=true;
     }
     if (!options.demo_play.empty() && !options.demo_record.empty()) return "--demo-play and --demo-record exclude each other";

@@ -229,6 +229,7 @@ static void test_cancel() {   // OSCancelThread: a waiting or never-started thre
         note("m-done");
     });
     s.run(m);
+    if(joined()!="w1,m-done")std::fprintf(stderr,"cancel trace: %s\n",joined().c_str());
     CHECK(joined() == "w1,m-done");
 }
 
@@ -254,6 +255,7 @@ int main() {
     test_priorities_and_join(); test_round_robin(); test_wake_order(); test_wake_preempts();
     test_busy_wait_sees_events(); test_events_wait_for_interrupts(); test_external_wakes_idle();
     test_deadlock_report(); test_irq_block_is_fatal(); test_exit_and_join_values();
-    test_suspend_resume(); test_sleep_is_at_least_requested(); test_idle_wait_scales(); test_blocked_with_interrupts_off(); test_irq_context_uses_small_data_bases(); test_scheduler_lock(); test_cancel();
+    test_suspend_resume(); test_sleep_is_at_least_requested(); test_idle_wait_scales(); test_blocked_with_interrupts_off(); test_irq_context_uses_small_data_bases(); test_scheduler_lock();
+    for (int i = 0; i < 1000; ++i) test_cancel();
     return 0;
 }

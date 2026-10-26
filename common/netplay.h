@@ -1,6 +1,7 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -17,7 +18,7 @@ bool valid_address(const std::string&);
 // A stop token cancels connect, accept and packet I/O.
 class Socket {
 public:
-    Socket(const Endpoint&,std::stop_token={},std::chrono::milliseconds timeout=std::chrono::seconds(15));
+    Socket(const Endpoint&,std::stop_token={},std::chrono::milliseconds timeout=std::chrono::seconds(15),std::function<void()> listening={});
     ~Socket();
     Socket(const Socket&)=delete;
     Socket& operator=(const Socket&)=delete;
@@ -28,10 +29,10 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 enum class LobbyPhase { waiting,connected,launching,failed };
-struct LobbyState { LobbyPhase phase=LobbyPhase::waiting; bool local_ready=false,remote_ready=false; std::string error; };
+struct LobbyState { LobbyPhase phase=LobbyPhase::waiting; bool local_ready=false,remote_ready=false; std::string error; bool listening=false,port_conflict=false; };
 class Lobby {
 public:
-    explicit Lobby(Endpoint);
+    explicit Lobby(Endpoint,std::chrono::milliseconds connect_timeout=std::chrono::seconds(15));
     ~Lobby();
     Lobby(const Lobby&)=delete;
     Lobby& operator=(const Lobby&)=delete;

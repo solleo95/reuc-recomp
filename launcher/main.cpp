@@ -10,7 +10,9 @@
 #include "netplay.h"
 #include "nat_mapping.h"
 #include "nat_tunnel.h"
+#include "network_session.h"
 #include "stun.h"
+#include "diagnostic_log.h"
 #include "graphite.h"
 #include "ui_fonts.h"
 #include "imgui.h"
@@ -23,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <future>
 #include <memory>
 #include <thread>
@@ -32,6 +35,9 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <dwmapi.h>
+#include <d3d11.h>
+#include <dxgi.h>
+#include "update_ui.h"
 namespace fs=std::filesystem;
 namespace {
 class SmokeNatGateway final : public uc::net::NatGateway {
@@ -75,10 +81,24 @@ struct Ui {
             const float scale=std::min({1200*dpi/1504,(bounds.w-48.f)/1504,(bounds.h-64.f)/916});
             SDL_SetWindowSize(window,int(1504*scale),int(916*scale));
         }
+#ifdef UC_UPDATE_ACCEPTANCE
+        SDL_SetWindowSize(window,1280,720);
+#endif
         auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
         if(hwnd) {BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE,&dark,sizeof(dark));}
         renderer=SDL_CreateRenderer(window,nullptr);
         if(!renderer || !SDL_SetRenderVSync(renderer,1))throw std::runtime_error(SDL_GetError());
+        if(auto* device=static_cast<ID3D11Device*>(SDL_GetPointerProperty(SDL_GetRendererProperties(renderer),SDL_PROP_RENDERER_D3D11_DEVICE_POINTER,nullptr))) {
+            IDXGIDevice* dxgi=nullptr;IDXGIAdapter* adapter=nullptr;DXGI_ADAPTER_DESC description{};
+            if(SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice),reinterpret_cast<void**>(&dxgi))) &&
+               SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&description))) {
+                char name[512]{};WideCharToMultiByte(CP_UTF8,0,description.Description,-1,name,sizeof(name),nullptr,nullptr);
+                std::fprintf(stderr,"[ui-gpu] adapter=%s vendor=%04x device=%04x VRAM_MB=%llu feature_level=%x\n",name,description.VendorId,description.DeviceId,static_cast<unsigned long long>(description.DedicatedVideoMemory/(1024*1024)),unsigned(device->GetFeatureLevel()));
+            } else std::fprintf(stderr,"[ui-gpu] adapter query unavailable\n");
+            if(adapter)adapter->Release();if(dxgi)dxgi->Release();
+        }
+        int width=0,height=0;SDL_GetWindowSizeInPixels(window,&width,&height);
+        std::fprintf(stderr,"[ui-display] pixels=%dx%d content_scale=%.2f\n",width,height,SDL_GetWindowDisplayScale(window));
         ImGui::CreateContext();context=true;
         auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
         if(diagnostic)io.ConfigInputTrickleEventQueue=false;
@@ -135,7 +155,7 @@ bool same_options(const uc::Options& a,const uc::Options& b) {
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
-int run(int argc,wchar_t** argv) {
+int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
     for(int i=1;i<argc;++i) {
         const std::wstring_view arg=argv[i];
@@ -145,6 +165,30 @@ int run(int argc,wchar_t** argv) {
     }
     if(!smoke.empty()) {fs::create_directories(smoke);config_path=smoke/L"config.json";}
     if(!smoke_exe.empty() && smoke.empty())throw std::invalid_argument("--smoke-exe requires --smoke");
+    const auto ui_start=SDL_GetTicksNS();
+    Ui ui;ui.init(!smoke.empty());
+    if(resume) {
+        if(!ui.artwork_error.empty()) throw std::runtime_error(ui.artwork_error);
+        ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();ImGui::NewFrame();
+        ImGui::Begin("Umbrella Chronicles");ImGui::TextUnformatted("Umbrella Chronicles");ImGui::End();ImGui::Render();
+        if(!SDL_RenderClear(ui.renderer)) throw std::runtime_error(SDL_GetError());
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
+        if(!SDL_RenderPresent(ui.renderer)) throw std::runtime_error(SDL_GetError());
+        auto confirmed=resume->confirm();if(uc::update::failed(confirmed)) throw std::runtime_error(std::get<uc::update::Error>(confirmed).detail);
+    }
+    uc::launcher::UpdateController updates(directory);
+    std::optional<uc::update::Manifest> installed;
+    if(smoke.empty() && fs::exists(directory/L"release.json")) {
+        auto raw=uc::update::read_text(directory/L"release.json",uc::update::max_manifest_size);
+        if(!uc::update::failed(raw)) {
+            auto manifest=uc::update::parse_manifest(std::get<std::string>(raw));
+            if(!uc::update::failed(manifest)) installed=std::get<uc::update::Manifest>(std::move(manifest));
+            else std::fprintf(stderr,"[update] Release metadata invalid; automatic update disabled\n");
+        } else std::fprintf(stderr,"[update] Release metadata unavailable; automatic update disabled\n");
+    }
+#ifndef UC_UPDATE_ACCEPTANCE
+    updates.start(std::move(installed));
+#endif
     std::unique_ptr<uc::CpuCalibration> calibration;
     uc::CpuCalibrationResult cpu_choice;bool cpu_ready=false,launch_requested=false;
     try {calibration=std::make_unique<uc::CpuCalibration>((smoke.empty() ? directory : smoke)/L"cpu-profile.json");}
@@ -156,16 +200,15 @@ int run(int argc,wchar_t** argv) {
     }
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
     std::string error;bool blocked=false;
-    std::unique_ptr<uc::net::Lobby> lobby;
-    std::unique_ptr<uc::net::NatTunnel> tunnel;
+    std::unique_ptr<uc::net::NetworkSession> network;
     std::unique_ptr<uc::net::NatMapping> nat;
     std::vector<std::unique_ptr<uc::net::NatMapping>> retiring_nat;
     std::optional<uc::net::Endpoint> pending_network;
-    std::string network_address="127.0.0.1",network_error,punch_address;
-    int network_port=uc::net::default_port;
+    std::string network_address,network_error,punch_address;
+    size_t network_local_address=0;
     bool network_modal=false,network_open_requested=false,network_host=false;
     auto stop_nat=[&] {if(nat) {nat->stop();retiring_nat.push_back(std::move(nat));}};
-    auto cancel_network=[&] {lobby.reset();tunnel.reset();stop_nat();if(pending_network)launch_requested=false;pending_network.reset();};
+    auto cancel_network=[&] {network.reset();stop_nat();if(pending_network)launch_requested=false;pending_network.reset();};
     const auto system_language=uc::launcher::system_language();
     std::string language="system",saved_language="system";
     active_language=system_language;
@@ -174,6 +217,14 @@ int run(int argc,wchar_t** argv) {
         failed=false;
         try {auto loaded=uc::load_config(config_path);auto settings=uc::options_from_config(loaded);
             auto locale=uc::launcher::config_language(loaded);
+            std::string last_peer;
+            if(auto launcher=loaded.properties.find("launcher");launcher!=loaded.properties.end()) {
+                if(auto peer=launcher->find("last_peer");peer!=launcher->end()) {
+                    if(!peer->is_string() || !uc::net::parse_connection_address(peer->get<std::string>()))throw std::invalid_argument("config: launcher.last_peer must be IPv4:port");
+                    last_peer=peer->get<std::string>();
+                }
+            }
+            network_address=std::move(last_peer);
             editor=uc::BindingEditor(loaded.input);document=std::move(loaded);options=saved_options=settings;
             language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
         } catch(const std::exception& e) {error=e.what();blocked=true;}
@@ -183,16 +234,23 @@ int run(int argc,wchar_t** argv) {
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
     if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
+#ifndef UC_UPDATE_ACCEPTANCE
     if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
         query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
         query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path] {promise->set_value(uc::query_features(exe,config));});
     }
-    Ui ui;ui.init(!smoke.empty());
+#endif
+    auto& diagnostics=std::cerr;
+    diagnostics<<"SDL "<<SDL_GetVersion()<<" renderer="<<SDL_GetRendererName(ui.renderer)
+               <<" UI initialization_ms="<<(SDL_GetTicksNS()-ui_start)/1e6<<std::endl;
+    std::string last_render_error;
+    std::string last_network_state;
+    Uint64 next_diagnostics=0;
     const auto* monitor=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     if(!monitor || monitor->w<=0 || monitor->h<=0)throw std::runtime_error("monitor mode unavailable");
     std::map<std::string,ImVec2> positions;
     auto track=[&](const std::string& name) {if(!smoke.empty()) {auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();positions[name]={(a.x+b.x)/2,(a.y+b.y)/2};
-        if((name=="launch" || name=="browse" || name=="network-cancel" || name=="network-ready") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher control clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
+        if((name=="launch" || name=="browse" || name=="network-cancel" || name=="network-copy-lan") && (a.x<0 || a.y<0 || b.x>ImGui::GetIO().DisplaySize.x || b.y>ImGui::GetIO().DisplaySize.y))throw std::runtime_error("launcher control clipped: "+name+" bottom="+std::to_string(b.y)+" height="+std::to_string(ImGui::GetIO().DisplaySize.y));
     }};
     auto button=[&](const char* label,const std::string& id,ImVec2 size=ImVec2{0,0}) {ImGui::PushID(id.c_str());bool clicked=ImGui::Button(label,size);track(id);ImGui::PopID();return clicked;};
     auto save=[&](const uc::Options& chosen) {
@@ -201,22 +259,24 @@ int run(int argc,wchar_t** argv) {
         } catch(const std::exception& e) {error=e.what();cancel_network();return false;}
     };
     bool done=false,background_host=false,smoke_capture_wait_checked=false;unsigned frame=0;const auto start=SDL_GetTicks();int page=1;
-    enum class SmokeNetwork { idle,failed_open,failed_focus,failed_type,failed_connect,failed_wait,failed_cancel,open,create,punch_focus,punch_type,punch_send,punch_verify,connect,ready,one_ready,both_ready,handoff,verify,complete };
+    enum class SmokeNetwork { idle,failed_open,failed_focus,failed_type,failed_connect,failed_wait,failed_copy,failed_copied,failed_cancel,open,create,punch_open,punch_focus,punch_type,punch_send,punch_verify,connect,one_ready,both_ready,handoff,verify,complete };
     SmokeNetwork smoke_network=SmokeNetwork::idle;
     SmokeNetwork smoke_network_logged=SmokeNetwork::idle;
-    constexpr const char* smoke_network_names[]={"idle","failed-open","failed-focus","failed-type","failed-connect","failed-wait","failed-cancel","open","create","punch-focus","punch-type","punch-send","punch-verify","connect","ready","one-ready","both-ready","handoff","verify","complete"};
+    constexpr const char* smoke_network_names[]={"idle","failed-open","failed-focus","failed-type","failed-connect","failed-wait","failed-copy","failed-copied","failed-cancel","open","create","punch-open","punch-focus","punch-type","punch-send","punch-verify","connect","one-ready","both-ready","handoff","verify","complete"};
     std::unique_ptr<uc::net::Lobby> smoke_peer;
-    std::unique_ptr<uc::net::NatTunnel> smoke_tunnel;
     Uint64 smoke_network_start=0;
-    bool smoke_ready_enabled=false,smoke_network_capture=false,smoke_network_timeout=false,smoke_punch_enabled=false,smoke_nat_capture=false;
+    bool smoke_network_capture=false,smoke_network_timeout=false,smoke_nat_capture=false,smoke_lan_copied=false;
     unsigned smoke_network_handoffs=0,smoke_click_frame=0;
     std::string smoke_join_address;
     size_t smoke_typed=0;
     while(!done) {
+        const auto frame_start=SDL_GetTicksNS();
+        updates.poll();
+        if(updates.close_requested()) {updates.handoff();break;}
         std::erase_if(retiring_nat,[](const auto& item){return item->finished();});
         if(background_host) {
             if(!uc::game_running(process))break;
-            if(tunnel && tunnel->state().phase==uc::net::TunnelPhase::failed)tunnel.reset();
+            if(network) {network->poll(false);if(network->state().lobby.phase==uc::net::LobbyPhase::failed) {diagnostics<<"[network] background connection failed: "<<network->state().lobby.error<<std::endl;network.reset();}}
             SDL_Delay(100);continue;
         }
         SDL_Event event;
@@ -232,10 +292,20 @@ int run(int argc,wchar_t** argv) {
             }
         }
         if(calibration && calibration->ready()) {cpu_choice=calibration->get();calibration.reset();cpu_ready=true;}
-        if(features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) {features=uc::feature_report_from_json(features_query.get());features_ready=true;}
+        if(features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
+            const auto report=features_query.get();features=uc::feature_report_from_json(report);features_ready=true;
+            diagnostics<<"GPU report at_ms="<<(SDL_GetTicksNS()-ui_start)/1e6<<" bytes="<<report.size()<<std::endl;
+        }
+        if(features_ready)uc::disable_unsupported_upscaling(options,features);
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();
         if(!smoke.empty()) {
             auto& io=ImGui::GetIO();io.AddFocusEvent(true);
+            // SDL reports a zero viewport while minimized; synthetic UI still uses the window's layout size.
+            if(io.DisplaySize.x<=0 || io.DisplaySize.y<=0) {
+                int width=0,height=0;
+                if(!SDL_GetWindowSize(ui.window,&width,&height))throw std::runtime_error(SDL_GetError());
+                io.DisplaySize={float(width),float(height)};
+            }
             io.AddMousePosEvent(-100,-100);
             std::map<unsigned,std::string> clicks={{10,"controls"},{18,"clear1"},{26,"add1"},{48,"clear1"},
                 {80,"controls"},{84,"style"},{88,"style3"},{98,"style"},{102,"style2"},{110,"general"},
@@ -244,11 +314,12 @@ int run(int argc,wchar_t** argv) {
                 {434,"framegen"},{438,"framegen-off"},{442,"framegen"},{446,"framegen-fsr"},{450,"framegen"},{454,"framegen-off"},
                 {458,"upscaling"},{462,"upscaler-dlss"},{470,"controls"},{476,"replace2"}};
             if(frame==360 && !SDL_SetWindowSize(ui.window,1000,720))throw std::runtime_error(SDL_GetError());
+            if(frame==520 && !SDL_MinimizeWindow(ui.window))throw std::runtime_error(SDL_GetError());
             for(size_t i=0;i<uc::launcher::languages().size();++i) {
                 unsigned first=114+unsigned(i)*18;
                 clicks[first]="language";clicks[first+4]="lang-"+std::string(uc::launcher::languages()[i].code);
             }
-            if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";clicks[486]="language";clicks[490]="lang-en";clicks[494]="game";clicks[500]="network";clicks[508]="network-create";clicks[512]="network-connect";clicks[518]="network-cancel";}
+            if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";clicks[486]="language";clicks[490]="lang-en";clicks[494]="game";clicks[500]="network";clicks[508]="network-connect";clicks[512]="network-connect";clicks[518]="network-cancel";}
             else {clicks[4]="launch";clicks[56]="reload";clicks[62]="defaults";}
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
@@ -262,11 +333,11 @@ int run(int argc,wchar_t** argv) {
             if(smoke_exe.empty() && frame==506) {if(!network_modal)throw std::runtime_error("network modal did not open");network_address="300.1.2.3";}
             if(smoke_exe.empty() && smoke_network!=SmokeNetwork::idle) {
                 if(smoke_network!=smoke_network_logged) {
-                    std::fprintf(stderr,"[network-smoke] %s modal=%d lobby=%d ready-enabled=%d\n",smoke_network_names[size_t(smoke_network)],network_modal,bool(lobby),smoke_ready_enabled);
+                    std::fprintf(stderr,"[network-smoke] %s modal=%d session=%d\n",smoke_network_names[size_t(smoke_network)],network_modal,bool(network));
                     smoke_network_logged=smoke_network;
                 }
-                smoke_network_timeout=SDL_GetTicks()-smoke_network_start>20000;
-                if(!network_error.empty() || !error.empty())throw std::runtime_error("network lobby smoke failed: "+network_error+error);
+                smoke_network_timeout=SDL_GetTicks()-smoke_network_start>30000;
+                if((!network_error.empty() && smoke_network!=SmokeNetwork::failed_wait && smoke_network!=SmokeNetwork::failed_cancel) || !error.empty())throw std::runtime_error("network lobby smoke failed: "+network_error+error);
                 if(smoke_peer && smoke_peer->state().phase==uc::net::LobbyPhase::failed)throw std::runtime_error("network smoke peer: "+smoke_peer->state().error);
                 auto click=[&](const char* id) {
                     if(!positions.contains(id))throw std::runtime_error(std::string("network smoke widget missing: ")+id);
@@ -288,37 +359,44 @@ int run(int argc,wchar_t** argv) {
                     if(click("network-connect"))smoke_network=SmokeNetwork::failed_wait;
                     break;
                 case SmokeNetwork::failed_wait:
-                    if(tunnel && tunnel->state().phase==uc::net::TunnelPhase::needs_punch && !tunnel->state().discovery_error.empty()) {
-                        if(lobby)throw std::runtime_error("failed UDP connection started a TCP lobby");
-                        smoke_nat_capture=true;smoke_network=SmokeNetwork::failed_cancel;
+                    if(network && network->state().needs_punch) {
+                        if(!uc::net::parse_connection_address(network->state().punch_address))throw std::runtime_error("missing LAN punch address");
+                        network_address.clear();reload();
+                        if(network_address!=smoke_join_address)throw std::runtime_error("last attempted endpoint was not restored");
+                        smoke_nat_capture=true;smoke_network=SmokeNetwork::failed_copy;
                     }
                     break;
+                case SmokeNetwork::failed_copy:if(click("punch-copy"))smoke_network=SmokeNetwork::failed_copied;break;
+                case SmokeNetwork::failed_copied: {
+                    char* clipboard=SDL_GetClipboardText();const std::string copied=clipboard ? clipboard : "";SDL_free(clipboard);
+                    if(copied!=network->state().punch_address)throw std::runtime_error("punch endpoint clipboard mismatch");
+                    smoke_network=SmokeNetwork::failed_cancel;break;
+                }
                 case SmokeNetwork::failed_cancel:
                     if(click("network-cancel"))smoke_network=SmokeNetwork::open;
                     break;
                 case SmokeNetwork::open: if(click("network"))smoke_network=SmokeNetwork::create;break;
-                case SmokeNetwork::create: if(network_modal && click("network-create"))smoke_network=SmokeNetwork::punch_focus;break;
-                case SmokeNetwork::punch_focus:
-                    if(tunnel && lobby) {
-                        if(smoke_punch_enabled)throw std::runtime_error("empty NAT endpoint accepted");
-                        if(click("punch-address"))smoke_network=SmokeNetwork::punch_type;
-                    }
-                    break;
+                case SmokeNetwork::create: if(network_modal && click("network-create"))smoke_network=SmokeNetwork::punch_open;break;
+                case SmokeNetwork::punch_open:if(network && network->state().port && click("punch-toggle"))smoke_network=SmokeNetwork::punch_focus;break;
+                case SmokeNetwork::punch_focus:if(click("punch-address"))smoke_network=SmokeNetwork::punch_type;break;
                 case SmokeNetwork::punch_type:io.AddInputCharactersUTF8("127.0.0.1:9");smoke_network=SmokeNetwork::punch_send;break;
-                case SmokeNetwork::punch_send:if(smoke_punch_enabled && click("punch-action"))smoke_network=SmokeNetwork::punch_verify;break;
-                case SmokeNetwork::punch_verify:
-                    if(tunnel->state().punching){smoke_nat_capture=true;smoke_network=SmokeNetwork::connect;}
-                    break;
+                case SmokeNetwork::punch_send:if(click("punch-action"))smoke_network=SmokeNetwork::punch_verify;break;
+                case SmokeNetwork::punch_verify:if(network->state().punching)smoke_network=SmokeNetwork::connect;break;
                 case SmokeNetwork::connect:
-                    if(lobby && !smoke_tunnel)smoke_tunnel=std::make_unique<uc::net::NatTunnel>(uc::net::Endpoint{false,network_address,uint16_t(network_port)},std::vector<std::string>{});
-                    if(smoke_tunnel && smoke_tunnel->state().phase==uc::net::TunnelPhase::connected && !smoke_peer)smoke_peer=std::make_unique<uc::net::Lobby>(smoke_tunnel->state().local);
-                    if(smoke_peer && smoke_ready_enabled && smoke_peer->state().phase==uc::net::LobbyPhase::connected)smoke_network=SmokeNetwork::ready;
+                    if(network && network->state().port && !smoke_peer) {
+                        if(smoke_lan_copied) {
+                            char* clipboard=SDL_GetClipboardText();
+                            const auto copied=uc::net::parse_connection_address(clipboard ? clipboard : "");SDL_free(clipboard);
+                            if(!copied || copied->port!=network->state().port)throw std::runtime_error("LAN clipboard endpoint mismatch");
+                            smoke_peer=std::make_unique<uc::net::Lobby>(*copied);smoke_nat_capture=true;
+                        } else if(click("network-copy-lan"))smoke_lan_copied=true;
+                    }
+                    if(smoke_peer && smoke_peer->state().phase==uc::net::LobbyPhase::connected)smoke_network=SmokeNetwork::one_ready;
                     break;
-                case SmokeNetwork::ready: if(click("network-ready"))smoke_network=SmokeNetwork::one_ready;break;
                 case SmokeNetwork::one_ready:
-                    if(launch_requested || pending_network || !lobby)throw std::runtime_error("one ready player requested launch");
-                    if(lobby->state().local_ready && smoke_peer->state().remote_ready) {
-                        if(lobby->state().remote_ready || smoke_peer->state().local_ready)throw std::runtime_error("network peer became ready without input");
+                    if(launch_requested || pending_network || !network)throw std::runtime_error("unprepared peer requested launch");
+                    if(network->state().lobby.local_ready && smoke_peer->state().remote_ready) {
+                        if(network->state().lobby.remote_ready || smoke_peer->state().local_ready)throw std::runtime_error("network peer skipped prerequisites");
                         smoke_network_capture=true;smoke_network=SmokeNetwork::both_ready;
                     }
                     break;
@@ -326,8 +404,8 @@ int run(int argc,wchar_t** argv) {
                 case SmokeNetwork::verify:
                     if(smoke_peer->state().phase==uc::net::LobbyPhase::launching) {
                         const auto endpoint=smoke_peer->take_start();
-                        if(!endpoint || endpoint->host || !endpoint->loopback || endpoint->port!=smoke_tunnel->state().local.port || smoke_peer->take_start())throw std::runtime_error("network peer handoff was not exactly once");
-                        smoke_peer.reset();smoke_tunnel.reset();tunnel.reset();smoke_network=SmokeNetwork::complete;
+                        if(!endpoint || endpoint->host || endpoint->loopback || endpoint->port!=network->state().port || smoke_peer->take_start())throw std::runtime_error("network peer handoff was not exactly once");
+                        smoke_peer.reset();network.reset();smoke_network=SmokeNetwork::complete;
                     }
                     break;
                 case SmokeNetwork::idle: case SmokeNetwork::handoff: case SmokeNetwork::complete: break;
@@ -335,7 +413,7 @@ int run(int argc,wchar_t** argv) {
             }
         }
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        if(!smoke.empty() && frame==2) {
+        if(!smoke.empty() && frame==523) {
             for(const auto& [code,name]:std::map<uint16_t,std::string>{{26,"W"},{22,"S"},{21,"R"},{10,"G"},{25,"V"},{41,"Escape"}})
                 if(physical_name({uc::PhysicalKind::key,code})!=name)throw std::runtime_error("physical key label mismatch: "+name);
             for(auto* font:{ui.sans,ui.serif}) {
@@ -515,9 +593,9 @@ int run(int argc,wchar_t** argv) {
             const bool upscaler_open=combo("##upscaling",kind_label(options.upscaler));track("upscaling");
             if(upscaler_open) {
                 for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::smaa,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
-                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::smaa ? features.effects : kind==uc::UpscalerKind::dlss ? features.dlss : features.fsr);
-                    const auto& reason=kind==uc::UpscalerKind::smaa ? features.effects_reason : kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
-                    ImGui::BeginDisabled(!supported && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left, not re-picked
+                    const bool supported=uc::upscaler_supported(features,kind);
+                    const auto& reason=!features.effects ? features.effects_reason : kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
+                    ImGui::BeginDisabled(!supported);
                     if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {options.upscaler=kind;if(kind==uc::UpscalerKind::smaa)options.frame_generation=false;}   // SMAA has no generator
                     track(std::string("upscaler-")+std::string(uc::upscaler_name(kind)));
                     ImGui::EndDisabled();
@@ -564,7 +642,7 @@ int run(int argc,wchar_t** argv) {
             const bool generator_open=combo("##framegen",kind_label(generator));track("framegen");
             if(generator_open) {
                 for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
-                    const bool supported=kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::dlss ? features.dlss_g : features.fsr_fg);
+                    const bool supported=uc::upscaler_supported(features,kind) && (kind==uc::UpscalerKind::off || (kind==uc::UpscalerKind::dlss ? features.dlss_g : features.fsr_fg));
                     const auto& reason=kind==uc::UpscalerKind::dlss ? features.dlss_g_reason : features.fsr_fg_reason;
                     ImGui::BeginDisabled(!supported);
                     if(ImGui::Selectable(kind_label(kind),generator==kind)) {
@@ -783,7 +861,7 @@ int run(int argc,wchar_t** argv) {
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || tunnel || lobby || pending_network);
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || network || pending_network || updates.blocks_game_launch());
         push_font(ui.serif,22);
         const float launch_gap=8*unit,launch_width=(width*.395f-launch_gap)/2;
         if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
@@ -805,89 +883,77 @@ int run(int argc,wchar_t** argv) {
         push_font(ui.sans,28);
         if(ImGui::BeginPopupModal(network_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
             push_font(ui.sans,22);
-            if(!tunnel) {
-            ImGui::TextWrapped("%s",tr("network_help"));ImGui::Spacing();
-            ImGui::TextUnformatted(tr("network_address"));ImGui::SetNextItemWidth(-1);
-            ImGui::InputText("##network-address",&network_address);
-            track("network-address");
-            ImGui::TextUnformatted(tr("network_port"));ImGui::SetNextItemWidth(-1);
-            ImGui::InputInt("##network-port",&network_port,0,0);track("network-port");
-            } else ImGui::Text("%s: %s:%d",tr(network_host ? "network_create" : "network_connect"),network_address.c_str(),network_port);
-            const auto combined_address=uc::net::parse_peer_address(network_address);
-            const bool valid_endpoint=bool(combined_address) || (uc::net::valid_address(network_address) && network_port>0 && network_port<=65535);
-            if(!valid_endpoint)ImGui::TextWrapped("%s",tr("network_invalid"));
-            if(nat && tunnel && tunnel->state().phase!=uc::net::TunnelPhase::connected) {
-                const auto state=nat->state();
-                ImGui::TextWrapped("%s",tr(state.phase==uc::net::NatPhase::discovering ? "nat_discovering" : state.phase==uc::net::NatPhase::mapped ? "nat_mapped" : "nat_unavailable"));
-                if(state.phase==uc::net::NatPhase::mapped) {
-                    if(state.public_address) {
-                        const auto endpoint=state.external+":"+std::to_string(network_port);
-                        ImGui::TextUnformatted(endpoint.c_str());
-                        ImGui::SameLine();if(button(tr("punch_copy"),"nat-copy"))SDL_SetClipboardText(endpoint.c_str());
-                    }
-                    if(!state.public_address)ImGui::TextWrapped("%s",tr("nat_private"));
-                    if(state.permanent)ImGui::TextWrapped("%s",tr("nat_permanent"));
-                }
-                if(!state.error.empty())ImGui::TextWrapped("%s",state.error.c_str());
-            }
-            if(tunnel) {
-                const auto state=tunnel->state();
-                if(state.phase==uc::net::TunnelPhase::failed){network_error=state.error;cancel_network();}
-                else {
-                    if(!lobby && state.local.port && (network_host || state.phase==uc::net::TunnelPhase::connected))lobby=std::make_unique<uc::net::Lobby>(state.local);
-                    if(state.phase!=uc::net::TunnelPhase::connected) {
-                        if(state.phase==uc::net::TunnelPhase::needs_punch)ImGui::TextWrapped("%s",tr("punch_help"));
-                        else if(!network_host)ImGui::TextWrapped("%s",tr("network_waiting"));
-                        if(network_host || state.phase==uc::net::TunnelPhase::needs_punch) {
-                            if(!state.public_address.empty()) {
-                                ImGui::TextWrapped("%s",tr("punch_public"));
-                                ImGui::TextUnformatted(state.public_address.c_str());
-                                ImGui::SameLine();if(button(tr("punch_copy"),"punch-copy"))SDL_SetClipboardText(state.public_address.c_str());
-                            } else ImGui::TextWrapped("%s",tr(state.discovery_error.empty() ? "punch_discovering" : "punch_unavailable"));
-                            if(state.symmetric)ImGui::TextWrapped("%s",tr("punch_symmetric"));
-                        }
-                        if(network_host) {
-                            ImGui::TextWrapped("%s",tr("punch_peer"));ImGui::SetNextItemWidth(-1);
-                            ImGui::InputText("##punch-address",&punch_address);track("punch-address");
-                            smoke_punch_enabled=bool(uc::net::parse_peer_address(punch_address)) && !state.punching && state.phase==uc::net::TunnelPhase::waiting;
-                            ImGui::BeginDisabled(!smoke_punch_enabled);
-                            if(button(tr(state.punching ? "punch_active" : "punch_action"),"punch-action")) {
-                                try {tunnel->punch(punch_address);network_error.clear();}
-                                catch(const std::exception& e){network_error=e.what();}
-                            }
-                            ImGui::EndDisabled();
-                        }
-                    }
-                }
-            }
-            if(lobby) {
-                auto state=lobby->state();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+600*unit);
+            const auto combined_address=uc::net::parse_connection_address(network_address);
+            const bool valid_endpoint=bool(combined_address);
+            if(!network) {
+                ImGui::TextWrapped("%s",tr("network_help"));ImGui::Spacing();
+                ImGui::TextUnformatted(tr("network_endpoint"));ImGui::SetNextItemWidth(600*unit);
+                ImGui::InputTextWithHint("##network-address","192.168.1.10:27888",&network_address);track("network-address");
+                if(!network_address.empty() && !valid_endpoint)ImGui::TextWrapped("%s",tr("network_invalid"));
+            } else {
                 const bool can_ready=!blocked && !failed && cpu_ready && game_found && !running && !launch_requested && !editor.capturing()
-                    && same_options(options,saved_options) && editor.bindings()==document.input && language==saved_language;
-                if(!smoke.empty() && smoke_network==SmokeNetwork::connect && !can_ready && frame%60==0)
-                    std::fprintf(stderr,"[network-smoke] readiness blocked: config=%d save-failed=%d cpu=%d game=%d child=%d launch=%d capture=%d options-saved=%d bindings-saved=%d language-saved=%d\n",
-                        blocked,failed,cpu_ready,game_found,running,launch_requested,bool(editor.capturing()),same_options(options,saved_options),editor.bindings()==document.input,language==saved_language);
-                if(!can_ready && state.local_ready) {lobby->ready(false);state.local_ready=false;}
-                if(state.phase==uc::net::LobbyPhase::failed) {network_error=state.error;cancel_network();}
-                else {
-                    ImGui::TextWrapped("%s",tr(state.phase==uc::net::LobbyPhase::waiting ? "network_waiting" : "network_connected"));
-                    if(state.phase!=uc::net::LobbyPhase::waiting) {
-                    ImGui::Text("%s: %s",tr("network_local"),tr(state.local_ready ? "network_ready" : "network_not_ready"));
-                    ImGui::Text("%s: %s",tr("network_remote"),tr(state.remote_ready ? "network_ready" : "network_not_ready"));
-                    if(!can_ready)ImGui::TextWrapped("%s",tr("network_prepare"));
-                    ImGui::BeginDisabled(!can_ready || state.phase!=uc::net::LobbyPhase::connected);
-                    smoke_ready_enabled=can_ready && state.phase==uc::net::LobbyPhase::connected;
-                    bool ready=state.local_ready;
-                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{ImGui::GetStyle().FramePadding.x,0});
-                    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,{8*unit,ImGui::GetStyle().ItemInnerSpacing.y});
-                    if(ImGui::Checkbox(tr("network_ready"),&ready)) {if(!ready || save(options))lobby->ready(ready);}
-                    track("network-ready");
-                    ImGui::PopStyleVar(2);
+                    && !updates.blocks_game_launch() && same_options(options,saved_options) && editor.bindings()==document.input && language==saved_language;
+                network->poll(can_ready);
+                const auto state=network->state();
+                if(network_host && state.port && !nat)nat=std::make_unique<uc::net::NatMapping>(state.port,smoke.empty() ? uc::net::upnp_gateway() : std::make_unique<SmokeNatGateway>());
+                if(network_host) {
+                    auto internet=state.public_address;
+                    if(nat) {const auto mapping=nat->state();if(mapping.phase==uc::net::NatPhase::mapped && mapping.public_address)internet=mapping.external+":"+std::to_string(state.port);}
+                    ImGui::TextUnformatted(tr("network_internet"));
+                    if(!internet.empty())ImGui::TextUnformatted(internet.c_str());
+                    else ImGui::TextWrapped("%s",tr(state.discovery_error.empty() ? "punch_discovering" : "punch_unavailable"));
+                    ImGui::SameLine();ImGui::BeginDisabled(internet.empty());
+                    if(button(tr("punch_copy"),"network-copy-internet"))SDL_SetClipboardText(internet.c_str());
                     ImGui::EndDisabled();
+                    if(nat) {
+                        const auto mapping=nat->state();
+                        if(mapping.phase==uc::net::NatPhase::unavailable)ImGui::TextWrapped("%s",tr("nat_unavailable"));
+                        else if(mapping.phase==uc::net::NatPhase::mapped && !mapping.public_address)ImGui::TextWrapped("%s",tr("nat_private"));
                     }
-                    if(lobby && can_ready)if(auto endpoint=lobby->take_start()) {
-                        if(!smoke.empty() && smoke_exe.empty() && lobby->take_start())throw std::runtime_error("network host handoff repeated");
-                        pending_network=std::move(endpoint);launch_requested=true;lobby.reset();network_modal=false;ImGui::CloseCurrentPopup();
+                    ImGui::Spacing();
+                    ImGui::TextUnformatted(tr("network_lan"));
+                    if(state.port && !state.local_addresses.empty()) {
+                        network_local_address=std::min(network_local_address,state.local_addresses.size()-1);
+                        const auto address=state.local_addresses[network_local_address]+":"+std::to_string(state.port);
+                        ImGui::SetNextItemWidth(320*unit);
+                        if(ImGui::BeginCombo("##network-lan",address.c_str())) {
+                            for(size_t i=0;i<state.local_addresses.size();++i)if(ImGui::Selectable((state.local_addresses[i]+":"+std::to_string(state.port)).c_str(),i==network_local_address))network_local_address=i;
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();if(button(tr("punch_copy"),"network-copy-lan"))SDL_SetClipboardText(address.c_str());
+                    } else ImGui::TextUnformatted(tr("network_prepare"));
+                    ImGui::Spacing();
+                    if(state.lobby.phase==uc::net::LobbyPhase::waiting) {
+                        const bool show_punch=ImGui::CollapsingHeader(tr("punch_action"));track("punch-toggle");
+                        if(show_punch) {
+                        ImGui::TextWrapped("%s",tr("punch_peer"));ImGui::SetNextItemWidth(360*unit);
+                        ImGui::InputText("##punch-address",&punch_address);track("punch-address");
+                        ImGui::BeginDisabled(!uc::net::parse_connection_address(punch_address) || state.punching || !state.port);
+                        if(button(tr(state.punching ? "punch_active" : "punch_action"),"punch-action")) {
+                            try {network->punch(punch_address);network_error.clear();}
+                            catch(const std::exception& e) {network_error=e.what();}
+                        }
+                        ImGui::EndDisabled();
+                        }
+                    }
+                } else {
+                    ImGui::TextUnformatted(network_address.c_str());
+                    if(state.needs_punch) {
+                        ImGui::TextWrapped("%s",tr("punch_help"));
+                        if(!state.punch_address.empty()) {
+                            ImGui::TextUnformatted(state.punch_address.c_str());ImGui::SameLine();
+                            if(button(tr("punch_copy"),"punch-copy"))SDL_SetClipboardText(state.punch_address.c_str());
+                        } else ImGui::TextWrapped("%s",tr(state.discovery_error.empty() ? "punch_discovering" : "punch_unavailable"));
+                    }
+                }
+                if(state.lobby.phase==uc::net::LobbyPhase::failed)network_error=state.lobby.error;
+                else {
+                    ImGui::TextWrapped("%s",tr(state.lobby.phase==uc::net::LobbyPhase::waiting ? "network_waiting" : "network_connected"));
+                    if(!can_ready)ImGui::TextWrapped("%s",tr("network_prepare"));
+                    if(can_ready)if(auto endpoint=network->take_start()) {
+                        if(!smoke.empty() && network->take_start())throw std::runtime_error("network host handoff repeated");
+                        pending_network=std::move(endpoint);launch_requested=true;network_modal=false;ImGui::CloseCurrentPopup();
                     }
                 }
             }
@@ -896,32 +962,42 @@ int run(int argc,wchar_t** argv) {
                 ImGui::TextWrapped("%s",network_error.empty() ? error.c_str() : network_error.c_str());
             }
             ImGui::Spacing();
-            ImGui::BeginDisabled(!valid_endpoint || bool(tunnel) || !retiring_nat.empty());
+            ImGui::BeginDisabled(bool(network) || !retiring_nat.empty());
             const bool create=button(tr("network_create"),"network-create");
-            ImGui::SameLine();const bool connect=button(tr("network_connect"),"network-connect");
-            ImGui::EndDisabled();
+            ImGui::SameLine();ImGui::BeginDisabled(!valid_endpoint);
+            const bool connect=button(tr("network_connect"),"network-connect");
+            ImGui::EndDisabled();ImGui::EndDisabled();
             if(create || connect) {
-                network_error.clear();
+                network_error.clear();network_local_address=0;
                 try {
-                    if(combined_address){network_address=combined_address->address;network_port=combined_address->port;}
                     network_host=create;
-                    const uc::net::Endpoint endpoint{create,network_address,uint16_t(network_port)};
-                    tunnel=smoke.empty() ? std::make_unique<uc::net::NatTunnel>(endpoint) : std::make_unique<uc::net::NatTunnel>(endpoint,std::vector<std::string>{},std::chrono::milliseconds(100));
-                    if(create)nat=std::make_unique<uc::net::NatMapping>(uint16_t(network_port),smoke.empty() ? uc::net::upnp_gateway() : std::make_unique<SmokeNatGateway>());
-                }
-                catch(const std::exception& e) {cancel_network();network_error=e.what();}
+                    if(create)punch_address.clear();
+                    const auto endpoint=create ? uc::net::Endpoint{true,"0.0.0.0",uc::net::default_port} : *combined_address;
+                    if(connect) {
+                        network_address=endpoint.address+":"+std::to_string(endpoint.port);
+                        auto next=document;next.properties["launcher"]["last_peer"]=network_address;
+                        uc::save_config(config_path,next);document=std::move(next);
+                    }
+                    network=smoke.empty() ? std::make_unique<uc::net::NetworkSession>(endpoint) : std::make_unique<uc::net::NetworkSession>(endpoint,std::vector<std::string>{});
+                } catch(const std::exception& e) {cancel_network();network_error=e.what();}
             }
+            ImGui::PopTextWrapPos();
             const float cancel_width=ImGui::CalcTextSize(tr("network_cancel")).x+2*ImGui::GetStyle().FramePadding.x;
             ImGui::SameLine();
             ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),ImGui::GetWindowContentRegionMax().x-cancel_width));
             if(button(tr("network_cancel"),"network-cancel")) {cancel_network();network_modal=false;network_error.clear();ImGui::CloseCurrentPopup();}
             if(!smoke.empty() && smoke_exe.empty() && (frame==510 || frame==514)) {
-                if(valid_endpoint || lobby || pending_network || launch_requested)throw std::runtime_error("invalid network endpoint accepted");
-                if(frame==510) {network_address="127.0.0.1";network_port=0;}
+                if(valid_endpoint || network || pending_network || launch_requested)throw std::runtime_error("invalid network endpoint accepted");
+                if(frame==510)network_address="127.0.0.1:0";
             }
             ImGui::PopFont();ImGui::EndPopup();
         }
         ImGui::PopFont();ImGui::PopStyleVar(2);
+        if(!network_modal && !editor.capturing()) {
+            push_font(ui.sans,22);
+            if(uc::launcher::draw_update_modal(updates,active_language,running,unit)) {launch_requested=false;cancel_network();}
+            ImGui::PopFont();
+        }
         // Every change is saved at once. An unfinished game folder is not saved (the last good one stays); a refused save is not retried until something changes.
         if(!blocked && !editor.capturing()) {
             auto chosen=options;if(!game_found)chosen.game=saved_options.game;
@@ -932,18 +1008,19 @@ int run(int argc,wchar_t** argv) {
         const bool check_capture_wait=!smoke_exe.empty() && !smoke_capture_wait_checked && launch_requested && cpu_ready && !editor.capturing();
         if(check_capture_wait)editor.begin_capture(uc::Action::fire,false);
         if(!smoke.empty() && smoke_exe.empty() && pending_network) {
-            if(smoke_network!=SmokeNetwork::handoff || !launch_requested || !pending_network->host || !pending_network->loopback || pending_network->port!=tunnel->state().local.port || ++smoke_network_handoffs!=1)
+            if(smoke_network!=SmokeNetwork::handoff || !launch_requested || !pending_network->host || pending_network->loopback || pending_network->port!=network->state().port || ++smoke_network_handoffs!=1)
                 throw std::runtime_error("network launcher handoff failed");
             if(!nat || nat->state().phase!=uc::net::NatPhase::mapped)throw std::runtime_error("NAT mapping lost at game handoff");
             stop_nat();launch_requested=false;pending_network.reset();smoke_network=SmokeNetwork::verify;
         }
-        if(launch_requested && cpu_ready && !done && !blocked && !editor.capturing() && game_found) {
+        if(launch_requested && cpu_ready && !done && !blocked && !editor.capturing() && game_found && !updates.blocks_game_launch()) {   // the GPU probe (~3 s) is not waited for: the game falls back by itself
             launch_requested=false;
+            if(features_ready)uc::disable_unsupported_upscaling(options,features);
             if(save(options)) {
                 try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu,pending_network);pending_network.reset();}
                 catch(const std::exception& e) {error=e.what();cancel_network();}
                 if(process && smoke.empty() && smoke_exe.empty()) {
-                    if(tunnel || nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep the punched socket and router lease alive until the child exits.
+                    if(network || nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep the Internet transport and router lease alive until the child exits.
                     else done=true;
                 }
             }
@@ -953,8 +1030,31 @@ int run(int argc,wchar_t** argv) {
             editor.cancel_capture();smoke_capture_wait_checked=true;
         }
         ImGui::End();ImGui::Render();
+        const auto now=SDL_GetTicks();
+        if(now>=next_diagnostics) {
+            next_diagnostics=now+1000;
+            diagnostics<<"[ui] frame="<<frame<<" fps="<<ImGui::GetIO().Framerate
+                <<" windows="<<ImGui::GetDrawData()->CmdListsCount<<" vertices="<<ImGui::GetDrawData()->TotalVtxCount
+                <<" atlas="<<ImGui::GetIO().Fonts->TexData->Width<<'x'<<ImGui::GetIO().Fonts->TexData->Height
+                <<" modal="<<network_modal<<" cpu_ready="<<cpu_ready<<" gpu_ready="<<features_ready<<std::endl;
+        }
+        std::string network_state="idle";
+        if(network) {
+            const auto state=network->state();
+            network_state="phase="+std::to_string(int(state.lobby.phase))+" port="+std::to_string(state.port)
+                +" tunnel="+std::to_string(state.tunneled)+" public="+state.public_address+" discovery="+state.discovery_error+" error="+state.lobby.error
+                +" needs_punch="+std::to_string(state.needs_punch)+" punching="+std::to_string(state.punching)+" punch_address="+state.punch_address;
+        }
+        if(nat) {const auto state=nat->state();network_state+=" router_phase="+std::to_string(int(state.phase))+" external="+state.external+" router_error="+state.error;}
+        if(network_state!=last_network_state) {diagnostics<<"[network] "<<network_state<<std::endl;last_network_state=network_state;}
         if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
+        const auto draw_start=SDL_GetTicksNS();
+        SDL_ClearError();
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
+        const std::string render_error=SDL_GetError();
+        if(!render_error.empty() && render_error!=last_render_error)diagnostics<<"render error: "<<render_error<<std::endl;
+        last_render_error=render_error;
+        if(!smoke.empty() && !render_error.empty())throw std::runtime_error("launcher rendering: "+render_error);
         if(!smoke.empty()) {
             if(smoke_network_timeout) {
                 ui.capture(smoke/L"network-timeout.bmp");
@@ -1007,16 +1107,16 @@ int run(int argc,wchar_t** argv) {
             if(smoke_exe.empty() && frame==504)ui.capture(smoke/L"network-open.bmp");
             if(smoke_exe.empty() && frame==516)ui.capture(smoke/L"network-invalid.bmp");
             if(smoke_network_capture) {ui.capture(smoke/L"network-connected.bmp");smoke_network_capture=false;}
-            if(smoke_nat_capture) {ui.capture(smoke/(network_host ? L"network-nat-punch.bmp" : L"network-nat-help.bmp"));smoke_nat_capture=false;}
-            if(frame==522 && (network_modal || lobby || pending_network))throw std::runtime_error("network cancel did not reset lobby");
+            if(smoke_nat_capture) {ui.capture(smoke/(network_host ? L"network-host.bmp" : L"network-error.bmp"));smoke_nat_capture=false;}
+            if(frame==522 && (network_modal || network || pending_network))throw std::runtime_error("network cancel did not reset lobby");
             if(frame>=524) {
                 if(smoke_exe.empty()) {
                     if(smoke_network==SmokeNetwork::idle) {
-                        network_address.clear();network_port=30000+int(GetCurrentProcessId()%20000);
-                        smoke_join_address="127.0.0.1:"+std::to_string(network_port);
+                        network_address.clear();
+                        smoke_join_address="127.0.0.1:"+std::to_string(30000+int(GetCurrentProcessId()%20000));
                         smoke_network_start=SDL_GetTicks();smoke_network=SmokeNetwork::failed_open;
                     } else if(smoke_network==SmokeNetwork::complete) {
-                        if(process || launch_requested || pending_network || lobby || smoke_network_handoffs!=1)throw std::runtime_error("network smoke launched a game or repeated handoff");
+                        if(process || launch_requested || pending_network || network || smoke_network_handoffs!=1)throw std::runtime_error("network smoke launched a game or repeated handoff");
                         done=true;
                     }
                 }
@@ -1031,8 +1131,16 @@ int run(int argc,wchar_t** argv) {
                 }
             }
         }
+        const auto present_start=SDL_GetTicksNS();
         if(!SDL_RenderPresent(ui.renderer))throw std::runtime_error(SDL_GetError());
+        const auto frame_end=SDL_GetTicksNS();
+        if(frame_end-frame_start>250000000)diagnostics<<"slow frame="<<frame<<" at_ms="<<(frame_end-ui_start)/1e6
+            <<" layout_ms="<<(draw_start-frame_start)/1e6<<" draw_ms="<<(present_start-draw_start)/1e6
+            <<" present_ms="<<(frame_end-present_start)/1e6<<" lists="<<ImGui::GetDrawData()->CmdListsCount<<std::endl;
         ++frame;
+#ifdef UC_UPDATE_ACCEPTANCE
+        if(frame==4) done=true;
+#endif
     }
     if(!smoke_exe.empty() && !smoke_capture_wait_checked)throw std::runtime_error("pending Play capture check did not run");
     if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage/network validation, cancel and readiness handoff; no OS input\n");
@@ -1042,6 +1150,32 @@ int run(int argc,wchar_t** argv) {
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     int count=0;auto arguments=CommandLineToArgvW(GetCommandLineW(),&count);
     if(!arguments)return 2;
-    int result=0;try {result=run(count,arguments);}catch(const std::exception& e) {std::fprintf(stderr,"launcher failed: %s\n",e.what());result=2;}
+    std::optional<uc::DiagnosticLog> diagnostics;
+    int result=0;
+    bool trial_startup=false,smoke_test=false;
+    for(int i=1;i<count;++i)if(std::wstring_view(arguments[i])==L"--smoke")smoke_test=true;
+    try {
+        auto parsed=uc::update::parse_resume_startup(count,arguments);
+        if(uc::update::failed(parsed)) throw std::runtime_error(std::get<uc::update::Error>(parsed).detail);
+        auto resume=std::get<std::optional<uc::update::ResumeStartup>>(std::move(parsed));
+        trial_startup=resume.has_value();
+        if(!resume) {
+            auto recovery=uc::update::resume_pending_update(executable_dir());
+            if(uc::update::failed(recovery)) throw std::runtime_error(std::get<uc::update::Error>(recovery).detail);
+            if(std::get<bool>(recovery)) {LocalFree(arguments);return 0;}
+        }
+        auto session=uc::enter_client_session(executable_dir(),resume?std::optional{resume->ticket}:std::nullopt);
+        if(auto* error=std::get_if<std::error_code>(&session)) throw std::runtime_error("Client is updating or requires recovery: "+error->message());
+        diagnostics.emplace("launcher",executable_dir()/L"logs");
+        result=run(resume?1:count,arguments,resume?&*resume:nullptr);
+    } catch(const std::exception& e) {
+        std::fprintf(stderr,"launcher failed: %s\n",e.what());
+        const int length=MultiByteToWideChar(CP_UTF8,0,e.what(),-1,nullptr,0);
+        std::wstring message(length,L'\0');MultiByteToWideChar(CP_UTF8,0,e.what(),-1,message.data(),length);
+        // The helper reports trial failures after rollback; a dialog here keeps the image locked.
+        if(!trial_startup && !smoke_test) MessageBoxW(nullptr,message.c_str(),L"Umbrella Chronicles",MB_OK|MB_ICONERROR);
+        result=2;
+    }
+    std::fprintf(stderr,"[session] launcher exit=%d\n",result);
     LocalFree(arguments);return result;
 }

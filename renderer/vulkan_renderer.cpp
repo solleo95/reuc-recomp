@@ -1,3 +1,6 @@
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 #include "late_aim.h"
 #include "texture_replacement.h"
 #include "post_effects.h"
@@ -7,6 +10,7 @@
 #include "buffer_memory.h"
 #include "upscale_math.h"
 #include "upscaler_probe.h"
+#include <vulkan/vulkan_win32.h>
 #include <tuple>
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
@@ -64,7 +68,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanRenderer::debug(VkDebugUtilsMessageSeverity
 VulkanRenderer::~VulkanRenderer() {
     try { shutdown(); } catch (const std::exception& error) { std::fprintf(stderr, "Vulkan shutdown failed: %s\n", error.what()); }
 }
-void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale, double render_aspect) {
+void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::filesystem::path& shaders, double render_scale, double render_aspect, bool exclusive_fullscreen) {
     if (instance_) throw std::logic_error("renderer already initialized");
     owner_ = std::this_thread::get_id(); window_ = window;
     render_aspect_=render_aspect;
@@ -79,10 +83,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     std::vector<VkExtensionProperties> available(available_count);
     vk_check(vkEnumerateInstanceExtensionProperties(nullptr, &available_count, available.data()), "instance extensions");
     auto has = [&](const char* name) { return std::any_of(available.begin(), available.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; }); };
-    bool maintenance_khr = has("VK_KHR_surface_maintenance1"), maintenance_ext = has("VK_EXT_surface_maintenance1");
-    if (!has(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) || (!maintenance_khr && !maintenance_ext))
-        throw std::runtime_error("surface maintenance1 required for verified presentation retirement");
-    extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    const bool capabilities2=has(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    bool maintenance_khr = capabilities2 && has("VK_KHR_surface_maintenance1"), maintenance_ext = capabilities2 && has("VK_EXT_surface_maintenance1");
+    if (capabilities2) extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     if (maintenance_khr) extensions.push_back("VK_KHR_surface_maintenance1");
     if (maintenance_ext) extensions.push_back("VK_EXT_surface_maintenance1");
     colorspace_ext_ = has(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 surface formats; without it HDR stays off
@@ -150,12 +153,13 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         vk_check(vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extension_count, device_extensions.data()), "device extensions");
         auto device_has = [&](const char* name) { return std::any_of(device_extensions.begin(), device_extensions.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; }); };
         const char* maintenance = maintenance_khr && device_has("VK_KHR_swapchain_maintenance1") ? "VK_KHR_swapchain_maintenance1" : maintenance_ext && device_has("VK_EXT_swapchain_maintenance1") ? "VK_EXT_swapchain_maintenance1" : nullptr;
-        if (!device_has(VK_KHR_SWAPCHAIN_EXTENSION_NAME) || !maintenance) continue;
+        if (!device_has(VK_KHR_SWAPCHAIN_EXTENSION_NAME)) continue;
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR retirement{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
-        VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; features13.pNext = &retirement;
+        VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; features13.pNext = maintenance ? &retirement : nullptr;
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; features.pNext = &features13;
         vkGetPhysicalDeviceFeatures2(candidate, &features);
-        if (!features13.dynamicRendering || !features13.synchronization2 || !retirement.swapchainMaintenance1) continue;
+        if (!features13.dynamicRendering || !features13.synchronization2) continue;
+        if (!retirement.swapchainMaintenance1) maintenance=nullptr;
         uint32_t family_count = 0; vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, nullptr);
         std::vector<VkQueueFamilyProperties> families(family_count); vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, families.data());
         for (uint32_t family = 0; family < family_count; ++family) {
@@ -166,10 +170,15 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
             }
         }
     }
-    if (!physical_) throw std::runtime_error("GPU requires Vulkan 1.3 graphics/present, dynamic rendering, synchronization2 and swapchain maintenance1");
+    if (!physical_) throw std::runtime_error("GPU requires Vulkan 1.3 graphics/present, dynamic rendering and synchronization2");
+    present_fences_=chosen_maintenance!=nullptr;
     VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_, &properties);
     max_image_dimension_=properties.limits.maxImageDimension2D;
-    std::fprintf(stderr, "Vulkan device: %s; presentation retirement: %s\n", properties.deviceName, chosen_maintenance);
+    std::fprintf(stderr, "Vulkan device: %s; presentation retirement: %s\n", properties.deviceName, chosen_maintenance ? chosen_maintenance : "legacy (successor acquire, device-idle shutdown)");
+    VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 details{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};details.pNext=&driver;
+    vkGetPhysicalDeviceProperties2(physical_,&details);
+    std::fprintf(stderr,"[gpu] vendor=%04x device=%04x Vulkan=%u.%u.%u driver_version=%u driver=%s info=%s\n",properties.vendorID,properties.deviceID,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),VK_VERSION_PATCH(properties.apiVersion),properties.driverVersion,driver.driverName,driver.driverInfo);
     if (streamline_) {
         std::string reason;
         dlss_available_=streamline_->dlss_supported(physical_, reason);
@@ -209,22 +218,26 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     }
     VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; queue_info.queueFamilyIndex = family_; queue_info.queueCount = queue_count; queue_info.pQueuePriorities = priorities;
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR retirement{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR}; retirement.swapchainMaintenance1 = VK_TRUE;
-    VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; features13.pNext = &retirement; features13.dynamicRendering = VK_TRUE; features13.synchronization2 = VK_TRUE;
+    VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES}; features13.pNext = present_fences_ ? &retirement : nullptr; features13.dynamicRendering = VK_TRUE; features13.synchronization2 = VK_TRUE;
     features13.privateData = private_data;
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.timelineSemaphore = queue_count == 3;   // the interpolation swapchain's queue sync
     features12.shaderFloat16=supported12.shaderFloat16;
     bool features12_chained = features12.timelineSemaphore || features12.shaderFloat16;
     if (features12_chained) { features12.pNext = features13.pNext; features13.pNext = &features12; }
-    std::vector<const char*> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME, chosen_maintenance};
+    std::vector<const char*> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    if(chosen_maintenance)device_extensions.push_back(chosen_maintenance);
     {   // FidelityFX resolves these entry points by their extension names, including after a live switch.
         uint32_t n = 0; vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, nullptr);
         std::vector<VkExtensionProperties> supported(n); vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, supported.data());
+        disallow_exclusive_=!exclusive_fullscreen && capabilities2 && std::any_of(supported.begin(),supported.end(),[](const auto& extension){return std::strcmp(extension.extensionName,VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME)==0;});
+        if(disallow_exclusive_)device_extensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
         if (through_streamline && std::any_of(supported.begin(),supported.end(),[](const auto& extension) { return std::strcmp(extension.extensionName,VK_KHR_PRESENT_ID_EXTENSION_NAME)==0; }))
             device_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);   // dependency of the low-latency extension Streamline enables
     }
+    std::fprintf(stderr,"Vulkan fullscreen policy: %s\n",disallow_exclusive_ ? "exclusive disallowed" : exclusive_fullscreen ? "driver default (exclusive requested)" : "driver default (extension unavailable)");
     // Upscaling: pipelines with the motion attachment also draw passes that bind none (post chain, HUD), which needs unused attachments.
     VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT unused{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT};
     {
@@ -755,9 +768,11 @@ void VulkanRenderer::load_pipeline_cache() {
     VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO}; info.initialDataSize=data.size(); info.pInitialData=data.data();
     vk_check(vkCreatePipelineCache(device,&info,nullptr,&pipeline_cache_),"pipeline cache");   // the driver ignores data from another driver or version
     pipeline_cache_loaded_=data.size();
+    std::fprintf(stderr,"[pipeline] disk cache bytes=%zu\n",data.size());
     for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"})
         for (const auto& recorded:load_pipeline_keys(cache_dir_/name))
             if (const auto key=static_key(recorded); valid_pipeline_key(key,logic_ops_) && known_keys_.insert(key).second) warm_keys_.push_back(key);
+    std::fprintf(stderr,"[pipeline] known pipeline keys=%zu\n",warm_keys_.size());
 }
 void VulkanRenderer::save_pipeline_cache() {
     static std::mutex saving;   // compile threads and shutdown may save concurrently
@@ -1056,10 +1071,11 @@ void VulkanRenderer::destroy_slot_images(Slot& slot) {
     }
 }
 void VulkanRenderer::reap_retired(bool wait) {
+    if(!present_fences_ && !wait)return;   // legacy chains wait for a successor image's reacquisition
     for (auto it = retired_.begin(); it != retired_.end();) {
         bool done = wait || it->chain != old_swapchain_;   // a chain still waiting for its successor stays
         for (const auto& image : it->images) {
-            if (!done || !image.pending) continue;
+            if (!done || !image.pending || !present_fences_) continue;
             const VkResult status = wait ? vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull) : vkGetFenceStatus(device, image.fence);
             if (status == VK_NOT_READY || status == VK_TIMEOUT) done = false;
             else if (status != VK_ERROR_DEVICE_LOST) vk_check(status, "retired presentation fence");
@@ -1076,6 +1092,7 @@ void VulkanRenderer::reap_retired(bool wait) {
 }
 void VulkanRenderer::retire_images(bool keep_buffers) {
     if (!device) return;
+    // shortcut: legacy Vulkan has no presentation fence at shutdown; use device idle until maintenance1 is available.
     VkResult status = present_.wait_idle(device);
     if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) vk_check(status, "retire device work");
     old_swapchain_ = VK_NULL_HANDLE;
@@ -1083,7 +1100,7 @@ void VulkanRenderer::retire_images(bool keep_buffers) {
         collect();
         reap_retired(true);
         for (const auto& image : images_)
-            if (image.pending) vk_check(vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull), "presentation retirement fence");
+            if (present_fences_ && image.pending) vk_check(vkWaitForFences(device, 1, &image.fence, VK_TRUE, 1000000000ull), "presentation retirement fence");
     }
     for (auto& image : images_) {
         if (image.view) vkDestroyImageView(device, image.view, nullptr);
@@ -1580,6 +1597,10 @@ void VulkanRenderer::rebuild() {
     uint32_t images = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount) images = std::min(images, capabilities.maxImageCount);
     VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR}; create.surface = surface_; create.minImageCount = images;
+    // Borderless must not silently become driver-managed exclusive fullscreen.
+    VkSurfaceFullScreenExclusiveInfoEXT fullscreen{VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT};
+    fullscreen.fullScreenExclusive=VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
+    if(disallow_exclusive_)create.pNext=&fullscreen;
     create.imageFormat = chosen.format; create.imageColorSpace = chosen.colorSpace; create.imageExtent = extent_; create.imageArrayLayers = 1;
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));
@@ -1595,6 +1616,7 @@ void VulkanRenderer::rebuild() {
     create.oldSwapchain = old_swapchain_;
     swapchain_format_ = chosen.format;
     vk_check(present_.create(device, &create, nullptr, &swapchain_), "swapchain");
+    std::fprintf(stderr,"Swapchain: %ux%u format=%d present=%s exclusive=%s\n",extent_.width,extent_.height,int(chosen.format),create.presentMode==VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : create.presentMode==VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo",disallow_exclusive_ ? "disallowed" : "driver default");
     old_swapchain_ = VK_NULL_HANDLE;   // retired by the call above; reap_retired() frees it when its presentations are done
     vk_check(present_.images(device, swapchain_, &count, nullptr), "swapchain image count");
     std::vector<VkImage> swapchain_images(count); vk_check(present_.images(device, swapchain_, &count, swapchain_images.data()), "swapchain images");
@@ -1602,7 +1624,7 @@ void VulkanRenderer::rebuild() {
     for (size_t i = 0; i < images_.size(); ++i) {
         images_[i].image = swapchain_images[i];
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &images_[i].ready), "per-image present semaphore");
-        VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; vk_check(vkCreateFence(device, &fence, nullptr, &images_[i].fence), "per-image present fence");
+        if(present_fences_) { VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; vk_check(vkCreateFence(device, &fence, nullptr, &images_[i].fence), "per-image present fence"); }
         if (hdr_active_) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image = swapchain_images[i]; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = chosen.format; view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vk_check(vkCreateImageView(device, &view, nullptr, &images_[i].view), "swapchain image view");
@@ -2033,8 +2055,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     bool suboptimal=false;
     PresentImage* present_image=nullptr;
     if (packet.present && display) {
+        const bool legacy_retirement=!present_fences_ && !retired_.empty();
+        if(legacy_retirement && !retirement_acquired_) {
+            VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            vk_check(vkCreateFence(device,&fence,nullptr,&retirement_acquired_),"legacy acquire fence");
+        }
         const auto acquire_start = std::chrono::steady_clock::now();
-        VkResult acquired = present_.acquire(device, swapchain_, 1000000ull, slot.acquired, VK_NULL_HANDLE, &image_index);
+        VkResult acquired = present_.acquire(device, swapchain_, 1000000ull, slot.acquired, legacy_retirement ? retirement_acquired_ : VK_NULL_HANDLE, &image_index);
         timings_.acquire_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquire_start).count();
         if (acquired == VK_TIMEOUT || acquired == VK_NOT_READY) {   // retried later: the packet must look unseen to the per-frame upscaling state
             boundary_=upscale_before.boundary; frame_start_=upscale_before.frame_start; scene_phase_=upscale_before.scene_phase; scene_mode_=upscale_before.scene_mode;
@@ -2048,11 +2075,16 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) vk_check(acquired, "acquire image");
             suboptimal = acquired == VK_SUBOPTIMAL_KHR;
             present_image = &images_.at(image_index);
-            if (present_image->pending) {
+            if(legacy_retirement) {
+                vk_check(vkWaitForFences(device,1,&retirement_acquired_,VK_TRUE,1000000000ull),"legacy successor acquire");
+                vk_check(vkResetFences(device,1,&retirement_acquired_),"reset legacy acquire fence");
+                if(present_image->pending)reap_retired(true);   // this successor image was presented, and the presentation engine returned it
+            }
+            if (present_fences_ && present_image->pending) {
                 vk_check(vkWaitForFences(device, 1, &present_image->fence, VK_TRUE, 1000000000ull), "reuse presentation fence");
                 present_image->pending = false;
             }
-            vk_check(vkResetFences(device, 1, &present_image->fence), "reset present fence");
+            if(present_fences_)vk_check(vkResetFences(device, 1, &present_image->fence), "reset present fence");
         }
     }
     vk_check(vkResetCommandBuffer(slot.command, 0), "reset command buffer");
@@ -2477,7 +2509,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (!present_image) return true;
     VkSwapchainPresentFenceInfoKHR present_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR}; present_fence.swapchainCount = 1; present_fence.pFences = &present_image->fence;
     // With DLSS-G Streamline presents (and paces) the frames itself and never signals a present fence: its swapchain images are not tracked here.
-    const bool fenced = !streamline_swapchain() && !fsr_presentation_;
+    const bool tracked = !streamline_swapchain() && !fsr_presentation_;
+    const bool fenced = present_fences_ && tracked;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; present.pNext = fenced ? &present_fence : nullptr; present.waitSemaphoreCount = 1; present.pWaitSemaphores = &present_image->ready;
     present.swapchainCount = 1; present.pSwapchains = &swapchain_; present.pImageIndices = &image_index;
     const auto present_start = std::chrono::steady_clock::now();
@@ -2488,7 +2521,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (dlss_generation_enabled()) dlss_g_->after_present();
     if (fsr_presentation_) fsr_g_->after_present();
     timings_.present_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_start).count();
-    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { present_image->pending = fenced; ++presentations_; }
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { present_image->pending = tracked; ++presentations_; }
     else if (result != VK_ERROR_OUT_OF_DATE_KHR) vk_check(result, "present frame");
     if (suboptimal || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;
     return true;
@@ -2550,6 +2583,8 @@ void VulkanRenderer::shutdown() {
             slot = {};
         }
         pass_timer_.shutdown();
+        if(retirement_acquired_)vkDestroyFence(device,retirement_acquired_,nullptr);
+        retirement_acquired_=VK_NULL_HANDLE;
         if (timing_pool_) vkDestroyQueryPool(device, timing_pool_, nullptr);
         if (pool_) vkDestroyCommandPool(device, pool_, nullptr);
         if (streamline_ && streamline_->active()) {   // slShutdown before the device and instance go; the surface it created first

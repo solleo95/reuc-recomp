@@ -34,6 +34,7 @@ class DelayRelay:
         self._udp_random = random.Random(seed ^ 0x554450)
         self._lock = threading.Lock()
         self._profile = (0.0, 0.0, 0.0, 0.0)
+        self._bandwidth = 0
         self._stats = {"segments": 0, "retransmissions": 0, "bytes": 0,
                        "udp_datagrams": 0, "udp_dropped": 0, "udp_bytes": 0}
         self._stop = threading.Event()
@@ -60,6 +61,13 @@ class DelayRelay:
             raise ValueError("invalid bounded delay/retransmission profile")
         with self._lock:
             self._profile = (delay, jitter, loss_rate, retransmit_delay)
+
+    def set_bandwidth(self, bytes_per_second):
+        """TCP only: each direction serializes at this rate (0 = unlimited) behind a 128 KiB queue."""
+        if not math.isfinite(bytes_per_second) or bytes_per_second < 0:
+            raise ValueError("invalid bandwidth")
+        with self._lock:
+            self._bandwidth = bytes_per_second
 
     def stats(self):
         with self._lock:
@@ -160,6 +168,7 @@ class DelayRelay:
             sizes = [0, 0]
             eof = [False, False]
             shut = [False, False]
+            link_free = [0.0, 0.0]
             for peer in peers:
                 peer.setblocking(False)
                 peer.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -171,7 +180,9 @@ class DelayRelay:
                         peer.shutdown(socket.SHUT_WR)
                         shut[i] = True
                     events = 0
-                    if not eof[i] and sizes[1 - i] < 1024 * 1024:
+                    with self._lock:
+                        capacity = 128 * 1024 if self._bandwidth else 1024 * 1024
+                    if not eof[i] and sizes[1 - i] < capacity:
                         events |= selectors.EVENT_READ
                     if queues[i] and queues[i][0][0] <= now:
                         events |= selectors.EVENT_WRITE
@@ -185,11 +196,14 @@ class DelayRelay:
                     return
                 due = [q[0][0] for q in queues if q and q[0][0] > now]
                 timeout = min(0.02, max(0, min(due) - now)) if due else 0.02
+                if not selector.get_map():  # Windows select rejects empty sets while delayed queues drain.
+                    self._stop.wait(timeout)
+                    continue
                 for key, mask in selector.select(timeout):
                     i = key.data
                     if mask & selectors.EVENT_READ:
                         try:
-                            data = peers[i].recv(min(65536, 1024 * 1024 - sizes[1 - i]))
+                            data = peers[i].recv(max(1, min(65536, capacity - sizes[1 - i])))
                         except BlockingIOError:
                             continue
                         if not data:
@@ -197,6 +211,7 @@ class DelayRelay:
                         else:
                             with self._lock:
                                 delay, jitter, loss_rate, retransmit_delay = self._profile
+                                bandwidth = self._bandwidth
                             q = queues[1 - i]
                             # Model lost segments recovering later: TCP preserves every byte and
                             # holds subsequent segments behind the missing one. No actual IP drop.
@@ -206,6 +221,9 @@ class DelayRelay:
                                 arrival = time.monotonic() + delay + self._random.uniform(-jitter, jitter)
                                 lost = bool(loss_rate and self._random.random() < loss_rate)
                                 arrival += retransmit_delay if lost else 0
+                                if bandwidth:
+                                    link_free[1 - i] = max(time.monotonic(), link_free[1 - i]) + len(segment) / bandwidth
+                                    arrival = max(arrival, link_free[1 - i] + delay)
                                 arrival = max(arrival, q[-1][0] if q else arrival)
                                 q.append((arrival, segment))
                                 segments += 1
@@ -226,7 +244,7 @@ class DelayRelay:
                             queues[i].popleft()
                         else:
                             queues[i][0] = (arrival, data[sent:])
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             # Peer quit terminates the stream, including queued writes.
             return
         except Exception as exc:
@@ -285,6 +303,16 @@ def selftest():
             assert recovered == b"recovered TCP data", "recovery model corrupted the stream"
             assert time.monotonic()-started >= .16, "retransmission delay absent"
             assert relay.stats()["retransmissions"] >= 2
+            relay.set_profile(0)
+            relay.set_bandwidth(400000)   # 100 KB through one direction takes 0.25 s; the echo overlaps the way back.
+            started = time.monotonic()
+            client.sendall(payload[:100000])
+            echoed = 0
+            while echoed < 100000:
+                part = client.recv(65536)
+                assert part, "unexpected EOF under bandwidth limit"
+                echoed += len(part)
+            assert time.monotonic() - started >= .22, "bandwidth limit absent"
     finally:
         relay.close()
         worker.join(3)
@@ -294,6 +322,28 @@ def selftest():
     idle = DelayRelay(1)
     idle.close()
     assert not idle._thread.is_alive(), "idle relay leaked"
+    with socket.socket() as closing_listener:
+        closing_listener.bind(("127.0.0.1", 0))
+        closing_listener.listen(1)
+        closing_listener.settimeout(3)
+        closing_relay = DelayRelay(closing_listener.getsockname()[1])
+        try:
+            closing_relay.set_profile(.1)
+            with socket.create_connection(("127.0.0.1", closing_relay.port), 2) as client, closing_listener.accept()[0] as host:
+                client.settimeout(3)
+                host.settimeout(3)
+                # Both readers reach EOF while delayed writes still need draining.
+                client.sendall(b"client")
+                host.sendall(b"host")
+                client.shutdown(socket.SHUT_WR)
+                host.shutdown(socket.SHUT_WR)
+                assert client.makefile("rb").read() == b"host"
+                assert host.makefile("rb").read() == b"client"
+            closing_relay._thread.join(2)
+            assert not closing_relay._thread.is_alive(), "delayed EOF did not drain"
+            closing_relay.check()
+        finally:
+            closing_relay.close()
     reset_listener = socket.socket()
     reset_listener.bind(("127.0.0.1", 0))
     reset_listener.listen(1)

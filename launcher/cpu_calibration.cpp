@@ -9,11 +9,12 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include "file_rename.h"
 namespace uc {
 namespace {
 using Clock=std::chrono::steady_clock;
 using Json=nlohmann::json;
-constexpr int profile_version=2;
+constexpr int profile_version=3;   // 3: hybrid CPUs choose among their performance cores only (an E-core won the probe and ran the game 3x slower)
 struct Handle {
     HANDLE value=INVALID_HANDLE_VALUE;
     ~Handle(){if(value!=INVALID_HANDLE_VALUE)CloseHandle(value);}
@@ -59,13 +60,14 @@ void save_profile(const std::filesystem::path& path,const CpuTopology& topology,
     bool created=false;
     try {
         {
-            Handle file{CreateFileW(temporary.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr)};
+            Handle file{CreateFileW(temporary.c_str(),GENERIC_WRITE|DELETE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr)};
             if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot create CPU profile");
             created=true;DWORD written=0;
             if(!WriteFile(file.value,bytes.data(),DWORD(bytes.size()),&written,nullptr) || written!=bytes.size() || !FlushFileBuffers(file.value))
                 throw std::runtime_error("cannot write CPU profile");
+            if(auto error=rename_sibling_file(file.value,path.filename().native(),true))
+                throw std::runtime_error("cannot replace CPU profile: "+error.message());
         }
-        if(!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("cannot replace CPU profile");
     } catch(...) {
         if(created && !DeleteFileW(temporary.c_str()))std::fprintf(stderr,"[cpu-calibration] temporary profile cleanup failed: %lu\n",GetLastError());
         throw;
@@ -92,7 +94,7 @@ CpuCalibrationResult calibrate(const std::filesystem::path& path,std::stop_token
     if(auto cached=load_cpu_profile(path,topology)) {result.cpu=*cached;result.cached=true;return result;}
     Probe probe;
     std::vector<CpuScore> scores;
-    for(const auto& core:topology.cores)scores.push_back({core.cpu,{},core.scheduling_class});
+    for(const auto& core:topology.cores)scores.push_back({core.cpu,{},core.scheduling_class,core.efficiency});
     // Alternate traversal so late cores do not systematically get the warm run.
     const double sample_ms=std::clamp(1920.0/scores.size()/3,15.0,60.0);
     DWORD_PTR previous=0;
@@ -117,17 +119,22 @@ CpuCalibrationResult calibrate(const std::filesystem::path& path,std::stop_token
 }
 }
 int fastest_cpu(const std::vector<CpuScore>& scores) {
-    struct Candidate {int cpu;double rate;unsigned scheduling_class;};
+    struct Candidate {int cpu;double rate;unsigned scheduling_class;unsigned efficiency;};
     std::vector<Candidate> candidates;double fastest=0;
     for(const auto& score:scores) {
         if(score.cpu<0 || score.cpu>=63 || std::ranges::any_of(score.samples,[](double sample){return !std::isfinite(sample) || sample<=0;}))continue;
         auto sorted=score.samples;std::sort(sorted.begin(),sorted.end());
-        candidates.push_back({score.cpu,sorted[1],score.scheduling_class});
-        fastest=std::max(fastest,sorted[1]);
+        candidates.push_back({score.cpu,sorted[1],score.scheduling_class,score.efficiency});
     }
+    // The probe is a memory-latency loop: an E-core can match or beat a P-core on it and still run the game's guest code
+    // several times slower. Where the CPU has efficiency classes (hybrid), only its fastest class is considered.
+    unsigned top_efficiency=0;
+    for(const auto& candidate:candidates)top_efficiency=std::max(top_efficiency,candidate.efficiency);
+    std::erase_if(candidates,[&](const Candidate& candidate){return candidate.efficiency<top_efficiency;});
+    for(const auto& candidate:candidates)fastest=std::max(fastest,candidate.rate);
     // A 5% tie band is a conservative heuristic, not a confidence interval.
     // Scheduling hints may break probe ties, never override clearly faster work.
-    Candidate best{-1,0,0};
+    Candidate best{-1,0,0,0};
     for(const auto& candidate:candidates)if(candidate.rate>=fastest*.95 &&
         (best.cpu<0 || candidate.scheduling_class>best.scheduling_class ||
          (candidate.scheduling_class==best.scheduling_class && candidate.rate>best.rate)))best=candidate;

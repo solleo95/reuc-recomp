@@ -566,17 +566,17 @@ def player_dump(g, args):
 
 def hook_probe(g, args):
     """Hooks in the real game: a mod's hook on GameWeaponUpdate is called with the weapon object, and clearing the 'allowed' flag (r4) from a hook changes
-    what the game does. Reads debug/mods.log next to the exe; fire presses use the game's own pad input."""
+    what the game does. Reads the session mods.log; fire presses use the game's own pad input."""
     reach_gameplay(g)
     g.advance(240)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("hook_called"):
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
         lines = [line for line in text.splitlines() if "hook r3=" in line]
         result["hook_lines"] = lines[-3:]
         if not lines:
-            g.fail("the hook was never called (no 'hook r3=' line in debug/mods.log)", "hook")
+            g.fail("the hook was never called (no 'hook r3=' line in session mods.log)", "hook")
         r3 = int(lines[-1].split("r3=")[1].split()[0], 16)
         result["r3"] = hex(r3)
         if not 0x80000000 <= r3 < 0x81800000:
@@ -664,7 +664,7 @@ def hook_replace(g, args):
         if after != before:
             g.fail(f"the magazine went from {before} to {after} although the weapon update was replaced by nothing", "hook replace")
     with g.step("post_ran"):
-        log_path = g.exe.parent / "debug" / "mods.log"
+        log_path = g.log_path("mods.log")
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
         if "post calls=" not in text:
             g.fail("the post hook never ran after the replaced function", "hook post")
@@ -675,7 +675,7 @@ def camera_api(g, args):
     """camera.position / forward from the view matrix, in the real game: the eye is about 1.5 m (15 units) above the floor, forward is a unit vector and the nearest
     living zombie is in front of the camera (dot product of the direction to it with forward > 0.3)."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("camera_logged"):
         lines = []
@@ -686,7 +686,7 @@ def camera_api(g, args):
             if lines:
                 break
         if not lines:
-            g.fail("the camera probe never saw a living zombie (no 'camera eye_y=' line in debug/mods.log)", "camera")
+            g.fail("the camera probe never saw a living zombie (no 'camera eye_y=' line in session mods.log)", "camera")
         fields = dict(part.split("=") for part in lines[-1].split("] ")[-1].split()[1:])
         eye_y, ahead = float(fields["eye_y"]), float(fields["ahead"])
         forward = [float(v) for v in fields["forward"].split(",")]
@@ -704,7 +704,7 @@ def player_api(g, args):
     """player.weapon / health / reserve in the real game: the handgun (id 0 or 19), full health, an infinite reserve (nil); then a script sets health to 0.5
     and the damage meter reads 25 (of 50)."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("player_logged"):
         line = ""
@@ -716,7 +716,7 @@ def player_api(g, args):
                 line = lines[-1]
                 break
         if not line:
-            g.fail("no 'player weapon=' line in debug/mods.log", "player api")
+            g.fail("no 'player weapon=' line in session mods.log", "player api")
         fields = dict(part.split("=") for part in line.split("] ")[-1].split()[1:])
         result["logged"] = fields
         if fields["weapon"] not in ("0", "19") or fields["health"] != "1.00" or fields["reserve"] != "nil":
@@ -733,7 +733,7 @@ def player_api(g, args):
 def input_force(g, args):
     """input.force_held = B: the harness holds nothing, yet the game sees the trigger (the mod logs fire_held) and the handgun fires (15 -> 14 or lower)."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("forced_trigger"):
         before = g.state()["player"]["magazine"]
@@ -752,7 +752,7 @@ def input_block(g, args):
     """input.block_held = B: the harness holds the trigger for 90 frames, the game does not see it (no shot, fire_held never true)."""
     reach_gameplay(g)
     g.advance(60)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("blocked_trigger"):
         before = g.state()["player"]["magazine"]
@@ -770,7 +770,7 @@ def enemy_api(g, args):
     """uc.enemy(id).hp = 0 on the nearest living zombie: the mod reads alive = false at once and the game keeps the zombie at hp 0 (dead, as after a kill); the
     capture shows the scene a moment later."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
     result = {}
     with g.step("enemy_killed"):
         line = ""
@@ -804,7 +804,7 @@ def game_api(g, args):
     """uc.game.time / paused and the hit counters in the real game: the clock rises while the mission runs, the hit counter rises while the trigger is
     held at the zombies, and the game's pause menu (the + button) shows as paused = true."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
 
     def rows():
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
@@ -844,7 +844,7 @@ def timers_api(g, args):
     """setTimeout / setInterval in the real game: an interval of one game second ticks about once per second of play, the timeout fires once, and the
     game's pause menu stops them (they count game steps)."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
 
     def lines():
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
@@ -1109,11 +1109,11 @@ def randomizer_live(g, args):
 
 def inspector_live(g, args):
     """The inspector example mod with log_every = 1 in the real train chapter: 25 s of play must give a snapshot line of valid JSON about every second in
-    debug/mods.log, the mission clock must rise, the camera must have a position, player 1 must be present with a health between 0 and 1, and the enemy list
+    the session mods.log, the mission clock must rise, the camera must have a position, player 1 must be present with a health between 0 and 1, and the enemy list
     must be a list. Then the Insert menu is opened on the mod's window and captured (look at it)."""
     import json
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
 
     def snapshots():
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
@@ -1261,7 +1261,7 @@ def guest_api(g, args):
     """uc.guest.call and uc.game.give_weapon / select_weapon in the real game: the weapon-record accessor returns the table address, and a submachine gun
     given and selected from a mod becomes the player's weapon; a held trigger then uses its magazine (automatic fire)."""
     reach_gameplay(g)
-    log_path = g.exe.parent / "debug" / "mods.log"
+    log_path = g.log_path("mods.log")
 
     def lines(prefix):
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""

@@ -139,7 +139,7 @@ static void god_mode() {
 
 namespace {
 std::vector<std::string> inspector_log_lines(const World& w) {   // the snapshot lines the mod wrote: "[inspector] {json}"
-    std::ifstream in(w.exe / "debug" / "mods.log");
+    std::ifstream in(w.exe / "logs" / "mods.log");
     std::vector<std::string> lines;
     for (std::string line; std::getline(in, line);) if (line.rfind("[inspector] {", 0) == 0) lines.push_back(line.substr(12));
     return lines;

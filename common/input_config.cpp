@@ -8,6 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include "file_rename.h"
 namespace uc {
 namespace {
 using Json=nlohmann::ordered_json;
@@ -150,14 +151,15 @@ void save_config(const std::filesystem::path& path,ConfigDocument& document) {
     bool created=false;
     try {
         {
-            Handle file(CreateFileW(temporary.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_TEMPORARY,nullptr));
+            Handle file(CreateFileW(temporary.c_str(),GENERIC_WRITE|DELETE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_TEMPORARY,nullptr));
             if(file.value==INVALID_HANDLE_VALUE)io_error("cannot create temporary file");
             created=true;
             DWORD written=0;
             if(!WriteFile(file.value,bytes.data(),DWORD(bytes.size()),&written,nullptr) || written!=bytes.size())io_error("cannot write temporary file");
             if(!FlushFileBuffers(file.value))io_error("cannot flush temporary file");
+            if(auto error=rename_sibling_file(file.value,path.filename().native(),true))
+                throw std::runtime_error("config: cannot replace file: "+error.message());
         }
-        if(!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))io_error("cannot replace file");
     } catch(...) {
         // Only this writer's unique temporary file is eligible for cleanup.
         if(created && std::filesystem::exists(temporary) && !DeleteFileW(temporary.c_str()))

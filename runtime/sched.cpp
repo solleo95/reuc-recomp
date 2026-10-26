@@ -541,6 +541,7 @@ void Sched::handoff(Thread* self, Thread* next) {
     if (self->id < 32 && run_started_ns_) run_ns_[self->id] += now - run_started_ns_;
     if (self->id < 32 && cycle_started_) run_cycles_[self->id] += thread_cycles() - cycle_started_;
     ++switches_; notified_ns_ = now;
+    const bool self_finished = self->state == Thread::State::Dead;
     next->state = Thread::State::Running;
     ee_ = next->ee;
     if (switch_hook_) switch_hook_(next);
@@ -550,7 +551,7 @@ void Sched::handoff(Thread* self, Thread* next) {
         if (!next->started) start_host(next);
     }
     next->cv.notify_one();
-    if (self->state == Thread::State::Dead) return;
+    if (self_finished) return;
     std::unique_lock<std::mutex> lk(baton_m_);
     self->cv.wait(lk, [&] { return running_ == self || shutdown_ || self->cancelled || self->rewind_requested; });
     if(self->rewind_requested && !shutdown_) throw ThreadRewind{};

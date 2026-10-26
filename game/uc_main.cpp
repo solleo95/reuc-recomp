@@ -1,4 +1,5 @@
 #include "clock.h"
+#include "client_update_lock.h"
 #include "cpu_topology.h"
 #include "compile_screen.h"
 #include "dispatch.h"
@@ -50,6 +51,8 @@
 #include "ax_audio.h"
 #include "det_trace.h"
 #include "frame_log.h"
+#include "diagnostic_log.h"
+#include "startup_error.h"
 #include "audio_gap_audit.h"
 #include "vulkan_renderer.h"
 #include "host_keys.h"
@@ -204,7 +207,7 @@ struct GuestRunner {
 };
 }  // namespace
 
-static int real_main(int argc, char** argv) {
+static int real_main(int argc, char** argv,uc::Options& startup_options) {
     timeBeginPeriod(1);   // 1 ms timers: sleeps and the modal drag/resize loop's WM_TIMER tick (otherwise 15.6 ms granularity)
     {   // Windows 11 may run a window without focus in EcoQoS and ignore the timer request above; a game wants neither.
         PROCESS_POWER_THROTTLING_STATE throttling{PROCESS_POWER_THROTTLING_CURRENT_VERSION,PROCESS_POWER_THROTTLING_EXECUTION_SPEED|PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,0};
@@ -215,11 +218,16 @@ static int real_main(int argc, char** argv) {
     auto parsed = uc::parse_options(arguments);
     if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
+    startup_options=options;   // probe/harness failures remain noninteractive, including a bad config
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
     const auto input_config=uc::load_config(config_path);
     parsed=uc::parse_options(arguments,uc::options_from_config(input_config));
     if(auto* error=std::get_if<std::string>(&parsed))throw std::invalid_argument(*error);
     options=std::get<uc::Options>(std::move(parsed));
+    startup_options=options;
+    uc::ConfigDocument diagnostic_options;uc::store_options(diagnostic_options,options);
+    std::fprintf(stderr,"[settings] graphics=%s\n",diagnostic_options.properties["graphics"].dump().c_str());
+    std::fprintf(stderr,"[settings] dlss5=%s\n",diagnostic_options.properties["dlss5"].dump().c_str());
     { std::error_code ignored; if(!std::filesystem::exists(exe_dir()/uc::kDlss5Runtime,ignored)) options.dlss5_enabled=false; }   // the player supplies nvngx_dlssnr.dll; without it DLSS 5 stays off
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
         const auto support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
@@ -235,7 +243,8 @@ static int real_main(int argc, char** argv) {
     const auto& game = options.game;
     if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
     uc::intro_init(options.skip_intro);
-    const auto pacing=uc::pacing_for_limit(options.fps_limit,options.game_hz,options.unlock_60fps);   // see Options::fps_limit
+    // Network play steps at the session tick whatever the frame limit says; the limit then only caps presents.
+    const auto pacing=options.netplay ? uc::PacingMode{options.unlock_60fps,options.game_hz} : uc::pacing_for_limit(options.fps_limit,options.game_hz,options.unlock_60fps);   // see Options::fps_limit
     uc::game_pacing_init(pacing.unlock_60,pacing.game_hz);
     if (options.gx_audit) {
 #ifdef UC_TRACE
@@ -248,7 +257,7 @@ static int real_main(int argc, char** argv) {
     uc::gx_gap_audit_enable(options.gx_gaps);
     uc::install_crash_handlers();
     uc::set_exit_hook(print_stats);
-    uc::crash_report_init(exe_dir() / "debug", [] {
+    uc::crash_report_init((uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory())/"crashes", [] {
         const auto vi = uc::vi_stats(); const auto d = uc::dvd_stats(); const auto gx = uc::gx_stats(); const auto sound = uc::audio_stats();
         char text[512];
         std::snprintf(text, sizeof text, "retraces %llu\ndvd opens %llu reads %llu\ngx draws %llu submitted %llu completed %llu copies %llu unowned fifo bytes %llu\naudio frames %llu nonzero samples %llu\n",
@@ -312,7 +321,8 @@ static int real_main(int argc, char** argv) {
     if (deterministic) {
         uc::set_deterministic_clock(true);
         sched.set_deterministic(true);
-        if (options.frame_generation) { options.frame_generation = false; std::fprintf(stderr, "Frame generation: off in deterministic runs\n"); }
+        // Network play is deterministic too, but frame generation only adds presented frames: the host shows more than the shared tick.
+        if (options.frame_generation && !options.netplay) { options.frame_generation = false; std::fprintf(stderr, "Frame generation: off in deterministic runs\n"); }
     }
     if (!options.det_out.empty()) det_trace = std::make_unique<uc::DetTrace>(options.det_out, boot.mem, options.det_frames);
     std::atomic<bool> det_stop{false};
@@ -374,21 +384,33 @@ static int real_main(int argc, char** argv) {
     double render_aspect=16.0/9;
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
+        const auto renderer_start=std::chrono::steady_clock::now();
+        std::fprintf(stderr,"[startup] renderer initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         if(!options.netplay)renderer.set_aim_source([&input] { return input.latest_aim(); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);
-        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect);
+        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect,options.window_mode==uc::WindowMode::exclusive);
+        std::fprintf(stderr,"[startup] renderer initialized after %.1f ms; setting effects\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-renderer_start).count());
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom_settings());
         renderer.set_crosshair_scale(options.crosshair_scale);
         renderer.set_effects(options.effects);
         renderer.set_dlss5(options.dlss5_enabled ? options.dlss5 : uc::Dlss5Settings{});
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
-            renderer.warm_pipelines([&screen](size_t done,size_t total) { screen->update(done,total); });
+            auto next_report=std::chrono::steady_clock::time_point{};
+            renderer.warm_pipelines([&](size_t done,size_t total) {
+                screen->update(done,total);
+                const auto now=std::chrono::steady_clock::now();
+                if(now>=next_report || done==total) {
+                    std::fprintf(stderr,"[startup] shaders %zu/%zu elapsed_ms=%.1f\n",done,total,std::chrono::duration<double,std::milli>(now-renderer_start).count());
+                    next_report=now+std::chrono::seconds(1);
+                }
+            });
         } else renderer.warm_pipelines([](size_t,size_t) {});   // a restart: the pipelines come from the disk cache
+        std::fprintf(stderr,"[startup] graphics ready after %.1f ms\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-renderer_start).count());
     };
     if (!options.demo_record.empty()) input.demo_record(options.demo_record);
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
@@ -415,11 +437,10 @@ static int real_main(int argc, char** argv) {
             const auto extent=uc::windowed_extent(options.render_scale,aspect,uint32_t(std::max(0,usable.w)),uint32_t(std::max(0,usable.h)));
             window_width=int(extent.width); window_height=int(extent.height);
         }
-        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (controlled ? SDL_WINDOW_HIDDEN : 0)));
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN));
         if (!window) throw std::runtime_error(SDL_GetError());
-        uc::configure_window_mode(window.get(),options.window_mode,int(options.width),int(options.height));
-        const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
-        std::fprintf(stderr,"Window mode: %s\n",mode_name);
+        // Enter fullscreen only after the compile overlay closes and Vulkan is ready to present.
+        init_renderer(true);
         if(controlled) {
             const auto properties=SDL_GetWindowProperties(window.get());
             const auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(properties,SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
@@ -430,10 +451,15 @@ static int real_main(int argc, char** argv) {
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
             if(!SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))
                 throw std::runtime_error("cannot raise diagnostic window: "+std::to_string(GetLastError()));
-        }
+        } else if(!SDL_ShowWindow(window.get())) throw std::runtime_error(SDL_GetError());
+        uc::configure_window_mode(window.get(),options.window_mode,int(options.width),int(options.height));
+        int output_width=0,output_height=0;
+        if(!SDL_GetWindowSizeInPixels(window.get(),&output_width,&output_height))throw std::runtime_error(SDL_GetError());
+        renderer.resize(uint32_t(std::max(0,output_width)),uint32_t(std::max(0,output_height)));
+        const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
+        std::fprintf(stderr,"Window mode: %s\n[startup] window shown after shader warmup; output=%dx%d focused=%d\n",mode_name,output_width,output_height,int((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
-        init_renderer(true);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
     uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);
@@ -461,6 +487,7 @@ static int real_main(int argc, char** argv) {
     double last_render_ms = 0;
     std::optional<uc::AudioOutput> audio;
     if (!options.headless) audio.emplace(options.mute);
+    if (audio && options.netplay) audio->mute_on_gaps(true);
     uc::audio_gap_audit_enable(options.audio_audit);
     uc::audio_hle_init(sched,[&audio](std::span<const int16_t> pcm) { if (audio) audio->write(pcm); },options.profile);
     gx::Packets packets{bool(network)};
@@ -485,6 +512,7 @@ static int real_main(int argc, char** argv) {
     mod_menu.set_apply([&mods] { mods.apply(); });   // the manager's changes (on, off, order, native code) reach the running game
     mods.start(boot.mem,options.headless ? nullptr : &mod_menu);   // on_load runs here; the guest starts right below
     GuestRunner runner(sched, mt, packets);
+    std::optional<uc::CompileScreen> network_wait_screen;
     auto start = std::chrono::steady_clock::now(), next_watch = start + std::chrono::seconds(1);
     auto last_profile_time=start;
     uint64_t last_profile_retrace=0;
@@ -498,13 +526,14 @@ static int real_main(int argc, char** argv) {
     uint64_t render_serial=0,pending_serial=0;
     uc::FrameLimit frame_limit(options.fps_limit);
     std::chrono::steady_clock::time_point last_present_at{};
-    // Frame log (frame_log.h): UC_FRAME_LOG=<file> or an empty frame_log.on next to uc.exe.
+    // The session CSV is automatic; UC_FRAME_LOG retains its explicit override.
     std::unique_ptr<uc::FrameLog> frame_log;
-    {
+    try {
         const char* path=std::getenv("UC_FRAME_LOG");
         if(path) frame_log=std::make_unique<uc::FrameLog>(fs::path(path));
+        else if(!uc::diagnostic_directory().empty())frame_log=std::make_unique<uc::FrameLog>(uc::diagnostic_directory()/"frames.csv");
         else if(fs::exists(exe_dir()/"frame_log.on")) frame_log=std::make_unique<uc::FrameLog>(exe_dir()/"debug"/("frames-"+std::to_string(GetCurrentProcessId())+".csv"));
-    }
+    } catch(const std::exception& error) {std::fprintf(stderr,"[diagnostics] frame CSV unavailable: %s\n",error.what());}
     uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0,frame_idle_last=0,frame_thread_last[8]={}; uint32_t frame_events=0;
     const auto thread_cycles=[]() -> uint64_t { ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); return cycles; };
     std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
@@ -540,6 +569,12 @@ static int real_main(int argc, char** argv) {
         }
         // Keep the captured slot alive until its fence completes and readback finishes.
         if (pending && !debug_capture_serial && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial && (network || pending->replay || frame_limit.ready(pending->present,std::chrono::steady_clock::now()))) {
+            if (network && pending->present && !pending->replay && last_present_at!=std::chrono::steady_clock::time_point{} && frame_limit.ready(true,std::chrono::steady_clock::now())) {
+                // Present pacing: a step's picture is ready whenever its guest work happens to end, which varies by several milliseconds from
+                // step to step. Hold an early one back so presents keep the simulation's spacing (a late one cannot be sped up); at most 4 ms.
+                const auto due=last_present_at+std::chrono::nanoseconds(1000000000/std::max<uint32_t>(1,network->tick()))-std::chrono::microseconds(300);
+                if (const auto now=std::chrono::steady_clock::now(); now<due) std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(due-now,std::chrono::milliseconds(4)));
+            }
             const auto render_start=std::chrono::steady_clock::now();
             const bool display=!pending->replay && frame_limit.ready(pending->present,render_start);
             const auto prior_presents=renderer.presentation_count();
@@ -705,7 +740,7 @@ static int real_main(int argc, char** argv) {
         targets.upscaling=[&](const uc::Options& next) {
             restart_pending=true;
             options.upscaler=next.upscaler; options.upscale_mode=next.upscale_mode; options.sharpening=next.sharpening; options.sharpness=next.sharpness;
-            options.frame_generation=next.frame_generation && !deterministic; options.frame_generation_multiplier=next.frame_generation_multiplier;
+            options.frame_generation=next.frame_generation && (!deterministic || options.netplay); options.frame_generation_multiplier=next.frame_generation_multiplier;
         };
         targets.fps_limit=[&](std::optional<uint32_t> limit) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
@@ -761,6 +796,16 @@ static int real_main(int argc, char** argv) {
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
     auto service_frame = [&] {
+        if(network && network->waiting()) {
+            if(!network_wait_screen) {
+                network_wait_screen.emplace();
+                network_wait_screen->wait_for_peer(uc::launcher::text(menu_language,"network_waiting"));
+                std::fprintf(stderr,"[netplay] waiting screen shown\n");
+            }
+        } else if(network_wait_screen) {
+            network_wait_screen.reset();
+            std::fprintf(stderr,"[netplay] waiting screen closed\n");
+        }
         if(test_server) {
             const auto state=uc::test_state_latest();
             auto frame_json=uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped());
@@ -768,6 +813,7 @@ static int real_main(int argc, char** argv) {
                 +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")
                 +",\"game_seconds\":"+std::to_string(uc::game_pacing_stats().timestep_ns/1e9)
                 +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
+                +",\"network_waiting\":"+(network_wait_screen ? "true" : "false")
                 +",\"sample_time_ns\":"+std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())
                 +",\"fps_limit\":"+std::to_string((live_settings ? live_settings->options().fps_limit : options.fps_limit).value_or(240))+"}";
             const auto pumped=test_server->pump(state.frame,frame_json);
@@ -917,7 +963,7 @@ static int real_main(int argc, char** argv) {
         if (options.seconds && now - start >= std::chrono::seconds(options.seconds)) close = true;
         if ((det_trace && det_trace->done()) || det_stop) close = true;
         if (now >= next_watch) {
-            if ((options.gx_audit || options.profile) && !options.headless) {
+            if ((options.gx_audit || options.profile || !uc::diagnostic_directory().empty()) && !options.headless) {
                 const auto presents=renderer.presentation_count(),textures=renderer.texture_creations(),decodes=uc::gx_stats().texture_decodes;
                 const auto profile_retrace=uc::vi_stats().retraces;
                 const double profile_ms=std::chrono::duration<double,std::milli>(now-last_profile_time).count();
@@ -940,7 +986,7 @@ static int real_main(int argc, char** argv) {
                 { const auto depth=packets.depth(); std::fprintf(stderr,"[packets] queued %zu outstanding %zu presenting in flight %zu\n",depth.queued,depth.outstanding,depth.frames_in_flight); }   // outstanding must stay near the guest lead (tens), never creep to kMaxOutstandingPackets
                 std::fprintf(stderr,"[guest-blocked] renderer wait %.2f ms total (window %.2f, packets %llu),main loop waited %.2f ms this second, GPU busy %.2f ms total, frame latency avg %.2f max %.2f ms over %llu frames\n",gx::seal_wait_ns()/1e6,gx::seal_window_wait_ns()/1e6,(unsigned long long)gx::seal_count(),loop_wait_ns/1e6,renderer.gpu_busy_ns()/1e6,gx::frame_latency().total_ns/1e6/std::max<uint64_t>(gx::frame_latency().frames,1),gx::frame_latency().max_ns/1e6,(unsigned long long)gx::frame_latency().frames); loop_wait_ns=0;
                 std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu wait %.2f ms\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted,pacing.wait_ns/1e6);
-                if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,output.max_queued_bytes); }
+                if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu dry %llu refills %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,(unsigned long long)output.dry_writes,(unsigned long long)audio->refills(),output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
                 { static uint64_t last_cycles=0,last_bench_presents=0; const auto cycles=sched.guest_cycles(); std::fprintf(stderr,"[bench] presents %llu draws %llu guest_mcycles %.2f\n",(unsigned long long)(presents-last_bench_presents),(unsigned long long)(gfx.draws-last_profile_draws),(cycles-last_cycles)/1e6); last_cycles=cycles; last_bench_presents=presents; }
@@ -964,6 +1010,7 @@ static int real_main(int argc, char** argv) {
         }
         loop_wait_ns+=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-wait_start).count();
     }
+    network_wait_screen.reset();
     runner.stop();
     if(network && !network->error().empty()) {
         result=5;
@@ -1017,7 +1064,15 @@ static int real_main(int argc, char** argv) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    uc::Options startup_options;
+    std::optional<uc::DiagnosticLog> diagnostics;
     try {
+        auto update_session=uc::enter_client_session(exe_dir());
+        if(auto* error=std::get_if<std::error_code>(&update_session)) {
+            std::fprintf(stderr,"[update] Client is updating or requires recovery. Start uc_launcher.exe: %s\n",error->message().c_str());
+            return 2;
+        }
+        diagnostics.emplace("game",exe_dir()/"logs");
         std::vector<std::string> encoded;
         std::vector<char*> arguments;
         encoded.reserve(size_t(argc));arguments.reserve(size_t(argc));
@@ -1029,8 +1084,17 @@ int wmain(int argc, wchar_t** argv) {
             text.pop_back();encoded.push_back(std::move(text));
         }
         for(auto& text:encoded)arguments.push_back(text.data());
-        return real_main(argc, arguments.data());
+        const int result=real_main(argc, arguments.data(),startup_options);
+        std::fprintf(stderr,"[session] game exit=%d\n",result);
+        return result;
     } catch (const std::exception& e) {
+        const auto logs=uc::diagnostic_directory().empty() ? exe_dir()/"logs" : uc::diagnostic_directory();
+        std::fprintf(stderr,"[startup] %s\n",e.what());
+        if(const auto message=uc::startup_error_message(startup_options,e.what(),logs)) {
+            if(!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Umbrella Chronicles",message->c_str(),nullptr))
+                std::fprintf(stderr,"[startup] cannot show error dialog: %s\n",SDL_GetError());
+        }
+        diagnostics.reset(); // fatal exits without unwinding; drain the diagnostic pipe first.
         uc::fatal("startup failed: %s", e.what());
     }
 }

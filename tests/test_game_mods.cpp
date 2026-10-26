@@ -186,15 +186,17 @@ static void log_is_capped_and_bad_config_is_reported() {
     const auto exe = fresh("gm_log");
     put(exe / "disc" / "DATA" / "a.bin", "abc");
     put(exe / "mods" / "chatty" / "mod.json", R"({"id":"chatty","name":"Chatty","version":"1.0","api":"1.0","script":"scripts/main.lua"})");
-    put(exe / "mods" / "chatty" / "scripts" / "main.lua", "for i = 1, 5000 do log.write('line ' .. i) end");
+    put(exe / "mods" / "chatty" / "scripts" / "main.lua", "local i = 0; on('on_step', function() i = i + 1; log.write('line ' .. i) end)");
     ordered_json section = enabled({"chatty"});
     section["chatty"] = 5;   // hand-edited: mods.chatty is not an object
     uc::DvdFs dvd;
     CHECK(dvd.open_root(exe / "disc"));
     uc::GameMods mods(exe, section, dvd, "RBUE08", false);
     mods.start(uc::guest_mem_base(), nullptr);
+    // Exercise the lifetime log cap without making 2,000 disk flushes compete with one Lua call's wall-time budget.
+    for(unsigned step=0;step<5000;++step)uc::mods::mods_step();
     mods.shutdown();
-    std::string text = slurp(exe / "debug" / "mods.log");
+    std::string text = slurp(exe / "logs" / "mods.log");
     text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());   // the log is a text file: CRLF on Windows
     const auto lines = size_t(std::count(text.begin(), text.end(), '\n'));
     CHECK(lines > 100 && lines < 2100);

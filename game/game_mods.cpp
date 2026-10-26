@@ -1,4 +1,5 @@
 #include "game_mods.h"
+#include "diagnostic_log.h"
 #include "arc/u8.h"
 #include "audio/brstm.h"
 #include "mod_guest_call.h"
@@ -183,8 +184,10 @@ void GameMods::log(std::string_view mod_id, std::string_view line) {
     std::fprintf(stderr, "[mod %.*s] %s\n", int(mod_id.size()), mod_id.data(), text.c_str());
     if (!log_file_.is_open()) {
         std::error_code error;
-        fs::create_directories(exe_dir_ / "debug", error);
-        log_file_.open(exe_dir_ / "debug" / "mods.log", std::ios::app);
+        const auto dir=diagnostic_directory().empty() ? exe_dir_/"logs" : diagnostic_directory();
+        fs::create_directories(dir, error);
+        log_file_.open(dir/"mods.log", std::ios::app);
+        if(!log_file_)std::fprintf(stderr,"[diagnostics] dedicated mod log unavailable; using runtime log\n");
     }
     log_file_ << '[' << mod_id << "] " << text << '\n';
     log_file_.flush();   // a crash must not lose the lines that explain it

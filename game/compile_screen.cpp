@@ -13,6 +13,7 @@ struct CompileScreen::State {
     HFONT title=nullptr, detail=nullptr;
     size_t done=0, total=0;
     bool shown=false;
+    std::wstring peer_message;
     std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
 };
 namespace {
@@ -31,9 +32,11 @@ void paint(HWND window,const CompileScreen::State& state) {
     SetBkMode(dc,TRANSPARENT);
     SelectObject(dc,state.title); SetTextColor(dc,kText);
     const bool starting=state.total==0;   // before the first progress report: the renderer is still starting
-    RECT title{24,18,client.right-24,52}; DrawTextW(dc,starting ? L"Запуск игры" : L"Компиляция шейдеров",-1,&title,DT_LEFT|DT_SINGLELINE);
+    RECT title{24,18,client.right-24,state.peer_message.empty() ? 52 : client.bottom-18};
+    DrawTextW(dc,state.peer_message.empty() ? (starting ? L"Запуск игры" : L"Компиляция шейдеров") : state.peer_message.c_str(),-1,&title,DT_LEFT|DT_WORDBREAK);
     SelectObject(dc,state.detail); SetTextColor(dc,kMuted);
-    RECT detail{24,54,client.right-24,80}; DrawTextW(dc,starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.",-1,&detail,DT_LEFT|DT_SINGLELINE);
+    RECT detail{24,54,client.right-24,80};
+    if(state.peer_message.empty())DrawTextW(dc,starting ? L"Загрузка DLSS и графического движка." : L"Нужно, чтобы игра шла без фризов.",-1,&detail,DT_LEFT|DT_SINGLELINE);
     if(starting) { BitBlt(target,0,0,client.right,client.bottom,dc,0,0,SRCCOPY); SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc); EndPaint(window,&paint); return; }
     const RECT track{24,96,client.right-24,112};
     HBRUSH track_brush=CreateSolidBrush(kTrack); FillRect(dc,&track,track_brush); DeleteObject(track_brush);
@@ -75,6 +78,14 @@ CompileScreen::~CompileScreen() {
 }
 void CompileScreen::show() {
     ShowWindow(state_->window,SW_SHOWNOACTIVATE); state_->shown=true; UpdateWindow(state_->window);
+}
+void CompileScreen::wait_for_peer(std::string_view message) {
+    const int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,message.data(),int(message.size()),nullptr,0);
+    if(count<=0)throw std::invalid_argument("invalid peer waiting message");
+    state_->peer_message.resize(count);
+    if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,message.data(),int(message.size()),state_->peer_message.data(),count)!=count)
+        throw std::runtime_error("cannot decode peer waiting message");
+    show();
 }
 void CompileScreen::update(size_t done,size_t total) {
     state_->done=done; state_->total=total;

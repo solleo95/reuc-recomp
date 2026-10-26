@@ -1,5 +1,6 @@
 #include "check.h"
 #include "input_config.h"
+#include "client_update_lock.h"
 #include <fstream>
 #include <chrono>
 #define WIN32_LEAN_AND_MEAN
@@ -37,8 +38,12 @@ int main() {
     auto path=std::filesystem::temp_directory_path()/std::filesystem::path(u"uc-config-тест")/
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())/"config.json";
     std::filesystem::create_directories(path.parent_path());
+    // The launcher holds this guard for its entire lifetime, including settings saves.
+    auto session=enter_client_session(path.parent_path());
+    CHECK(std::holds_alternative<ClientSessionGuard>(session));
     auto fresh=load_config(path); CHECK(fresh.input==default_bindings());
-    fresh.input[size_t(Action::knife)].clear(); save_config(path,fresh);
+    fresh.input[size_t(Action::knife)].clear();
+    try {save_config(path,fresh);} catch(const std::exception& error) {std::fprintf(stderr,"save under client guard: %s\n",error.what());return 1;}
     auto saved=load_config(path); CHECK(saved.input==fresh.input);
     auto stale=saved; saved.properties["unrelated"]=123; save_config(path,saved);
     rejects([&]{save_config(path,stale);});

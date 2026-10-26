@@ -8,6 +8,17 @@ int main() {
     auto loopback=parse(std::array<std::string_view,2>{"--net-loopback","--net-host"});
     CHECK(std::holds_alternative<uc::Options>(loopback));
     CHECK(std::get<uc::Options>(loopback).netplay->loopback);
+    // Network play steps both games on the virtual clock at a shared tick: 60 Hz by default, the original 30 Hz on request.
+    CHECK(std::get<uc::Options>(loopback).deterministic && std::get<uc::Options>(loopback).game_hz==0);
+    CHECK(std::get<uc::Options>(loopback).net_tick==60 && std::get<uc::Options>(loopback).unlock_60fps);
+    auto slow=parse(std::array<std::string_view,3>{"--net-host","--net-tick","30"});
+    CHECK(std::get<uc::Options>(slow).net_tick==30 && !std::get<uc::Options>(slow).unlock_60fps);
+    auto fast=parse(std::array<std::string_view,3>{"--net-host","--net-tick","120"});
+    CHECK(std::get<uc::Options>(fast).net_tick==120 && std::get<uc::Options>(fast).game_hz==120 && !std::get<uc::Options>(fast).unlock_60fps);
+    auto top=parse(std::array<std::string_view,3>{"--net-host","--net-tick","240"});
+    CHECK(std::get<uc::Options>(top).net_tick==240 && std::get<uc::Options>(top).game_hz==240);
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-host","--net-tick","90"})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--net-host","--net-tick"})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,3>{"--net-loopback","--net-join","1.2.3.4"})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--net-loopback"})));
     CHECK(std::holds_alternative<uc::Options>(parse(std::array<std::string_view,3>{"--net-host","--net-port","27888"})));

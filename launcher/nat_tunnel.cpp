@@ -9,6 +9,7 @@
 #include <enet/enet.h>
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -269,8 +270,17 @@ struct NatTunnel::Impl {
         try {
             current=this;
             ENetAddress bind_address{ENET_HOST_ANY,endpoint.host ? endpoint.port : uint16_t(0)};
-            udp.reset(enet_host_create(&bind_address,1,2,0,0));
-            if(!udp)throw std::runtime_error("Cannot bind UDP tunnel port");
+            udp.reset(enet_host_create(nullptr,1,2,0,0));
+            if(!udp)throw std::runtime_error("Cannot create UDP tunnel");
+            const BOOL exclusive=TRUE;
+            if(setsockopt(udp->socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive))==SOCKET_ERROR)socket_error("Cannot reserve UDP tunnel port");
+            // Bind separately: enet_host_create destroys the socket and loses the Winsock bind error.
+            if(enet_socket_bind(udp->socket,&bind_address)<0) {
+                const auto error=WSAGetLastError();
+                {std::lock_guard lock(mutex);snapshot.port_conflict=error==WSAEADDRINUSE || error==WSAEACCES;}
+                throw SocketError("Cannot bind UDP tunnel port",error);
+            }
+            if(enet_socket_get_address(udp->socket,&udp->address)<0)socket_error("Cannot inspect UDP tunnel port");
             udp->intercept=intercept;udp->maximumPacketSize=chunk_size+1;udp->maximumWaitingData=queue_limit;
             // The public UDP socket and the local game socket must have distinct ports.
             if(endpoint.host) {
@@ -286,9 +296,15 @@ struct NatTunnel::Impl {
                 if(auto target=resolve(server,stop))probes.push_back({*target,transaction(),{}});
             }
             const auto started=Clock::now();next_probe=started;
+            auto next_report=started;
+            std::fprintf(stderr,"[tunnel] started role=%s bound_port=%u local_port=%u STUN_targets=%zu\n",endpoint.host ? "host" : "client",udp->address.port,local_port,probes.size());
             ENetAddress remote{};InetPtonA(AF_INET,endpoint.address.c_str(),&remote.host);remote.port=endpoint.port;
             while(!stop.stop_requested()) {
                 const auto now=Clock::now();
+                if(now>=next_report) {
+                    std::fprintf(stderr,"[tunnel] connected=%d sent_bytes=%u received_bytes=%u sent_packets=%u received_packets=%u rtt_ms=%u variance_ms=%u lost_packets=%u\n",int(connected),udp->totalSentData,udp->totalReceivedData,udp->totalSentPackets,udp->totalReceivedPackets,peer ? peer->roundTripTime : 0,peer ? peer->roundTripTimeVariance : 0,peer ? peer->packetsLost : 0);
+                    next_report=now+1s;
+                }
                 if(!endpoint.host && !connected && now>=next_connect) {
                     if(peer)enet_peer_reset(peer);
                     raw_send(remote,stun_request(transaction()));
@@ -326,6 +342,7 @@ struct NatTunnel::Impl {
                 std::this_thread::sleep_for(1ms);
             }
         } catch(const std::exception& error) {
+            std::fprintf(stderr,"[tunnel] failed: %s\n",error.what());
             std::lock_guard lock(mutex);snapshot.phase=TunnelPhase::failed;snapshot.error=error.what();
         }
         if(peer)enet_peer_disconnect_now(peer,0);

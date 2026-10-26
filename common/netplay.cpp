@@ -20,6 +20,7 @@ struct Winsock {
     ~Winsock() { WSACleanup(); }
 };
 void initialize() { static Winsock winsock; }
+struct PortConflict : std::runtime_error { PortConflict():std::runtime_error("Listening port is already in use"){} };
 [[noreturn]] void socket_error(const char* operation, int error = WSAGetLastError()) {
     throw std::runtime_error(std::string(operation) + " (Winsock " + std::to_string(error) + ")");
 }
@@ -98,7 +99,7 @@ struct Socket::Impl {
     // A host may wait all day for a connection; a connected peer must keep responding.
     Impl(std::stop_token token, std::chrono::milliseconds limit) : stop(token), timeout(std::min(limit, std::chrono::milliseconds(15000))) {}
 };
-Socket::Socket(const Endpoint& endpoint, std::stop_token stop, std::chrono::milliseconds timeout)
+Socket::Socket(const Endpoint& endpoint, std::stop_token stop, std::chrono::milliseconds timeout,std::function<void()> listening)
     : impl_(std::make_unique<Impl>(stop, timeout)) {
     if (!valid_address(endpoint.address)) throw std::runtime_error("Enter a numeric IPv4 address");
     if (!endpoint.port) throw std::runtime_error("Network port must be nonzero");
@@ -115,9 +116,14 @@ Socket::Socket(const Endpoint& endpoint, std::stop_token stop, std::chrono::mill
         if (setsockopt(listener.value, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == SOCKET_ERROR)
             socket_error("Cannot reserve listening port");
         address.sin_addr.s_addr = htonl(endpoint.loopback ? INADDR_LOOPBACK : INADDR_ANY);
-        if (bind(listener.value, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) socket_error("Cannot bind listening port");
+        if (bind(listener.value, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+            const int error=WSAGetLastError();
+            if(error==WSAEADDRINUSE || error==WSAEACCES)throw PortConflict{};
+            socket_error("Cannot bind listening port",error);
+        }
         if (listen(listener.value, 1) == SOCKET_ERROR) socket_error("Cannot listen for peer");
         nonblocking(listener.value);
+        if(listening)listening();
         for (;;) {
             wait_socket(listener.value, false, deadline, stop);
             const SOCKET connected = accept(listener.value, nullptr, nullptr);
@@ -176,16 +182,18 @@ std::vector<uint8_t> Socket::receive() {
 
 struct Lobby::Impl {
     Endpoint endpoint;
+    std::chrono::milliseconds connect_timeout;
     mutable std::mutex mutex;
     LobbyState state;
     std::atomic<bool> desired_ready{false};
     bool start_taken = false;
     std::jthread worker;
-    explicit Impl(Endpoint value) : endpoint(std::move(value)), worker([this](std::stop_token stop) { run(stop); }) {}
+    explicit Impl(Endpoint value,std::chrono::milliseconds timeout) : endpoint(std::move(value)),connect_timeout(timeout),worker([this](std::stop_token stop) { run(stop); }) {}
     ~Impl() { worker.request_stop(); worker.join(); }
     void run(std::stop_token stop) {
         try {
-            auto socket = std::make_unique<Socket>(endpoint, stop, endpoint.host ? std::chrono::hours(24) : 15s);
+            auto socket = std::make_unique<Socket>(endpoint, stop, endpoint.host ? std::chrono::hours(24) : connect_timeout,
+                [this]{std::lock_guard lock(mutex);state.listening=true;});
             send_message(*socket, Message::hello);
             receive_message(*socket, Message::hello);
             { std::lock_guard lock(mutex); state.phase = LobbyPhase::connected; }
@@ -234,10 +242,11 @@ struct Lobby::Impl {
             std::lock_guard lock(mutex);
             state.phase = LobbyPhase::failed;
             state.error = error.what();
+            state.port_conflict = dynamic_cast<const PortConflict*>(&error)!=nullptr;
         }
     }
 };
-Lobby::Lobby(Endpoint endpoint) : impl_(std::make_unique<Impl>(std::move(endpoint))) {}
+Lobby::Lobby(Endpoint endpoint,std::chrono::milliseconds timeout) : impl_(std::make_unique<Impl>(std::move(endpoint),timeout)) {}
 Lobby::~Lobby() = default;
 void Lobby::ready(bool ready) {
     std::lock_guard lock(impl_->mutex);

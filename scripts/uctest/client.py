@@ -365,6 +365,15 @@ class Game:
         return taken
 
     # failure ---------------------------------------------------------
+    def log_path(self, name):
+        if self.process is not None:
+            # Windows filesystem timestamps may round down relative to time.time().
+            sessions = [p for p in (self.exe.parent / "logs").glob(f"game-*-{self.process.pid}-*")
+                        if p.is_dir() and p.name.rsplit("-", 2)[1] == str(self.process.pid) and p.stat().st_mtime >= self._started - 1]
+            if sessions:
+                return max(sessions, key=lambda p: (p.stat().st_mtime, p.name)) / name
+        return self.exe.parent / "debug" / name  # Older comparison builds keep their original layout.
+
     def _log_tail(self):
         try:
             return (self.run_dir / "run.log").read_text(errors="replace").splitlines()[-80:]
@@ -373,7 +382,8 @@ class Game:
 
     def _crash_report(self):
         try:
-            reports = [p for p in (self.exe.parent / "debug").glob("crash-*.txt") if p.stat().st_mtime >= self._started]
+            roots = [self.exe.parent / "debug", self.log_path("crashes")]
+            reports = [p for root in roots for p in root.glob("crash-*.txt") if p.stat().st_mtime >= self._started - 1]
             return str(max(reports, key=lambda p: p.stat().st_mtime)) if reports else None
         except OSError:
             return None

@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include "vulkan_compat.h"
 using namespace std::chrono_literals;
 
 static std::filesystem::path executable_dir() {
@@ -22,10 +23,17 @@ static std::filesystem::path executable_dir() {
     return std::filesystem::path(std::wstring(path.data(), size)).parent_path();
 }
 int main(int argc, char** argv) {
-    bool validation = false;
+    bool validation = false,presentation_only=false;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--validation") validation = true;
-        else { std::fprintf(stderr, "usage: renderer_smoke [--validation]\n"); return 2; }
+        else if(std::string_view(argv[i])=="--presentation-only") presentation_only=true;
+        else if(std::string_view(argv[i])=="--without-maintenance=surface") missing_maintenance=MissingMaintenance::surface;
+        else if(std::string_view(argv[i])=="--without-maintenance=device") missing_maintenance=MissingMaintenance::device;
+        else if(std::string_view(argv[i])=="--without-maintenance=feature") missing_maintenance=MissingMaintenance::feature;
+        else if(std::string_view(argv[i])=="--without-unused-attachments") missing_unused_attachments=true;
+        else if(std::string_view(argv[i])=="--without-fullscreen-policy") missing_exclusive_policy=true;
+        else if(std::string_view(argv[i])=="--exclusive-policy") expect_exclusive_fullscreen=true; // Policy only; the test window stays small and windowed.
+        else { std::fprintf(stderr, "usage: renderer_smoke [--validation] [--presentation-only] [--without-maintenance=surface|device|feature] [--without-unused-attachments] [--without-fullscreen-policy] [--exclusive-policy]\n"); return 2; }
     }
     SDL_Window* window = nullptr;
     try {
@@ -87,7 +95,7 @@ int main(int argc, char** argv) {
         draw.transforms.edit().projection=gx::make_projection({1,0,-1,0,-1.f/9,-10.f/9},0);
         {
             uc::VulkanRenderer mesh_renderer;
-            mesh_renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
+            mesh_renderer.initialize(window, validation, executable_dir() / "data" / "shaders",0.5,16.0/9,expect_exclusive_fullscreen);
             auto mesh_packet=packet; mesh_packet.serial=1; mesh_packet.present=false;
             auto& mesh_draw=mesh_packet.draws[0];
             mesh_draw.mesh=std::make_shared<const gx::MeshBuffers>(gx::MeshBuffers{mesh_draw.vertices,mesh_draw.indices});
@@ -97,7 +105,7 @@ int main(int argc, char** argv) {
             mesh_renderer.shutdown();
             CHECK(mesh_renderer.validation_errors()==0);
         }
-        renderer.initialize(window, validation, executable_dir() / "data" / "shaders");
+        renderer.initialize(window, validation, executable_dir() / "data" / "shaders",0.5,16.0/9,expect_exclusive_fullscreen);
         auto render = [&](uint64_t serial) {
             packet.serial = serial;
             auto end = std::chrono::steady_clock::now() + 3s;
@@ -134,6 +142,21 @@ int main(int argc, char** argv) {
         CHECK(!renderer.render(packet));
         renderer.resize(640, 360);
         pixels = render(3);
+        if(presentation_only) {
+            // Resize again before the successor image can be reacquired, then drain ordinary presentations.
+            for(uint64_t serial=4;serial<40;++serial) {
+                if(serial<12) {
+                    const int width=serial%2 ? 480 : 640;
+                    resize_window(width,360);renderer.resize(width,360);
+                }
+                render(serial);
+            }
+            uc::save_png(renderer.capture(39),executable_dir()/"presentation-smoke.png");
+            renderer.shutdown();CHECK(renderer.validation_errors()==0);
+            SDL_DestroyWindow(window);window=nullptr;SDL_Quit();
+            std::puts("Presentation smoke passed: pixels, repeated resize, zero extent, semaphore reuse, completions, shutdown");
+            return 0;
+        }
         // Readback is a real attachment capture, not a screenshot of a reference image.
         std::ofstream capture(executable_dir() / "renderer-smoke.ppm", std::ios::binary);
         capture << "P6\n" << pixels.width << ' ' << pixels.height << "\n255\n";
@@ -661,7 +684,7 @@ int main(int argc, char** argv) {
         CHECK(renderer.poll_completions() == std::vector<uint64_t>({143}));
         CHECK(renderer.validation_errors() == 0);
         uc::VulkanRenderer portrait;
-        portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25);
+        portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25,expect_exclusive_fullscreen);
         auto thin_copy=std::make_shared<gx::TexturePixels>(); thin_copy->gpu_only=true;
         for(uint32_t width=1024;;width/=2) { thin_copy->levels.push_back({width,1,{}}); if(width==1) break; }
         work=packet; work.serial=1; work.present=false; work.clear_after_copy=false; work.draws[0]=quad;
@@ -757,7 +780,6 @@ int main(int argc, char** argv) {
             submit(work,&portrait); sampled=portrait.capture(work.serial);
             CHECK(sampled.rgba[center]==0 && sampled.rgba[center+2]==255);
         }
-        // In-game menu: drawn over the presented frame while set, nothing at all once cleared.
         work=packet; work.serial=descriptor_serial++; submit(work,&portrait); const auto plain=portrait.capture(work.serial);
         portrait.set_menu([] { ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({120,80}); ImGui::Begin("menu"); ImGui::TextUnformatted("menu"); ImGui::End(); });
         work.serial=descriptor_serial++; submit(work,&portrait); CHECK(portrait.capture(work.serial).rgba!=plain.rgba);

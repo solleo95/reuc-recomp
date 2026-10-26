@@ -1,6 +1,30 @@
 #include "check.h"
 #include "feature_report.h"
+#include "options.h"
 int main() {
+    {
+        uc::FeatureReport laptop; laptop.fsr=true; // The laptop's probe: runtime exists, effects path does not.
+        uc::Options options; options.upscaler=uc::UpscalerKind::dlss; options.frame_generation=true;
+        uc::disable_unsupported_upscaling(options,laptop);
+        CHECK(options.upscaler==uc::UpscalerKind::off && !options.frame_generation);
+        options.upscaler=uc::UpscalerKind::fsr;
+        uc::disable_unsupported_upscaling(options,laptop);
+        CHECK(options.upscaler==uc::UpscalerKind::off);
+        laptop.effects=true;
+        options.upscaler=uc::UpscalerKind::fsr; options.frame_generation=true;
+        uc::disable_unsupported_upscaling(options,laptop);
+        CHECK(options.upscaler==uc::UpscalerKind::fsr && !options.frame_generation);
+        laptop.dlss=true; laptop.dlss_g=true;
+        options.upscaler=uc::UpscalerKind::dlss; options.frame_generation=true;
+        uc::disable_unsupported_upscaling(options,laptop);
+        CHECK(options.upscaler==uc::UpscalerKind::dlss && options.frame_generation);
+        laptop.dlss_g=false;
+        uc::disable_unsupported_upscaling(options,laptop);
+        CHECK(options.upscaler==uc::UpscalerKind::dlss && !options.frame_generation);
+        uc::disable_unsupported_upscaling(options,{});
+        CHECK(options.upscaler==uc::UpscalerKind::off && !options.frame_generation);
+        CHECK(uc::upscaler_supported({},uc::UpscalerKind::off));
+    }
     uc::FeatureReport report;
     report.dlss=true; report.dlss_g=true; report.dlss_g_max_multiplier=2; report.fsr=true; report.fsr_fg=true;
     report.dlss_g_reason=""; report.fsr_reason="";

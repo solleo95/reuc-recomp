@@ -12,6 +12,7 @@ import time
 import statistics
 import hashlib
 import math
+import os
 
 from .client import Game, ROOT, StepFailed, GUEST_CPU, NETPLAY_CLIENT_CPU
 from .menus import screen_of
@@ -574,6 +575,8 @@ def run(args):
 
 
 def main():
+    # The FPS and speed checks need a fixed tick: a tick change inside a measurement window would move the ratios.
+    os.environ.setdefault("UC_NET_TICK_AUTO", "0")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", default="dist/uc.exe")
     parser.add_argument("--port", type=int, default=27889, choices=range(1024, 65535), metavar="1024..65534")

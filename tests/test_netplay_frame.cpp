@@ -51,16 +51,74 @@ int main() {
     CHECK(sampling.sample(0,60000000,true)==15); // Slots13/14 keep old held state; new edges belong only to15.
     CHECK(sampling.next()==16 && !sampling.sample(0,60000000));
     CHECK(sampling.sample(0,61000000,true)==16);
-    CHECK(uc::net_input_delay(0)==2);
-    CHECK(uc::net_input_delay(40000000)==5);
-    CHECK(uc::net_input_delay(100000000)==8);
-    CHECK(uc::net_input_delay(200000000)==14);
-    CHECK(uc::net_input_delay(240000000)==17);
-    CHECK(uc::net_input_delay(400000000)==26);
-    CHECK(uc::net_input_delay(433333333)==28);
+    CHECK(uc::net_input_delay(0,120)==2);
+    CHECK(uc::net_input_delay(40000000,120)==5);
+    CHECK(uc::net_input_delay(100000000,120)==8);
+    CHECK(uc::net_input_delay(200000000,120)==14);
+    CHECK(uc::net_input_delay(240000000,120)==17);
+    CHECK(uc::net_input_delay(400000000,120)==26);
+    CHECK(uc::net_input_delay(433333333,120)==28);
+    // The pipeline covers the same milliseconds at the 60 and 30 Hz ticks with half and a quarter of the frames.
+    CHECK(uc::net_input_delay(0,60)==2);
+    CHECK(uc::net_input_delay(100000000,60)==5);
+    CHECK(uc::net_input_delay(200000000,60)==8);
+    CHECK(uc::net_input_delay(200000000,30)==5);
+    CHECK(uc::net_input_delay(433333333,30)==9);
+    {   // Tick policy: four slow seconds drop to 30 Hz, twenty fast ones return, a single odd second changes nothing.
+        uc::NetTickPolicy policy;
+        CHECK(policy.update(60,8000)==0);
+        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
+        CHECK(policy.update(60,8000)==0);                                 // A calm second resets the count.
+        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
+        CHECK(policy.update(60,15000)==30);
+        for(int second=1;second<20;++second)CHECK(policy.update(30,9000)==0);
+        CHECK(policy.update(30,12000)==0);                                // Not fast enough for 60 Hz: the count restarts.
+        for(int second=1;second<20;++second)CHECK(policy.update(30,9000)==0);
+        CHECK(policy.update(30,9000)==60);
+        // The return fails at once: the next wait doubles to forty seconds.
+        for(int second=0;second<3;++second)CHECK(policy.update(60,15000)==0);
+        CHECK(policy.update(60,15000)==30);
+        for(int second=1;second<40;++second)CHECK(policy.update(30,9000)==0);
+        CHECK(policy.update(30,9000)==60);
+        CHECK(policy.update(60,9000)==0);                                 // Back at 60 with the counters clear.
+        CHECK(policy.update(60,1e9)==0);                                  // A loading hitch alone is one second, not a downshift.
+        uc::NetTickPolicy overloaded;                                      // Over 110% of the frame (18.3 ms at 60 Hz): the game is already behind.
+        CHECK(overloaded.update(60,20000)==0 && overloaded.update(60,20000)==30);
+        uc::NetTickPolicy tight;                                           // Between 85% and 110%: the slower, surer path.
+        for(int second=0;second<3;++second)CHECK(tight.update(60,16000)==0);
+        CHECK(tight.update(60,16000)==30);
+        uc::NetTickPolicy strong;                                          // Two fast PCs climb: 60 -> 120 needs a step under 5.4 ms, 120 -> 144 under 4.5 ms.
+        for(int second=1;second<20;++second)CHECK(strong.update(60,4000)==0);
+        CHECK(strong.update(60,4000)==120);
+        for(int second=1;second<20;++second)CHECK(strong.update(120,4400)==0);
+        CHECK(strong.update(120,4400)==144);
+        for(int second=0;second<3;++second)CHECK(strong.update(144,7500)==0);   // Over 85% of 6.9 ms: one rung down after four seconds.
+        CHECK(strong.update(144,7500)==120);
+        for(int second=0;second<50;++second)CHECK(strong.update(120,4400)!=144 || second>=39);   // The failed climb doubled the hold.
+        uc::NetTickPolicy top;                                             // 144 -> 240 needs a step under 2.7 ms; 240 is the last rung.
+        for(int second=1;second<20;++second)CHECK(top.update(144,2600)==0);
+        CHECK(top.update(144,2600)==240);
+        for(int second=0;second<100;++second)CHECK(top.update(240,100)==0);
+    }
+    // At most six steps run on predicted remote input; the seventh waits for the peer.
+    CHECK(!uc::net_must_wait(3,10) && !uc::net_must_wait(10,11) && !uc::net_must_wait(10,5));
+    CHECK(uc::net_must_wait(10,4) && uc::net_must_wait(1000,100));
+    // A stalled replay must not manufacture seconds of immutable future input.
+    uc::NetInputClock stalled(3);
+    CHECK(stalled.sample(0,0)==3);
+    CHECK(stalled.sample(0,5000000000,true)==11);
+    CHECK(stalled.next()==12);
+    CHECK(!stalled.sample(0,10000000000,true));
+    for(uint64_t cursor=1;cursor<9;++cursor)CHECK(!stalled.sample(cursor,10000000000));
+    CHECK(stalled.sample(9,10000000000)==12);
+    // A replay samples on wall time at the session tick: 2.5 ticks after the deadline owe three slots.
+    constexpr uint64_t tick60=1000000000/60;
+    uc::NetInputClock sixty(3);
+    CHECK(sixty.sample(0,0,false,tick60)==3);
+    CHECK(sixty.sample(0,tick60+tick60*5/2,true,tick60)==6);
     for(const auto rtt:{uint64_t(433333334),UINT64_MAX}) {
         bool rejected=false;
-        try {uc::net_input_delay(rtt);}catch(const std::invalid_argument&) {rejected=true;}
+        try {uc::net_input_delay(rtt,60);}catch(const std::invalid_argument&) {rejected=true;}
         CHECK(rejected);
     }
     uc::NativeInput source; source.focus(true); source.context(uc::InputContext::qte);

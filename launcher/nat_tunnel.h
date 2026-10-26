@@ -8,7 +8,7 @@ struct TunnelState {
     Endpoint local{false,"127.0.0.1",0};
     uint16_t bound_port=0;
     std::string public_address,error,discovery_error;
-    bool symmetric=false,punching=false;
+    bool symmetric=false,punching=false,port_conflict=false;
 };
 // One UDP socket survives the lobby/game process handoff. Only its worker touches ENet.
 class NatTunnel {

@@ -73,7 +73,7 @@ private:
     std::shared_ptr<mods::GameApiTicker> ticker_;
     std::unique_ptr<mods::ModHost> host_;
     std::mutex log_mutex_;
-    std::ofstream log_file_;                     // debug/mods.log, opened on the first line
+    std::ofstream log_file_;                     // session mods.log, opened on the first line
     std::map<std::string, size_t> log_lines_;    // lines logged per mod this session (capped)
     std::map<std::string, std::vector<uint8_t>> text_bases_;   // the disc's mes_<lang>.txtres, read before any overlay (only when a mod has a text/ folder)
     std::filesystem::path text_root_;                          // the generated root of the active mods' text (guarded by files_mutex_)

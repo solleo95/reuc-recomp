@@ -1,4 +1,5 @@
 #pragma once
+#include "options.h"
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,21 @@ struct FeatureReport {
     bool dlss5=false;              // DLSS 5 Neural Rendering (nvngx_dlssnr.dll through NGX): the feature could be created on this GPU
     std::string dlss5_reason;      // why not: runtime missing, GPU too old for this DLL, driver, CreateFeature result
 };
+inline bool upscaler_supported(const FeatureReport& report,UpscalerKind kind) {
+    switch(kind) {
+    case UpscalerKind::off: return true;
+    case UpscalerKind::blit:
+    case UpscalerKind::smaa: return report.effects;
+    case UpscalerKind::dlss: return report.effects && report.dlss;
+    case UpscalerKind::fsr: return report.effects && report.fsr;
+    }
+    return false;
+}
+inline void disable_unsupported_upscaling(Options& options,const FeatureReport& report) {
+    if(!upscaler_supported(report,options.upscaler)) options.upscaler=UpscalerKind::off;
+    const bool generation=options.upscaler==UpscalerKind::dlss ? report.dlss_g : options.upscaler==UpscalerKind::fsr && report.fsr_fg;
+    if(!generation) options.frame_generation=false;
+}
 inline std::string to_json(const FeatureReport& r) {
     return nlohmann::json{{"dlss",r.dlss},{"dlss_g",r.dlss_g},{"fsr",r.fsr},{"fsr_fg",r.fsr_fg},{"dlss_g_max_multiplier",r.dlss_g_max_multiplier},
         {"dlss_reason",r.dlss_reason},{"dlss_g_reason",r.dlss_g_reason},{"fsr_reason",r.fsr_reason},{"fsr_fg_reason",r.fsr_fg_reason},

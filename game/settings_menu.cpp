@@ -84,6 +84,7 @@ void SettingsMenu::build() {
 void SettingsMenu::main_tab(float unit) {
     auto options=current();
     const auto* features=features_();
+    if(features)disable_unsupported_upscaling(options,*features);
     ImGui::Dummy({0,8*unit});
     ImGui::BeginChild("graphics",{0,0});
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
@@ -112,6 +113,7 @@ void SettingsMenu::main_tab(float unit) {
         if(kind==UpscalerKind::off) return true;
         if(failed_.contains(kind) || (generation && failed_generation_.contains(kind))) { why=tr("launcher_only"); return false; }
         if(!features) { why=tr("checking"); return false; }
+        if(!features->effects) { why=tr("effects_unavailable"); return false; }
         if(kind==UpscalerKind::smaa) { if(!features->effects) why=tr("effects_unavailable"); return features->effects; }   // SMAA runs on the effects path and has no generator
         const bool ok=kind==UpscalerKind::dlss ? (generation ? features->dlss_g : features->dlss) : (generation ? features->fsr_fg : features->fsr);
         const auto& reason=kind==UpscalerKind::dlss ? (generation ? features->dlss_g_reason : features->dlss_reason) : (generation ? features->fsr_fg_reason : features->fsr_reason);
@@ -123,7 +125,7 @@ void SettingsMenu::main_tab(float unit) {
     if(ImGui::BeginCombo("##upscaling",kind_label(options.upscaler))) {
         for(const auto kind:{UpscalerKind::off,UpscalerKind::smaa,UpscalerKind::dlss,UpscalerKind::fsr}) {
             std::string why; const bool ok=supported(kind,false,why);
-            ImGui::BeginDisabled(!ok && kind!=options.upscaler);   // a saved choice this PC cannot run stays visible and can be left
+            ImGui::BeginDisabled(!ok);
             if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {
                 options=with_upscaler(options,kind);
                 std::string ignored;   // frame generation moves along only where the new kind has a generator
@@ -175,7 +177,7 @@ void SettingsMenu::main_tab(float unit) {
             std::string why;
             const bool ok=value==FrameGenChoice::off || (supported(value==FrameGenChoice::dlss ? UpscalerKind::dlss : UpscalerKind::fsr,false,why) &&
                                                          supported(value==FrameGenChoice::dlss ? UpscalerKind::dlss : UpscalerKind::fsr,true,why));
-            ImGui::BeginDisabled(!ok && value!=choice);
+            ImGui::BeginDisabled(!ok);
             if(ImGui::Selectable(choice_label(value).c_str(),choice==value)) options=with_frame_generation(options,value);
             ImGui::EndDisabled();
             if(!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",why.c_str());

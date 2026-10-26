@@ -19,6 +19,19 @@ class FakeTransport:
         self.out.put(json.dumps({"type": "frame", "n": n, "context": context, "speed": 1, "ui": [-1]*12, **extra}))
 
 class ClientTest(unittest.TestCase):
+    def test_session_logs_select_own_process_and_keep_legacy_fallback(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            g = Game(exe=str(root / "uc.exe"), launch=False)
+            g.process = SimpleNamespace(pid=123)
+            self.assertEqual(g.log_path("mods.log"), root / "debug" / "mods.log")
+            session = root / "logs" / "game-20261025-210000-000-123-0"
+            (session / "crashes").mkdir(parents=True)
+            (session / "crashes" / "crash-test.txt").write_text("fixture")
+            (root / "logs" / "game-20261025-210001-123-456-0").mkdir()
+            self.assertEqual(g.log_path("mods.log"), session / "mods.log")
+            self.assertEqual(g._crash_report(), str(session / "crashes" / "crash-test.txt"))
     def test_launch_keeps_saved_borderless_config_windowed(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:

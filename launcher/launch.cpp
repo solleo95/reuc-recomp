@@ -1,20 +1,12 @@
 #include "launch.h"
 #include "options_config.h"
+#include "client_update_lock.h"
 #include <fstream>
 #include <iterator>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 namespace uc {
-std::wstring quote_windows_arg(std::wstring_view argument) {
-    if(argument.find(L'\0')!=std::wstring_view::npos)throw std::invalid_argument("argument contains NUL");
-    std::wstring result=L"\"";size_t slashes=0;
-    for(wchar_t c:argument) {
-        if(c==L'\\') {++slashes;continue;}
-        result.append(c==L'\"' ? slashes*2+1 : slashes,L'\\');slashes=0;result+=c;
-    }
-    result.append(slashes*2,L'\\');result+=L'\"';return result;
-}
 void ProcessCloser::operator()(void* handle) const {if(handle)CloseHandle(handle);}
 bool game_running(const GameProcess& process) {
     if(!process)return false;
@@ -46,8 +38,10 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
     PROCESS_INFORMATION process{};
     std::string text;
     if(CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,exe.parent_path().c_str(),&startup,&process)) {
+        std::fprintf(stderr,"[launch] GPU probe child pid=%lu timeout_ms=%u\n",process.dwProcessId,timeout_ms);
         CloseHandle(process.hThread);
-        if(WaitForSingleObject(process.hProcess,timeout_ms)==WAIT_TIMEOUT) {TerminateProcess(process.hProcess,1);WaitForSingleObject(process.hProcess,5000);}
+        if(WaitForSingleObject(process.hProcess,timeout_ms)==WAIT_TIMEOUT) {std::fprintf(stderr,"[launch] GPU probe timed out\n");TerminateProcess(process.hProcess,1);WaitForSingleObject(process.hProcess,5000);}
+        DWORD code=0;GetExitCodeProcess(process.hProcess,&code);std::fprintf(stderr,"[launch] GPU probe exit=%lu\n",code);
         CloseHandle(process.hProcess);
     }
     CloseHandle(out);if(null!=INVALID_HANDLE_VALUE)CloseHandle(null);
@@ -58,6 +52,8 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
 GameProcess launch_game(const std::filesystem::path& executable,const std::filesystem::path& config,const Options* diagnostic,int guest_cpu,std::optional<net::Endpoint> network) {
     if(guest_cpu < -1 || guest_cpu>=63)throw std::invalid_argument("guest CPU must be -1 or 0..62");
     const auto exe=std::filesystem::absolute(executable),settings=std::filesystem::absolute(config);
+    auto session=enter_client_session(exe.parent_path());
+    if(auto* error=std::get_if<std::error_code>(&session)) throw std::runtime_error("Client update blocks game launch: "+error->message());
     if(!std::filesystem::is_regular_file(exe))throw std::runtime_error("uc.exe is missing");
     if(!std::filesystem::is_regular_file(settings))throw std::runtime_error("config.json is missing");
     const auto options=options_from_config(load_config(settings));
@@ -79,6 +75,7 @@ GameProcess launch_game(const std::filesystem::path& executable,const std::files
     STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
     if(!CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,exe.parent_path().c_str(),&startup,&process))
         throw std::runtime_error("CreateProcessW failed: Windows error "+std::to_string(GetLastError()));
+    std::fprintf(stderr,"[launch] game child pid=%lu network=%s port=%u\n",process.dwProcessId,network ? (network->host ? "host" : "client") : "off",network ? network->port : 0);
     CloseHandle(process.hThread);return GameProcess(process.hProcess);
 }
 }

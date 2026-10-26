@@ -10,6 +10,10 @@ opens two single-client named pipes (JSON lines, UTF-8, `\n`):
 
 `<name>` is `[A-Za-z0-9_-]{1,32}`. The window is visible but never activated; no system input is sent. The harness always passes `--no-vulkan-layers` (sets `VK_LOADER_LAYERS_DISABLE=~implicit~`): implicit layers such as OBS capture, RTSS, ReShade and the Steam overlay cost ~3 FPS and add 50+ ms hitches, so tests measure the game alone. Normal play keeps the layers on. Use `python -m uctest` instead of speaking the protocol by hand (see `.claude/skills/uc-test/SKILL.md`).
 
+From `scripts/`, `python -m uctest.window_startup` checks that the game window stays hidden until shader warmup finishes, then becomes visible and reaches the title screen. It uses the normal 1280×720 harness, isolated saves and no system input; it captures the resulting frame. Intel fullscreen presentation still requires a check on the affected machine.
+
+`uctest.netplay`, `uctest.netplay_history`, and `uctest.netplay_slow_peer` check the input-packet network mode with two real games (controls, state hashes, rollback history, a client slowed by `UC_NET_CLIENT_STEP_US`; see [netplay](netplay.md)). `python -m uctest.netem` independently checks relay ordering, bandwidth limit, cancellation and delayed EOF handling.
+
 All `uctest` game launches (live scenarios, bench, demo recording/replay/check/profile) pin guest threads with `--guest-cpu 26`. Other CPU arguments are rejected; the old local `build/bench-machine.json` no longer overrides placement. This harness configuration requires a machine where logical CPU 26 is available; normal launcher calibration is independent.
 
 ## Commands
@@ -36,7 +40,7 @@ A `kpad` press holds its buttons for `hold_frames` and then releases them keepin
 - `frame` (every KPAD sample, droppable under backpressure): `n` frame counter, `speed`, `context` (`inactive|menu|gameplay|qte`), `ui` (12 UI manager slot states, `-1` inactive), `menu` (4 menu page-alive words), `ui_valid`, `pause` (2 = paused), `scene_mode`, `tutorial`, `tutorial_loaded`, `player{valid,address,mode,state,magazine,life,damage,scene}` (`life` HUD gauge 0..1, `damage` 0 = unhurt .. 50 = dead), `view` (world→view 3x4 row-major or `null`), `enemies` (`[{id,cls,root:[x,y,z],head,hp}]`: `cls` actor class pointer, `head` false once the head is shot off, `hp` zombie health 10 per pistol hit, <= 0 is dead although the actor stays until the wave ends; world units of 10 cm, y up; actors outside the 200-entry table are found through the actor list), `render_ms`, `presents`, `retraces`, `dropped` (frame events dropped).
 - `action`: `name` (`Reload|Grenade|Knife|QTE`), `accepted`, `frame`.
 - `exit`: `code`.
-Crash information is not sent on the pipe: the client reads the tail of `run.log` and the newest `debug/crash-*.txt` itself when the process dies.
+Crash information is not sent on the pipe: the client reads the tail of `run.log` and the current process's `logs/game-*/crashes/crash-*.txt` when it dies. Older comparison builds can still use `debug/crash-*.txt`.
 
 ## Codex Windows sandbox
 
@@ -77,7 +81,7 @@ The game saves progress into the isolated saves copy. `--save-as NAME` keeps a f
 
 ## Crash bundle
 
-Every fatal error writes `dist/debug/crash-<time>-<pid>.txt` (host stack with guest function names) and, next to it, the folder `crash-<time>-<pid>.dump` with the machine state at the moment of the crash (about 88 MB each; delete old ones by hand): `mem1.bin` (guest 0x80000000, 24 MB), `mem2.bin` (0x90000000, 64 MB), `threads.txt` (every live guest thread: state, wait key, r0-r31, lr/ctr/cr/msr, f0-f31 as raw bits; `current 1` marks the thread that crashed), `gx.txt` (bound vertex/matrix arrays, 12 = position matrices, 13 = normal matrices) and `functions.txt` (entry address and symbol of every translated function). The report ends with a `bundle:` line; a failed autoplay/scenario report names the `.txt`.
+Every handled fatal error writes `logs/game-*/crashes/crash-<time>-<pid>.txt` (host stack with guest function names) and, next to it, the folder `crash-<time>-<pid>.dump` with the machine state at the moment of the crash (about 88 MB each; delete old ones by hand): `mem1.bin` (guest 0x80000000, 24 MB), `mem2.bin` (0x90000000, 64 MB), `threads.txt` (every live guest thread: state, wait key, r0-r31, lr/ctr/cr/msr, f0-f31 as raw bits; `current 1` marks the thread that crashed), `gx.txt` (bound vertex/matrix arrays, 12 = position matrices, 13 = normal matrices) and `functions.txt` (entry address and symbol of every translated function). The report ends with a `bundle:` line; a failed autoplay/scenario report names the `.txt`. See [Automatic diagnostics](logs.md) for the other session files.
 
 `python -m uctest inspect <crash-*.txt|*.dump> threads | stack [thread id] | mem ADDR [SIZE] | f32 ADDR [COUNT] | nan ADDR SIZE | posmtx INDEX | gx` reads it back offline, any number of times, without the game: the back chain from r1 with function names, memory and float dumps, non-finite floats in a range, and the position matrix an indexed load (`GXLoadPosMtxIndx`) reads (`posmtx INDEX` uses array 12 of `gx.txt`; INDEX is r3 of the crashed thread). It is a post-mortem view, not a savestate: the game cannot resume from it (guest threads live on host stacks).
 

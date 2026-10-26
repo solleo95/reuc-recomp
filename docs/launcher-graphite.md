@@ -17,7 +17,7 @@ User selected concept 1. Native C++ / SDL3 / ImGui; no additional UI framework.
 
 ## Assets and fonts
 
-`assets/launcher/graphite-atlas.png` preserves the approved `assets/launcher-concepts/01-graphite.png` artwork. The launcher samples only decorative regions: train header, branding and company footer. Navigation icons are transparent vector geometry shared by selected/unselected states. Interactive controls and localized text are rendered independently. The previous generated train asset is preserved but no longer used.
+`assets/launcher/graphite-atlas.png` preserves the approved concept artwork. The launcher samples only decorative regions: train header, branding and company footer. Navigation icons are transparent vector geometry shared by selected/unselected states. Interactive controls and localized text are rendered independently. Original concepts and the unused generated train asset are kept locally and excluded from Git.
 
 Layout follows the concept's 1504×916 client area, 344-pixel sidebar, 232-pixel header and two settings columns. Thin outlined fields, chevrons, round toggles and footer proportions follow the reference. Unimplemented upscaling, quality and frame-generation controls are disabled and marked unavailable. Render-scale choices: monitor resolution, 1× (Native), 1.5×, 2×, 3×, each with output dimensions. Existing custom config values are preserved until a new choice is made.
 

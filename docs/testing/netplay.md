@@ -1,4 +1,92 @@
-# Direct-IP cooperative play (first stage)
+# Cooperative play
+
+## Current mode: input packets on a shared tick (2026-10-26)
+
+Only input and state hashes cross the network. Both PCs run the whole game on the
+deterministic virtual clock at one shared simulation tick: 60 Hz by default, then
+chosen automatically from 30 (the original rate), 60, 120, 144 and 240 Hz
+(`--net-tick` sets the starting tick, agreed in the startup message). A frame limit
+(`--fps-limit`) never changes the tick: network play steps at the tick and the limit
+only caps presents. Each PC renders and presents at its own rate (detached rendering:
+the renderer shows the newest complete frame), so a slow GPU lowers only its own
+picture. The simulation itself must run at the tick on both PCs; a PC that cannot is
+handled automatically:
+
+* **Lead limit.** At most `net_prediction_limit` (6) steps run on predicted remote input;
+  the next waits for the other PC's input, the virtual clock gives the waited time back
+  (the game slows down, it never races to catch up) and rollback replays stay short.
+  Nothing ends the session for a slow peer any more (it used to exit with "input
+  sampling exceeded rollback history"); 10 s without input is reported as an error.
+* **Automatic tick.** Each PC measures the wall time of one simulated step (waits
+  excluded) and reports it in its acknowledgements. The host's `NetTickPolicy` drops
+  the tick one rung when the slower PC needs more than 85% of the current frame for
+  four seconds, and climbs one rung after twenty seconds under 65% of the next rung's
+  frame (a drop soon after a climb doubles that wait, up to 160 s). The change is a
+  message `{tick, at}` three seconds ahead; both PCs switch at step `at`, every
+  replay through that step applies it again, and hashes and history use fixed
+  frame counts (60 and 120), so the peers stay hash-equal across a change. The
+  input pipeline is sized in frames for the 60 Hz tick at startup and kept.
+* **Host display above the tick.** Frame generation (DLSS-G, FSR 3.1) is allowed in
+  network play: it adds presented frames only. The displayed rate of the host is the
+  tick times the multiplier (120 at 60 Hz with a 2x generator); the harness counters
+  count rendered frames only.
+
+`UC_NET_CLIENT_STEP_US=<us>` makes every step of the joining player that much slower
+(tests of a weak PC). `[netplay] rollback count ...` lines show tick and step costs.
+Regression: `cd scripts`, `python -m uctest.netplay --exe dist/uc.exe --speed 1`
+(controls, FPS ceilings, hashes), `python -m uctest.netplay_slow_peer` (with
+`UC_NET_CLIENT_STEP_US=12000` it must settle at 30 Hz, speed 1.0, equal hashes).
+
+Both players open Multiplayer. Create starts a listener on all local IPv4 addresses,
+including localhost, with automatic free-port selection. Copy the displayed LAN or
+Internet `IP:Port` into the client's single address field. The game starts automatically
+after connection; no Ready checkboxes. LAN does not need router NAT traversal.
+
+## Archived: host-authoritative video build (2026-10-26, replaced, see `build/backup-host-auth`)
+
+That build streamed the host's picture to a thin client. Its stream used H.264 (Media Foundation, High profile or Main where the encoder
+requires it, CBR, no B-frames, keyframe every 120 frames) up to 1280x720 (multiples of
+16) at up to 60Hz and stereo PCM32kHz. The encoder is the first hardware H.264 MFT
+that works (NVIDIA first, then AMD, Intel, ...) and falls back by itself to the Windows
+software encoder when none exists or one stalls or fails (`UC_STREAM_ENCODER=software`
+forces it). The client needs the Windows H.264 decoder (not in Windows N editions
+without the Media Feature Pack); decoded NV12 goes to the GPU as an NV12 texture.
+Encode/decode and network I/O use worker threads; GPU readback goes through a bounded
+nonblocking ring in cached host memory (write-combined memory reads at a few hundred
+MB/s and cost the host 15 ms per frame); streaming at 60Hz costs the host about 4% FPS.
+
+Rate control (`VideoRate`) is automatic. The bitrate starts at 16 Mbit/s and rises 15%
+every second of calm up to 30 Mbit/s; it falls by a quarter when captures are replaced
+because the in-flight window is full (more than 20% in half a second) or when the
+receipt delay is 60 ms above its best (a standing queue). The floor is 2.5 Mbit/s;
+`UC_STREAM_KBPS=<kbit/s>` pins it. The window of frames sent but not yet decoded
+follows the path's best round trip (2 frames on a LAN, up to 6): every encoded frame
+must reach the decoder, so newer captures replace the one waiting while the window
+is full and the host never waits. The client shows each decoded picture at once (no
+jitter buffer, at most two queued, newest wins). Audio queues retain at most100ms.
+A hardware-encoded stream decodes with no extra delay; the software encoder's stream
+leaves one picture in the decoder (17 ms at 60Hz). Frame rate depends on host/network/
+client capacity. Insert releases the client's cursor; graphic settings belong to the host.
+Link tests: `DelayRelay.set_bandwidth` (scripts/uctest/netem.py) throttles the TCP relay.
+
+The host retains the ordinary GX completion queue so guest loading/audio threads can
+run while graphics work is pending. Video delivery runs independently. Capture uses
+phase-based deadlines; the client buffers at most three images and follows the
+measured source rate, up to60Hz. A single image is released after50ms even when the
+source delivers fewer than4FPS. HDR native prompts are composited into the SDR stream
+on the encoder worker.
+
+The video build's regression script is gone with it. The rollback sections below describe
+the input-packet netcode that is current again (with the tick and lead changes above).
+
+On the affected host, Windows Filtering Platform identified ESET Security blocking
+incoming TCP and UDP for `dist-raw/uc_launcher.exe` (filter70661). ESET Advanced setup
+→ Network access protection → Firewall → Rules → Edit: allow inbound TCP/UDP for the
+actual `uc_launcher.exe` and `uc.exe` paths, remote subnet192.168.50.0/24, ports any
+(automatic port fallback). Put the rules above blocking rules. Security configuration
+is user-managed; it is not changed by the game.
+
+## Historical rollback implementation and measurements
 
 **Owner decision, 2026-10-24:** retain the current synchronous rollback;
 background replay is deferred. See the [current known-issues and handoff record](netplay-known-issues.md)

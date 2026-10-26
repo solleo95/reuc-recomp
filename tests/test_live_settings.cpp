@@ -30,6 +30,7 @@ int main() {
     CHECK(live.options().upscaler==uc::UpscalerKind::dlss && live.options().render_scale==0);
     {   // only the changed field reaches its subsystem, and the file has it
         auto next=live.options(); next.bloom=false; live.apply(next);
+        if(live.error()) std::fprintf(stderr,"first settings save: %s\n",live.error()->c_str());
         CHECK((calls==std::vector<std::string>{"bloom"}) && !saved().bloom && !live.error());
     }
     {   // the strength alone reaches the bloom target once, with both fields
