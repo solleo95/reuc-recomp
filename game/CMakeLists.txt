@@ -72,8 +72,9 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(step_probe ${CMAKE_SOURCE_DIR}/tools/step_probe/step_probe.cpp)   # offline proof of tools/step_audit fix records
   target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
-  add_executable(uc uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_client_update_lock)
+  include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
+  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm shell32
     uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch uc_game_mods uc_mod_menu uc_netplay_game)
   add_custom_command(TARGET uc POST_BUILD
@@ -91,6 +92,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   install(FILES ${UC_UPSCALER_RUNTIME} DESTINATION .)
   # nvngx_dlssnr.dll is not installed into dist: players supply their own, and a deploy must never overwrite it.
   install(FILES ${CMAKE_SOURCE_DIR}/third_party/smaa/LICENSE.txt DESTINATION licenses/SMAA)
+  install(FILES ${mimalloc_SOURCE_DIR}/LICENSE DESTINATION licenses/mimalloc)
   install(FILES ${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md DESTINATION .)   # credits and trademark line; the licence texts go to licenses/ (renderer, cmake/upscaler_sdks.cmake)
   install(FILES ${CMAKE_SOURCE_DIR}/project/identified_sdk.txt ${CMAKE_SOURCE_DIR}/project/symbols.txt ${CMAKE_SOURCE_DIR}/project/gx_symbols.txt ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed DESTINATION data)
 else()
