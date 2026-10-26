@@ -1612,29 +1612,31 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     // Edited in place: a failure below ends the guest thread, so the half-updated state is never observed.
     const auto selectors=texture_selectors(read32(c.r[2]-8968));
     gx::share(mesh_state,layout);
-    bool uniforms_dirty=true;
+    bool uniforms_dirty=true,transforms_dirty=true;   // changed since the shared block was last compared (that comparison is a memcmp of 2 KB per draw)
     const auto texture_wrap=wraps(bound_textures);
     try {
         for(const auto& operation:cached->operations) {
             if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
                 indexed_texture(texture_matrices,transforms,layout,texture->index,texture->id,texture->words); dirty_material();
                 resolve_texture_matrices(uniforms,selectors,texture_matrices);
-                uniforms_dirty=true;
+                uniforms_dirty=transforms_dirty=true;
                 continue;
             }
             if(const auto* position=std::get_if<MeshPosition>(&operation)) {
                 indexed_position(transforms,texture_matrices,layout,position->index,position->row); dirty_material();
                 resolve_texture_matrices(uniforms,selectors,texture_matrices);
-                uniforms_dirty=true;
+                uniforms_dirty=transforms_dirty=true;
             } else if(const auto* normal=std::get_if<MeshNormal>(&operation)) {
                 indexed_normal(transforms,layout,normal->index,normal->row);
+                transforms_dirty=true;
             } else {
                 const auto& geometry=std::get<MeshGeometry>(operation);
                 if(uniforms_dirty) { gx::share(mesh_uniforms_block,uniforms); uniforms_dirty=false; }
                 auto& draw=draws.emplace_back();
                 draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=mesh_state;
                 draw.mesh=geometry.buffers;
-                draw.transforms=gx::share(mesh_transforms_block,transforms); draw.material=material; draw.uniforms=mesh_uniforms_block; draw.texture_bank=texture_bank(*draw.state,texture_matrices); draw.blend=blend_state; draw.texture=textures[0];
+                if(transforms_dirty) { gx::share(mesh_transforms_block,transforms); transforms_dirty=false; }
+                draw.transforms=mesh_transforms_block; draw.material=material; draw.uniforms=mesh_uniforms_block; draw.texture_bank=texture_bank(*draw.state,texture_matrices); draw.blend=blend_state; draw.texture=textures[0];
                 draw.texture_wrap=texture_wrap;
                 std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
             }
