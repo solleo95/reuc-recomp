@@ -827,9 +827,9 @@ void gx_fifo_write(int size, uint32_t value) {
         if (recording_primitive()) {
             auto& draw=*recorded_draw(recording->native.geometry.back());
             if (size_t(size)>draw.expected-draw.payload.size()) throw gx::Error(gx::ErrorCode::truncated,draw.callsite,draw.expected-draw.payload.size(),size);
-            draw.payload.insert(draw.payload.end(),bytes,bytes+size);
+            for (int i=0;i<size;++i) draw.payload.push_back(bytes[i]);   // reserved up front (GXBegin, GXBeginDisplayList): a 1-4 byte insert(range) costs more than the copy
         }
-        recording->bytes.insert(recording->bytes.end(),bytes,bytes+size);
+        for (int i=0;i<size;++i) recording->bytes.push_back(bytes[i]);
         return;
     }
     if (!capture || !capture->active()) {
