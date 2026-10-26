@@ -366,6 +366,88 @@ void compare_hit_buffer(int iterations = 3000) {
     std::printf("BoundsRecordInit / HitBufferConstruct: %d mismatches in %d randomised runs each\n", mismatches, iterations);
     CHECK(mismatches == 0);
 }
+
+// The loop of the segment-against-mesh function (800A4904): per triangle the translated code copies three vertices to the frame, calls SegmentTriangleHit
+// (return address 800A49E8) and, after a miss, bumps four counters and tests the count. The reference below is that code, op for op, around the translated
+// SegmentTriangleHit; the native path is the same caller around the HLE, which may run several triangles per call. Both must end in the same state.
+void loop_iteration_body(Ctx& c) {
+    op_lwz(c, 0, 31, 0); op_or(c, 24, 4, 24, false); op_or(c, 25, 5, 25, false); op_addi(c, 3, 1, 28); op_mulli(c, 0, 0, 12); op_addi(c, 6, 1, 100); op_addi(c, 7, 1, 88);
+    op_addi(c, 8, 1, 76); op_lfsx(c, 0, 22, 0); op_add(c, 9, 22, 0, false); op_stfs(c, 0, 1, 100); op_lfs(c, 0, 9, 4); op_stfs(c, 0, 1, 104); op_lfs(c, 0, 9, 8);
+    op_stfs(c, 0, 1, 108); op_lwz(c, 0, 31, 4); op_mulli(c, 0, 0, 12); op_lfsx(c, 0, 22, 0); op_add(c, 9, 22, 0, false); op_stfs(c, 0, 1, 88); op_lfs(c, 0, 9, 4);
+    op_stfs(c, 0, 1, 92); op_lfs(c, 0, 9, 8); op_stfs(c, 0, 1, 96); op_lwz(c, 0, 31, 8); op_mulli(c, 0, 0, 12); op_lfsx(c, 0, 22, 0); op_add(c, 9, 22, 0, false);
+    op_stfs(c, 0, 1, 76); op_lfs(c, 0, 9, 4); op_stfs(c, 0, 1, 80); op_lfs(c, 0, 9, 8); op_stfs(c, 0, 1, 84); c.lr = 0x800A49E8u;
+}
+bool loop_continues(Ctx& c) {   // after a miss: the translated bookkeeping and the count test (true: another triangle, after the poll)
+    op_addi(c, 31, 31, 12); op_addi(c, 28, 28, 3); op_addi(c, 30, 30, 4); op_addi(c, 27, 27, 1);
+    op_lwz(c, 0, 23, 28); op_cmpl(c, 0, 28, 0);
+    if (crbit(c, 0) != true) return false;
+    ppc::poll(c);
+    return true;
+}
+void ref_collision_loop(Ctx& c) {
+    do {
+        loop_iteration_body(c);
+        uint32_t saved[5]; for (int i = 0; i < 5; ++i) saved[i] = c.r[27 + i];
+        ref_SegmentTriangleHit(c);
+        for (int i = 0; i < 5; ++i) c.r[27 + i] = saved[i];   // the translated callee restores its callee-saved registers
+        if (c.r[3] != 0) return;
+    } while (loop_continues(c));
+}
+void native_collision_loop(Ctx& c) {
+    do {
+        loop_iteration_body(c);
+        hle_SegmentTriangleHit(c);
+        if (c.r[3] != 0) return;
+    } while (loop_continues(c));
+}
+void compare_collision_loop(int iterations = 6000) {
+    constexpr uint32_t mesh = kBase + 0x40, verts = kBase + 0x100, index = kBase + 0x800, p0 = kBase + 0x10, p1 = kBase + 0x20, sp = kBase + 0x3000;
+    int mismatches = 0, hits = 0, ended = 0, long_runs = 0;
+    for (int n = 0; n < iterations; ++n) {
+        const uint32_t triangles = 1 + uint32_t(rng() % 14), vertex_count = 6 + uint32_t(rng() % 24);
+        std::vector<uint32_t> words(0x1000 / 4, 0);
+        auto put3 = [&](uint32_t at, double x, double y, double z) { const size_t i = (at - kBase) / 4; words[i] = float_bits(x); words[i + 1] = float_bits(y); words[i + 2] = float_bits(z); };
+        std::uniform_real_distribution<double> d(-3, 3);
+        put3(p0, -2, d(rng) * 0.2, d(rng) * 0.2); put3(p1, 2, d(rng) * 0.2, d(rng) * 0.2);
+        for (uint32_t v = 0; v < vertex_count; ++v) {
+            put3(verts + 12 * v, d(rng), d(rng), d(rng));
+            if (n % 9 == 0 && v % 5 == 0) { const size_t i = (verts + 12 * v - kBase) / 4; words[i] = random_float_bits(); words[i + 1] = random_float_bits(); }
+        }
+        for (uint32_t t = 0; t < triangles * 3; ++t) words[(index - kBase) / 4 + t] = uint32_t(rng() % vertex_count);
+        words[(mesh - kBase) / 4 + 7] = triangles * 3;   // the vertex-index count at +28 (the loop counter r28 advances by 3 per triangle)
+        uint32_t k[3] = {float_bits(1e-4), 0, float_bits(1.0)};
+        auto setup = [&](Fix& f) {
+            Ctx& c = f.c;
+            fill_region(f, words);
+            wr32(c, kSda - 32296, k[0]); wr32(c, kSda - 32304, k[1]); wr32(c, kSda - 32300, k[2]);
+            c.r[2] = kSda; c.r[1] = sp; fill_stack(f, sp); c.gqr[0] = 0;
+            c.r[22] = verts; c.r[23] = mesh; c.r[24] = p0; c.r[25] = p1; c.r[26] = 0; c.r[27] = 0; c.r[28] = 0; c.r[29] = kBase + 0x700; c.r[30] = 0; c.r[31] = index;
+            c.r[4] = p0; c.r[5] = p1;
+            for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
+            c.poll_count = uint32_t(n);
+        };
+        // The scratch registers (r0, r4..r9, f0) are not compared: the translated callee leaves its own temporaries in them and the caller rewrites them before use.
+        auto result = [&](Fix& f) {
+            Ctx& c = f.c;
+            std::vector<uint8_t> memory(c.mem + (kBase & 0x3FFFFFFF), c.mem + (kBase & 0x3FFFFFFF) + 0x1000);
+            append_stack(memory, f, sp);
+            return std::make_tuple(memory, c.r[3], c.r[27], c.r[28], c.r[30], c.r[31], c.lr, c.poll_count);
+        };
+        Fix expected, got;
+        setup(expected); setup(got);
+        ref_collision_loop(expected.c);
+        native_collision_loop(got.c);
+        const auto want = result(expected), have = result(got);
+        hits += std::get<1>(want) == 1; ended += std::get<1>(want) == 0; long_runs += std::get<3>(want) > 6;
+        const bool same = same_memory(std::get<0>(want), std::get<0>(have)) && std::get<1>(want) == std::get<1>(have) && std::get<2>(want) == std::get<2>(have)
+            && std::get<3>(want) == std::get<3>(have) && std::get<4>(want) == std::get<4>(have) && std::get<5>(want) == std::get<5>(have)
+            && std::get<6>(want) == std::get<6>(have) && std::get<7>(want) == std::get<7>(have);
+        if (!same && ++mismatches <= 3) std::printf("collision loop differs at iteration %d (%u triangles; r3 %u/%u, r28 %u/%u, polls %u/%u)\n", n, triangles, std::get<1>(want), std::get<1>(have), std::get<3>(want), std::get<3>(have), std::get<7>(want), std::get<7>(have));
+    }
+    std::printf("collision loop: %d mismatches in %d randomised runs (%d ended on a hit, %d on the last triangle, %d past two triangles)\n", mismatches, iterations, hits, ended, long_runs);
+    CHECK(mismatches == 0);
+    CHECK(hits > iterations / 10 && ended > iterations / 10 && long_runs > iterations / 10);
+}
 }  // namespace
 
 int main() {
@@ -394,5 +476,6 @@ int main() {
     compare("PSVECCrossProduct", hle_PSVECCrossProduct, ref_PSVECCrossProduct, false);
     compare_segment_triangle();
     compare_hit_buffer();
+    compare_collision_loop();
     return 0;
 }

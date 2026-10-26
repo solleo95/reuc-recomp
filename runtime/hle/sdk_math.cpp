@@ -308,7 +308,7 @@ SDK_INLINE double vdot(const V3& a, const V3& b) {   // the "PSQUATDotProduct" t
     return x + hi[1];
 }
 }  // namespace
-void hle_SegmentTriangleHit(ppc::Ctx& c) {
+static bool segment_triangle_hit(ppc::Ctx& c) {   // true: a hit (r3 = 1)
     float_gqr(c);
     const double eps = f32_at(c, c.r[2] - 32296), zero = f32_at(c, c.r[2] - 32304), one = f32_at(c, c.r[2] - 32300);
     const uint32_t out = c.r[3];
@@ -330,22 +330,71 @@ void hle_SegmentTriangleHit(ppc::Ctx& c) {
     }
     c.ps1[31] = double(float(c.ps1[31])); c.ps1[30] = double(float(c.ps1[30]));
     temp(68, e1); temp(56, e2); temp(44, dir); temp(32, pvec);
-    if (det < eps) return;
+    if (det < eps) return false;
     const V3 tvec = vsub(p0, v0);
     temp(20, tvec);
     const double u = vdot(tvec, pvec);
-    if (u < zero || u > det) return;
+    if (u < zero || u > det) return false;
     const V3 qvec = vcross(tvec, e1);
     temp(8, qvec);
     const double v = vdot(dir, qvec);
-    if (v < zero || rs(u + v) > det) return;
+    if (v < zero || rs(u + v) > det) return false;
     const double t = rs(vdot(e2, qvec) * rs(one / det));
-    if (t < zero || t > one) return;
+    if (t < zero || t > one) return false;
     const V3 hit = {dir.xy * FloatPair{float(t),float(t)},dir.z * float(t)};
     temp(44, hit);   // PSVECScale(dir, dir, t) in place
     st(c, out + 0, wide(p0.xy + hit.xy));
     st1(c, out + 8, {p0.z + hit.z,0.0});
     c.r[3] = 1;
+    return true;
+}
+
+// The loop of the game's segment-against-mesh test (800A4904) calls SegmentTriangleHit once per triangle and, for the great majority that miss, goes through
+// about forty translated instructions (index loads, nine float copies to the stack, the argument registers, the counters) before the next call. When the call
+// comes from that loop (the return address 800A49E8) and misses, this runs the following iterations natively, with the same register, stack and poll effects,
+// until one hits or the triangles end, and then returns to the translated code exactly as if it had made that call itself.
+namespace {
+constexpr uint32_t kCollisionLoopReturn = 0x800A49E8u;
+void collision_loop_continue(ppc::Ctx& c) {
+    const uint32_t sp = c.r[1];
+    if (!in_ram(sp, 200)) return;
+    for (;;) {
+        const uint32_t mesh = c.r[23], vertices = c.r[22];
+        if (!in_ram(mesh + 28, 4)) return;
+        const uint32_t count = ppc::rd32_ram(c, mesh + 28);
+        const uint32_t next_index = c.r[31] + 12, next_vertex = c.r[28] + 3, next_offset = c.r[30] + 4, next_triangle = c.r[27] + 1;
+        if (!(next_vertex < count)) return;   // the triangles ended: the translated bookkeeping finds that out itself
+        if (!in_ram(next_index, 12)) return;
+        uint32_t offsets[3]; uint32_t where[3];
+        for (int i = 0; i < 3; ++i) {
+            offsets[i] = ppc::rd32_ram(c, next_index + 4 * i) * 12u;
+            where[i] = vertices + offsets[i];
+            if (!in_ram(where[i], 12)) return;
+        }
+        // Committed from here: what the translated code leaves at the back edge (r0 holds the count it just loaded), then the poll, then the body.
+        c.r[31] = next_index; c.r[28] = next_vertex; c.r[30] = next_offset; c.r[27] = next_triangle; c.r[0] = count;
+        ppc::poll(c);
+        const uint32_t at[3] = {sp + 100, sp + 88, sp + 76};   // v0, v1, v2 copies on the frame
+        double last = 0;
+        for (int i = 0; i < 3; ++i) {
+            for (int k = 0; k < 3; ++k) {   // lfs/lfsx then stfs: single -> double -> single, bit for bit
+                const uint32_t bits = ppc::rd32_ram(c, where[i] + 4 * k);
+                float f; std::memcpy(&f, &bits, 4);
+                last = f;
+                const float back = float(last);
+                uint32_t out; std::memcpy(&out, &back, 4);
+                const uint32_t word = _byteswap_ulong(out);
+                std::memcpy(ppc::hp(c, at[i] + 4 * k), &word, 4);
+            }
+        }
+        c.r[0] = offsets[2]; c.r[9] = where[2]; c.f[0] = c.ps1[0] = last;
+        c.r[3] = sp + 28; c.r[4] = c.r[24]; c.r[5] = c.r[25]; c.r[6] = at[0]; c.r[7] = at[1]; c.r[8] = at[2];
+        if (segment_triangle_hit(c)) return;
+    }
+}
+}  // namespace
+void hle_SegmentTriangleHit(ppc::Ctx& c) {
+    if (!segment_triangle_hit(c) && c.lr == kCollisionLoopReturn) collision_loop_continue(c);
 }
 
 // Two tiny routines of the game's collision code that run thousands of times a frame (together ~7% of the heavy window), written on host memory.
