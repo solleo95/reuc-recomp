@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <utility>
 #include <vector>
 #include <optional>
 
@@ -63,19 +64,35 @@ inline int reticle_tint_owner(const DrawPacket& draw) {
 template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<std::optional<std::array<float,2>>,2>& consumed, unsigned local, bool exact = false) {
     struct Group { std::array<float,2> center; int owner; std::vector<size_t> members; bool tinted = false; };
     std::vector<Group> groups;
+    std::vector<std::pair<size_t, std::array<float,2>>> loose;   // untinted quads that did not directly follow a ring
+    const auto within = [](const std::array<float,2>& a, const std::array<float,2>& b, float limit) { return std::abs(a[0] - b[0]) < limit && std::abs(a[1] - b[1]) < limit; };
+    size_t last = size_t(-1);   // the group of the latest tinted ring: the white quads that follow it in draw order are its own, even where two reticles overlap
     for (size_t i = 0; i < draws.size(); ++i) {
         if (!reticle_candidate(draws[i])) continue;
         const auto center = draw_center_ndc(draws[i]);
         if (!center) continue;
         int tint = reticle_tint_owner(draws[i]);
         if (tint == 1 && !consumed[1]) tint = 0;   // a lone pad's reticle is the first player's, whatever its tint
-        Group* group = nullptr;
-        for (auto& g : groups)
-            if (std::abs(g.center[0] - (*center)[0]) < 0.03f && std::abs(g.center[1] - (*center)[1]) < 0.03f) { group = &g; break; }
-        if (!group) { groups.push_back({*center, tint, {}}); group = &groups.back(); }
-        if (group->owner < 0) group->owner = tint;
-        if (tint >= 0 && !group->tinted) { group->tinted = true; group->center = *center; }   // the tinted ring is the anchor
-        group->members.push_back(i);
+        if (tint >= 0) {
+            size_t found = groups.size();
+            for (size_t g = 0; g < groups.size(); ++g) if (groups[g].tinted && groups[g].owner == tint && within(groups[g].center, *center, 0.03f)) { found = g; break; }
+            if (found == groups.size()) groups.push_back({*center, tint, {}, true});
+            groups[found].members.push_back(i);
+            last = found;
+        } else if (last != size_t(-1) && within(groups[last].center, *center, 0.03f)) groups[last].members.push_back(i);
+        else loose.push_back({i, *center});
+    }
+    for (const auto& [index, center] : loose) {
+        size_t best = groups.size(); float best_distance = 0.15f;
+        for (size_t g = 0; g < groups.size(); ++g) {
+            if (!groups[g].tinted) continue;
+            const float d = std::max(std::abs(groups[g].center[0] - center[0]), std::abs(groups[g].center[1] - center[1]));
+            if (d < best_distance) { best_distance = d; best = g; }
+        }
+        if (best == groups.size())
+            for (size_t g = 0; g < groups.size(); ++g) if (!groups[g].tinted && within(groups[g].center, center, 0.03f)) { best = g; break; }
+        if (best == groups.size()) groups.push_back({center, -1, {}, false});
+        groups[best].members.push_back(index);
     }
     size_t marked = 0;
     std::optional<std::array<float,2>> anchor;   // the local ring's centre in aim units

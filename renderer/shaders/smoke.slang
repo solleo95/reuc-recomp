@@ -21,7 +21,7 @@ struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
 // Vulkan viewport (x, y, width, height) in target pixels.
 // effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting), bit 1 = albedo and material targets (kEffectRtMaterial), bit 2 = the draw's record is
 // model-valid (kEffectRtModelValid); the MOTION variant only. record: the draw's material record index (rt_material.h), ~0u = none.
-struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; uint record; };
+struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; uint record; float2 shift; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection;
 // Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
 // (prevRows = clip_to_prev_clip applied to the current clip position).
@@ -124,6 +124,7 @@ Output vertexMain(Input input) {
     }
     output.position.xy += projection.jitter * 2.0 / projection.viewport.zw * output.position.w;
 #endif
+    output.position.xy += projection.shift * output.position.w;   // late aim: a clip-space translation, so a quad the game placed at the screen edge is clipped after the move, not before
     // View-space normal: the loaded normal matrix applied to the object normal; without a loaded matrix the object normal stays (position-only fixtures).
     uint normalRow = row & 31;
     uint4 loaded = palettes[projection.palette].loaded;

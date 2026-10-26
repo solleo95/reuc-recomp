@@ -54,6 +54,11 @@ int main() {
             CHECK(!exact[0].aim_exact && exact[1].aim_exact && exact[2].aim_exact && exact[3].aim_exact && !exact[4].aim_exact);
             CHECK(std::abs(exact[1].aim_ref[0] - ax) < 1e-5f && std::abs(exact[2].aim_ref[1] - ay) < 1e-5f && std::abs(exact[3].aim_ref[0] - ax) < 1e-5f);
         }
+        {   // Reticles exactly on top of each other: the tint and the draw order still keep the quads apart.
+            std::vector<gx::DrawPacket> stacked{tinted(quad(0x80393B0C, nx, ny, 120), red), quad(0x80393B0C, nx, ny, 120), tinted(quad(0x80393B0C, nx + 0.01f, ny, 120), blue), quad(0x80393B0C, nx + 0.01f, ny, 120)};
+            CHECK(mark(stacked, {aim, aim}, 0) == 4);
+            CHECK(stacked[0].late_aim && stacked[1].late_aim && !stacked[2].late_aim && !stacked[3].late_aim && stacked[2].reticle && stacked[3].reticle);
+        }
         std::vector<gx::DrawPacket> far{tinted(quad(0x80393B0C, nx - 0.45f, ny, 120), red)};   // a fast flick: 0.45 from the pointer it was drawn from
         CHECK(mark(far, {aim, other}, 0) == 1 && far[0].late_aim);
     }

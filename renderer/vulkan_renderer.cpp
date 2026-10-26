@@ -333,8 +333,8 @@ constexpr uint32_t kNoMotion=UINT32_MAX;
 constexpr VkFormat kMotionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kGBufferFormat=VK_FORMAT_R16G16B16A16_UNORM;   // gbuffer.h
 constexpr float kShadowDistance=30.f;   // how far from the camera the shadow map reaches, in view units (metres)
-struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, record=kRtNoRecord, reserved[2]{}; };   // effects: kEffect* bits (graphics_effects.h); record: rt_material.h
-static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112 && offsetof(DrawPush,record)==116);
+struct DrawPush { gx::Projection projection; uint32_t palette, current_row, indexed, alpha_pass, bank, motion=kNoMotion; float jitter[2]{}; float viewport[4]{}; uint32_t effects=0, record=kRtNoRecord; float shift[2]{}; };   // effects: kEffect* bits (graphics_effects.h); record: rt_material.h
+static_assert(sizeof(DrawPush)==128 && offsetof(DrawPush,jitter)==88 && offsetof(DrawPush,viewport)==96 && offsetof(DrawPush,effects)==112 && offsetof(DrawPush,record)==116 && offsetof(DrawPush,shift)==120);
 constexpr VkFormat kMaterialFormat=VK_FORMAT_R32_UINT, kAlbedoFormat=VK_FORMAT_R8G8B8A8_UNORM;   // the RT pair (rt_material.h)
 struct MotionBlock { gx::Projection prev_rows; uint32_t prev_palette, kind, unused[2]; };   // smoke.slang MotionBlock (std430)
 static_assert(sizeof(MotionBlock)==80);
@@ -2220,13 +2220,14 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 if (crosshair_scale_<=0) continue;   // 0%: no crosshair (a Vulkan viewport needs a positive size)
                 if (const auto center=gx::draw_center_ndc(draw)) gx::scale_viewport_about(*center,crosshair_scale_,draw_viewport.x,draw_viewport.y,draw_viewport.width,draw_viewport.height);
             }
+            float late_shift[2]{};   // clip-space translation of a late-aimed reticle quad, in NDC of the draw's viewport
             if (draw.late_aim && aim_source_) {
                 const auto latest=aim_source_();
                 const auto& from=draw.aim_exact ? draw.aim_ref : packet.aim_consumed;
                 const float dx=(latest[0]-from[0])*gx::kAimToNdcX*0.5f*area.width, dy=(latest[1]-from[1])*gx::kAimToNdcY*0.5f*area.height;
                 static const bool log_aim=std::getenv("UC_AIM_LOG")!=nullptr;   // diagnostics: one line per shifted reticle draw (consumed, latest, shift in aim units)
                 if (log_aim) std::fprintf(stderr,"[aim] t=%.4f consumed %.4f %.4f latest %.4f %.4f callsite %08X\n",std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),from[0],from[1],latest[0],latest[1],draw.callsite);
-                if (dx!=0 || dy!=0) { draw_viewport.x+=dx; draw_viewport.y+=dy; draw_scissor=scissor; ++late_aim_draws_; }
+                if (dx!=0 || dy!=0) { late_shift[0]=dx*2/draw_viewport.width; late_shift[1]=dy*2/draw_viewport.height; draw_scissor=scissor; ++late_aim_draws_; }
             }
             vkCmdSetViewport(slot.command,0,1,&draw_viewport); vkCmdSetScissor(slot.command,0,1,&draw_scissor);
             const Buffer& vertex_buffer=info.vertices ? *info.vertices : slot.vertices;
@@ -2238,6 +2239,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             vkCmdBindDescriptorSets(slot.command,VK_PIPELINE_BIND_POINT_GRAPHICS,layout_,0,1,&slot.texture_sets[set_index],0,nullptr);
             DrawPush push{draw.transforms->projection,info.palette,info.current,info.indexed,0,info.bank};
             push.viewport[0]=draw_viewport.x; push.viewport[1]=draw_viewport.y; push.viewport[2]=draw_viewport.width; push.viewport[3]=draw_viewport.height;
+            push.shift[0]=late_shift[0]; push.shift[1]=late_shift[1];
             if (effects_.per_pixel_lighting && motion_outputs_) push.effects|=kEffectPerPixelLighting;   // only lit draws change: nothing else has a lighting channel on
             if (scene) {
                 push.motion=draw_motion[d];
