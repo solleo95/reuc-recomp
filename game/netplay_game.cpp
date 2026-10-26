@@ -119,7 +119,7 @@ uint32_t NetTickPolicy::update(uint32_t tick,double step_cost_us) {
     for(size_t i=0;i<net_ticks.size();++i)if(net_ticks[i]==tick)rung=i;
     // A step that cannot fit the frame at all (over 110%) means the game already runs below real time and the sound stutters: two seconds.
     const double frame_us=1000000.0/tick;
-    slow_=step_cost_us>frame_us*1.1 ? slow_+2 : step_cost_us>frame_us*0.85 ? slow_+1 : 0;
+    slow_=step_cost_us>frame_us*1.1 ? slow_+2 : step_cost_us>frame_us*0.95 ? slow_+1 : 0;
     // What the heaviest recent second cost, forgotten with a 70 s half-life: menus and loading are cheap, a fight is not, and a climb that
     // only looked at the last seconds kept taking the rung a fight then dropped again. A single hitch is capped at 30 ms.
     ceiling_=std::max(std::min(step_cost_us,30000.0),ceiling_*0.99);
@@ -130,7 +130,7 @@ uint32_t NetTickPolicy::update(uint32_t tick,double step_cost_us) {
         return net_ticks[rung-1];
     }
     if(rung+1>=net_ticks.size()) {fast_=0;return 0;}
-    fast_=ceiling_<1000000.0/net_ticks[rung+1]*0.65 ? fast_+1 : 0;   // Would the next tick still leave a third of its frame free, even for the heaviest recent second?
+    fast_=ceiling_<1000000.0/net_ticks[rung+1]*(net_ticks[rung+1]==60 ? 0.88 : 0.65) ? fast_+1 : 0;   // Would the next tick still leave a third of its frame free, even for the heaviest recent second?
     if(fast_>=hold_) {fast_=0;last_up_=seconds_;return net_ticks[rung+1];}
     return 0;
 }

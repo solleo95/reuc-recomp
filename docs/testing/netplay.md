@@ -19,8 +19,8 @@ handled automatically:
   sampling exceeded rollback history"); 10 s without input is reported as an error.
 * **Automatic tick.** Each PC measures the wall time of one simulated step (waits
   excluded) and reports it in its acknowledgements. The host's `NetTickPolicy` drops
-  the tick one rung when the slower PC needs more than 85% of the current frame for
-  four seconds, and climbs one rung after 45 seconds under 65% of the next rung's
+  the tick one rung when the slower PC needs more than 95% of the current frame for
+  four seconds, and climbs one rung after 45 seconds under 65% (88% for 30 -> 60 Hz, so a laptop at 14 ms per step can return to 60 Hz) of the next rung's
   frame, measured on the heaviest second of the last minutes (70 s half-life) so a
   cheap menu does not trigger a climb that a fight undoes (a drop soon after a climb
   doubles that wait, up to 360 s). The change is a

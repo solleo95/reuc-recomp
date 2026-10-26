@@ -28,8 +28,8 @@ bool same_net_input(const NetFrame&,const NetFrame&);
 // Shared simulation ticks, steps per second: 30 is the original game's rate, 60 its doubling, the rest timed steps.
 constexpr std::array<uint32_t,5> net_ticks{30,60,120,144,240};
 // Host-side choice of the shared tick from the slowest player's smoothed wall time per simulated step.
-// Called about once a second. Returns the tick to switch to, or 0 to stay: a step costing over 85% of the current frame for
-// four seconds, or over 110% for two, drops one rung; a step under 65% of the next rung's frame for 45 seconds climbs one; "a step" for a climb is the heaviest second of the last minutes
+// Called about once a second. Returns the tick to switch to, or 0 to stay: a step costing over 95% of the current frame for
+// four seconds, or over 110% for two, drops one rung; a step under 65% (88% for 30 -> 60 Hz) of the next rung's frame for 45 seconds climbs one; "a step" for a climb is the heaviest second of the last minutes
 // (70 s half-life), so a cheap menu does not trigger a climb that a fight undoes. A drop within two
 // minutes of a climb doubles the wait for the next climb (up to 360 s), so a PC whose cost depends on the tick does not flap.
 class NetTickPolicy {
