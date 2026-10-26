@@ -206,7 +206,9 @@ bool NativeInput::aim(float x,float y) {
 std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); return {state_.x,state_.y}; }
 std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
 std::array<float,2> input_consumed_aim() { auto* source=aim_channel==1 ? second_input : input; return source ? source->consumed_aim() : std::array<float,2>{}; }
+std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? second_input : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
 void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; }
+unsigned input_aim_channel() { return aim_channel; }
 InputSample NativeInput::consume() {
     std::lock_guard lock(mutex_);
     if(network_frame_)return network_frame_->sample;

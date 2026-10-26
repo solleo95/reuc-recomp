@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <memory>
 #include <vector>
 
@@ -93,6 +94,8 @@ void input_hle_set_poll(std::function<void(const ppc::Ctx&)>);
 unsigned input_hle_channel(); // Guest baton owns the currently sampled channel.
 void input_hle_restore_channel(unsigned channel);
 std::array<float,2> input_consumed_aim();   // the pointer the guest read last for the aim channel's pad (zero without input)
+std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel);   // the same for one pad; nullopt where there is none (single-player has no second)
+unsigned input_aim_channel();   // the local player's pad (0 outside network play)
 void input_hle_set_aim_channel(unsigned channel);   // network play: the local player's pad (0 host, 1 client); reset to 0 by input_hle_init
 uint32_t input_demo_speed(uint32_t live);   // the clock speed factor the deterministic game pacing uses (recorded and replayed with the demo; live without input)
 }

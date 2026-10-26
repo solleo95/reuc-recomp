@@ -2216,7 +2216,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 const auto bottom=std::clamp<int64_t>((int64_t(s[1])+s[3])*target.extent.height/480,y,target.extent.height);
                 draw_scissor={{int32_t(x),int32_t(y)},{uint32_t(right-x),uint32_t(bottom-y)}};
             }
-            if (draw.late_aim && crosshair_scale_!=1) {
+            if (draw.reticle && crosshair_scale_!=1) {
                 if (crosshair_scale_<=0) continue;   // 0%: no crosshair (a Vulkan viewport needs a positive size)
                 if (const auto center=gx::draw_center_ndc(draw)) gx::scale_viewport_about(*center,crosshair_scale_,draw_viewport.x,draw_viewport.y,draw_viewport.width,draw_viewport.height);
             }

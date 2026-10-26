@@ -801,7 +801,10 @@ itself, not the transport).
 
 The renderer re-aims the local player's reticle at record time by (freshest mouse - pointer the game drew with), as in single-player, so it follows
 the mouse at the present rate whatever the tick (30 Hz tick: the game's own reticle steps 30 times a second). The pointer the game drew with is
-the one of the local player's pad (`input_hle_set_aim_channel`: slot 0 on the host, 1 on the client); the other player's reticle uses the same
-callsite and textures, so of the matching draws only those next to the one nearest the local pointer are shifted (`mark_reticle_draws`). A shot
-still lands where the mouse was when the button went down: the aim and the button travel together in one input sample.
-`UC_AIM_LOG=1` prints one `[aim]` line per shifted draw (consumed pointer, latest pointer) for diagnosis.
+the one of the local player's pad (`input_hle_set_aim_channel`: slot 0 on the host, 1 on the client). Whose reticle a quad is comes from its vertex
+tint, not from where it sits: the game eases the reticle behind its pointer, so in a fast flick it is 0.2 NDC and more away from it and a position
+test let it go (the reticle jumped) and took the other player's reticle when they touched (it shrank and was pushed). Red tint is pad 0, blue is
+pad 1; the white quads at the same place belong to the tinted ring; a lone pad owns every reticle (`mark_reticle_draws`). The wake behind the
+reticle (callsite 8006CED4, 182 vertices, tinted, alpha fading) is shifted with the local one. A shot still lands where the mouse was when the
+button went down: the aim and the button travel together in one input sample. The crosshair size setting is local and visual: it scales both players'
+reticles (`DrawPacket::reticle`), only the local one is shifted (`late_aim`). `UC_AIM_LOG=1` prints one `[aim]` line per shifted draw.
