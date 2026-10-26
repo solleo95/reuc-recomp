@@ -20,8 +20,10 @@ handled automatically:
 * **Automatic tick.** Each PC measures the wall time of one simulated step (waits
   excluded) and reports it in its acknowledgements. The host's `NetTickPolicy` drops
   the tick one rung when the slower PC needs more than 85% of the current frame for
-  four seconds, and climbs one rung after twenty seconds under 65% of the next rung's
-  frame (a drop soon after a climb doubles that wait, up to 160 s). The change is a
+  four seconds, and climbs one rung after 45 seconds under 65% of the next rung's
+  frame, measured on the heaviest second of the last minutes (70 s half-life) so a
+  cheap menu does not trigger a climb that a fight undoes (a drop soon after a climb
+  doubles that wait, up to 360 s). The change is a
   message `{tick, at}` three seconds ahead; both PCs switch at step `at`, every
   replay through that step applies it again, and hashes and history use fixed
   frame counts (60 and 120), so the peers stay hash-equal across a change. The
@@ -781,3 +783,16 @@ The owner subsequently confirmed that the other demanding game remained frozen
 and the external limiter was disabled during these measurements. The isolated
 43% slowdown therefore remains unexplained; do not attribute it to those two
 conditions. It did not recur in the reverse-order or final three-pair repeats.
+
+## Network audio
+
+The guest delivers sound in bursts (30-80 ms gaps around the start and under rollbacks), and the device queue used to hold only about 15 ms,
+so every gap ran it dry and crackled. In network play `AudioOutput` keeps a cushion: whenever less than 12 ms is queued it tops the queue up
+with silence to 50 ms (`refills` in the `[audio-output]` exit line), at the price of about 50 ms extra sound latency. A queue that grows
+(the game clock runs a little ahead of the device) is drained by playing 3% faster above 60% of its cap and back at 35%
+(`AudioCatchUp`); only past the cap (100 ms, 150 ms in network play) is it cleared (`overruns`, one click). Gap mute silences the output
+while the game runs behind (a peer that cannot hold the tick).
+
+Diagnosis: `UC_AUDIO_DUMP=<prefix>` writes every block the game hands over to `<prefix>.<pid>`; `python -m uctest.audio_dump <file>` prints the
+write gaps, the queue left at each write and the largest sample steps per second (the same steps in a single-player dump mean the sound
+itself, not the transport).
