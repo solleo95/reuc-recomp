@@ -84,7 +84,7 @@ the input-packet netcode that is current again (with the tick and lead changes a
 On the affected host, Windows Filtering Platform identified ESET Security blocking
 incoming TCP and UDP for `dist-raw/uc_launcher.exe` (filter70661). ESET Advanced setup
 → Network access protection → Firewall → Rules → Edit: allow inbound TCP/UDP for the
-actual `uc_launcher.exe` and `uc.exe` paths, remote subnet192.168.50.0/24, ports any
+actual `uc_launcher.exe` and `uc.exe` paths, remote subnet<LAN subnet>, ports any
 (automatic port fallback). Put the rules above blocking rules. Security configuration
 is user-managed; it is not changed by the game.
 
@@ -429,7 +429,7 @@ A complete rollback/savestate path is not currently implemented.
 The Multiplayer button now inherits the normal graphite button palette;
 Singleplayer retains red styling. Native launcher smoke passed including lobby
 validation, Ready gating and cancellation (`build/launcher-multiplayer-gray.log`).
-The verified launcher was deployed to `S:\Games\Umbrella Chronicles`;
+The verified launcher was deployed to `<install dir>`;
 SHA256 `828F98BD9EB855693A43CAC5A16F248D3AA61B8FD4B143F32060661D6AC53BFC`.
 Harness unit checks passed15/15; the relay self-test passed. After the runs,
 the temporary WinDivert driver was stopped and its service was confirmed absent.
@@ -624,7 +624,7 @@ and the harness suites passed20 tests. GPU copy lifetime and restored-feedback
 smoke passed. The scoped input-sampling review found no remaining issue after the
 missed-slot fix. WinDivert cleanup succeeded and all harness processes exited.
 The owner subsequently requested deployment. The previous increment was copied
-to `S:/Games/Umbrella Chronicles` on2026-10-24, with11 changed files backed up in
+to `<install dir>` on2026-10-24, with11 changed files backed up in
 `build/deploy-backup-20261024-013908`; saves/config/mods stayed untouched. Its
 `uc.exe` SHA256 is`2E10F1351B87D2A9EE8A941AEA6390761127F728029E381024D300F729A5B7A2`.
 This deployment did not resolve the remaining rollback smoothness failures.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Working toolchain, a C++ project skeleton with a one-click `build.bat` (build → `dist\` → copy to `S:\Games\Umbrella Chronicles`), a tested DOL parser/scanner, and go/no-go answers for spikes S1, S3, S4.
+**Goal:** Working toolchain, a C++ project skeleton with a one-click `build.bat` (build → `dist\` → copy to `<install dir>`), a tested DOL parser/scanner, and go/no-go answers for spikes S1, S3, S4.
 
 **Architecture:** CMake + Ninja + clang-cl. `common/` holds the DOL parser and scanner (first pieces of the future analyzer). `tools/s1_scan` is a CLI over them. Spikes S3 and S4 are throwaway research artifacts under `tools/spikes/` and `docs/spikes/`, kept out of the main build.
 
@@ -14,10 +14,10 @@
 
 - Native Windows x64 only; no emulator, interpreter, JIT or PowerPC code in any runtime artifact.
 - Generated/native code is compiled with clang-cl, `/O2`, `x86-64-v3`.
-- Game input: extracted Wii game at `S:\Games\Umbrella Chronicles\game`; executable at `DATA\sys\main.dol`.
-- Build output goes to `<project>\dist`, then `robocopy` to `S:\Games\Umbrella Chronicles` (the folder root, next to `game\` and `extractor\`).
+- Game input: extracted Wii game at `<install dir>\game`; executable at `DATA\sys\main.dol`.
+- Build output goes to `<project>\dist`, then `robocopy` to `<install dir>` (the folder root, next to `game\` and `extractor\`).
 - `build.bat` is run manually and exits non-zero on any failure.
-- Project root: `D:\Projects\Native Ports\Umbrella-chronicles-recomp` (path contains spaces; quote everything).
+- Project root: `<repo>` (path contains spaces; quote everything).
 - Commit steps are omitted on purpose: the user asked that commits happen only on request. Do not run `git commit`.
 - Spike code is throwaway and must be labelled as such.
 
@@ -90,7 +90,7 @@ vulkaninfo --summary
 
 Expected: clang-cl 17 or newer; `VULKAN_SDK` prints a path; `slangc` prints a version; `vulkaninfo` lists the RTX 4080 with Vulkan 1.3 or newer.
 
-If `slangc.exe` is absent from the Vulkan SDK `Bin`, install Slang from its GitHub releases into `C:\Tools\slang` and add that `bin` directory to the user PATH.
+If `slangc.exe` is absent from the Vulkan SDK `Bin`, install Slang from its GitHub releases into `<slang dir>` and add that `bin` directory to the user PATH.
 
 - [ ] **Step 4: Verify Slang → SPIR-V**
 
@@ -639,7 +639,7 @@ Expected: `test_dol` and `test_dol_scan` PASSED; `build\tools\s1_scan\s1_scan.ex
 
 **Interfaces:**
 - Consumes: `scripts\dev.bat` (Task 2), `install(TARGETS s1_scan ...)` (Task 3).
-- Produces: `build.bat [--no-install]`. Env override `UC_INSTALL_DIR` (default `S:\Games\Umbrella Chronicles`). Exit 0 on success, non-zero on any failure.
+- Produces: `build.bat [--no-install]`. Env override `UC_INSTALL_DIR` (default `<install dir>`). Exit 0 on success, non-zero on any failure.
 
 - [ ] **Step 1: Write `build.bat`**
 
@@ -650,7 +650,7 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "BUILD=%ROOT%\build"
 set "DIST=%ROOT%\dist"
-if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
+if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=<install dir>"
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
 set "NO_INSTALL="
 if /I "%~1"=="--no-install" set "NO_INSTALL=1"
@@ -681,8 +681,8 @@ exit /b 0
 
 - [ ] **Step 2: Happy path from another working directory**
 
-Run: `cd /d C:\ && "D:\Projects\Native Ports\Umbrella-chronicles-recomp\build.bat"`
-Expected: exit 0; `dist\tools\s1_scan.exe` exists; `S:\Games\Umbrella Chronicles\tools\s1_scan.exe` exists; `build\s1_report.txt` has `entry` and `unique bl targets` lines.
+Run: `cd /d C:\ && "<repo>\build.bat"`
+Expected: exit 0; `dist\tools\s1_scan.exe` exists; `<install dir>\tools\s1_scan.exe` exists; `build\s1_report.txt` has `entry` and `unique bl targets` lines.
 
 - [ ] **Step 3: Second run succeeds (robocopy returns 0 or 1)**
 
@@ -712,7 +712,7 @@ Then: `set UC_INSTALL_DIR=%TEMP%` and run `build.bat`. Expected: message `main.d
 
 - [ ] **Step 1: Read the real report**
 
-Run: `build\tools\s1_scan\s1_scan.exe "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol"`
+Run: `build\tools\s1_scan\s1_scan.exe "<install dir>\game\DATA\sys\main.dol"`
 Collect: section table, `unique bl targets`, `suspicious zero runs`, and the SDK string list.
 
 - [ ] **Step 2: Classify the SDK strings**

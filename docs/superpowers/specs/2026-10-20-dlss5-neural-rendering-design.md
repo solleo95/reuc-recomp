@@ -13,7 +13,7 @@ Non-goals: Streamline plugin for dlssnr (none exists), HDR output (the game is S
 ## Facts the design rests on
 
 * Feature id 18 (`NVSDK_NGX_Feature_Reserved18`). Instance/device extensions come from `NVSDK_NGX_VULKAN_GetFeature{Instance,Device}ExtensionRequirements` (VK_NVX_binary_import, VK_NVX_image_view_handle, buffer device address, push descriptor, properties2).
-* The DLL in `E:\Downloads` targets arch 0x1B0 (RTX 50); on other GPUs the core logs "snippet is using newer GPU arch" and `CreateFeature` returns `0xbad0000b`. The owner will drop in a DLL built for their GPU later. Everything must therefore be correct for an unverified network: only the parameter names (from the DLL's own strings) are followed.
+* The DLL in `<downloads>` targets arch 0x1B0 (RTX 50); on other GPUs the core logs "snippet is using newer GPU arch" and `CreateFeature` returns `0xbad0000b`. The owner will drop in a DLL built for their GPU later. Everything must therefore be correct for an unverified network: only the parameter names (from the DLL's own strings) are followed.
 * The DLL reads: `DLSSNR.Color/Depth/MVec/Output`, `*SubrectBaseX/Y/Width/Height`, `MVecScaleX/Y`, `JitterOffsetX/Y`, `Reset`, `DepthInverted`, `Intensity`, `GlobalToneStrength`, `LocalToneStrength`, `LocalStructureStrength`, `SkinStructureStrength`, `Style`, `UseAutoMask`, `MaskBlendMode`, `UICorrection`, `UI`, `UIAlpha`, `ScalingRatio`, `Width`/`Height` (create), `Hint.Render.Preset`, `Enabled`. It has **no** exposure, encoding, nits, filter or pass parameters: those belong to the host (see below).
 
 ## Pipeline (host side)

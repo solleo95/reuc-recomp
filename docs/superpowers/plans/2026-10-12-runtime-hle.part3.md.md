@@ -180,7 +180,7 @@ Run: `scripts\dev.bat` — Expected: `test_clock` (with the new schedule checks)
 
 - Consumes: every runtime piece from Tasks 2–7, the generated `uc_functions` table, `project/identified_sdk.txt`, `project/symbols.txt`.
 - Produces:
-  - `uc.exe --game <dir> [--seconds N] [--log-dvd]` (default game dir `S:\Games\Umbrella Chronicles\game`); exit code 0 normal, 3 guest trap or fatal runtime error, 4 no-progress watchdog.
+  - `uc.exe --game <dir> [--seconds N] [--log-dvd]` (default game dir `<install dir>\game`); exit code 0 normal, 3 guest trap or fatal runtime error, 4 no-progress watchdog.
   - `uc::DvdStats { opens, reads, bytes }`, `uc::dvd_stats()`, `uc::dvd_log(bool)`; `uc::trace_dump_all(FILE*, int)`.
   - `scripts\translate.bat` (hle.cfg generation + cached translation, shared by `build.bat` and `bringup.bat`); `scripts\bringup.bat [uc args]` (trace build in `build-trace\`, runs `uc.exe`, prints the log tail).
 
@@ -372,7 +372,7 @@ std::vector<uint8_t> slurp(const fs::path& p) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    fs::path game = "S:\\Games\\Umbrella Chronicles\\game";
+    fs::path game = "<install dir>\\game";
     int seconds = 0;
     bool log_dvd = false;
     for (int i = 1; i < argc; ++i) {
@@ -475,7 +475,7 @@ set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 set "BUILD=%ROOT%\build"
 set "GEN=%ROOT%\generated"
-if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
+if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=<install dir>"
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
 set "ARGS=%*"
 if not defined ARGS set "ARGS=--seconds 20"

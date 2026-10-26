@@ -24,6 +24,6 @@ With trace --gx-audit, the first completed frame containing game geometry is sav
 
 Scoped mid-item Luna review reported no findings. Remaining Task6 work: normal/texture matrices, channels/texgen/TEV, depth/blend/clipping/raster and viewport/depth-range fidelity. GPU texture binding/sampling and EFB/XFB copies also remain open; first game-image/4K/temporal acceptance unchanged. SDL direct-tool-console startup remains TD-031.
 
-Complete build.bat:51/51CPUtests passed; dist staged and copied to S:/Games/Umbrella Chronicles. Current GPU smoke with shared PNG writer also exits0 under explicit Khronos validation. Native source/diff check passed; normal interactive launch remains unverified.
+Complete build.bat:51/51CPUtests passed; dist staged and copied to <install dir>. Current GPU smoke with shared PNG writer also exits0 under explicit Khronos validation. Native source/diff check passed; normal interactive launch remains unverified.
 
 Installed exe started from C:/Windows/Temp with redirected output:6seconds exit0,370draws/1480vertices,699GPUsubmissions/698completions,361retraces, all workers joined, no unknownMMIO/VUID. A final pending batch can be canceled at shutdown; no completion synthesized for it.

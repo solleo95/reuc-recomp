@@ -1,0 +1,348 @@
+<div align="center">
+
+# Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
+
+**The Wii game running natively on Windows: unlocked FPS, mouse aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+
+**English** · [Русский](README.ru.md)
+
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![Status: early build](https://img.shields.io/badge/status-early%20build-orange)](#early-build-please-read)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/njy2CqecyY)
+[![Download](https://img.shields.io/badge/download-latest%20release-brightgreen)](https://github.com/solleo95/reuc-recomp/releases/latest)
+
+[Features](#features) · [Installation](#installation) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
+
+<img src="assets/launcher/graphite-train.png" alt="The Ecliptic Express train at night" width="100%">
+
+</div>
+
+## Early build: please read
+
+> [!WARNING]
+> **This is a very early build and development is still very active.**
+>
+> The game is already **very playable**, but it has been tested **only on the author's hardware**, so some problems and bugs are quite likely on yours.
+> Please report them in the [Issues](https://github.com/solleo95/reuc-recomp/issues) or on the [Discord server](https://discord.gg/njy2CqecyY).
+>
+> **Multiplayer is still quite raw:** it has a number of known problems and has not been tested much. See [Multiplayer](#multiplayer-online-co-op).
+
+When you report a problem, please say what GPU, driver and Windows version you use, and describe how to reproduce the problem (see [Reporting problems](#reporting-problems)).
+
+> [!IMPORTANT]
+> **No game files are included and none will ever be.** This is not a piracy tool. You need your **own copy** of the game (a disc image of _Resident Evil: The Umbrella Chronicles_ for the Wii, region **NTSC-U, game ID `RBUE08`**), and you unpack it yourself with [Wit](https://wit.wiimm.de/wit/). See [Installation](#installation). The project is not affiliated with, endorsed by or connected to Capcom, Nintendo, NVIDIA or AMD.
+
+## Contents
+
+- [Features](#features)
+- [System requirements](#system-requirements)
+- [Installation](#installation)
+  - [1. Download the port](#1-download-the-port)
+  - [2. Unpack your game image with Wit](#2-unpack-your-game-image-with-wit)
+  - [3. First launch and settings](#3-first-launch-and-settings)
+  - [4. Updating](#4-updating)
+- [In-game menu and controls](#in-game-menu-and-controls)
+- [Multiplayer (online co-op)](#multiplayer-online-co-op)
+- [Known issues](#known-issues)
+- [Reporting problems](#reporting-problems)
+- [Modding](#modding)
+- [Building from source](#building-from-source)
+- [Contributing](#contributing)
+- [License](#license)
+- [Credits](#credits)
+
+## Features
+
+### Native execution and performance
+
+- **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own Windows runtime and a Vulkan renderer instead of the Wii's GPU.
+- **High performance and unlocked FPS.** Frame-rate limit presets up to 240 FPS or no limit at all, instead of the original 30. The build uses ThinLTO and profile-guided optimisation, and the hot paths of the Wii SDK are replaced by native code.
+- Shaders and pipelines are warmed up before the game starts, so shader compilation does not cause stutters during play.
+- Windowed, borderless and exclusive fullscreen modes, any resolution and an adjustable internal render scale.
+
+### Controls built for PC
+
+- **Very comfortable, responsive mouse control.** Raw relative mouse input without acceleration or smoothing, with the aiming latency reduced so the crosshair follows your hand. The original Wii-remote gestures (knife, quick-time events, grenade) work with the mouse and the keyboard.
+- **On-screen hints and prompts use mouse and keyboard icons** (and update when you rebind a key) instead of Wii-remote buttons.
+- Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel and key combinations are supported.
+- Keyboard and mouse are the main way to play; the in-game menu opens with **Insert** (see [In-game menu](#in-game-menu-and-controls)).
+
+<img src="assets/readme/prompts.png" alt="On-screen prompts with mouse icons: Pick Up, a tutorial text, OK and Back" width="100%">
+
+### Improved graphics
+
+- **Upscaling:** NVIDIA **DLSS** (Super Resolution and DLAA, all quality modes) and AMD **FSR 3.1** (any GPU). The HUD is drawn at full output resolution, so it stays sharp.
+- **Frame generation:** NVIDIA **DLSS Frame Generation** (2x on RTX 40, up to 6x on RTX 50) and **FSR 3.1 Frame Generation** (works on GPUs without RTX). The HUD is excluded from interpolation. With NVIDIA Reflex for low latency.
+- **Ray tracing** (GPUs with ray query support): ray-traced shadows from the sun and the lamps, with our own denoiser; **DLSS Ray Reconstruction** on RTX GPUs. More ray-traced effects are in development.
+- **Native HDR output** (HDR10) when Windows HDR is on.
+- **Improved effects:** our own floating-point bloom, ambient occlusion (GTAO), contact shadows, per-pixel lighting, SMAA, 16x anisotropic filtering and motion blur — each one can be switched on and off separately.
+- **Optional DLSS 5** (Neural Rendering) for supported NVIDIA GPUs. The DLSS 5 runtime is not part of this project and is not distributed with it: you place `nvngx_dlssnr.dll` next to `uc.exe` yourself, and only then the DLSS 5 option appears. Off by default.
+- High-resolution **texture replacement** (see [Modding](#modding)).
+
+<img src="assets/readme/comparison.jpg" alt="The same train carriage: the original Wii version (left) and this port (right), with a zoomed detail of the chandelier below" width="100%">
+
+<img src="assets/readme/ray-tracing.jpg" alt="The same scene with ray-traced shadows off (left) and on (right), with a zoomed detail below" width="100%">
+
+Details: [Upscaling and frame generation](docs/upscaling.md) · [Graphics effects](docs/graphics-effects.md).
+
+### Launcher
+
+- Built-in **launcher in 13 languages**: English, Русский, Deutsch, Français, Español, Italiano, Português, Polski, Українська, Türkçe, 日本語, 한국어, 简体中文.
+- All settings in one place: resolution, window mode, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings. Features your GPU cannot run are greyed out with the reason.
+- **One-click updates:** the launcher checks the latest release, verifies the files (SHA-256) and replaces them, keeping your settings, saves and mods.
+- Multiplayer lobby with automatic router port opening (UPnP) and NAT punching ([details](#multiplayer-online-co-op)).
+
+<p>
+  <img src="assets/readme/launcher-graphics.png" alt="The launcher: Graphics page with window mode, render scale, frame rate limit, DLSS and sharpening" width="49%">
+  <img src="assets/readme/launcher-controls.png" alt="The launcher: Controls page with the key bindings and the control icon style" width="49%">
+</p>
+
+### Extensive modding
+
+- Mods are folders in `mods/` that you can switch on and off **while the game is running**.
+- You can change **practically any resource**: textures (DDS), audio (OGG / WAV), text and fonts, any file of the disc, archives, movies, and weapon and game data without writing code.
+- **Scripts in Lua and JavaScript** with a documented game API (players, weapons, enemies, camera, input, events, UI, settings), plus **hooks** into the game's own functions.
+- **Native DLL mods** for anything that scripts are too slow or too limited for.
+- Example mods in [`mods-examples`](mods-examples) (infinite ammo, god mode, randomizer, inspector, native DLL and more).
+
+See [Modding](#modding).
+
+### Online co-op
+
+- Two-player network co-op over LAN or the Internet, with automatic port opening on routers that support UPnP and manual NAT punching. See [Multiplayer](#multiplayer-online-co-op). **Currently raw and little tested.**
+
+## System requirements
+
+The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windows 11), so the minimum requirements are not determined yet. What is known:
+
+|                                      |                                                                                               |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| **OS**                               | Windows 10 / 11, 64-bit                                                                       |
+| **CPU**                              | x86-64 with **AVX2** (Intel Haswell / AMD Excavator or newer)                                 |
+| **GPU**                              | A GPU with **Vulkan 1.3** support and an up-to-date driver                                    |
+| **DLSS and DLSS Frame Generation**   | NVIDIA GeForce RTX (frame generation 2x on RTX 40, up to 6x on RTX 50)                        |
+| **FSR 3.1 and FSR Frame Generation** | Any GPU with Vulkan 1.3 — **RTX is not required**                                             |
+| **Ray tracing**                      | A GPU with ray query support (the launcher shows if yours has it)                             |
+| **DLSS 5**                           | Optional; NVIDIA RTX GPU and the `nvngx_dlssnr.dll` runtime that you provide yourself         |
+| **Game**                             | Your own image of _Resident Evil: The Umbrella Chronicles_ for the Wii, **NTSC-U (`RBUE08`)** |
+
+> [!NOTE]
+> Only the North American release (`RBUE08`) is supported. The translated game code is tied to the exact `main.dol` of that release, so the PAL (`RBUP08`) and Japanese (`RBUJ08`) versions will not work.
+
+## Installation
+
+### 1. Download the port
+
+1. Open the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest) and download **`UC-Windows-X.Y.Z.zip`**.
+2. Unpack it into a folder where you have write permission (for example `C:\Games\Umbrella Chronicles`; **not** `Program Files`). The archive contents go directly into that folder: you will see `uc_launcher.exe`, `uc.exe` and several DLL files.
+
+### 2. Unpack your game image with Wit
+
+The port does not contain the game. It reads the game's files from a folder where **you** unpack **your own** disc image. The tool for this is **Wit** (Wiimms ISO Tools).
+
+**What you need:** an image of your own disc of the NTSC-U version (`RBUE08`) in `.iso`, `.wbfs`, `.ciso`, `.wdf` or `.wia` format. (The `.rvz` format of Dolphin is not supported by Wit: convert it to ISO in Dolphin first, _right-click the game → Convert File…_.) You can dump your disc with a Wii and homebrew software.
+
+**Unpacking:**
+
+1. Download **Wit** for Windows from <https://wit.wiimm.de/wit/> and unpack it somewhere, for example to `C:\Tools\wit`.
+2. Open **PowerShell** or the command prompt in the folder with the port (where `uc.exe` is) and run (change the paths to yours):
+
+   ```powershell
+   C:\Tools\wit\bin\wit.exe extract "C:\Images\Umbrella Chronicles.iso" ".\game"
+   ```
+
+   `wit extract` (short form `wit x`) writes the whole disc into the `game` folder. It takes a minute and needs about 4 GB of free space.
+
+3. Check the result. The file **`game\DATA\sys\main.dol`** must exist. The structure should look like this:
+
+   ```
+   uc.exe
+   uc_launcher.exe
+   game\
+   ├─ DATA\
+   │  ├─ files\        (the game's data)
+   │  └─ sys\
+   │     └─ main.dol
+   └─ UPDATE\
+   ```
+
+4. _(Optional)_ Check that the image is the right one. The SHA-1 of the file should be `7ed67efe2ba9b0de1cef0bbb2ea157d7a43d7f25`:
+
+   ```powershell
+   certutil -hashfile "game\DATA\sys\main.dol" SHA1
+   ```
+
+If you unpacked the game into another folder, you will select it in the launcher at the next step. The folder you choose must be the one that **contains `DATA`**.
+
+### 3. First launch and settings
+
+1. Run **`uc_launcher.exe`**. If the launcher says _"Select the extracted game folder"_, click the **Game folder** field and pick the folder from step 2 (the one that contains `DATA`). A green check mark means the game is found.
+2. Choose the language of the launcher (top of the window), the resolution and the window mode.
+3. Set the graphics options. Good starting point:
+   - **Upscaler:** DLSS (RTX GPU) or FSR (any GPU), mode _Quality_. Without an upscaler the game renders at your resolution as is.
+   - **Frame generation:** leave it off until the game runs well, then try it. Choosing a generator also turns on the matching upscaler.
+   - **Ray tracing, DLSS Ray Reconstruction, HDR:** only if your GPU supports them; entries that are not available are greyed out with an explanation.
+   - **FPS limit:** the limit also sets how often the game simulation steps. With frame generation the displayed FPS is the limit multiplied by the generator multiplier.
+4. Open the **Controls** page if you want to change key bindings.
+5. Press the red **Singleplayer** button to start the game (**Multiplayer** is next to it).
+
+On the **first start** the launcher runs a short CPU calibration and the game compiles its shaders and pipelines before it shows the picture. The first start takes longer; later starts are faster.
+
+Everything the launcher changes is saved at once to `config.json` next to `uc.exe`. Your saves are in the `saves` folder. Do not run the game from a read-only location.
+
+You can change most of the graphics options **in the game** as well: press **Insert**.
+
+### 4. Updating
+
+The launcher checks for a new release when it starts and offers **Update** or **Later**. After you agree it downloads the archive, verifies it, restarts and replaces the files. `config.json`, `saves`, `mods`, `textures`, `game` and your own files are kept. Close the game before updating. More details: [docs/releasing.md](docs/releasing.md) (in Russian).
+
+## In-game menu and controls
+
+- **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it.
+- Aiming is done with the mouse, the main actions are on the mouse buttons and the wheel; the full list and rebinding are in the launcher's **Controls** page and the in-game menu.
+- **Alt** releases the mouse cursor in windowed mode. **Esc** pauses.
+
+<img src="assets/readme/ingame-menu.png" alt="The in-game menu (Insert): the Main, Effects and Controls tabs" width="100%">
+
+## Multiplayer (online co-op)
+
+> [!WARNING]
+> **Multiplayer is raw and has not been tested much.** Expect connection problems, desynchronisation, and rough moments after a lag spike. Please report what you see on [Discord](https://discord.gg/njy2CqecyY) or in the [Issues](https://github.com/solleo95/reuc-recomp/issues). Technical notes and the known problems: [docs/testing/netplay.md](docs/testing/netplay.md).
+
+Two players play the game together over the network. Only the players' inputs and checksums go over the network; each PC runs the whole game and draws its own picture at its own frame rate.
+
+**Before you start**
+
+- **Both players need the same version of the port** (the same release, and the launcher updated) **and the same game data** (`RBUE08`).
+- The joining player plays on a **temporary copy of the host's saves**; the personal saves of both players stay untouched.
+- **Mods are disabled** in network play.
+- There is **no password and no encryption**. Play only with people you trust and share your address only with them.
+
+### Hosting a game
+
+1. In the launcher, press **Multiplayer**, then **Create host**.
+2. The window shows two addresses, each with a **Copy IP:port** button:
+   - **Internet** — your public IP address and port. The launcher tries to open the port on your router **automatically (UPnP)**; the window tells you if it succeeded.
+   - **Local network** — for a friend in the same home network. If you have several network adapters, pick the right one in the list.
+3. Send the address to your friend (the Internet one for a friend elsewhere, the local one for a friend in your LAN) and wait. The game starts by itself for both players as soon as the connection is made.
+
+The default port is **27888** (TCP and UDP). If it is busy, a free port is chosen, and the window shows the port in use.
+
+### Joining a game
+
+1. Press **Multiplayer**, enter the host's address in the form `IP:port` (for example `203.0.113.5:27888`), press **Connect**.
+2. The game starts by itself when the connection is made. **Cancel** closes the lobby.
+
+### If the connection fails
+
+Go through these steps in order.
+
+**1. Windows Firewall / antivirus.** On the first start Windows asks whether to allow the network access: allow **`uc_launcher.exe`** and **`uc.exe`** (both TCP and UDP, private and public networks). If the question did not appear, add the rules manually: _Windows Security → Firewall & network protection → Allow an app through firewall_. Third-party antivirus firewalls (ESET, Kaspersky and others) need the same rules. This must be done by **both** players.
+
+**2. Automatic port opening (UPnP).** For the host the launcher asks the router to forward the port. This works only if UPnP is enabled in your router. If the window says _"Automatic port forwarding unavailable"_, do the next step.
+
+**3. Manual port forwarding (on the host's router).**
+
+1. Find the host PC's local address (for example `192.168.1.10`; it is shown in the **Local network** row). Better to make it permanent with a DHCP reservation in the router.
+2. Open your router's web interface (usually `192.168.0.1` or `192.168.1.1`) → _Port forwarding_ / _Virtual server_ / _NAT_.
+3. Create rules that forward **port 27888, protocols TCP and UDP**, to the host PC's local address and the same port.
+4. Give the friend your **external** IP address (the _Internet_ row of the lobby, or any "what is my IP" site) and the port.
+
+**4. NAT punching (without changing the router).** Use this when the friend cannot connect directly and port forwarding is not possible:
+
+1. The friend (client) enters the host's `IP:port` and presses **Connect**. When the direct connection fails, the window says _"Connection failed"_ and shows the friend's own **public IP:port** (it is found automatically; wait a few seconds). The friend **copies it and sends it to the host**.
+2. The host, with the lobby open, expands the **Punch NAT** section, pastes the friend's `IP:port` into the field and presses **Punch NAT**.
+3. **Keep both windows open.** The friend's client retries the connection automatically and the game starts as soon as the connection succeeds.
+
+NAT punching works with most home routers. It will not work if either side has **symmetric NAT** (the launcher warns about it) or if the provider uses **CGNAT / double NAT** (the lobby shows that the router has no public IPv4 address). In these cases use port forwarding or a VPN.
+
+**5. VPN or a virtual LAN.** If nothing else helps (CGNAT, a strict provider), both players install a virtual network such as ZeroTier, Tailscale, Radmin VPN or WireGuard and use the _virtual_ IP address of the host in the **Local network** field. This does not need any port forwarding.
+
+**Other checks**
+
+- Check the address and the port: they must be exactly what the host's lobby shows.
+- The host must keep the lobby window open until the client connects.
+- A connection from the same PC or the same home network always uses the **local** address.
+- If the game connects but is slow, the PC that cannot keep up lowers the shared simulation rate automatically (60 → 30 Hz) instead of dropping the connection.
+
+## Known issues
+
+- Early build, tested on one PC: other GPUs, drivers and CPUs may show problems that the author has not seen.
+- Multiplayer: see above. It may fail to connect, desynchronise or freeze for a moment after a network lag.
+- Only `RBUE08` (NTSC-U) is supported.
+- Not all graphics options work together on all GPUs; unsupported ones are greyed out with a reason.
+- Ray tracing currently covers shadows only; other ray-traced effects are not finished.
+
+Found something else? Tell us: [Reporting problems](#reporting-problems).
+
+## Reporting problems
+
+- **Bugs and suggestions:** [GitHub Issues](https://github.com/solleo95/reuc-recomp/issues) (there is a form for bug reports).
+- **Questions, help and chat:** [Discord](https://discord.gg/njy2CqecyY).
+
+A useful report has: the **version** of the port (shown in the launcher), your **GPU, driver, Windows version**, which graphics options were on (upscaler, frame generation, ray tracing, HDR), how to repeat the problem, and a screenshot or a short video if it is visual. The released builds do not write log files; builds from source do (the `logs` and `debug` folders next to `uc.exe`), attach them if you have them. Do not attach any game files.
+
+## Modding
+
+Mods change the game without touching the original files. A mod is a folder in `mods/` next to `uc.exe` with a `mod.json` file; you switch mods on and off in the **Mods** tab of the in-game menu (**Insert**).
+
+| You want to…                                               | Guide                                                                                                          |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Start here, make your first mod in five minutes            | [Modding guide](docs/modding/guide/en/README.md) · [Руководство](docs/modding/guide/ru/README.md)              |
+| Replace or add textures                                    | [Textures](docs/modding/guide/en/textures.md) · [Extracting the original textures](docs/texture-extraction.md) |
+| Replace music, voices, sounds                              | [Audio](docs/modding/guide/en/audio.md)                                                                        |
+| Change text and fonts                                      | [Text](docs/modding/guide/en/text.md)                                                                          |
+| Replace any file of the disc, archives, movies             | [Disc files](docs/modding/guide/en/files.md)                                                                   |
+| Change numbers (damage, magazine size) without code        | [Data patches](docs/modding/guide/en/data-patches.md)                                                          |
+| Write scripts                                              | [Lua](docs/modding/guide/en/lua.md) · [JavaScript](docs/modding/guide/en/javascript.md)                        |
+| Use the game API (players, enemies, camera, input, events) | [Game API guide](docs/modding/guide/en/game-api.md) · [API reference](docs/modding/api/README.md)              |
+| Hook the game's own functions                              | [Hooks](docs/modding/guide/en/hooks.md)                                                                        |
+| Add settings sliders and menus                             | [Settings and UI](docs/modding/guide/en/settings-and-ui.md)                                                    |
+| Build a native DLL mod                                     | [Native DLL](docs/modding/guide/en/native-dll.md)                                                              |
+| Test and share your mod                                    | [Testing and sharing](docs/modding/guide/en/testing-and-sharing.md)                                            |
+
+Reference pages: [short modding reference](docs/modding/getting-started.md), [recipes](docs/modding/recipes.md), [safety](docs/modding/safety.md) (script mods run in a sandbox, DLL mods have full rights), type definitions for editors: [`uc.d.ts`](docs/modding/uc.d.ts) (JavaScript / TypeScript) and [`uc.lua`](docs/modding/lua/uc.lua) (Lua). Ready-made examples are in [`mods-examples`](mods-examples).
+
+<img src="assets/readme/mods.png" alt="The Mods tab with several mods switched on, and the Inspector mod's window" width="100%">
+
+## Building from source
+
+Short version: you need Visual Studio Build Tools (C++), LLVM / `clang-cl`, CMake, Ninja, Python 3.10+, the Vulkan SDK and **your own extracted game image** (`main.dol` is translated to native code during the build). Copy [`local.env.example`](local.env.example) to `local.env`, set `UC_INSTALL_DIR` and run `build.bat`.
+
+Full instructions: [docs/building.md](docs/building.md).
+
+## Contributing
+
+Pull requests, bug reports, translations of the launcher and mods are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first ([на русском](CONTRIBUTING.ru.md)): it describes how to build, test and prepare a pull request. Ideas and questions are best discussed on [Discord](https://discord.gg/njy2CqecyY).
+
+## License
+
+The source code of this project is licensed under the **[GNU General Public License v3.0](LICENSE)** (GPL-3.0). In short: you can use, study, change and share it, and changed versions that you distribute must stay under the same licence with their source available.
+
+**What the licence covers, and what it does not:**
+
+| Component                                                                                                                                        | Licence                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The project's own source code (translator, runtime, renderer, launcher, updater, modding platform, tools, tests, documentation)                  | **GPL-3.0** — [`LICENSE`](LICENSE)                                                                                                                           |
+| Third-party libraries built into or shipped with the port: SDL3, Dear ImGui, ENet, MiniUPnPc, Lua, QuickJS-ng, mimalloc, miniz, stb_vorbis, SMAA | Their own licences (permissive, compatible with the GPL) — [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), texts in the `licenses` folder of the release |
+| Proprietary runtimes that are shipped as separate DLLs: NVIDIA Streamline / DLSS / Reflex, AMD FidelityFX                                        | Their vendors' licences — they are **not** under the GPL and are not part of the GPL-covered work. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)        |
+| Optional NVIDIA DLSS 5 runtime (`nvngx_dlssnr.dll`)                                                                                              | Not distributed by this project; you obtain it yourself under NVIDIA's terms                                                                                 |
+| **The game itself**: code, models, textures, audio, video, text of _Resident Evil: The Umbrella Chronicles_                                      | © Capcom. **Not covered by this licence and not included in the repository.**                                                                                |
+
+**The original game files.** To build or run the port you need the game's files from **your own legally obtained copy**: the build translates your `main.dol` into native code, and the game reads the rest of its data from the unpacked disc at run time. The repository contains no game code, no game assets and no output of the translation (`generated/` is git-ignored). Release archives contain the compiled port and **no** game assets (textures, models, audio, video).[^1] Do not post or request disc images, assets or decompiled game code in the issues, pull requests or the Discord server.
+
+_Resident Evil_ and _The Umbrella Chronicles_ are trademarks of Capcom Co., Ltd. Nintendo and Wii are trademarks of Nintendo. NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. All other names belong to their owners; this project is not affiliated with any of them.
+
+## Credits
+
+- **The author and maintainer:** [solleo95](https://github.com/solleo95).
+- **Contributors, testers and everyone on the [Discord server](https://discord.gg/njy2CqecyY)** who tried the early builds and reported bugs — thank you!
+- **[Wit — Wiimms ISO Tools](https://wit.wiimm.de/wit/)** for unpacking game images.
+- **[Dolphin Emulator](https://dolphin-emu.org/)** — used as a reference for the Wii's behaviour and for comparison screenshots while developing; the SDK function signatures are matched with the format of its signature databases. No Dolphin code is included.
+- **[Aurora](https://github.com/encounter/aurora)** (a source-level GameCube / Wii compatibility layer by encounter and the Metaforce project) and **Mario Kart Wiicompiled** — studied as references of how the Wii's GX graphics and the static translation of Wii games can be approached. Ideas only, no code is used.
+- **NVIDIA** — [Streamline](https://github.com/NVIDIAGameWorks/Streamline), DLSS, DLSS Frame Generation, Ray Reconstruction and Reflex.
+- **AMD** — [FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) (FSR 3.1 and FSR Frame Generation).
+- **Open-source libraries:** [SDL3](https://github.com/libsdl-org/SDL), [Dear ImGui](https://github.com/ocornut/imgui), [SMAA](https://github.com/iryoku/smaa) by Jorge Jimenez et al., [ENet](https://github.com/lsalzman/enet), [MiniUPnPc](https://github.com/miniupnp/miniupnp), [Lua](https://www.lua.org), [QuickJS-ng](https://github.com/quickjs-ng/quickjs), [mimalloc](https://github.com/microsoft/mimalloc), [miniz](https://github.com/richgel999/miniz), [stb_vorbis](https://github.com/nothings/stb), [nlohmann/json](https://github.com/nlohmann/json). Full list and licence texts: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+- **Capcom** — for creating the game.
+
+[^1]: The `uc.exe` in the release archives also contains the game's program code, translated to native code by this project's translator. That part is not covered by the GPL grant and remains subject to the rights of its owner.

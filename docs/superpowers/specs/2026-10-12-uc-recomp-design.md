@@ -6,7 +6,7 @@ Date: 2026-10-12. Status: draft for review.
 
 Native Windows x64 port of Resident Evil: The Umbrella Chronicles (Wii, RBUE08 NTSC-U) by static recompilation.
 Runtime contains no emulator, interpreter, JIT, or PowerPC code. User supplies the extracted game at
-`S:\Games\Umbrella Chronicles\game` (`DATA\sys\main.dol`, `DATA\files\...`).
+`<install dir>\game` (`DATA\sys\main.dol`, `DATA\files\...`).
 
 Success criteria (full project):
 1. All game code runs as natively compiled x64 (translated ahead of time on the user machine).
@@ -29,7 +29,7 @@ Future compatibility requirement (owner,2026-10-12): support extracted images of
 | Base | Own project. Wiicompiled, aurora, DolRecomp, Dolphin are references for ideas, not code (avoids GPL-3 inheritance; license is the owner's choice) |
 | Launcher | Separate C++ exe, Dear ImGui + SDL3, writes `config.json` |
 | Toolchain | Installed via winget after spec approval: VS Build Tools (MSVC + Windows SDK), LLVM/clang-cl, Vulkan SDK, Slang |
-| Output | Build to `<project>\dist`, then robocopy to `S:\Games\Umbrella Chronicles` |
+| Output | Build to `<project>\dist`, then robocopy to `<install dir>` |
 
 ## 3. Scope decomposition
 
@@ -157,7 +157,7 @@ Owner control decision,2026-10-13: LMB Interact, RMB Fire; wheel and W/S cycle w
 
 Regional startup metadata includes the application ID at0x80003180, copied from the actual disc header. OSGetAppGamename and the game's normal locale selection then choose the US resources for RBUE08. The supplied Russian translation stores its dialogue text in mes_us with matching modified font glyphs (G11); game files and system language are preserved.
 
-**Launcher.** `launcher.exe` (ImGui/SDL3). Fields: game path (default `S:\Games\Umbrella Chronicles\game`),
+**Launcher.** `launcher.exe` (ImGui/SDL3). Fields: game path (default `<install dir>\game`),
 resolution (incl. 4K), FPS limit (60/120/144/240/unlimited), upscaler (DLSS/FSR/off), DLSS preset, DLSS model,
 frame generation mode, Launch button. Stored in `config.json` next to the exe; `uc.exe` reads it and also accepts CLI overrides.
 Add checkbox **«Пропустить вступительные ролики»** (`skip_intro`, default false; CLI `--skip-intro`).
@@ -170,7 +170,7 @@ It skips the initial Nintendo safety/wrist-strap screens, CAPCOM and CRIWARE log
 2. Configure + build `analyzer`, `translator`, `runtime`, `renderer`, `launcher`.
 3. If `dist\` cache key differs: run analyzer + translator on `main.dol`, compile generated sources.
 4. Stage into `dist\` (`uc.exe`, `launcher.exe`, DLLs, shaders, `project\`).
-5. `robocopy dist "S:\Games\Umbrella Chronicles" /E` (copies into the folder root, next to `game\` and `extractor\`).
+5. `robocopy dist "<install dir>" /E` (copies into the folder root, next to `game\` and `extractor\`).
 Exit code non-zero on any failure.
 
 ## 11. Spikes (run first, throwaway code)

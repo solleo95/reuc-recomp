@@ -15,7 +15,7 @@
 - Runtime stays native: no GX FIFO interpreter, DSP or Wii Remote device model inside `uc.exe`. FIFO parsing exists only in diagnostics (`--gx-audit`) and the offline `uc_fifo_replay` tool.
 - Dolphin is an oracle (captures, logs, documentation); no Dolphin code is copied (GPL, emulation architecture).
 - Diagnostics are off by default and cost nothing on the normal path except the crash handler.
-- Output: `<project>\dist`, install copy to `S:\Games\Umbrella Chronicles`; reports go to `<exe dir>\debug`.
+- Output: `<project>\dist`, install copy to `<install dir>`; reports go to `<exe dir>\debug`.
 - Files are never deleted without the owner's request; commits only on request. Codex works on `launcher/` in parallel — do not touch it.
 
 ## Review Focus

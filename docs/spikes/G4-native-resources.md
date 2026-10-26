@@ -18,7 +18,7 @@ Final12-second validation run exits0:721retraces,19opens/63reads/13637056bytes,7
 
 Mid-item gpt-6-luna review reported no findings. Whole-plan Astra review remains reserved for completion of all tasks.
 
-Complete build.bat passes50/50tests, stages dist and copies to S:/Games/Umbrella Chronicles. Copied exe started from C:/Windows/Temp with redirected stdout/stderr, six-second validation exit0:354draws/1416vertices,667GPUsubmissions/666completions,361retraces, zero unmappedMMIO/VUID, all guest/file workers joined. Final pending graphics work may be canceled at shutdown; no completion fabricated for it.
+Complete build.bat passes50/50tests, stages dist and copies to <install dir>. Copied exe started from C:/Windows/Temp with redirected stdout/stderr, six-second validation exit0:354draws/1416vertices,667GPUsubmissions/666completions,361retraces, zero unmappedMMIO/VUID, all guest/file workers joined. Final pending graphics work may be canceled at shutdown; no completion fabricated for it.
 
 ## Remaining work
 

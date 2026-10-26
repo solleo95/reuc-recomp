@@ -1,0 +1,78 @@
+name: Bug report / Сообщение об ошибке
+description: Something does not work (this is an early build, bugs are expected) / Что-то не работает
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting! This is an early build tested on one PC, so your report helps a lot. / Спасибо! Это ранняя сборка, проверенная на одном ПК, ваш отчёт очень полезен.
+
+        **Do not attach game files, disc images or extracted game assets. / Не прикладывайте файлы игры, образы дисков и извлечённые ресурсы.**
+        Questions and chat: [Discord](https://discord.gg/njy2CqecyY).
+  - type: input
+    id: version
+    attributes:
+      label: Port version / Версия порта
+      description: Shown in the launcher (Client update) or in `release.json`. / Показана в лаунчере или в `release.json`.
+      placeholder: "0.0.1"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что произошло
+      description: What you did, what you expected and what happened instead. / Что вы делали, чего ожидали и что получилось.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / Как повторить
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: false
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU, driver, CPU, RAM / Видеокарта, драйвер, процессор, ОЗУ
+      placeholder: "NVIDIA GeForce RTX 3070, driver 5xx.xx, Ryzen 5 5600, 16 GB"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version / Версия Windows
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Graphics settings / Графические настройки
+      description: Upscaler (DLSS / FSR), frame generation, ray tracing, HDR, DLSS 5, resolution, FPS limit, mods. / Апскейлер, генерация кадров, трассировка, HDR, DLSS 5, разрешение, лимит FPS, моды.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / Область
+      options:
+        - Singleplayer game / Одиночная игра
+        - Multiplayer / Мультиплеер
+        - Launcher / Лаунчер
+        - Graphics (DLSS, FSR, frame generation, ray tracing, HDR) / Графика
+        - Controls / Управление
+        - Mods / Моды
+        - Update / Обновление
+        - Other / Другое
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots, video, logs / Скриншоты, видео, журналы
+      description: A screenshot or a short video helps. Released builds write no logs; if you build from source, attach the `logs` and `debug` folders. Drag and drop files here. / Поможет скриншот или короткое видео. Релизные сборки не пишут журналы; если вы собираете из исходников, приложите папки `logs` и `debug`.
+    validations:
+      required: false

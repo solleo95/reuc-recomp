@@ -6,7 +6,7 @@
 После сборки утилита устанавливается в папку `tools` рядом с игрой:
 
 ```bat
-"S:\Games\Umbrella Chronicles\tools\extract_textures.bat"
+"<install dir>\tools\extract_textures.bat"
 ```
 
 Нужен Python 3.10 или новее. Внешние Python-пакеты не требуются. По умолчанию
@@ -21,13 +21,13 @@ Mip-уровни и дополнительные варианты имён фи�
 Произвольные вход и выход:
 
 ```bat
-extract_textures.bat --input "S:\Games\Umbrella Chronicles\game\DATA" --output "S:\Games\Umbrella Chronicles\TexturesDump\RBUE08"
+extract_textures.bat --input "<install dir>\game\DATA" --output "<install dir>\TexturesDump\RBUE08"
 ```
 
 Входом также может быть один архив или контейнер текстур. Для запуска из исходников:
 
 ```bat
-python tools\texture_extract\extract_textures.py --input "S:\Games\Umbrella Chronicles\game\DATA" --output "S:\Games\Umbrella Chronicles\TexturesDump\RBUE08" --decoder build\tools\texture_extract\uc_texture_decode.dll
+python tools\texture_extract\extract_textures.py --input "<install dir>\game\DATA" --output "<install dir>\TexturesDump\RBUE08" --decoder build\tools\texture_extract\uc_texture_decode.dll
 ```
 
 Обрабатываются U8 (`.arc` и `.rarc`, включая вложенные архивы), TPL с палитрами,

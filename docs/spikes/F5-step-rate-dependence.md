@@ -132,7 +132,7 @@ inputs may not reach the QTE; not exercised live.
 Owner report (chapter 1, current save): through the windows the train's motion is not visible and the rain behind the window is static; in the dining car light
 from the windows should run across the tables, and the smoke is thinner than in the original. Not explained yet. What is established:
 
-- Reference: Dolphin with scripting (`D:\Tools\Dolphin-scripting`, `work\ctl2.py` = savestate load, screenshots, pointer/buttons, optional bot; `work\dctl.py launch|load|shot|bot`) runs the
+- Reference: Dolphin with scripting (`<dolphin dir>`, `work\ctl2.py` = savestate load, screenshots, pointer/buttons, optional bot; `work\dctl.py launch|load|shot|bot`) runs the
   original. The first corridor and the dining car are reachable from `train3.sav` / `ref_r*.sav`; the Leech Man blocks the simple bot (needs aimed fire), so the roof is not reached.
   The original dining car shows dense haze over the whole car; ours is clearer (one frame each, not a controlled comparison).
 - Not a step-rate effect that the counter probe sees. `UC_PACKET_MOTION=<file>|<frames>` + `<file>.go` logs per mesh draw (position matrix, texture matrix, indirect, colour, light hashes)
@@ -143,9 +143,9 @@ from the windows should run across the tables, and the smoke is thinner than in 
   (selectors seen: 30/33/36); a fix mapping GX_PNMTX ids to position matrices was written and tested but never triggered, so it was reverted.
 - Next: record a longer Dolphin FIFO log (Tools > FIFO Recorder, ~60 frames) of the dining car or the corridor start and diff which GX state animates (texture matrices, texture images, BP
   colour registers) against our draw stream (`UC_PACKET_DUMP` / `UC_PACKET_MOTION`).
-- 2026-10-18: `D:\Tools\Dolphin-scripting\work\dining_car.dff` (12 frames, via Tools > FIFO Player > Record; the main window needs a launch without `-b`) is INVALID: the player had died
+- 2026-10-18: `<dolphin dir>\work\dining_car.dff` (12 frames, via Tools > FIFO Player > Record; the main window needs a launch without `-b`) is INVALID: the player had died
   (god-mode bot was off), so it shows the death screen. Re-record with `bot on` running during the recording.
-- Valid log: `D:\Tools\Dolphin-scripting\work\dining_car_live.dff` (12 frames, player alive, god-mode bot running during the recording, 22 MB).
+- Valid log: `<dolphin dir>\work\dining_car_live.dff` (12 frames, player alive, god-mode bot running during the recording, 22 MB).
 
 ### Finding: per-vertex texture matrix indices are ignored (2026-10-18, TD-058)
 

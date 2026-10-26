@@ -44,7 +44,7 @@ Files: build outputs and release manifests in existing distribution directories;
 - [x] Update PC/laptop executables and maps with backups and matching hashes; update release manifests. Report any real-machine checks that remain.
 
 ### Follow-up: filtered LAN connection, five-second retry and last peer
-User confirmed LAN target 192.168.50.137:27888 and requested a five-second wait before offering punch plus persistence of the last attempted IP:Port.
+User confirmed LAN target <LAN host>:27888 and requested a five-second wait before offering punch plus persistence of the last attempted IP:Port.
 - [x] Compare both launcher logs: host listened while client direct TCP timed out; no gameplay started.
 - [x] Read firewall state: Windows Private/Public firewall disabled, ESET running; no firewall changes. ESET UI access blocked by computer-use product policy, so the exact packet filter remains unconfirmed.
 - [x] Add/test five-second client Lobby timeout and UDP fallback; keep incoming host wait unchanged.

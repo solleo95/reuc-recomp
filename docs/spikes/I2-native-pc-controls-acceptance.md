@@ -34,7 +34,7 @@ Stage2 codec tests cover duplicate properties, unknown/invalid input schema, def
 
 Live multi-source/focus route1791968126465971700 exposed v2 rejecting physical key-up while unfocused and treating that as a fatal protocol error. RED fixture→minimal release exception in apply_test_event→GREEN input/game_input/host_input. Down/motion/wheel while unfocused remain rejected; release clears the resolver's blocked physical source.1791968355975530100 repeats two Fire keys, releases one without a game Fire-release edge, loses/restores focus, then successfully accepts Reload/Grenade/eight Knife. Controlled events36..40 acknowledged. Updated executable staged and copied/E after targeted checks; no user save/config writes.
 
-Full build.bat --no-install:76/76CTest, dist installed. Copied dist to S:/Games/Umbrella Chronicles with robocopy/E (code1 means files copied). No config.json/saves in dist; user files preserved. New executable uc_launcher.exe contains current graphics/intro controls and input editing; future DLSS/FSR/FG and port-owned prompts are not implemented here.
+Full build.bat --no-install:76/76CTest, dist installed. Copied dist to <install dir> with robocopy/E (code1 means files copied). No config.json/saves in dist; user files preserved. New executable uc_launcher.exe contains current graphics/intro controls and input editing; future DLSS/FSR/FG and port-owned prompts are not implemented here.
 
 1791932770890224300 presentation samples31,30,30,30,30,30; context at measurement end Gameplay. No performance gain claimed from this short segment. Previous6/21/30 samples included effect/capture costs; modal/death intervals are not battle FPS. Original30FPS cadence remains default.
 

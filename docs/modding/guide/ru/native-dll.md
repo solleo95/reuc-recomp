@@ -195,8 +195,8 @@ cmake_minimum_required(VERSION 3.20)
 project(my_native_mod CXX)
 set(CMAKE_CXX_STANDARD 17)
 
-set(IMGUI_DIR "C:/libs/imgui-1.92.9b")                         # версия ImGui, названная в uc_mod.h
-set(UC_SDK_DIR "S:/Games/Umbrella Chronicles/sdk")             # папка с uc_mod.h
+set(IMGUI_DIR "<imgui dir>")                         # версия ImGui, названная в uc_mod.h
+set(UC_SDK_DIR "<install dir>/sdk")             # папка с uc_mod.h
 
 add_library(my_mod MODULE src/my_mod.cpp
   ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)

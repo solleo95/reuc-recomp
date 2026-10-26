@@ -1,0 +1,18 @@
+name: Feature request / Предложение
+description: Suggest an improvement / Предложить улучшение
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like? / Что вы хотите?
+      description: Describe the idea and the problem it solves. / Опишите идею и какую проблему она решает.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and examples / Альтернативы и примеры
+      description: Other ways to solve it, or other games / ports that do it well. / Другие способы решения или игры и порты, где это сделано хорошо.
+    validations:
+      required: false

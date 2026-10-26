@@ -17,9 +17,9 @@
 - Guest memory model: one 1 GB virtual reservation, host address = `base + (ea & 0x3FFFFFFF)`, MEM1 committed at `0x00000000..0x01800000`, MEM2 at `0x10000000..0x14000000`; effective addresses `0xCC000000..0xCDFFFFFF` are MMIO and are routed to `mmio_read/mmio_write`.
 - Guest is big-endian; every load/store byteswaps (`_byteswap_*`).
 - Generated code is never distributed and never committed (`generated/` is git-ignored).
-- `build.bat` stays one-click, exits non-zero on failure, copies `dist\` to `S:\Games\Umbrella Chronicles`.
-- Project root `D:\Projects\Native Ports\Umbrella-chronicles-recomp` (path has spaces; quote everything). Commit steps are omitted: the user asked that commits happen only on request.
-- Test command for every task: `scripts\dev.bat` (configure, build, ctest). Game DOL: `S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol`.
+- `build.bat` stays one-click, exits non-zero on failure, copies `dist\` to `<install dir>`.
+- Project root `<repo>` (path has spaces; quote everything). Commit steps are omitted: the user asked that commits happen only on request.
+- Test command for every task: `scripts\dev.bat` (configure, build, ctest). Game DOL: `<install dir>\game\DATA\sys\main.dol`.
 
 ## Spec deviations and proposals (surface to the user in the hand-off)
 
@@ -431,7 +431,7 @@ int main(int argc, char** argv) {
 - [ ] **Step 7: Run tests, then the coverage report**
 
 Run: `scripts\dev.bat` — Expected: `test_isa` PASSED.
-Run: `build\tools\dol_coverage\dol_coverage.exe "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol"`
+Run: `build\tools\dol_coverage\dol_coverage.exe "<install dir>\game\DATA\sys\main.dol"`
 Expected: `undecoded` ≤ 25 words, all explainable as data embedded in text (S1 saw 13 non-zero primary-0 words). For every `undecoded primary P xo10 X` line with a count above 3, add the missing row to `PPC_OPS` (consult the 750CL manual opcode map), re-run until only explainable leftovers remain. Record the final numbers (words, undecoded, `OE-set`, `unsupported-kind`) in the ledger: `OE-set` > 0 means Tasks 2–3 must implement overflow forms (they are written without OE; an OE word is translated as a trap and counted by Task 6).
 
 ---
@@ -2579,7 +2579,7 @@ Run: `scripts\dev.bat` — Expected: all `e2e_*` tests and `translator_determini
 
 Run (after `scripts\dev.bat` has built the translator):
 ```
-build\tools\translator\translator.exe --dol "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol" --cfg project\uc.cfg --out generated --shard 150
+build\tools\translator\translator.exe --dol "<install dir>\game\DATA\sys\main.dol" --cfg project\uc.cfg --out generated --shard 150
 ```
 Expected: exit 0 and a line like `functions N  instructions ≈ 968000  invalid-words …  midfunction-traps …  unresolved-bctr …  OE-traps …  unsupported …  jump-tables …`.
 Record every number. Expected magnitudes from S1: `functions` between 9000 and 12000. Triage:
@@ -2641,7 +2641,7 @@ int main(int argc, char** argv) {
 Add `#include <cstring>` to `smoke.cpp`.
 Run: `scripts\dev.bat` with `generated\` present. Time the first compile (`powershell -Command "Measure-Command { cmake --build build --target uc_game }"` after deleting `build\game`).
 Expected: `uc_game` builds without errors. If clang reports an error in a generated file, fix the emitter (add a regression test in `test_emit.cpp` first). Record the compile time and the single slowest file (`ninja -C build -t` or `/clang:-ftime-report` on that file if above 60 s).
-Run: `build\game\uc_smoke.exe "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol"` — Expected: prints the function count and `entry 8000403C known: yes`, exit 0.
+Run: `build\game\uc_smoke.exe "<install dir>\game\DATA\sys\main.dol"` — Expected: prints the function count and `entry 8000403C known: yes`, exit 0.
 
 - [ ] **Step 3: Cached translate step in `build.bat`**
 
@@ -2654,7 +2654,7 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "BUILD=%ROOT%\build"
 set "DIST=%ROOT%\dist"
 set "GEN=%ROOT%\generated"
-if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
+if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=<install dir>"
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
 set "CFG=%ROOT%\project\uc.cfg"
 set "TRANSLATOR=%BUILD%\tools\translator\translator.exe"
@@ -2736,10 +2736,10 @@ The `build\` folder must exist before step 2 writes logs: add `if not exist "%BU
 
 - [ ] **Step 4: Verify the build script**
 
-Run from another directory: `cd /d C:\ && "D:\Projects\Native Ports\Umbrella-chronicles-recomp\build.bat" --no-install`
+Run from another directory: `cd /d C:\ && "<repo>\build.bat" --no-install`
 Expected: exit 0; the first run prints the translator statistics, the second run prints `generated\ is up to date` and does not re-run the translator.
 Then change a character in a copy of `uc.cfg`? No: append a comment line to `project\uc.cfg`, run again — Expected: the translator runs again (cache key changed).
-Run with `UC_INSTALL_DIR=S:\TEMP\uc (test)` (create `game\DATA\sys\main.dol` there): Expected: still exit 0 with parentheses in the path.
+Run with `UC_INSTALL_DIR=<temp>\uc (test)` (create `game\DATA\sys\main.dol` there): Expected: still exit 0 with parentheses in the path.
 
 - [ ] **Step 5: Write `docs/spikes/T1-translation-stats.md`**
 
@@ -3084,7 +3084,7 @@ Ask the user for permission to download one data file: `https://raw.githubuserco
 
 Run:
 ```
-build\tools\sigmatch\sigmatch.exe --dol "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol" --dsy third_party\signatures\totaldb.dsy --cfg project\uc.cfg --required project\hle_required.txt --out build\sig
+build\tools\sigmatch\sigmatch.exe --dol "<install dir>\game\DATA\sys\main.dol" --dsy third_party\signatures\totaldb.dsy --cfg project\uc.cfg --required project\hle_required.txt --out build\sig
 ```
 Expected: counts printed, `build\sig\names.txt`, `build\sig\anchors.txt`. Sanity check of the masks: a healthy run names at least a few hundred OS/DVD/MEM/runtime functions. If it names almost nothing while the database is large, re-fetch Dolphin's `SignatureDB.cpp` and compare the mask table with `dsy_step` line by line (the masks here were taken from a summary of that file).
 Then read `anchors.txt`: each anchor links a function to a string such as `WPADInit()` or `dvd.c`. Promote confident ones to `project/uc.cfg` as `hle <addr> <Name>` lines (names must match `hle_required.txt` and later HLE function names); keep uncertain ones out.

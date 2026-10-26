@@ -39,7 +39,7 @@ Ghidra stays postponed (`docs/decisions.md`). Revisit it if steps 3–4 do not p
 ## Reproduce
 
 ```
-build\tools\sigmatch\sigmatch.exe --dol "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol" ^
+build\tools\sigmatch\sigmatch.exe --dol "<install dir>\game\DATA\sys\main.dol" ^
   --dsy third_party\signatures\totaldb.dsy --cfg project\uc.cfg --required project\hle_required.txt ^
   --min-words 3 --out build\sig_3
 ```

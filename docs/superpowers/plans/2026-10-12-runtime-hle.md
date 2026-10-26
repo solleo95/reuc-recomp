@@ -16,10 +16,10 @@
 - Guest threads run one at a time; a switch happens only inside a blocking HLE call, a yield, an exit, or at a safe point where a higher-priority thread became ready. Priority 0 is the highest, 31 the lowest.
 - Time base is 60.75 MHz (bus clock 243 MHz / 4); bus clock `0x0E7BE2C0`, CPU clock `0x2B73A840`.
 - Guest memory map (from the earlier plan): one 1 GB reservation, host address `base + (ea & 0x3FFFFFFF)`; MEM1 `0x80000000..0x817FFFFF`, MEM2 `0x90000000..0x93FFFFFF`, locked cache `0xE0000000..0xE0003FFF`, MMIO window `0xCC000000..0xCDFFFFFF`. The top 1 MB of MEM1 (`0x81700000..0x817FFFFF`) is reserved for the runtime (interrupt stack, dummy contexts); the arena high mark handed to the game is `0x81700000`.
-- Game files: `<game>\DATA\files` of the extracted tree (default `S:\Games\Umbrella Chronicles\game`). Paths from the guest never escape that root.
-- `build.bat` stays one-click, exits non-zero on failure, keeps the paren-safe label style and copies `dist\` to `S:\Games\Umbrella Chronicles`.
-- Project root `D:\Projects\Native Ports\Umbrella-chronicles-recomp` (spaces in the path; quote everything). The repository now exists (`git`), but commits happen only when the user asks: no commit steps in this plan.
-- Test command for every task: `scripts\dev.bat`. Real game: `S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol`.
+- Game files: `<game>\DATA\files` of the extracted tree (default `<install dir>\game`). Paths from the guest never escape that root.
+- `build.bat` stays one-click, exits non-zero on failure, keeps the paren-safe label style and copies `dist\` to `<install dir>`.
+- Project root `<repo>` (spaces in the path; quote everything). The repository now exists (`git`), but commits happen only when the user asks: no commit steps in this plan.
+- Test command for every task: `scripts\dev.bat`. Real game: `<install dir>\game\DATA\sys\main.dol`.
 - Guest structure layouts (OSThread, DVDFileInfo, low-memory globals) are taken from the translated SDK code and verified in Task 1, never from memory alone.
 - **Nativity rule (owner's priority: maximum nativity and performance).** Anything that behaves like emulation is allowed only as a stopgap and must be written to `docs/tech-debt.md` in the same step that adds it: a hardware-register model more complex than a plain read-back register file, a device that answers a handshake, a `Nop` that drops behaviour the game could observe, a polling/timing workaround. If a function needs a non-trivial hardware model, replace the SDK function with a native HLE at the call level instead (one line in `project/hle_map.txt`) and record the model that was avoided.
 
@@ -341,7 +341,7 @@ Run: `scripts\dev.bat` — Expected: builds; `build\tools\xref\xref.exe --dol <m
 
 - [ ] **Step 4: Locate the missing functions and write `project/symbols.txt`**
 
-Names to find (from `docs/spikes/S5-identification.md`): `OSInit`, `OSReport`, `OSPanic`, `OSGetTick`, `OSJoinThread`, `DVDClose`, `WPADInit`, `WPADRead`, `KPADInit`, `KPADRead`, `KPADSetPosParam`, plus the two unattributed privileged functions `802A26F4` and `802A3EB0`. Use these commands (set `X=build\tools\xref\xref.exe --dol "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol" --cfg project\uc.cfg --names project\identified_sdk.txt`):
+Names to find (from `docs/spikes/S5-identification.md`): `OSInit`, `OSReport`, `OSPanic`, `OSGetTick`, `OSJoinThread`, `DVDClose`, `WPADInit`, `WPADRead`, `KPADInit`, `KPADRead`, `KPADSetPosParam`, plus the two unattributed privileged functions `802A26F4` and `802A3EB0`. Use these commands (set `X=build\tools\xref\xref.exe --dol "<install dir>\game\DATA\sys\main.dol" --cfg project\uc.cfg --names project\identified_sdk.txt`):
 
 | Target                                    | Procedure                                                                                                                      | Expected evidence                                                                                                                    |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2587,7 +2587,7 @@ Run: `scripts\dev.bat` — Expected: `test_clock` (with the new schedule checks)
 
 - Consumes: every runtime piece from Tasks 2–7, the generated `uc_functions` table, `project/identified_sdk.txt`, `project/symbols.txt`.
 - Produces:
-  - `uc.exe --game <dir> [--seconds N] [--log-dvd]` (default game dir `S:\Games\Umbrella Chronicles\game`); exit code 0 normal, 3 guest trap or fatal runtime error, 4 no-progress watchdog.
+  - `uc.exe --game <dir> [--seconds N] [--log-dvd]` (default game dir `<install dir>\game`); exit code 0 normal, 3 guest trap or fatal runtime error, 4 no-progress watchdog.
   - `uc::DvdStats { opens, reads, bytes }`, `uc::dvd_stats()`, `uc::dvd_log(bool)`; `uc::trace_dump_all(FILE*, int)`.
   - `scripts\translate.bat` (hle.cfg generation + cached translation, shared by `build.bat` and `bringup.bat`); `scripts\bringup.bat [uc args]` (trace build in `build-trace\`, runs `uc.exe`, prints the log tail).
 
@@ -2720,7 +2720,7 @@ std::vector<uint8_t> slurp(const fs::path& p) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    fs::path game = "S:\\Games\\Umbrella Chronicles\\game";
+    fs::path game = "<install dir>\\game";
     int seconds = 0;
     bool log_dvd = false;
     for (int i = 1; i < argc; ++i) {
@@ -2823,7 +2823,7 @@ set "ROOT=%~dp0.."
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 set "BUILD=%ROOT%\build"
 set "GEN=%ROOT%\generated"
-if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=S:\Games\Umbrella Chronicles"
+if not defined UC_INSTALL_DIR set "UC_INSTALL_DIR=<install dir>"
 set "GAME_DOL=%UC_INSTALL_DIR%\game\DATA\sys\main.dol"
 set "ARGS=%*"
 if not defined ARGS set "ARGS=--seconds 20"

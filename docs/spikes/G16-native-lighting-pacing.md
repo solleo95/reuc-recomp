@@ -1,6 +1,6 @@
 # Native lighting and render pacing
 
-Owner supplies `S:/Games/Umbrella Chronicles/debug/reference.png` as a visual reference and authorizes continued autonomous visible testing with skipped intro/internal input. No host mouse/keyboard input or owner-save mutation.
+Owner supplies `<install dir>/debug/reference.png` as a visual reference and authorizes continued autonomous visible testing with skipped intro/internal input. No host mouse/keyboard input or owner-save mutation.
 
 ## Root cause of white geometry
 

@@ -28,7 +28,7 @@ Draw identity includes callsite, mesh/vertex count and occurrence; equal-size ge
 - [ ] Investigate and test a concrete GPU integration saving. Files: renderer/vulkan_renderer.cpp/.h and tests/renderer_upscale_smoke.cpp only if evidence supports a change. Candidate areas: unconditional output-depth upscale, repeated copies, redundant render-pass barriers. Preserve pipeline and image quality; reject hypotheses that fail GPU validation/pixels or do not win.
 - [ ] Compare quality on reproducible scene input/current settings and against native edge coverage; inspect real gameplay captures. Existing renderer_upscale_smoke and harness helpers should be reused. Only add a small test/helper for missing evidence.
 - [ ] Run identical-work comparisons: current vs optimized DLSS/FSR, same presets/modes; both vs Off. Repeat meaningful/borderline changes with three alternating pairs. Run full Release, 115 tests, GPU validation/FG switch and live harness checks. Record actual result, including any unmet native-FPS target.
-- [ ] Final review; resolve actionable findings. Install only verified beneficial release in S:/Games/Umbrella Chronicles, preserving config/saves and comparing SHA-256. Archive benchmark executable out of dist before install.
+- [ ] Final review; resolve actionable findings. Install only verified beneficial release in <install dir>, preserving config/saves and comparing SHA-256. Archive benchmark executable out of dist before install.
 
 ## Investigation ledger
 

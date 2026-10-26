@@ -16,7 +16,7 @@
 - Works on any GPU vendor; frame generation is optional per machine and never changes the simulation.
 - Simulation stays deterministic: identical dt sequence on both PCs; tick changes only at an agreed frame.
 - Never run any test fullscreen (harness forces 1280x720); few live runs; edit source only with Edit/Write.
-- End state: full `build.bat --no-install` passes, deploy `uc.exe`, `data/uc.map`, `release.json` to `dist-raw`, `dist-release` and `\\192.168.50.170\dist-raw` with hash check (recipe in `build/h264-deploy/install.ps1`).
+- End state: full `build.bat --no-install` passes, deploy `uc.exe`, `data/uc.map`, `release.json` to `dist-raw`, `dist-release` and `<laptop share>` with hash check (recipe in `build/h264-deploy/install.ps1`).
 
 ## Review Focus
 

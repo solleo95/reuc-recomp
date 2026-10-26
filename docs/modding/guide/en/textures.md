@@ -41,7 +41,7 @@ You get the right names by **extracting** the original textures: the extractor s
 Run in a command prompt in the game folder:
 
 ```bat
-tools\extract_textures.bat --input "game\DATA" --output "D:\work\dump"
+tools\extract_textures.bat --input "game\DATA" --output "<work>\dump"
 ```
 
 - `--input` is the game's data folder (it also accepts one archive or container file).
@@ -66,7 +66,7 @@ Running the extractor again is safe: files with the same contents are kept, and 
 
 Edit the PNG files with any program. Rules that keep the replacement working:
 
-1. **Keep the file name exactly.** Copy edited files under the same name into a separate folder (for example `D:\work\upscaled`). You may leave out every picture you do not change.
+1. **Keep the file name exactly.** Copy edited files under the same name into a separate folder (for example `<work>\upscaled`). You may leave out every picture you do not change.
 2. **Keep the shape.** The new picture must have the same width-to-height ratio as the original. Doubling or quadrupling the size is typical for an HD pack (256x256 becomes 512x512 or 1024x1024).
 3. **Keep the alpha channel.** Many game textures have transparency (leaves, hair, glass, UI). Save PNG with alpha, 8 bits per channel (RGBA).
 4. **Do not change the picture's meaning.** The same pixel must stay in the same place: textures are mapped to models by position.
@@ -82,7 +82,7 @@ Special textures need care:
 The game loads **BC7-compressed DDS files with a full mip chain**. The shipped converter makes them from your PNG files:
 
 ```bat
-tools\uc_texture_convert.exe --input "D:\work\upscaled" --output "mods\my-textures\textures" --manifest "D:\work\dump\extractor_manifest.json"
+tools\uc_texture_convert.exe --input "<work>\upscaled" --output "mods\my-textures\textures" --manifest "<work>\dump\extractor_manifest.json"
 ```
 
 | Option | Meaning |

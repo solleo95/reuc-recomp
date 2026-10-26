@@ -582,7 +582,7 @@ CMake: `add_executable(test_test_server test_test_server.cpp ${CMAKE_SOURCE_DIR}
 - [ ] **Step 8: Full suite + live smoke**: `build.bat --no-install`; then in PowerShell:
 
 ```powershell
-$d=New-Item -ItemType Directory -Force build\autotest\server-smoke; Copy-Item "S:\Games\Umbrella Chronicles\saves" "$d\saves" -Recurse -Force
+$d=New-Item -ItemType Directory -Force build\autotest\server-smoke; Copy-Item "<install dir>\saves" "$d\saves" -Recurse -Force
 Start-Process dist\uc.exe -ArgumentList "--skip-intro","--seconds","30","--test-server","smoke","--save-root","`"$d\saves`"","--capture-dir","`"$d`""
 python -c "import time,json;time.sleep(3);c=open(r'\\.\pipe\uc-test-smoke-cmd','wb',buffering=0);e=open(r'\\.\pipe\uc-test-smoke-evt','rb');c.write(b'{\"id\":1,\"cmd\":\"capture\"}\n');[print(e.readline()) for _ in range(400) ]" | Select-String '"id":1|"type":"frame"' | Select-Object -First 3
 ```
@@ -690,7 +690,7 @@ CMake: `add_test(NAME test_uctest_client COMMAND ${Python3_EXECUTABLE} -I ${CMAK
 - [ ] **Step 3: Implement** `transport.py`: `PipeTransport` opens `\\.\pipe\uc-test-{name}-cmd` (`open(..., "wb", buffering=0)`) then `-evt` (`open(..., "rb")`), retrying `FileNotFoundError`/`PermissionError` every 50 ms until `connect_seconds`, then raises `TimeoutError("test pipe uc-test-<name> not available")`. `read_line` returns decoded line without `\n`, `None` at EOF/`OSError`.
 
 `client.py` essentials:
-- `__init__`: `run_dir` default `build/autotest/<time_ns>`; when `launch`, copy `S:\Games\Umbrella Chronicles\saves` to `run_dir/saves`, start `exe` with `--test-server <run name> --save-root <saves> --capture-dir <run_dir> --seconds <seconds> --speed <speed>` (+ `--skip-intro`), stdout/stderr to `run_dir/run.log`, `creationflags=0` (visible console as before), then `transport_factory()` default `PipeTransport(name)`.
+- `__init__`: `run_dir` default `build/autotest/<time_ns>`; when `launch`, copy `<install dir>\saves` to `run_dir/saves`, start `exe` with `--test-server <run name> --save-root <saves> --capture-dir <run_dir> --seconds <seconds> --speed <speed>` (+ `--skip-intro`), stdout/stderr to `run_dir/run.log`, `creationflags=0` (visible console as before), then `transport_factory()` default `PipeTransport(name)`.
 - Reader thread: `json.loads` each line; `type=="frame"` → `self.frame`, append to `deque(maxlen=600)`, notify condition; `type=="action"` → `self._actions.append`; `type=="exit"` → `self.exited=True`; dict with `id` → `self._replies[id]=obj`, notify. EOF → `self.exited=True`, notify.
 - `request`: assign next id, send `json.dumps(cmd|{"id":id})`, wait on condition until reply, exit or `seconds`; `error` → `fail(...)`.
 - `wait`: start `n = self.frame.get("n",0)`; loop: predicate(frame) true → return frame; `frames` budget exceeded (`frame.n - n > frames`) or `seconds` elapsed or `exited` → `fail`.

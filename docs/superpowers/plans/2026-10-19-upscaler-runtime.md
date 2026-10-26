@@ -8,7 +8,7 @@
 
 **Spec:** User reports four regressions in this conversation: lower FPS with either upscaler, long upscaler switches, long frame-generation switches, missing launcher option.
 
-**Constraints:** Harness-only game input; isolated saves/config; no commits; release to S:/Games/Umbrella Chronicles after verification. Optional capabilities must remain optional on other GPUs.
+**Constraints:** Harness-only game input; isolated saves/config; no commits; release to <install dir> after verification. Optional capabilities must remain optional on other GPUs.
 
 ## Tasks
 
@@ -25,7 +25,7 @@
 - DLSS Ultra Performance: 9.483 -> 9.120 s, -3.8%, paired 95% CI [-6.8%, -0.9%], three alternating demo pairs. FSR: 9.278 -> 8.516 s, -8.2%, one pair. Native candidate: 7.908 s; CPU-bound reconstruction remains slower than native. Each measured window: 1,614,225 draws.
 - Overlay PASS: build/autotest/1792365991509257900. SR updates 6.8-12.0 ms, generator change 30.1 ms, repeated FG toggles 0.1-6.2 ms; no device restart. Timing excludes subsequent deferred SDK work.
 - Live DLSS Quality / render-scale 2 / window 1280x720: PASS, mean 157.8 FPS, active frame-gap p99 9.0 ms; build/autotest/1792366168371421500.
-- Installed 56 release files in S:/Games/Umbrella Chronicles; every SHA-256 matched. Config and five saves unchanged. Excluded debug artifacts and archived the benchmark baseline under build/uc_perf_before_4bfe.exe.
+- Installed 56 release files in <install dir>; every SHA-256 matched. Config and five saves unchanged. Excluded debug artifacts and archived the benchmark baseline under build/uc_perf_before_4bfe.exe.
 - Final review found one refresh-target lifetime gap. Regression failed before the fix (`build/upscale-retention-red.log`); retaining the target in the submitting slot fixes it. Reviewer confirmed closure; refreshed SR validation and FG functional smoke pass (`build/upscale-retention-green.log`, `build/upscale-retention-fg.log`). Full Release rebuilt, 115/115 pass (`build/upscaler-release-final.log`), redeployed and all 56 hashes reverified. Performance/live results above precede this final lifetime guard.
 - Installed uc.exe SHA-256: 66E2E00405DC3A0A480BA72ED30F80002BC1D4AED383F7170AC87BDE55F34E58. Launcher: CAB79A86E31D2C8E1096CB22C8F238834DCB9AC73E77098F4AB3D3BAE18573FE.
 

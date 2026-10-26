@@ -29,4 +29,4 @@ Checked 2026-10-23 (USA build, harness at 1280x720, `uctest run movie_probe`; th
 
 ## Notes for the next session
 
-- The harness needs `UC_GAME_DIR` set (or the usual `S:\Games\Umbrella Chronicles\game` folder) for tests that read the game's files; on 2026-10-23 the folder `game` was gone and `game_en` / `game_ru` existed instead, so spike runs passed `--game-arg=--game --game-arg=<folder>`.
+- The harness needs `UC_GAME_DIR` set (or the usual `<install dir>\game` folder) for tests that read the game's files; on 2026-10-23 the folder `game` was gone and `game_en` / `game_ru` existed instead, so spike runs passed `--game-arg=--game --game-arg=<folder>`.

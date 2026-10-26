@@ -114,7 +114,7 @@ Repeating Claude's 300 Hz / 12-second protocol now gives main 123.68 active FPS 
 
 All three copied save files hash identically between the old GPU run and the current 300 Hz run. GPU, render/output dimensions and scene match. The remaining historical difference (137.02 versus 128.42 active FPS) is real in these reports; the mixed-window calculation alone does not explain it. Rebuilding original source also produces lower current FPS, so the follow-up fixes are not supported as its cause.
 
-The actual historical binary was then recovered from `C:/Users/solle/.claude/jobs/a940f4f0/tmp/uc_gpu.exe` with matching `shaders_new`. Session chronology confirms it was built after the slab fix, saved at 15:45 UTC, and used in the original pair. Copied into `build/bench-claude/game/uc.exe`; SHA-256 of both copies: `BBEB8F6674ED99ED0A441B036535FF872213832C952A75994D651D299E4CA143`. Both shader hashes also match current dist shaders.
+The actual historical binary was then recovered from `<scratch>/uc_gpu.exe` with matching `shaders_new`. Session chronology confirms it was built after the slab fix, saved at 15:45 UTC, and used in the original pair. Copied into `build/bench-claude/game/uc.exe`; SHA-256 of both copies: `BBEB8F6674ED99ED0A441B036535FF872213832C952A75994D651D299E4CA143`. Both shader hashes also match current dist shaders.
 
 Exact saved exe versus current exe, again 300 Hz / 12 seconds, order saved/current/current/saved:
 

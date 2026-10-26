@@ -16,10 +16,10 @@
 - Guest threads run one at a time; a switch happens only inside a blocking HLE call, a yield, an exit, or at a safe point where a higher-priority thread became ready. Priority 0 is the highest, 31 the lowest.
 - Time base is 60.75 MHz (bus clock 243 MHz / 4); bus clock `0x0E7BE2C0`, CPU clock `0x2B73A840`.
 - Guest memory map (from the earlier plan): one 1 GB reservation, host address `base + (ea & 0x3FFFFFFF)`; MEM1 `0x80000000..0x817FFFFF`, MEM2 `0x90000000..0x93FFFFFF`, locked cache `0xE0000000..0xE0003FFF`, MMIO window `0xCC000000..0xCDFFFFFF`. The top 1 MB of MEM1 (`0x81700000..0x817FFFFF`) is reserved for the runtime (interrupt stack, dummy contexts); the arena high mark handed to the game is `0x81700000`.
-- Game files: `<game>\DATA\files` of the extracted tree (default `S:\Games\Umbrella Chronicles\game`). Paths from the guest never escape that root.
-- `build.bat` stays one-click, exits non-zero on failure, keeps the paren-safe label style and copies `dist\` to `S:\Games\Umbrella Chronicles`.
-- Project root `D:\Projects\Native Ports\Umbrella-chronicles-recomp` (spaces in the path; quote everything). The repository now exists (`git`), but commits happen only when the user asks: no commit steps in this plan.
-- Test command for every task: `scripts\dev.bat`. Real game: `S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol`.
+- Game files: `<game>\DATA\files` of the extracted tree (default `<install dir>\game`). Paths from the guest never escape that root.
+- `build.bat` stays one-click, exits non-zero on failure, keeps the paren-safe label style and copies `dist\` to `<install dir>`.
+- Project root `<repo>` (spaces in the path; quote everything). The repository now exists (`git`), but commits happen only when the user asks: no commit steps in this plan.
+- Test command for every task: `scripts\dev.bat`. Real game: `<install dir>\game\DATA\sys\main.dol`.
 - Guest structure layouts (OSThread, DVDFileInfo, low-memory globals) are taken from the translated SDK code and verified in Task 1, never from memory alone.
 
 ## Spec deviations and proposals (surface to the user in the hand-off)
@@ -338,7 +338,7 @@ Run: `scripts\dev.bat` — Expected: builds; `build\tools\xref\xref.exe --dol <m
 
 - [ ] **Step 4: Locate the missing functions and write `project/symbols.txt`**
 
-Names to find (from `docs/spikes/S5-identification.md`): `OSInit`, `OSReport`, `OSPanic`, `OSGetTick`, `OSJoinThread`, `DVDClose`, `WPADInit`, `WPADRead`, `KPADInit`, `KPADRead`, `KPADSetPosParam`, plus the two unattributed privileged functions `802A26F4` and `802A3EB0`. Use these commands (set `X=build\tools\xref\xref.exe --dol "S:\Games\Umbrella Chronicles\game\DATA\sys\main.dol" --cfg project\uc.cfg --names project\identified_sdk.txt`):
+Names to find (from `docs/spikes/S5-identification.md`): `OSInit`, `OSReport`, `OSPanic`, `OSGetTick`, `OSJoinThread`, `DVDClose`, `WPADInit`, `WPADRead`, `KPADInit`, `KPADRead`, `KPADSetPosParam`, plus the two unattributed privileged functions `802A26F4` and `802A3EB0`. Use these commands (set `X=build\tools\xref\xref.exe --dol "<install dir>\game\DATA\sys\main.dol" --cfg project\uc.cfg --names project\identified_sdk.txt`):
 
 | Target                                    | Procedure                                                                                                                      | Expected evidence                                                                                                                    |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
