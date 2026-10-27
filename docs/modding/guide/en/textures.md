@@ -13,7 +13,7 @@ How to replace the pictures the game draws: characters, rooms, weapons, menus, f
 - [Step 1 - extract the original textures](#step-1---extract-the-original-textures)
 - [Step 2 - edit or upscale the pictures](#step-2---edit-or-upscale-the-pictures)
 - [Step 3 - convert to DDS](#step-3---convert-to-dds)
-- [Step 4 - put the textures into a mod](#step-4---put-the-textures-into-a-mod)
+- [Step 4 - put the textures into the game](#step-4---put-the-textures-into-the-game)
 - [Step 5 - test it](#step-5---test-it)
 - [Anatomy of a texture file name](#anatomy-of-a-texture-file-name)
 - [Several mods and the base folder](#several-mods-and-the-base-folder)
@@ -95,9 +95,28 @@ tools\uc_texture_convert.exe --input "<work>\upscaled" --output "mods\my-texture
 
 The converter uses all processor threads (about 30 seconds for 8000 pictures) and skips files whose DDS is already newer than the PNG, so you can run it again after changing a few pictures.
 
-## Step 4 - put the textures into a mod
+## Step 4 - put the textures into the game
 
-A texture mod needs nothing but a `mod.json` and the `textures` folder:
+There are two ways. **You do not need to make a mod**: the simplest way is the first one.
+
+### Option A - the `textures` folder next to `uc.exe` (simplest)
+
+Create a folder named `textures` in the game folder, right next to `uc.exe`, and drop all your `.dds` files straight into it:
+
+```
+<game folder>\
+  uc.exe
+  textures\
+    tex1_256x256_0123456789abcdef_14.dds
+    tex1_512x256_fedcba9876543210_6.dds
+    ...
+```
+
+No `mod.json`, no Mods tab, nothing to tick: the game picks the files up by itself. The files go directly into `textures\` (no extra subfolder). You can also point the converter's `--output` at this folder in [Step 3](#step-3---convert-to-dds).
+
+### Option B - a mod (for sharing a pack)
+
+Choose this when you want players to switch the pack on and off in the Mods tab, or to combine it with other packs. A texture mod needs nothing but a `mod.json` and the `textures` folder:
 
 ```
 mods\my-textures\
@@ -123,7 +142,7 @@ Cosmetic mods leave `touches_gameplay` out (it is `false` by default). If you al
 
 ## Step 5 - test it
 
-1. Start the game, press **Insert**, open the **Mods** tab and tick your mod.
+1. Start the game. If you made a mod (Option B), press **Insert**, open the **Mods** tab and tick it; files in the `textures` folder next to `uc.exe` (Option A) need no ticking.
 2. Go to a place where one of the textures is visible. A texture changes **the next time the game decodes it**: textures already in use may need a scene change or a restart of the game to be reloaded.
 3. If nothing changes, see [Troubleshooting](#troubleshooting).
 
@@ -149,7 +168,7 @@ tex1_256x256_0123456789abcdef_14.dds
 
 The game looks for a texture in this order: the mods' `textures` folders from the lowest mod in the list to the highest (the lower one wins), then the base `textures` folder next to `uc.exe`. If two mods contain the same file, the mod lower in the **Mods** tab list wins ([how mods combine](README.md#how-several-mods-work-together)).
 
-The base `textures` folder works without any mod; it is where a pack from before the mod system lives.
+The base `textures` folder works without any mod: it is the simple way to install textures ([Step 4, Option A](#option-a---the-textures-folder-next-to-ucexe-simplest)) and where a pack from before the mod system lives.
 
 ## Limits
 
