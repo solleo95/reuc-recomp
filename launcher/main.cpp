@@ -459,6 +459,19 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
         }
         const float unit=std::max(.60f,std::min(ImGui::GetIO().DisplaySize.x/1504.f,ImGui::GetIO().DisplaySize.y/916.f));
+        if(smoke.empty() && frame==3) {   // support log: labels the fonts cannot draw show up blank (a Windows without the CJK fonts)
+            diagnostics<<"[ui-text] language="<<language<<" active="<<active_language<<" unit="<<unit<<" display="<<ImGui::GetIO().DisplaySize.x<<"x"<<ImGui::GetIO().DisplaySize.y<<std::endl;
+            auto* baked=ui.sans->GetFontBaked(22);
+            auto report=[&](const std::string& what,std::string_view value) {
+                const auto length=MultiByteToWideChar(CP_UTF8,0,value.data(),int(value.size()),nullptr,0);
+                std::wstring wide(size_t(std::max(length,0)),L'\0');MultiByteToWideChar(CP_UTF8,0,value.data(),int(value.size()),wide.data(),length);
+                for(auto character:wide)if(character>32 && !baked->FindGlyphNoFallback(character))diagnostics<<"[ui-text] no glyph U+"<<std::hex<<unsigned(character)<<std::dec<<" in "<<what<<std::endl;
+            };
+            for(auto locale:uc::launcher::languages()) {
+                report("language name "+std::string(locale.code),locale.name);
+                if(locale.code==active_language)for(auto key:uc::launcher::translation_keys())report(std::string(locale.code)+"."+std::string(key),uc::launcher::text(locale.code,key));
+            }
+        }
         uc::launcher::graphite_style();ImGui::GetStyle().ScaleAllSizes(unit);
         // ScaleAllSizes floors thin borders to zero below 1×.
         ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;

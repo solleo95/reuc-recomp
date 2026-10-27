@@ -1,5 +1,6 @@
 #include "ui_fonts.h"
 #include <imgui.h>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -18,6 +19,7 @@ Fonts load_fonts(ImFontAtlas& atlas) {
     for(const auto* filename:{L"segoeui.ttf",L"msyh.ttc",L"malgun.ttf",L"msgothic.ttc"}) {
         std::ifstream source(folder/filename,std::ios::binary);
         std::vector<char> data(std::istreambuf_iterator<char>(source),{});
+        std::fprintf(stderr,"[ui-font] %ls bytes=%zu%s\n",filename,data.size(),data.empty() ? " (missing)" : "");
         if(data.empty()) {if(fonts.bytes.empty())throw std::runtime_error("Segoe UI font unavailable");continue;}
         if(data.size()>64*1024*1024)throw std::runtime_error("UI font too large");
         ImFontConfig config;config.FontDataOwnedByAtlas=false;config.MergeMode=!fonts.bytes.empty();
@@ -27,6 +29,7 @@ Fonts load_fonts(ImFontAtlas& atlas) {
     fonts.sans=atlas.Fonts[0];
     std::ifstream serif_source(folder/L"georgia.ttf",std::ios::binary);
     std::vector<char> serif_data(std::istreambuf_iterator<char>(serif_source),{});
+    std::fprintf(stderr,"[ui-font] georgia.ttf bytes=%zu%s\n",serif_data.size(),serif_data.empty() ? " (missing)" : "");
     if(serif_data.empty())throw std::runtime_error("Georgia font unavailable");
     const size_t fallback_count=fonts.bytes.size();fonts.bytes.push_back(std::move(serif_data));
     ImFontConfig serif_config;serif_config.FontDataOwnedByAtlas=false;
