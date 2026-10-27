@@ -23,6 +23,7 @@ namespace {
 DvdFs* g_fs;
 DvdStats g_stats;
 bool g_log = false;
+bool g_log_opens = false;   // file opens alone: they tell a support log which stage or movie the game was in
 std::mutex g_m;
 std::condition_variable g_cv;
 std::deque<std::function<void()>> g_jobs;
@@ -115,7 +116,7 @@ void dvd_hle_init(DvdFs& fs) {
     });
 }
 DvdStats dvd_stats() { std::lock_guard lock(g_m); return g_stats; }
-void dvd_log(bool on) { g_log = on; }
+void dvd_log(bool on,bool opens) { g_log = on; g_log_opens = opens; }
 }  // namespace uc
 
 void hle_DVDInit(ppc::Ctx&) {}
@@ -130,7 +131,7 @@ static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
     ppc::wr32(c, fi + layout::kFiCallback, 0);
     ppc::wr32(c, fi + layout::kCbState, 0);                 // DVD_STATE_END
     { std::lock_guard lock(g_m); ++g_stats.opens; }
-    if (g_log) std::fprintf(stderr, "[dvd] open %s\n", g_fs->path_of(e).c_str());
+    if (g_log || g_log_opens) std::fprintf(stderr, "[dvd] open %s\n", g_fs->path_of(e).c_str());
     c.r[3] = 1;
 }
 void hle_DVDFastOpen(ppc::Ctx& c) { open_entry(c, int(c.r[3]), c.r[4]); }

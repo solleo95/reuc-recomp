@@ -52,6 +52,8 @@
 #include "ax_audio.h"
 #include "det_trace.h"
 #include "frame_log.h"
+#include "hitch_report.h"
+#include <array>
 #include "diagnostic_log.h"
 #include "startup_error.h"
 #include "audio_gap_audit.h"
@@ -364,7 +366,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::SaveFs saves(network ? network->save_root() : local_save_root);
     uc::save_hle_init(saves);
     uc::DvdSession dvd_session(dvd);
-    uc::dvd_log(options.log_dvd);
+    uc::dvd_log(options.log_dvd,!uc::diagnostic_directory().empty());
     uc::set_clock_speed(options.speed);
     uc::test_state_enable(server_mode);
     uc::test_state_set_god(options.god);
@@ -563,6 +565,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     } catch(const std::exception& error) {std::fprintf(stderr,"[diagnostics] frame CSV unavailable: %s\n",error.what());}
     uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0,frame_idle_last=0,frame_gpu_busy_last=0,frame_thread_last[8]={}; uint32_t frame_events=0;
     const auto thread_cycles=[]() -> uint64_t { ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); return cycles; };
+    uc::FrameRow previous_frame_row; std::array<double,64> recent_intervals{}; size_t recent_intervals_seen=0; double worst_hitch_ms=0; unsigned hitch_lines=0,hitch_second_lines=0,hitches_this_second=0; uint64_t hitch_unlogged=0;
     std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
     uint64_t audit_capture_serial=0;
     uint64_t debug_capture_serial=0;
@@ -691,6 +694,18 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                       row.gpu_rt_as_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_as); row.gpu_rt_shadows_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_shadows); row.gpu_rt_reflections_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_reflections); row.gpu_rt_lighting_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_lighting); row.gpu_rt_path_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_path);
                       const auto rt=renderer.rt_stats(); row.rt_blas=rt.blas; row.rt_triangles=rt.triangles; }
                     frame_log->add(row);
+                    {   // a drop in a user log names its cause; 12 lines a second and 400 a session at most
+                        double typical_frame_ms=0;   // the median of the last 64 frames; none until 32 are known
+                        if(recent_intervals_seen>=32) {const size_t known=std::min<size_t>(recent_intervals_seen,64);auto sorted=recent_intervals;std::nth_element(sorted.begin(),sorted.begin()+known/2,sorted.begin()+known);typical_frame_ms=sorted[known/2];}
+                        recent_intervals[recent_intervals_seen++%64]=row.interval_ms;
+                        const auto hitch=uc::hitch_report(row,previous_frame_row,typical_frame_ms);
+                        if(!hitch.empty()) {
+                            if(hitch_lines<400 && hitch_second_lines<12) {std::fprintf(stderr,"%s\n",hitch.c_str());++hitch_lines;++hitch_second_lines;}
+                            else ++hitch_unlogged;
+                            ++hitches_this_second; worst_hitch_ms=std::max(worst_hitch_ms,row.interval_ms);
+                        }
+                        previous_frame_row=row;
+                    }
                     frame_cpu_last=cpu; frame_busy_ns=frame_events_ns=0; frame_events=0;
                 } else if (frame_log) frame_cpu_last=thread_cycles();
                 last_present_at=presented_at; frame_limit.presented(presented_at);
@@ -1046,6 +1061,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu dry %llu refills %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,(unsigned long long)output.dry_writes,(unsigned long long)audio->refills(),output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
+                std::fprintf(stderr,"[hitches] this second %u worst %.1f ms, session lines %u not logged %llu\n",hitches_this_second,worst_hitch_ms,hitch_lines,(unsigned long long)hitch_unlogged);
+                hitches_this_second=hitch_second_lines=0; worst_hitch_ms=0;
+                uc::log_runtime_sample();
                 { static uint64_t last_cycles=0,last_bench_presents=0; const auto cycles=sched.guest_cycles(); std::fprintf(stderr,"[bench] presents %llu draws %llu guest_mcycles %.2f\n",(unsigned long long)(presents-last_bench_presents),(unsigned long long)(gfx.draws-last_profile_draws),(cycles-last_cycles)/1e6); last_cycles=cycles; last_bench_presents=presents; }
                 profile_loops=profile_retries=0; last_profile_draws=gfx.draws; last_profile_copies=gfx.copies; last_audio_frames=sound.frames;
             }

@@ -6,7 +6,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <dxgi.h>
+#include <dxgi1_4.h>
+#include <psapi.h>
 #include <wrl/client.h>
 
 namespace uc {
@@ -63,6 +64,18 @@ void adapters() {
             (unsigned long long)(desc.DedicatedVideoMemory>>20),(unsigned long long)(desc.SharedSystemMemory>>20),version,(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE) ? " software" : "");
     }
 }
+void hardware() {
+    SYSTEM_INFO info{};GetNativeSystemInfo(&info);
+    MEMORYSTATUSEX memory{sizeof(memory)};GlobalMemoryStatusEx(&memory);
+    std::fprintf(stderr,"[system] cpu=%s logical_processors=%lu ram_MB=%llu\n",utf8(registry_text(HKEY_LOCAL_MACHINE,L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",L"ProcessorNameString")).c_str(),info.dwNumberOfProcessors,memory.ullTotalPhys>>20);
+    const auto plan=utf8(registry_text(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Power\\User\\PowerSchemes",L"ActivePowerScheme"));
+    const char* names[][2]={{"381b4222-f694-41f0-9685-ff5bb260df2e","Balanced"},{"8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c","High performance"},{"a1841308-3541-4fab-bc81-f71556f20b4a","Power saver"},{"e9a42b02-d5df-448d-aa00-03f14749eb61","Ultimate performance"}};
+    const char* label="custom";for(const auto& known:names)if(plan==known[0])label=known[1];
+    SYSTEM_POWER_STATUS power{};const bool have_power=GetSystemPowerStatus(&power)!=0;
+    std::fprintf(stderr,"[system] power_plan=%s (%s) ac=%s battery_percent=%d\n",label,plan.c_str(),!have_power || power.ACLineStatus==255 ? "unknown" : power.ACLineStatus ? "online" : "battery",have_power && power.BatteryLifePercent!=255 ? int(power.BatteryLifePercent) : -1);
+    DEVMODEW mode{};mode.dmSize=sizeof(mode);
+    if(EnumDisplaySettingsW(nullptr,ENUM_CURRENT_SETTINGS,&mode))std::fprintf(stderr,"[system] primary display %lux%lu @ %lu Hz\n",mode.dmPelsWidth,mode.dmPelsHeight,mode.dmDisplayFrequency);
+}
 void vulkan_layers() {   // implicit layers (overlays such as OBS, RTSS, ReShade) are a known source of stutter and crashes
     for(HKEY root:{HKEY_LOCAL_MACHINE,HKEY_CURRENT_USER}) {
         HKEY key=nullptr;
@@ -81,8 +94,35 @@ void log_system_report(const std::filesystem::path& exe_dir) {
     client_version(exe_dir);
     windows_edition();
     disk_space(exe_dir);
+    hardware();
     adapters();
     vulkan_layers();
     std::fprintf(stderr,"[command-line] %s\n",utf8(GetCommandLineW()).c_str());
+}
+void log_runtime_sample() {
+    static uint64_t last_tick=0,last_process=0,last_idle=0,last_kernel=0,last_user=0,last_faults=0;
+    const auto value=[](FILETIME t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;};
+    FILETIME created,exited,kernel,user,idle_time,system_kernel,system_user;
+    PROCESS_MEMORY_COUNTERS_EX memory{sizeof(memory)};
+    if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user) || !GetSystemTimes(&idle_time,&system_kernel,&system_user) || !K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory)))return;
+    const uint64_t process=value(kernel)+value(user),system_total=value(system_kernel)+value(system_user),idle=value(idle_time);
+    if(last_tick) {
+        const double span=double(system_total-last_tick);   // all logical processors together: percent of the whole machine
+        std::fprintf(stderr,"[process] working_set_MB=%llu peak_MB=%llu private_MB=%llu page_faults=%llu cpu_percent=%.1f machine_cpu_percent=%.1f\n",memory.WorkingSetSize>>20,memory.PeakWorkingSetSize>>20,memory.PrivateUsage>>20,
+            (unsigned long long)(memory.PageFaultCount-last_faults),span>0 ? 100.0*double(process-last_process)/span : 0.0,span>0 ? 100.0*(1.0-double(idle-last_idle)/span) : 0.0);
+    }
+    last_tick=system_total;last_process=process;last_idle=idle;last_faults=memory.PageFaultCount;
+    MEMORYSTATUSEX machine{sizeof(machine)};
+    if(GlobalMemoryStatusEx(&machine))std::fprintf(stderr,"[memory] available_MB=%llu total_MB=%llu load_percent=%lu commit_available_MB=%llu\n",machine.ullAvailPhys>>20,machine.ullTotalPhys>>20,machine.dwMemoryLoad,machine.ullAvailPageFile>>20);
+    static Microsoft::WRL::ComPtr<IDXGIFactory4> factory;   // video memory this process holds on each GPU against the budget Windows grants it
+    if(!factory && FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))return;
+    for(UINT index=0;;++index) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter3;DXGI_ADAPTER_DESC1 desc{};
+        if(factory->EnumAdapters1(index,&adapter)==DXGI_ERROR_NOT_FOUND)break;
+        if(FAILED(adapter->GetDesc1(&desc)) || (desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE) || FAILED(adapter.As(&adapter3)))continue;
+        DXGI_QUERY_VIDEO_MEMORY_INFO local{};
+        if(SUCCEEDED(adapter3->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&local)) && local.CurrentUsage)
+            std::fprintf(stderr,"[vram] #%u used_MB=%llu budget_MB=%llu%s\n",index,local.CurrentUsage>>20,local.Budget>>20,local.CurrentUsage>local.Budget ? " OVER BUDGET" : "");
+    }
 }
 }
