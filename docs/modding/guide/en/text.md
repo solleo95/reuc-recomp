@@ -156,6 +156,32 @@ Problems never stop a mod: a bad entry is skipped and the other entries still ap
 | Letters look wrong | The font lacks the characters, or the localization uses its own code points ([special case](#special-case---a-localization-with-its-own-alphabet)). |
 | The text is cut or overlaps | It is too long for the text box. Shorten it. |
 
+## Short character names in `main.dol`
+
+Eight short names (Ada, Billy, Carlos, Chris, HUNK, Jill, Rebecca, Wesker) are not in the text file: the game keeps them inside `main.dol`, next to the internal labels `HG_A`... `HG_G`. A mod changes them with `dol/names.json`:
+
+```
+mods/my-translation/
+  mod.json
+  dol/names.json
+```
+
+```json
+{ "Ada": "Ада", "Billy": "Билли", "Carlos": "Карлос", "Chris": "Крис", "HUNK": "ХАНК", "Jill": "Джил", "Rebecca": "Ребекка", "Wesker": "Вескер" }
+```
+
+- The key is the original English name; the value is the new text in UTF-8, as in the text files. The names in `main.dol` are only 3 to 7 bytes long, but the game copies each one into a 16-byte field of its character slot, and the port puts your text there instead of the original: a name may be **up to 15 bytes** (7 Cyrillic letters, which take 2 bytes each). It is used the next time the game sets its characters up (a chapter start).
+- A font that draws its letters on other codes (for example Cyrillic on Latin codes) needs a table, `dol/charmap.json`: each character and the code the font draws it with, either one character or a whole number from 1 to 255:
+
+  ```json
+  { "К": "K", "р": "p", "и": "u", "с": "c", "ж": 126 }
+  ```
+
+  A mapped character becomes that one byte; every other character stays its UTF-8 bytes. Without a `charmap.json` the text is written as it is.
+- A name that is unknown, empty, longer than 15 bytes, or sits in a `main.dol` whose table is somewhere else is listed in the log as `name patch: ...` and skipped; the other names still apply. Switching the mod off puts the original names back; when two mods name the same character the later one wins.
+- Longer names (and every name the game shows in a line of text) belong in the text file, for example record 252, "Chris Redfield".
+- Together with a font in `files/Data/sysres/font0/` and `font1/` (see [Disc files](files.md)) this lets a translation work on the plain English game, without an edited `main.dol`.
+
 ## See also
 
 - [Disc files](files.md) - replacing subtitle tables and other files as a whole.

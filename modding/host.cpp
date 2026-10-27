@@ -1,5 +1,6 @@
 #include "host.h"
 #include "data_patch.h"
+#include "name_patch.h"
 #include <algorithm>
 #include <cctype>
 
@@ -21,6 +22,7 @@ struct ModHost::Running {
     bool disabled = false;   // switched off for the rest of its run (a failed start or too many failures)
     bool load_failed = false;   // it failed while starting: sync() tries again (the manager may have changed what it was missing, e.g. a DLL confirmation)
     std::string last_error;
+    NameUndo name_undo;   // owner of the main.dol names this mod sets (dol/names.json), taken back when it stops
     std::map<const void*, std::shared_ptr<bool>> hook_flags;   // per runtime: false once its hooks are dropped (a hook call already in flight sees it)
     std::unique_ptr<Hooks> hooks;
     bool live() const { return started && !disabled; }
@@ -127,6 +129,7 @@ void ModHost::stop_mod(Running& mod) {
     drop_hooks(mod, mod.script.get());
     drop_hooks(mod, mod.native.get());
     dropped(mod);   // the game takes back what the mod set (switches, weapon values, data patches)
+    undo_name_patches(mod.name_undo);
     mod.script.reset();   // (the lock is held: a hook call waiting for it finds the mod stopped)
     mod.native.reset();
     mod.started = false;
@@ -138,6 +141,8 @@ void ModHost::stop_mod(Running& mod) {
 void ModHost::apply_patches(Running& mod) {
     const auto patches = apply_data_patches(mod.root, *mod.api);
     for (const auto& error : patches.errors) if (config_.log) config_.log(mod.manifest.id, "data patch: " + error);
+    if (!config_.memory) return;
+    for (const auto& error : apply_name_patches(mod.root, *config_.memory, mod.name_undo).errors) if (config_.log) config_.log(mod.manifest.id, "name patch: " + error);
 }
 
 void ModHost::create_runtimes(Running& mod, bool scripts, bool native) {

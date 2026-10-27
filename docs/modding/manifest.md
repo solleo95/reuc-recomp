@@ -10,6 +10,7 @@ mods/my-mod/
   audio/        replacement music and voices, .ogg or .wav (see audio.md)
   text/         replacement text, one JSON file per language (see text.md)
   data/         data patches, one JSON file each (see data-patches.md)
+  dol/          names.json (+ charmap.json): the short character names kept in main.dol (see guide/en/text.md)
   scripts/      Lua or JavaScript
   native/       a DLL (see native-dll.md)
 ```

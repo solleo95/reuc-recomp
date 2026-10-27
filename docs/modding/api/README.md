@@ -34,3 +34,4 @@ Used with `hook.pre`, `hook.post`, `hook.replace`.
 |---|---|---|---|
 | `GameWeaponUpdate` | `0x8006C268` | implemented | Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag. Checked in the game: the hook is called with a guest address in r3, and clearing r4 stops the held trigger from firing. |
 | `PlayerEventHandler` | `0x800676A0` | unverified | Player event handler (damage, firing and similar events). |
+| `StringCopy` | `0x802933D8` | unverified | The game's strcpy: r3 is the destination, r4 the source. Every string copy of the game passes through it, so keep a callback short. The port itself hooks it to give the short character names of dol/names.json. |

@@ -940,6 +940,31 @@ def _record_500_bytes(g):
     return None
 
 
+DOL_NAMES = {"Rebecca": "Ребекка"}   # the character of the train chapter (the only slot the game fills there) and what the dol_names mod calls her
+
+
+def dol_names(g, args):
+    """The dol_names mod's dol/names.json gives the short character names in UTF-8 (longer than the fields in main.dol). The game copies a name into its
+    character slot when the chapter starts: the Russian text must be in guest memory afterwards, and the DOL's own table must be untouched.
+    Run it on the English image (UC_GAME_DIR=<English game folder>)."""
+    reach_gameplay(g)
+    g.advance(30)
+    result = {"capture": g.capture()}
+    with g.step("names_in_memory"):
+        log = (g.run_dir / "run.log").read_text(encoding="utf-8", errors="replace")
+        if "name patch" in log:
+            g.fail("the mod reported a problem: " + [line for line in log.splitlines() if "name patch" in line][:3].__repr__(), "dol names")
+        table = bytes.fromhex(g.request({"cmd": "peek", "addr": 0x803DE4C0, "size": 74})["hex"])
+        if b"\x00Rebecca\x00Wesker\x00" not in table:
+            g.fail(f"the table in main.dol was written: {table!r}", "dol names")
+        for english, russian in DOL_NAMES.items():
+            at = _find_in_guest_memory(g, b"\x00" + russian.encode("utf-8") + b"\x00", start=0x80000000, size=0x1800000)
+            result[english] = None if at is None else f"{at:08X}"
+            if at is None:
+                g.fail(f"{english} as {russian} is not in guest memory: the strcpy hook did not give the slot the mod's name", "dol names")
+    return result
+
+
 def text_replace(g, args):
     """The text_marker mod sets records 500, 550 and 553 (the handgun's name in the HUD, which shows UCTEXTMARKER in the capture) for every language. The game reads the whole text file into MEM2
     (around 0x91240000): the scenario finds the original text of record 500 in that window (which proves the window holds the file) and requires the marker
@@ -1299,8 +1324,8 @@ def guest_api(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "weapon_switch": weapon_switch, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent}
-SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
+             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent, "dol_names": dol_names}
+SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"], "dol_names": ["dol_names"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a fixture that leaves input unchanged
 SCENARIOS["camera_stick"] = camera_stick
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'

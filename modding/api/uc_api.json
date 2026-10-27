@@ -246,6 +246,7 @@
   ],
   "hookable": [
     { "name": "GameWeaponUpdate", "address": "8006C268", "status": "implemented", "doc": "Per-step weapon update of a player; r3 is the weapon object (the player's weapon is player + 0x48), r4 the 'allowed' flag. Checked in the game: the hook is called with a guest address in r3, and clearing r4 stops the held trigger from firing." },
-    { "name": "PlayerEventHandler", "address": "800676A0", "status": "unverified", "doc": "Player event handler (damage, firing and similar events)." }
+    { "name": "PlayerEventHandler", "address": "800676A0", "status": "unverified", "doc": "Player event handler (damage, firing and similar events)." },
+    { "name": "StringCopy", "address": "802933D8", "status": "unverified", "doc": "The game's strcpy: r3 is the destination, r4 the source. Every string copy of the game passes through it, so keep a callback short. The port itself hooks it to give the short character names of dol/names.json." }
   ]
 }
