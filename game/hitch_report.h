@@ -16,7 +16,7 @@ inline std::string hitch_report(const FrameRow& row,const FrameRow& previous,dou
     const auto* top=&causes[0];for(const auto& cause:causes)if(cause.ms>top->ms)top=&cause;
     const bool known=top->ms>=row.interval_ms*0.5;
     const auto delta=[](uint64_t now,uint64_t before){return (unsigned long long)(now>=before ? now-before : 0);};
-    char text[640];
+    char text[768];
     std::snprintf(text,sizeof text,"[hitch] t=%.0f ms frame=%.1f ms (typical %.1f) cause=%s | gpu %.1f gpu-longest %.1f guest-cpu %.1f guest-idle %.1f present-wait %.1f submit %.1f render %.1f events %.1f renderer-waits-guest %.1f | textures+%llu decodes+%llu disc-reads+%llu queued %u outstanding %u rt-as %.1f",
         row.t_ms,row.interval_ms,typical_ms,known ? top->name : "unattributed (OS, driver or another program)",row.gpu_sum_ms,row.gpu_ms,guest,row.idle_ms,row.acquire_ms+row.present_ms,row.submit_ms,row.busy_ms,row.events_ms,seal_wait,
         delta(row.textures,previous.textures),delta(row.decodes,previous.decodes),delta(row.dvd_reads,previous.dvd_reads),row.queued,row.outstanding,row.gpu_rt_as_ms);

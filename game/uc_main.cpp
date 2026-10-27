@@ -698,8 +698,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                         double typical_frame_ms=0;   // the median of the last 64 frames; none until 32 are known
                         if(recent_intervals_seen>=32) {const size_t known=std::min<size_t>(recent_intervals_seen,64);auto sorted=recent_intervals;std::nth_element(sorted.begin(),sorted.begin()+known/2,sorted.begin()+known);typical_frame_ms=sorted[known/2];}
                         recent_intervals[recent_intervals_seen++%64]=row.interval_ms;
-                        const auto hitch=uc::hitch_report(row,previous_frame_row,typical_frame_ms);
+                        auto hitch=uc::hitch_report(row,previous_frame_row,typical_frame_ms);
                         if(!hitch.empty()) {
+                            hitch+=" | "+uc::dvd_area();   // only for a slow frame: the area takes a lock the disc thread also uses
                             if(hitch_lines<400 && hitch_second_lines<12) {std::fprintf(stderr,"%s\n",hitch.c_str());++hitch_lines;++hitch_second_lines;}
                             else ++hitch_unlogged;
                             ++hitches_this_second; worst_hitch_ms=std::max(worst_hitch_ms,row.interval_ms);
@@ -1061,7 +1062,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if(audio) { const auto output=audio->stats(); std::fprintf(stderr,"[audio-output] blocks %llu overruns %llu dry %llu refills %llu max queued bytes %d\n",(unsigned long long)output.blocks,(unsigned long long)output.overruns,(unsigned long long)output.dry_writes,(unsigned long long)audio->refills(),output.max_queued_bytes); }
                 std::fprintf(stderr,"[geometry-cache] hits %llu misses %llu\n",(unsigned long long)gfx.geometry_hits,(unsigned long long)gfx.geometry_misses);
                 std::fprintf(stderr,"[profile] loops %llu retries %llu native draws %llu copies %llu audio blocks %llu\n",(unsigned long long)profile_loops,(unsigned long long)profile_retries,(unsigned long long)(gfx.draws-last_profile_draws),(unsigned long long)(gfx.copies-last_profile_copies),(unsigned long long)(sound.frames-last_audio_frames));
-                std::fprintf(stderr,"[hitches] this second %u worst %.1f ms, session lines %u not logged %llu\n",hitches_this_second,worst_hitch_ms,hitch_lines,(unsigned long long)hitch_unlogged);
+                std::fprintf(stderr,"[hitches] this second %u worst %.1f ms, session lines %u not logged %llu | %s\n",hitches_this_second,worst_hitch_ms,hitch_lines,(unsigned long long)hitch_unlogged,uc::dvd_area().c_str());
                 hitches_this_second=hitch_second_lines=0; worst_hitch_ms=0;
                 uc::log_runtime_sample();
                 { static uint64_t last_cycles=0,last_bench_presents=0; const auto cycles=sched.guest_cycles(); std::fprintf(stderr,"[bench] presents %llu draws %llu guest_mcycles %.2f\n",(unsigned long long)(presents-last_bench_presents),(unsigned long long)(gfx.draws-last_profile_draws),(cycles-last_cycles)/1e6); last_cycles=cycles; last_bench_presents=presents; }

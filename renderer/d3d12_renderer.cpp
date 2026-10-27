@@ -1529,9 +1529,12 @@ ID3D12PipelineState* D3D12Renderer::pipeline(const gx::DrawPacket& draw,bool alp
     }
     if(uber) return uber;
     ComPtr<ID3D12PipelineState> state;
+    const auto began=std::chrono::steady_clock::now();
     const auto created=device_->CreateGraphicsPipelineState(&desc,IID_PPV_ARGS(&state));
     if(FAILED(created)) stats();
     check(created,"Create GX DirectX PSO");
+    // The Vulkan "[pipeline] ... compiled on the render thread" line: this call is a stall of the frame (the ubershader PSO of a state combination seen for the first time).
+    if(const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count(); ms>=2) std::fprintf(stderr,"[pipeline] new ubershader PSO compiled on the render thread: %.1f ms\n",ms);
     ++stats_.state_objects; return pipelines_.emplace(key,std::move(state)).first->second.Get();
 }
 

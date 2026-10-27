@@ -62,6 +62,7 @@ private:
 
 struct DvdStats { uint64_t opens = 0, reads = 0, bytes = 0; };
 DvdStats dvd_stats();
+std::string dvd_area();         // "script=s00c1 room=r008 movie=-": the latest stage script, room and movie opened, for support logs
 void dvd_log(bool on,bool opens=false);          // print "[dvd] open <path>" and read lines to stderr; `opens` alone prints just the opens
 void dvd_hle_init(DvdFs& fs);   // defined in hle/dvd.cpp
 void dvd_hle_shutdown();       // call after guests stop, while their scheduler and file tree remain alive

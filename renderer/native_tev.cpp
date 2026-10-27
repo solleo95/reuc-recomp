@@ -5,6 +5,7 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -121,7 +122,7 @@ const TevShaders::Entry* TevShaders::get(size_t variant,const TevWords& words) {
         entries_.emplace(key,Slot{});
         const auto cached=cached_.find(key);
         Bytecode known=cached!=cached_.end() ? cached->second : nullptr;
-        if(!blocking_) { queue_.push_front({key,std::move(known),false,{}}); lock.unlock(); wake_.notify_one(); return nullptr; }
+        if(!blocking_) { queue_.push_front({key,std::move(known),false,{}}); ++demanded_; lock.unlock(); wake_.notify_one(); return nullptr; }
     }
     std::string error;
     auto code=cached_.contains(key) ? cached_.at(key) : compile(key,error);
@@ -155,14 +156,23 @@ void TevShaders::run() {
         if(job.task) { try { job.task(); } catch(const std::exception& error) { std::fprintf(stderr,"[pipeline] background task failed: %s\n",error.what()); } }
         else {
             bool store=false; Bytecode code=job.code;
+            const auto began=std::chrono::steady_clock::now();
             if(!code) {
                 std::string error; code=compile(job.key,error); store=code!=nullptr;
                 if(!code) std::fprintf(stderr,"[pipeline] TEV pixel shader failed to compile: %s\n",error.c_str());
             }
             finish(job.key,std::move(code),store);
+            const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count();
+            std::lock_guard lock(mutex_);
+            compile_ms_+=ms;
         }
         std::lock_guard lock(mutex_);
         --running_;
+        // The DirectX counterpart of the Vulkan "background compile idle" line: while shaders are missing the game draws with the ubershader (slower, not a stall).
+        if(queue_.empty() && running_==0 && (compile_ms_>0 || demanded_)) {
+            std::fprintf(stderr,"[pipeline] TEV background compile idle: %zu shaders ready, %zu requested by the game before ready, %.0f ms of compile work\n",compiled_,demanded_,compile_ms_);
+            demanded_=0; compile_ms_=0;
+        }
     }
 }
 }

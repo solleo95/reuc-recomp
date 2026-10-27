@@ -14,6 +14,8 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -25,6 +27,19 @@ DvdStats g_stats;
 bool g_log = false;
 bool g_log_opens = false;   // file opens alone: they tell a support log which stage or movie the game was in
 std::mutex g_m;
+std::string g_area_script, g_area_room, g_area_movie;   // the latest stage script, room and movie the game opened (under g_m)
+// The stage is not stored in any guest word (docs/spikes/M2-game-state.md), but loading it opens Data/script/sNNcN.arc and Data/bg/rNNN.rarc.
+std::string stem_after(const std::string& path, std::string_view prefix, std::string_view suffix) {
+    if (path.size() <= prefix.size() + suffix.size() || path.compare(0, prefix.size(), prefix) != 0 || path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) return {};
+    auto name = path.substr(prefix.size(), path.size() - prefix.size() - suffix.size());
+    return name.find('/') == std::string::npos ? name : std::string{};
+}
+void note_area(const std::string& path) {
+    std::lock_guard lock(g_m);
+    if (auto script = stem_after(path, "Data/script/s", ".arc"); !script.empty()) g_area_script = "s" + script;
+    else if (auto room = stem_after(path, "Data/bg/r", ".rarc"); !room.empty()) g_area_room = "r" + room;
+    else if (auto movie = stem_after(path, "Data/movie/", ".sfd"); !movie.empty()) g_area_movie = movie;
+}
 std::condition_variable g_cv;
 std::deque<std::function<void()>> g_jobs;
 std::thread g_thread;
@@ -116,6 +131,10 @@ void dvd_hle_init(DvdFs& fs) {
     });
 }
 DvdStats dvd_stats() { std::lock_guard lock(g_m); return g_stats; }
+std::string dvd_area() {
+    std::lock_guard lock(g_m);
+    return "script=" + (g_area_script.empty() ? "-" : g_area_script) + " room=" + (g_area_room.empty() ? "-" : g_area_room) + " movie=" + (g_area_movie.empty() ? "-" : g_area_movie);
+}
 void dvd_log(bool on,bool opens) { g_log = on; g_log_opens = opens; }
 }  // namespace uc
 
@@ -131,7 +150,9 @@ static void open_entry(ppc::Ctx& c, int e, uint32_t fi) {
     ppc::wr32(c, fi + layout::kFiCallback, 0);
     ppc::wr32(c, fi + layout::kCbState, 0);                 // DVD_STATE_END
     { std::lock_guard lock(g_m); ++g_stats.opens; }
-    if (g_log || g_log_opens) std::fprintf(stderr, "[dvd] open %s\n", g_fs->path_of(e).c_str());
+    const auto path = g_fs->path_of(e);
+    note_area(path);
+    if (g_log || g_log_opens) std::fprintf(stderr, "[dvd] open %s\n", path.c_str());
     c.r[3] = 1;
 }
 void hle_DVDFastOpen(ppc::Ctx& c) { open_entry(c, int(c.r[3]), c.r[4]); }

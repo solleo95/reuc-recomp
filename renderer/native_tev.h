@@ -64,7 +64,8 @@ private:
     std::deque<Job> queue_;
     std::vector<std::thread> workers_;
     std::mutex file_mutex_;
-    size_t compiled_=0,running_=0;
+    size_t compiled_=0,running_=0,demanded_=0;   // demanded_: shaders the game asked for before they were ready (each drew with the ubershader meanwhile)
+    double compile_ms_=0;   // worker time spent compiling since the last idle report
     bool stop_=false,cache_ok_=false;
 };
 }
