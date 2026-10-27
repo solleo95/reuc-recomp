@@ -13,20 +13,37 @@ struct Input {
 };
 // Texture matrices by id (gx::TextureBank), 3 rows each; read only when the draw has a bank (projection.bank != 0xFFFFFFFF).
 struct TextureBank { float4 rows[126 * 3]; };
+#ifdef UC_DIRECTX
+// SM5 limits structured elements to 2048 bytes; float4 rows preserve the CPU layout.
+StructuredBuffer<float4> textureBankRows : register(t9);
+float4 textureRow(uint bank, uint row) { return textureBankRows[bank * 378 + row]; }
+#else
 [[vk::binding(4, 0)]] StructuredBuffer<TextureBank> textureBanks;
+float4 textureRow(uint bank, uint row) { return textureBanks[bank].rows[row]; }
+#endif
 // Position and normal matrices of a draw: 64 rows each (gx::PaletteBlock). A vertex stores only its row.
 struct Palette { float4 position[64]; float4 normal[64]; uint4 loaded; };
+#ifdef UC_DIRECTX
+StructuredBuffer<float4> paletteRows : register(t8);
+float4 positionRow(uint palette, uint row) { return paletteRows[palette * 129 + row]; }
+float4 normalRowAt(uint palette, uint row) { return paletteRows[palette * 129 + 64 + row]; }
+uint4 loadedRows(uint palette) { return asuint(paletteRows[palette * 129 + 128]); }
+#else
 [[vk::binding(3, 0)]] StructuredBuffer<Palette> palettes;
+float4 positionRow(uint palette, uint row) { return palettes[palette].position[row]; }
+float4 normalRowAt(uint palette, uint row) { return palettes[palette].normal[row]; }
+uint4 loadedRows(uint palette) { return palettes[palette].loaded; }
+#endif
 // alphaPass: ubershader only. motion/jitter/viewport: the MOTION variant (upscaling) only; jitter in target pixels, viewport = the draw's
 // Vulkan viewport (x, y, width, height) in target pixels.
 // effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting), bit 1 = albedo and material targets (kEffectRtMaterial), bit 2 = the draw's record is
 // model-valid (kEffectRtModelValid); the MOTION variant only. record: the draw's material record index (rt_material.h), ~0u = none.
 struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; uint record; float2 shift; };
-[[vk::push_constant]] ConstantBuffer<Projection> projection;
+[[vk::push_constant]] ConstantBuffer<Projection> projection : register(b1);
 // Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
 // (prevRows = clip_to_prev_clip applied to the current clip position).
 struct MotionBlock { float4 prevRows[4]; uint prevPalette; uint kind; uint2 unused; };
-[[vk::binding(5, 0)]] StructuredBuffer<MotionBlock> motions;
+[[vk::binding(5, 0)]] StructuredBuffer<MotionBlock> motions : register(t10);
 struct Output {
     float4 position : SV_Position;
     [[vk::location(0)]] float4 color : COLOR0;
@@ -35,6 +52,8 @@ struct Output {
 #ifdef MOTION
     [[vk::location(10)]] float4 currentClip : TEXCOORD8;    // unjittered
     [[vk::location(11)]] float4 previousClip : TEXCOORD9;
+#endif
+#if defined(MOTION) || defined(UC_DIRECTX)
     [[vk::location(12)]] float4 rawColor0 : TEXCOORD10;     // per-pixel lighting: the vertex colours the channels take as material and ambient, the view position and the unnormalised view normal
     [[vk::location(13)]] float4 rawColor1 : TEXCOORD11;
     [[vk::location(14)]] float3 viewPosition : TEXCOORD12;
@@ -96,7 +115,7 @@ float3 generateTexcoord(uint id, Input input) {
     uint matrixId = (input.texMatrixIds[id / 4] >> ((id % 4) * 8)) & 255;   // 255: this vertex has no index for the texgen
     if (projection.bank != 0xFFFFFFFF && matrixId < 126) {
         uint at = 3 * matrixId;
-        row0 = textureBanks[projection.bank].rows[at]; row1 = textureBanks[projection.bank].rows[at + 1]; row2 = textureBanks[projection.bank].rows[at + 2];
+        row0 = textureRow(projection.bank, at); row1 = textureRow(projection.bank, at + 1); row2 = textureRow(projection.bank, at + 2);
     }
     float3 stq = float3(dot(row0, value), dot(row1, value), (gen & 2) != 0 ? dot(row2, value) : 1.0);
     if ((drawState.texPosts[id / 4][id % 4] & 256) != 0 && dot(stq, stq) > 0.0) stq = normalize(stq);
@@ -107,9 +126,9 @@ Output vertexMain(Input input) {
     Output output;
     float4 objectPosition = float4(input.position, 1.0);
     uint row = projection.indexed != 0 ? input.matrixRow : projection.currentRow;   // validated on the CPU: row <= 61, rows loaded
-    float4 row0 = palettes[projection.palette].position[row];
-    float4 row1 = palettes[projection.palette].position[row + 1];
-    float4 row2 = palettes[projection.palette].position[row + 2];
+    float4 row0 = positionRow(projection.palette, row);
+    float4 row1 = positionRow(projection.palette, row + 1);
+    float4 row2 = positionRow(projection.palette, row + 2);
     float4 viewPosition = float4(dot(row0, objectPosition), dot(row1, objectPosition), dot(row2, objectPosition), 1.0);
     output.position = float4(dot(projection.rows[0], viewPosition), dot(projection.rows[1], viewPosition), dot(projection.rows[2], viewPosition), dot(projection.rows[3], viewPosition));
 #ifdef MOTION
@@ -118,7 +137,7 @@ Output vertexMain(Input input) {
     if (projection.motion != 0xFFFFFFFF) {
         MotionBlock m = motions[projection.motion];
         if (m.kind == 1) {
-            float4 p0 = palettes[m.prevPalette].position[row], p1 = palettes[m.prevPalette].position[row + 1], p2 = palettes[m.prevPalette].position[row + 2];
+            float4 p0 = positionRow(m.prevPalette, row), p1 = positionRow(m.prevPalette, row + 1), p2 = positionRow(m.prevPalette, row + 2);
             output.previousClip = clipOf(m.prevRows, float4(dot(p0, objectPosition), dot(p1, objectPosition), dot(p2, objectPosition), 1.0));
         } else if (m.kind == 2) output.previousClip = clipOf(m.prevRows, output.position);
     }
@@ -127,19 +146,22 @@ Output vertexMain(Input input) {
     output.position.xy += projection.shift * output.position.w;   // late aim: a clip-space translation, so a quad the game placed at the screen edge is clipped after the move, not before
     // View-space normal: the loaded normal matrix applied to the object normal; without a loaded matrix the object normal stays (position-only fixtures).
     uint normalRow = row & 31;
-    uint4 loaded = palettes[projection.palette].loaded;
+    uint4 loaded = loadedRows(projection.palette);
     bool allLoaded = true;
     [unroll] for (uint i = 0; i < 3; ++i) { uint r = normalRow + i; uint word = r < 32 ? loaded.x : loaded.y; allLoaded = allLoaded && (((word >> (r & 31)) & 1u) != 0); }
     float3 viewNormal = input.objectNormal;
-    if (allLoaded) viewNormal = float3(dot(palettes[projection.palette].normal[normalRow].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 1].xyz, input.objectNormal), dot(palettes[projection.palette].normal[normalRow + 2].xyz, input.objectNormal));
+    if (allLoaded) viewNormal = float3(dot(normalRowAt(projection.palette, normalRow).xyz, input.objectNormal), dot(normalRowAt(projection.palette, normalRow + 1).xyz, input.objectNormal), dot(normalRowAt(projection.palette, normalRow + 2).xyz, input.objectNormal));
 #ifndef SHADOW   // the shadow map's vertex stage (smoke.shadow.vert.spv) stops here: position only, no lighting, no texture coordinates
     float3 normal = dot(viewNormal,viewNormal)>0.0 ? normalize(viewNormal) : float3(0.0);
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
-#ifdef MOTION
+#if defined(MOTION) || defined(UC_DIRECTX)
     output.rawColor0 = input.color; output.rawColor1 = input.color1; output.viewPosition = viewPosition.xyz; output.viewNormal = viewNormal;
 #endif
     [unroll] for (uint id = 0; id < 8; ++id) output.texcoords[id] = generateTexcoord(id, input);
+#endif
+#ifdef UC_DIRECTX
+    output.position.y = -output.position.y; // Direct3D's viewport maps positive clip Y upward.
 #endif
     return output;
 }
@@ -180,8 +202,12 @@ float3 applyFog(float3 color, float depth) {
     return float3((prev*(256-ifog)+fogColor*ifog)>>8)/255.0;
 }
 struct Targets {
+#ifdef UC_LOGIC
+    uint4 color : SV_Target0;
+#else
     float4 color : SV_Target0;
-#ifdef MOTION
+#endif
+#if defined(MOTION) && !defined(UC_LOGIC_COLOR_ONLY)
     float4 motion : SV_Target1;   // rg: previous minus current position in target pixels (unjittered); written only by depth-writing draws
     float4 gbuffer : SV_Target2;  // normal, fog and flags (gbuffer.slang); written only by depth-writing draws, and bound only while an effect reads it
     uint material : SV_Target3;   // material record index (rt_material.h) and albedo (stage-0 texture x material colour, unlit): depth-writing draws,
@@ -210,11 +236,15 @@ float4 albedoTexel(Output input) {
 float2 pixelOf(float4 clip) { return projection.viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) * projection.viewport.zw; }
 Targets fragmentMain(Output input) {
     Targets targets;
-#ifdef MOTION
+#if defined(MOTION) && !defined(UC_LOGIC_COLOR_ONLY)
     targets.motion = float4(pixelOf(input.previousClip) - pixelOf(input.currentClip), 0.0, 0.0);
 #endif
+#ifdef UC_LOGIC
+    targets.color = uint4(round(saturate(shadeFragment(input))*255.0));
+#else
     targets.color = shadeFragment(input);
-#ifdef MOTION
+#endif
+#if defined(MOTION) && !defined(UC_LOGIC_COLOR_ONLY)
     targets.gbuffer = gbufferTexel(input);
     targets.material = projection.record;
     targets.albedo = (projection.effects & 2u) != 0 ? albedoTexel(input) : float4(0.0);
@@ -224,12 +254,16 @@ Targets fragmentMain(Output input) {
 float4 shadeFragment(Output input) {
 #ifdef UBER
     loadTevKey();
+#ifdef UC_SPEC
+    destinationAlphaPass = tevWord(66);
+#else
     destinationAlphaPass = projection.alphaPass;
+#endif
 #endif
     float2 uv[8];
     [unroll] for(uint i=0;i<8;++i) uv[i]=input.texcoords[i].xy / (input.texcoords[i].z != 0.0 ? input.texcoords[i].z : 1.0);
     float4 rasterColor0=input.color, rasterColor1=input.color1;
-#ifdef MOTION
+#if defined(MOTION) || defined(UC_DIRECTX)
     if((projection.effects&1u)!=0) {   // the lighting channels again, at the pixel: the same GX equations on the interpolated normal and position
         const float3 normal = dot(input.viewNormal,input.viewNormal)>0.0 ? normalize(input.viewNormal) : float3(0.0);
         if(((drawState.channels[0]|drawState.channels[2])&2u)!=0) rasterColor0 = shadeChannel(input.rawColor0,0,input.viewPosition,normal);

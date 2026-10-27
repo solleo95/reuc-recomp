@@ -179,7 +179,7 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
         draws[i].layer = true;   // every player's wake belongs to the reticle layer, only the local one is re-aimed
         int owner = reticle_tint_owner(draws[i]);
         if (owner == 1 && !consumed[1]) owner = 0;
-        if (owner >= 0 && unsigned(owner) == local && consumed[owner]) {
+        if (exact && owner >= 0 && unsigned(owner) == local && consumed[owner]) {   // single-player: the wake stays as the game draws it (a rigid shift swung it and smeared under frame generation)
             draws[i].late_aim = true; draws[i].wake = exact; ++marked;
             if (anchor) { draws[i].aim_ref = *anchor; draws[i].aim_exact = true; }
         }

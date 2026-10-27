@@ -1,10 +1,10 @@
 // Robust Contrast-Adaptive Sharpening, after AMD FidelityFX FSR 1 (ffx_fsr1.h, FsrRcasF), MIT License,
 // Copyright (c) 2021-2022 Advanced Micro Devices, Inc. The constant is 2^-stops (renderer/upscale_math.h rcas_constant), as FSR's API maps
 // its 0..1 sharpness. Reads a copy of the upscaled scene, writes the sharpened result back into the EFB region.
-[[vk::binding(0, 0)]] Texture2D<float4> source;
-[[vk::binding(1, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> target;
+[[vk::binding(0, 0)]] Texture2D<float4> source : register(t0);
+[[vk::binding(1, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> target : register(u0);
 struct Constants { int2 size; float sharpness; float unused; };
-[[vk::push_constant]] ConstantBuffer<Constants> constants;
+[[vk::push_constant]] ConstantBuffer<Constants> constants : register(b0);
 
 static const float kLimit = 0.25 - 1.0 / 16.0;   // FSR_RCAS_LIMIT: keeps the filter from ringing
 

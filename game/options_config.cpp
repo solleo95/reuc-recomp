@@ -26,6 +26,12 @@ Options options_from_config(const ConfigDocument& document) {
     if(root.contains("skip_tutorials"))options.skip_tutorials=boolean(root["skip_tutorials"]);
     if(root.contains("graphics")) {
         const auto& graphics=root["graphics"];if(!graphics.is_object())invalid("graphics must be an object");
+        if(graphics.contains("renderer")) {
+            if(!graphics["renderer"].is_string())invalid("renderer must be a string");
+            const auto backend=renderer_backend_from_name(graphics["renderer"].get<std::string>());
+            if(!backend)invalid("renderer must be vulkan, dx11 or dx12");
+            options.renderer_backend=*backend;
+        }
         if(graphics.contains("render_scale")) {
             if(!graphics["render_scale"].is_number())invalid("render_scale must be a number");
             const auto scale=graphics["render_scale"].get<double>();
@@ -158,6 +164,7 @@ Options options_from_config(const ConfigDocument& document) {
 }
 void store_options(ConfigDocument& document,const Options& options) {
     if(options.prompt_style!=PromptStyle::monochrome && options.prompt_style!=PromptStyle::sculpted)invalid("unknown prompt_style");
+    if(renderer_backend_name(options.renderer_backend).empty())invalid("unknown renderer");
     if(options.window_mode!=WindowMode::windowed && options.window_mode!=WindowMode::borderless && options.window_mode!=WindowMode::exclusive)invalid("unknown window_mode");
     if(!upscaler_from_name(upscaler_name(options.upscaler),false))invalid("unknown upscaler");
     if(upscale_mode_name(options.upscale_mode).empty())invalid("unknown upscale_mode");
@@ -168,6 +175,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     auto& graphics=replacement.properties["graphics"];
     if(graphics.is_null())graphics=nlohmann::ordered_json::object();
     if(!graphics.is_object())invalid("graphics must be an object");
+    graphics["renderer"]=std::string(renderer_backend_name(options.renderer_backend));
     graphics["render_scale"]=options.render_scale;
     graphics["width"]=options.width;graphics["height"]=options.height;
     graphics["unlock_60fps"]=options.unlock_60fps;

@@ -1,6 +1,7 @@
 #pragma once
 #include "live_settings.h"
 #include "feature_report.h"
+#include "backend_ui.h"
 #include "binding_editor.h"
 #include "ui_fonts.h"
 #include "menu_bridge.h"
@@ -14,7 +15,7 @@ namespace uc {
 class SettingsMenu {
 public:
     // features: the PC's DLSS/FSR support once known (nullptr while checking); monitor: the desktop size for the render scale labels.
-    SettingsMenu(LiveSettings& live, std::string language, std::function<const FeatureReport*()> features, uint32_t monitor_width, uint32_t monitor_height);
+    SettingsMenu(LiveSettings& live, std::string language, std::function<const FeatureReport*()> features, uint32_t monitor_width, uint32_t monitor_height, RendererBackend backend=RendererBackend::vulkan);
     void setup();   // renderer set_menu setup: fonts and style into the menu's ImGui context
     void build();   // renderer set_menu build: one frame of widgets; runs inside the renderer, so picks wait for commit()
     void commit();  // main loop, outside rendering: apply and save what build() picked
@@ -40,6 +41,7 @@ private:
     std::string language_;
     std::function<const FeatureReport*()> features_;
     uint32_t monitor_width_, monitor_height_;
+    BackendUi backend_ui_;   // what the chosen graphics API can offer; the rest is hidden
     BindingEditor editor_;
     ui::Fonts fonts_;
     std::set<UpscalerKind> failed_, failed_generation_;

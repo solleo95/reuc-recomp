@@ -2,10 +2,18 @@
 #include "launch.h"
 #include "options_config.h"
 #include <fstream>
+#include <cstdio>
+#include <vector>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 int main(int argc,char** argv) {
+    if(argc>1 && std::string_view(argv[1])=="--features") {
+        std::vector<std::string_view> arguments;for(int i=1;i<argc;++i)arguments.emplace_back(argv[i]);
+        const auto parsed=uc::parse_options(arguments);if(!std::holds_alternative<uc::Options>(parsed))return 2;
+        const auto name=uc::renderer_backend_name(std::get<uc::Options>(parsed).renderer_backend);
+        std::printf("{\"renderer\":\"%.*s\"}\n",int(name.size()),name.data());return 0;
+    }
     if(argc>2 && std::string_view(argv[1])=="--config") {
         std::ofstream out(std::filesystem::path(argv[2]).parent_path()/"child-args.txt");
         for(int i=1;i<argc;++i)out<<argv[i]<<'\n';
@@ -28,6 +36,10 @@ int main(int argc,char** argv) {
     uc::ConfigDocument config;uc::Options options;options.game=directory;
     uc::store_options(config,options);uc::save_config(directory/"config.json",config);
     wchar_t executable[32768];CHECK(GetModuleFileNameW(nullptr,executable,32768));
+    for(auto backend:{uc::RendererBackend::vulkan,uc::RendererBackend::directx11,uc::RendererBackend::directx12}) {
+        const auto expected=std::string("{\"renderer\":\"")+std::string(uc::renderer_backend_name(backend))+"\"}";
+        CHECK(uc::query_features(executable,directory/"config.json",3000,backend)==expected);
+    }
     for(int mode:{0,1,2}) {
         const int cpu=mode==1 ? 7 : -1;
         std::optional<uc::net::Endpoint> network;

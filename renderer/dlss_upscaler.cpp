@@ -1,4 +1,5 @@
 #include "upscaler.h"
+#include "native_upscaler.h"
 #include "streamline.h"
 #include "streamline_api.h"
 #include "upscale_math.h"
@@ -34,7 +35,7 @@ sl::Resource image(const UpscaleImage& i) {
 void check(sl::Result result, const char* what) {
     if (result!=sl::Result::eOk) throw std::runtime_error(std::string("DLSS: ")+what+" failed: "+sl::getResultAsStr(result));
 }
-class DlssUpscaler final : public Upscaler {
+class DlssUpscaler final : public Upscaler,public NativeUpscaler {
 public:
     DlssUpscaler(const Streamline& streamline, UpscaleMode mode) : api_(streamline.api()), mode_(mode) {
         options_.mode=dlss_mode(mode);
@@ -49,6 +50,21 @@ public:
         if (rr_options_set_) api_.free_resources(sl::kFeatureDLSS_RR, viewport_);
     }
     void evaluate(const UpscaleInputs& in) override {
+        evaluate(in,in.command,image(in.color),image(in.depth),image(in.motion),image(in.output),image(in.diffuse_albedo),image(in.specular_albedo),image(in.normal_roughness));
+    }
+    void evaluate(const NativeUpscaleInputs& native) override {
+        UpscaleInputs in;
+        in.render_size={native.render_size.width,native.render_size.height};in.output_size={native.output_size.width,native.output_size.height};
+        in.jitter=native.jitter;in.reset=native.reset;in.projection=native.projection;in.clip_to_prev_clip=native.clip_to_prev_clip;
+        in.ray_reconstruction=native.ray_reconstruction;
+        const auto resource=[](const NativeUpscaleImage& image) {
+            sl::Resource result(sl::ResourceType::eTex2d,image.resource,nullptr,nullptr,image.state);
+            result.width=image.extent.width;result.height=image.extent.height;result.nativeFormat=image.format;result.mipLevels=result.arrayLayers=1;
+            return result;
+        };
+        evaluate(in,native.command,resource(native.color),resource(native.depth),resource(native.motion),resource(native.output),resource(native.diffuse_albedo),resource(native.specular_albedo),resource(native.normal_roughness));
+    }
+    void evaluate(const UpscaleInputs& in,void* command,sl::Resource color,sl::Resource depth,sl::Resource motion,sl::Resource output,sl::Resource diffuse,sl::Resource specular,sl::Resource normals) {
         sl::FrameToken* token=api_.frame;   // taken by the renderer for this guest frame (Streamline::begin_frame)
         if (!token) throw std::runtime_error("DLSS: no frame token");
         if (options_.outputWidth!=in.output_size.width || options_.outputHeight!=in.output_size.height) {
@@ -85,7 +101,6 @@ public:
         constants.motionVectorsDilated=sl::Boolean::eFalse;
         constants.motionVectorsJittered=sl::Boolean::eFalse;
         check(api_.set_constants(constants,*token,viewport_),"constants");
-        auto color=image(in.color), depth=image(in.depth), motion=image(in.motion), output=image(in.output);
         const sl::Extent render{0,0,in.render_size.width,in.render_size.height}, shown{0,0,in.output_size.width,in.output_size.height};
         // The scene targets stay untouched until the next frame's first scene pass (the renderer defers their clear), so they are valid until
         // present and Streamline neither copies them nor loses them for frame generation; the output gets the HUD drawn into it right after.
@@ -96,17 +111,16 @@ public:
             {&output,sl::kBufferTypeScalingOutputColor,sl::ResourceLifecycle::eOnlyValidNow,&shown}};
         const sl::BaseStructure* inputs[]={&viewport_};
         if (in.ray_reconstruction) {   // Ray Reconstruction replaces Super Resolution for this frame: the same tags and the three guides
-            auto diffuse=image(in.diffuse_albedo), specular=image(in.specular_albedo), normals=image(in.normal_roughness);
             const sl::ResourceTag rr_tags[]={tags[0],tags[1],tags[2],tags[3],
                 {&diffuse,sl::kBufferTypeAlbedo,sl::ResourceLifecycle::eValidUntilPresent,&render},
                 {&specular,sl::kBufferTypeSpecularAlbedo,sl::ResourceLifecycle::eValidUntilPresent,&render},
                 {&normals,sl::kBufferTypeNormalRoughness,sl::ResourceLifecycle::eValidUntilPresent,&render}};
-            check(api_.set_tag_for_frame(*token,viewport_,rr_tags,7,in.command),"RR tags");
-            check(api_.evaluate_feature(sl::kFeatureDLSS_RR,*token,inputs,1,in.command),"RR evaluate");
+            check(api_.set_tag_for_frame(*token,viewport_,rr_tags,7,command),"RR tags");
+            check(api_.evaluate_feature(sl::kFeatureDLSS_RR,*token,inputs,1,command),"RR evaluate");
             return;
         }
-        check(api_.set_tag_for_frame(*token,viewport_,tags,4,in.command),"tags");
-        check(api_.evaluate_feature(sl::kFeatureDLSS,*token,inputs,1,in.command),"evaluate");
+        check(api_.set_tag_for_frame(*token,viewport_,tags,4,command),"tags");
+        check(api_.evaluate_feature(sl::kFeatureDLSS,*token,inputs,1,command),"evaluate");
     }
     bool sharpens() const override { return false; }
     RenderExtent minimum_internal(RenderExtent output) const override {
@@ -141,4 +155,5 @@ private:
 };
 }
 std::unique_ptr<Upscaler> make_dlss_upscaler(const Streamline& streamline, UpscaleMode mode) { return std::make_unique<DlssUpscaler>(streamline,mode); }
+std::unique_ptr<NativeUpscaler> make_native_dlss_upscaler(const Streamline& streamline,UpscaleMode mode) {return std::make_unique<DlssUpscaler>(streamline,mode);}
 }

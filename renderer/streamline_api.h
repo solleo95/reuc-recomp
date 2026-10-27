@@ -22,6 +22,8 @@ struct StreamlineApi {
     PFun_slSetConstants* set_constants=nullptr;
     PFun_slEvaluateFeature* evaluate_feature=nullptr;
     PFun_slFreeResources* free_resources=nullptr;
+    PFun_slSetD3DDevice* set_d3d_device=nullptr;
+    PFun_slUpgradeInterface* upgrade_interface=nullptr;
     PFN_vkGetInstanceProcAddr get_instance_proc=nullptr;   // SL's: vulkan-1 addresses except for the intercepted calls
     PFN_vkGetDeviceProcAddr get_device_proc=nullptr;
     sl::FrameToken* frame=nullptr;   // this guest frame's token (Streamline::begin_frame): DLSS constants, frame generation and Reflex share it

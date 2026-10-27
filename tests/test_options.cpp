@@ -5,6 +5,17 @@
 
 template<size_t N> static auto parse(const std::array<std::string_view, N>& args) { return uc::parse_options(args); }
 int main() {
+    for (const auto& [name,backend] : {std::pair{"vulkan",uc::RendererBackend::vulkan},
+                                      {"dx11",uc::RendererBackend::directx11}, {"dx12",uc::RendererBackend::directx12}}) {
+        const auto selected=parse(std::array<std::string_view,2>{"--renderer",name});
+        CHECK(std::holds_alternative<uc::Options>(selected));
+        CHECK(std::get<uc::Options>(selected).renderer_backend==backend);
+        CHECK(uc::renderer_backend_name(backend)==name);
+    }
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,0>{})).renderer_backend==uc::RendererBackend::vulkan);
+    for (const auto invalid : {"", "DX11", "opengl", "dx13"})
+        CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--renderer",invalid})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--renderer"})));
     auto loopback=parse(std::array<std::string_view,2>{"--net-loopback","--net-host"});
     CHECK(std::holds_alternative<uc::Options>(loopback));
     CHECK(std::get<uc::Options>(loopback).netplay->loopback);

@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include "renderer_backend.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -27,4 +28,5 @@ Dlss5DeviceNeeds dlss5_device_needs(VkInstance, VkPhysicalDevice, const std::fil
 // Why the device cannot ray trace (extensions, features), nullptr when it has everything; the renderer enables them under the same test.
 const char* ray_tracing_gap(VkPhysicalDevice physical);
 UpscalerSupport probe_upscalers(const std::filesystem::path& directory, bool dlss5 = true);   // dlss5 false: nvngx_dlssnr.dll is not touched
+UpscalerSupport probe_native_upscalers(const std::filesystem::path& directory,RendererBackend backend);
 }

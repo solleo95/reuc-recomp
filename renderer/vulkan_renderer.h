@@ -2,6 +2,7 @@
 #include "dlss5_pass.h"
 #include "graphics_effects.h"
 #include "gx_packets.h"
+#include "render_pixels.h"
 #include "hdr_pass.h"
 #include "pipeline_keys.h"
 #include "prompt_overlay.h"
@@ -49,8 +50,6 @@
 #include <unordered_set>
 
 namespace uc {
-struct RenderPixels { uint64_t serial = 0; uint32_t width = 0, height = 0; std::vector<uint8_t> rgba; };
-void save_png(const RenderPixels& pixels,const std::filesystem::path& path);
 class VulkanRenderer {
 public:
     VulkanRenderer() = default;
@@ -115,7 +114,7 @@ public:
     void lost_copies(std::vector<const gx::TexturePixels*> keys);
     RenderExtent upscale_internal_extent() const { return {scene_extent_.width, scene_extent_.height}; }   // {0,0} without an upscaler
     uint64_t whole_frame_upscales() const { return whole_frame_upscales_; }   // frames without the game's scene copy: upscaled whole at present
-    struct MotionPixels { uint32_t width=0, height=0; std::vector<float> rg; std::array<float,2> at(uint32_t x, uint32_t y) const { const size_t i=(size_t(y)*width+x)*2; return {rg.at(i), rg.at(i+1)}; } };
+    using MotionPixels=uc::MotionPixels;
     MotionPixels capture_motion();   // tests/tools: the motion target of the last scene (waits for the GPU)
     struct GBufferPixels { uint32_t width=0, height=0; std::vector<uint16_t> texels; };   // rgba per texel, as gbuffer.h encodes
     GBufferPixels capture_gbuffer();   // tests/tools: the G-buffer of the last scene (waits for the GPU); throws when no scene wrote one

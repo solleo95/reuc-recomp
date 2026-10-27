@@ -13,6 +13,21 @@ struct Params {
     uint first;          // à-trous: the first pass (its variance is in the moments, its input the history)
     uint maxHistory;     // temporal: the longest history in frames
 };
+#ifdef UC_DIRECTX
+ConstantBuffer<Params> params : register(b0);
+Texture2D<float4> noisy : register(t0);
+Texture2D<float> sceneDepth : register(t1);
+Texture2D<float2> sceneMotion : register(t2);
+Texture2D<float4> sceneGBuffer : register(t3);
+RWTexture2D<float4> previousHistory : register(u0);
+RWTexture2D<float4> previousMoments : register(u1);
+RWTexture2D<float4> previousGuide : register(u2);
+RWTexture2D<float4> history : register(u3);
+RWTexture2D<float4> moments : register(u4);
+RWTexture2D<float4> guide : register(u5);
+RWTexture2D<float4> filterIn : register(u6);
+RWTexture2D<float4> filterOut : register(u7);
+#else
 [[vk::push_constant]] ConstantBuffer<Params> params;
 [[vk::binding(0, 0)]] Texture2D<float4> noisy;
 [[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
@@ -29,6 +44,7 @@ struct Params {
 // À-trous: rgb = signal, a = its variance.
 [[vk::binding(10, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> filterIn;
 [[vk::binding(11, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> filterOut;
+#endif
 
 static const uint kReset = 1, kRadiance = 2;
 static const float kDepthTolerance = 0.02;        // kDenoiseDepthTolerance

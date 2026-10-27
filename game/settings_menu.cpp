@@ -26,8 +26,8 @@ bool compact_checkbox(const char* id,const char* label,bool& value,float unit) {
     return changed;
 }
 }
-SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height)
-    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),editor_(live.bindings()) {}
+SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height,RendererBackend backend)
+    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()) {}
 const char* SettingsMenu::tr(std::string_view key) const { return launcher::text(language_,key).data(); }
 void SettingsMenu::setup() {
     fonts_=ui::load_fonts(*ImGui::GetIO().Fonts);   // the previous menu context (if any) is gone: its atlas no longer reads the old bytes
@@ -65,7 +65,7 @@ void SettingsMenu::build() {
     if(ImGui::BeginTabBar("tabs",ImGuiTabBarFlags_FittingPolicyScroll)) {   // tabs that do not fit (mods add more) scroll with arrow buttons
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
-        if(current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
+        if(backend_ui_.dlss5 && current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
         if(mod_menu_) {   // mods: one manager tab; each mod's settings open in a window from there
             if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
@@ -120,10 +120,11 @@ void SettingsMenu::main_tab(float unit) {
         if(!ok) why=reason.empty() ? tr("unsupported") : reason;
         return ok;
     };
-    const auto kind_label=[&](UpscalerKind kind) { return kind==UpscalerKind::dlss ? "DLSS" : kind==UpscalerKind::fsr ? "FSR" : kind==UpscalerKind::smaa ? "SMAA" : tr("off"); };
+    const auto kind_label=[&](UpscalerKind kind) { return kind==UpscalerKind::dlss ? "DLSS" : kind==UpscalerKind::fsr && backend_ui_.fsr ? "FSR" : kind==UpscalerKind::smaa ? "SMAA" : tr("off"); };
     ImGui::TextUnformatted(tr("upscaling"));
     if(ImGui::BeginCombo("##upscaling",kind_label(options.upscaler))) {
         for(const auto kind:{UpscalerKind::off,UpscalerKind::smaa,UpscalerKind::dlss,UpscalerKind::fsr}) {
+            if(kind==UpscalerKind::fsr && !backend_ui_.fsr) continue;
             std::string why; const bool ok=supported(kind,false,why);
             ImGui::BeginDisabled(!ok);
             if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {
@@ -165,6 +166,7 @@ void SettingsMenu::main_tab(float unit) {
     if(ImGui::SliderFloat("##sharpness",&sharpness,.01f,1.f,"%.2f")) options.sharpness=std::clamp(std::round(double(sharpness)*100)/100,.01,1.);
     ImGui::EndDisabled(); ImGui::EndDisabled();
     ImGui::Dummy({0,6*unit});
+    if(backend_ui_.frame_generation) {
     ImGui::TextUnformatted(tr("framegen"));
     const auto choice=frame_generation_choice(options);
     const auto choice_label=[&](FrameGenChoice value) -> std::string {
@@ -185,6 +187,7 @@ void SettingsMenu::main_tab(float unit) {
         ImGui::EndCombo();
     }
     ImGui::Dummy({0,6*unit});
+    }
     ImGui::TextUnformatted(tr("crosshair_scale"));
     int crosshair=int(options.crosshair_scale);
     if(ImGui::SliderInt("##crosshair",&crosshair,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.crosshair_scale=uint32_t(std::clamp(crosshair,0,100));
@@ -234,7 +237,7 @@ void SettingsMenu::effects_tab(float unit) {
     ImGui::EndDisabled();
     if(!path && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr("effects_unavailable"));
     const auto preset_label=[&](EffectLevel level) { return level==EffectLevel::off ? std::string(tr("off")) : std::string(tr(level==EffectLevel::low ? "level_low" : level==EffectLevel::medium ? "level_medium" : level==EffectLevel::high ? "level_high" : "level_ultra")); };
-    const auto rt=rt_ui(options.effects,features!=nullptr,features && features->ray_tracing);
+    const auto rt=backend_ui_.ray_tracing ? rt_ui(options.effects,features!=nullptr,features && features->ray_tracing) : RtUi{false,false,false};
     const auto level_combo=[&](const char* id,const char* title,EffectLevel& value,bool replaced=false) {   // the presets of an effect; greyed out like the other screen-space effects (replaced: ray tracing does it instead)
         ImGui::Dummy({0,6*unit});
         ImGui::TextUnformatted(tr(title));
@@ -254,6 +257,7 @@ void SettingsMenu::effects_tab(float unit) {
     ImGui::EndDisabled();
     if((!path || rt.raster_replaced) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s",tr(rt.raster_replaced ? "replaced_by_rt" : "effects_unavailable"));
     // Ray tracing (path tracing): the checkbox and its quality; it lights the scene instead of the shadow map, the contact shadows and GTAO above.
+    if(backend_ui_.ray_tracing) {
     ImGui::Dummy({0,6*unit});
     ImGui::BeginDisabled(!rt.master_enabled);
     compact_checkbox("##rt",tr("ray_tracing"),options.effects.path_tracing,unit);
@@ -270,6 +274,7 @@ void SettingsMenu::effects_tab(float unit) {
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
+    }
     ImGui::Dummy({0,6*unit});
     compact_checkbox("##bloom",tr("bloom"),options.bloom,unit);
     ImGui::BeginDisabled(!options.bloom);

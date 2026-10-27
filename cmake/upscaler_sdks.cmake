@@ -52,6 +52,7 @@ set(UC_UPSCALER_RUNTIME
   ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlss.dll ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlssd.dll ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlssg.dll
   ${streamline_SOURCE_DIR}/bin/x64/NvLowLatencyVk.dll
   ${fidelityfx_SOURCE_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll
+  ${fidelityfx_SOURCE_DIR}/PrebuiltSignedDLL/amd_fidelityfx_dx12.dll
   CACHE INTERNAL "")
 install(FILES ${streamline_SOURCE_DIR}/license.txt ${streamline_SOURCE_DIR}/bin/x64/nvngx_dlss.license.txt ${streamline_SOURCE_DIR}/bin/x64/reflex.license.txt
   DESTINATION licenses/Streamline)

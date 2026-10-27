@@ -6,6 +6,7 @@
 #include "feature_report.h"
 #include "render_scale.h"
 #include "rt_ui.h"
+#include "backend_ui.h"
 #include "prompt_icons.h"
 #include "localization.h"
 #include "netplay.h"
@@ -162,7 +163,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
@@ -247,11 +248,19 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
+    auto features_backend=options.renderer_backend;
+    const auto start_features_query=[&] {
+        features_backend=options.renderer_backend;features_ready=false;
+        if(query_thread.thread.joinable())query_thread.thread.join();
+        query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
+        query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path,backend=features_backend] {
+            try {promise->set_value(uc::query_features(exe,config,30000,backend));} catch(...) {promise->set_exception(std::current_exception());}
+        });
+    };
     if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
 #ifndef UC_UPDATE_ACCEPTANCE
     if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
-        query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
-        query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path] {promise->set_value(uc::query_features(exe,config));});
+        start_features_query();
     }
 #endif
     auto& diagnostics=std::cerr;
@@ -307,9 +316,13 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         }
         if(calibration && calibration->ready()) {cpu_choice=calibration->get();calibration.reset();cpu_ready=true;}
         if(features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
-            const auto report=features_query.get();features=uc::feature_report_from_json(report);features_ready=true;
-            diagnostics<<"GPU report at_ms="<<(SDL_GetTicksNS()-ui_start)/1e6<<" bytes="<<report.size()<<std::endl;
+            try {
+                const auto report=features_query.get();
+                if(features_backend==options.renderer_backend) {features=uc::feature_report_from_json(report);features_ready=true;}
+                diagnostics<<"GPU report at_ms="<<(SDL_GetTicksNS()-ui_start)/1e6<<" bytes="<<report.size()<<std::endl;
+            } catch(const std::exception& e) {features={};features_ready=features_backend==options.renderer_backend;diagnostics<<"GPU report failed: "<<e.what()<<std::endl;}
         }
+        if(smoke.empty() && !features_query.valid() && features_backend!=options.renderer_backend) start_features_query();
         if(features_ready)uc::disable_unsupported_upscaling(options,features);
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();
         if(!smoke.empty()) {
@@ -335,6 +348,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             if(smoke_exe.empty()) {clicks[56]="reload";clicks[62]="defaults";clicks[486]="language";clicks[490]="lang-en";clicks[494]="game";clicks[500]="network";clicks[508]="network-connect";clicks[512]="network-connect";clicks[518]="network-cancel";}
             else {clicks[4]="launch";clicks[56]="reload";clicks[62]="defaults";}
+            if(smoke_exe.empty()) {
+                clicks[68]="general";clicks[72]="renderer";clicks[76]="renderer1";
+                clicks[348]="general";clicks[352]="renderer";clicks[356]="renderer2";
+            }
             for(auto [when,id]:clicks)if(frame>=when-2 && frame<=when+1) {
                 if(!positions.contains(id))throw std::runtime_error("launcher smoke widget missing: "+id);
                 const auto point=positions.at(id);io.AddMousePosEvent(point.x,point.y);
@@ -556,7 +573,17 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             const float column_gap=88*unit;
             const float column=(ImGui::GetContentRegionAvail().x-column_gap)/2;
             ImGui::BeginChild("display",{column,0},ImGuiChildFlags_None);
-            ImGui::PushItemWidth(-1);ImGui::TextUnformatted(tr("window"));
+            ImGui::PushItemWidth(-1);ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);
+            const char* renderer_names[]={"Vulkan","DirectX 11","DirectX 12"};
+            const bool renderer_open=combo("##renderer",renderer_names[int(options.renderer_backend)]);track("renderer");
+            if(renderer_open) {
+                for(int i=0;i<3;++i) {
+                    if(ImGui::Selectable(renderer_names[i],int(options.renderer_backend)==i)) {options.renderer_backend=uc::RendererBackend(i);if(smoke.empty())features_ready=false;}
+                    track("renderer"+std::to_string(i));
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});ImGui::TextUnformatted(tr("window"));
             push_font(ui.sans,22);
             const char* modes[]={"windowed","borderless","exclusive"};
             const bool window_open=combo("##window",tr(modes[int(options.window_mode)]));track("window");
@@ -601,12 +628,16 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::BeginChild("enhancements",{0,0},ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_AlwaysVerticalScrollbar);
             ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::PushItemWidth(-1);
+            const auto api=uc::backend_ui(options.renderer_backend);   // what this graphics API can offer; the rest is hidden
+            // Hidden controls keep their saved values (the renderer ignores them on this API), so switching back restores them.
+            const auto rt_for=[&] {return api.ray_tracing ? uc::rt_ui(options.effects,features_ready,features.ray_tracing) : uc::RtUi{false,false,false};};
             ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
             const bool checking=features_query.valid();
             const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : kind==uc::UpscalerKind::smaa ? "SMAA" : tr("off");};
-            const bool upscaler_open=combo("##upscaling",kind_label(options.upscaler));track("upscaling");
+            const bool upscaler_open=combo("##upscaling",kind_label(!api.fsr && options.upscaler==uc::UpscalerKind::fsr ? uc::UpscalerKind::off : options.upscaler));track("upscaling");
             if(upscaler_open) {
                 for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::smaa,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
+                    if(kind==uc::UpscalerKind::fsr && !api.fsr)continue;
                     const bool supported=uc::upscaler_supported(features,kind);
                     const auto& reason=!features.effects ? features.effects_reason : kind==uc::UpscalerKind::dlss ? features.dlss_reason : features.fsr_reason;
                     ImGui::BeginDisabled(!supported);
@@ -650,6 +681,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(ImGui::SliderFloat("##sharpness",&sharpness,0.01f,1.0f,"%.2f"))options.sharpness=std::clamp(std::round(double(sharpness)*100)/100,0.01,1.0);
             track("sharpness");
             ImGui::EndDisabled();
+            if(api.frame_generation) {
             ImGui::Dummy({0,16*unit});
             ImGui::TextUnformatted(tr("framegen"));push_font(ui.sans,22);
             const auto generator=options.frame_generation ? options.upscaler : uc::UpscalerKind::off;
@@ -686,6 +718,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     ImGui::TextWrapped("%s: %u FPS",tr("output_fps"),options.fps_limit.value_or(options.unlock_60fps ? 60 : 30)*options.frame_generation_multiplier);
                     ImGui::PopStyleColor();
                 }
+            }
             }
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("effects"));
             ImGui::TextUnformatted(tr("anisotropy"));push_font(ui.sans,22);
@@ -726,18 +759,20 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)ImGui::SetTooltip("%s",hint);}
                     ImGui::PopFont();
                 };
-                level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,uc::rt_ui(options.effects,features_ready,features.ray_tracing).raster_replaced,tr("replaced_by_rt"));   // path tracing replaces it
+                level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,rt_for().raster_replaced,tr("replaced_by_rt"));   // path tracing replaces it
                 ImGui::Dummy({0,8*unit});
                 level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
                 // Ray tracing (path tracing): the checkbox and its quality; it lights the scene instead of the shadow map, the contact shadows and GTAO.
-                const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
-                const std::string rt_why=std::string(tr("rt_unavailable"))+(features.ray_tracing_reason.empty() ? "" : " ("+features.ray_tracing_reason+")");
-                ImGui::Dummy({0,8*unit});
-                toggle("##rt",tr("ray_tracing"),options.effects.path_tracing,!rt.master_enabled,rt_why.c_str());
-                ImGui::Dummy({0,8*unit});
-                level_combo("##rt-quality","rt_quality","rt-quality",options.effects.rt_quality,!rt.quality_enabled,nullptr,false);
+                if(api.ray_tracing) {
+                    const auto rt=rt_for();
+                    const std::string rt_why=std::string(tr("rt_unavailable"))+(features.ray_tracing_reason.empty() ? "" : " ("+features.ray_tracing_reason+")");
+                    ImGui::Dummy({0,8*unit});
+                    toggle("##rt",tr("ray_tracing"),options.effects.path_tracing,!rt.master_enabled,rt_why.c_str());
+                    ImGui::Dummy({0,8*unit});
+                    level_combo("##rt-quality","rt_quality","rt-quality",options.effects.rt_quality,!rt.quality_enabled,nullptr,false);
+                }
             }
-            const auto rt=uc::rt_ui(options.effects,features_ready,features.ray_tracing);
+            const auto rt=rt_for();
             ImGui::Dummy({0,8*unit});
             toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
@@ -752,9 +787,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::EndDisabled();
             std::error_code dlss5_ignored;const bool dlss5_runtime=fs::exists(directory/L"nvngx_dlssnr.dll",dlss5_ignored);   // the player puts it next to the exe
             if(!dlss5_runtime)options.dlss5_enabled=false;
+            if(api.dlss5) {
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("dlss5"));
             toggle("##dlss5",tr("dlss5_enable"),options.dlss5_enabled,!dlss5_runtime,tr("dlss5_runtime_missing"));
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("dlss5_enable_hint"));ImGui::PopStyleColor();
+            }
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("hdr"));
             toggle("##hdr",tr("hdr"),options.hdr.enabled);
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("hdr_hint"));ImGui::PopStyleColor();
@@ -1079,6 +1116,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(frame==42) {if(uc::load_config(config_path).input[size_t(uc::Action::fire)]!=std::vector<uc::Binding>{{uc::BindingKind::physical,{uc::PhysicalKind::key,41},{}}})throw std::runtime_error("Esc capture/save UI failed");ui.capture(smoke/L"saved.bmp");}
             if(frame==52) {if(error.find("changed since loading")==std::string::npos)throw std::runtime_error("stale-save error UI failed");ui.capture(smoke/L"error.bmp");}
             if(frame==66) {if(editor.bindings()!=uc::default_bindings())throw std::runtime_error("restore defaults UI failed");ui.capture(smoke/L"defaults.bmp");}
+            if(smoke_exe.empty() && (frame==78 || frame==358)) {
+                const auto expected=frame==78 ? uc::RendererBackend::directx11 : uc::RendererBackend::directx12;
+                if(options.renderer_backend!=expected || uc::options_from_config(uc::load_config(config_path)).renderer_backend!=expected)throw std::runtime_error("renderer select/save UI failed");
+                ui.capture(smoke/(frame==78 ? L"renderer-dx11.bmp" : L"renderer-dx12.bmp"));
+            }
             if(frame==96 || frame==110) {
                 const auto expected=frame==96 ? uc::PromptStyle::sculpted : uc::PromptStyle::monochrome;
                 ui.capture(smoke/(frame==96 ? L"style3.bmp" : L"style2.bmp"));

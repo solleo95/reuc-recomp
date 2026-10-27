@@ -55,7 +55,7 @@
 #include "diagnostic_log.h"
 #include "startup_error.h"
 #include "audio_gap_audit.h"
-#include "vulkan_renderer.h"
+#include "game_renderer.h"
 #include "host_keys.h"
 #include "launch.h"
 #include "live_settings.h"
@@ -244,15 +244,17 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if(kPublicRelease) { options.gx_audit=false; options.capture_scene_passes=false; options.audio_audit=false; options.gx_gaps=false; }   // developer reports that write files
     { std::error_code ignored; if(!std::filesystem::exists(exe_dir()/uc::kDlss5Runtime,ignored)) options.dlss5_enabled=false; }   // the player supplies nvngx_dlssnr.dll; without it DLSS 5 stays off
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
-        const auto support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
+        uc::UpscalerSupport support;
+        if(options.renderer_backend==uc::RendererBackend::vulkan) support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
+        else support=uc::probe_native_upscalers(exe_dir(),options.renderer_backend);
         uc::FeatureReport report{support.dlss,support.dlss_g,support.fsr,support.fsr_fg,support.dlss_g_max_multiplier,support.dlss_reason,support.dlss_g_reason,support.fsr_reason,support.fsr_fg_reason,support.effects,support.effects_reason,support.anisotropy_max,support.ray_tracing,support.ray_reconstruction,support.ray_tracing_reason,support.ray_reconstruction_reason,support.dlss5,support.dlss5_reason};
         std::printf("%s\n",uc::to_json(report).c_str());
-        return 0;
+        return 0;   // the caller reads the report as soon as it is written and does not wait for this process to unload the NGX/Streamline runtimes
     }
     const bool server_mode=!options.test_server.empty();
     if(server_mode && !options.test_control.empty()) throw std::invalid_argument("--test-server replaces --test-control; use only one");
     const bool controlled=!options.test_control.empty() || server_mode;
-    if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control and --test-server require Vulkan and an isolated --save-root");
+    if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control and --test-server require a renderer and an isolated --save-root");
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
     if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
@@ -393,14 +395,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
 
     std::optional<VideoSession> video;
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(nullptr, SDL_DestroyWindow);
-    std::optional<uc::VulkanRenderer> renderer_storage; renderer_storage.emplace();
-    uc::VulkanRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
+    std::optional<uc::GameRenderer> renderer_storage; renderer_storage.emplace(options.renderer_backend);
+    uc::GameRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
     double render_aspect=16.0/9;
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();   // the launcher's language: menus and start screens
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
         const auto renderer_start=std::chrono::steady_clock::now();
-        std::fprintf(stderr,"[startup] renderer initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
+        std::fprintf(stderr,"[startup] renderer=%s initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",std::string(uc::renderer_backend_name(options.renderer_backend)).c_str(),options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(menu_language); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
         renderer.set_aim_source([&input] { return input.latest_aim(); });
@@ -453,7 +455,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             const auto extent=uc::windowed_extent(options.render_scale,aspect,uint32_t(std::max(0,usable.w)),uint32_t(std::max(0,usable.h)));
             window_width=int(extent.width); window_height=int(extent.height);
         }
-        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN));
+        const SDL_WindowFlags graphics_window=options.renderer_backend==uc::RendererBackend::vulkan ? SDL_WINDOW_VULKAN : 0;
+        window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, graphics_window | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN));
         if (!window) throw std::runtime_error(SDL_GetError());
         // Enter fullscreen only after the compile overlay closes and Vulkan is ready to present.
         init_renderer(true);
@@ -556,7 +559,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         else if(!uc::diagnostic_directory().empty())frame_log=std::make_unique<uc::FrameLog>(uc::diagnostic_directory()/"frames.csv");
         else if(!kPublicRelease && fs::exists(exe_dir()/"frame_log.on")) frame_log=std::make_unique<uc::FrameLog>(exe_dir()/"debug"/("frames-"+std::to_string(GetCurrentProcessId())+".csv"));
     } catch(const std::exception& error) {std::fprintf(stderr,"[diagnostics] frame CSV unavailable: %s\n",error.what());}
-    uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0,frame_idle_last=0,frame_thread_last[8]={}; uint32_t frame_events=0;
+    uint64_t frame_busy_ns=0,frame_events_ns=0,frame_cpu_last=0,frame_idle_last=0,frame_gpu_busy_last=0,frame_thread_last[8]={}; uint32_t frame_events=0;
     const auto thread_cycles=[]() -> uint64_t { ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); return cycles; };
     std::vector<double> present_intervals; present_intervals.reserve(1024);   // ms between presents, reported once per second by --profile
     uint64_t audit_capture_serial=0;
@@ -681,6 +684,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     row.retraces=uc::vi_stats().retraces; row.textures=renderer.texture_creations(); row.decodes=uc::gx_stats().texture_decodes; row.dvd_reads=uc::dvd_stats().reads;
                     row.audio_blocks=uc::audio_stats().frames; row.seal_wait_ns=gx::seal_wait_ns(); row.switches=sched.switch_stats().switches; row.queued=uint32_t(depth.queued); row.outstanding=uint32_t(depth.outstanding);
                     { const auto window=gx::take_latency_window(); row.sealed_to_done_ms=window.sealed_to_done_ms; row.taken_to_done_ms=window.taken_to_done_ms; row.gpu_ms=renderer.take_gpu_window_ms();
+                      { const uint64_t busy=renderer.gpu_busy_ns(); row.gpu_sum_ms=busy>=frame_gpu_busy_last ? (busy-frame_gpu_busy_last)/1e6 : 0; frame_gpu_busy_last=busy; }   // a restarted renderer counts from zero
                       row.gpu_upscale_ms=renderer.pass_ms(uc::GpuPass::upscale); row.gpu_smaa_ms=renderer.pass_ms(uc::GpuPass::smaa); row.gpu_occlusion_ms=renderer.pass_ms(uc::GpuPass::occlusion);
                       row.gpu_rt_as_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_as); row.gpu_rt_shadows_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_shadows); row.gpu_rt_reflections_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_reflections); row.gpu_rt_lighting_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_lighting); row.gpu_rt_path_ms=renderer.take_pass_total_ms(uc::GpuPass::rt_path);
                       const auto rt=renderer.rt_stats(); row.rt_blas=rt.blas; row.rt_triangles=rt.triangles; }
@@ -766,7 +770,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         do { for (uint64_t serial : renderer.poll_completions()) if (packets.complete(serial)) uc::gx_completed(serial); }
         while (renderer.wait_for_pending(1000000000ull));
         auto lost=renderer.copy_keys();
-        renderer_storage.reset(); renderer_storage.emplace();
+        renderer_storage.reset(); renderer_storage.emplace(options.renderer_backend);
         init_renderer(false);
         renderer.lost_copies(std::move(lost));
         std::fprintf(stderr,"Renderer restarted in %.0f ms: upscaler %s, frame generation %s\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count(),
@@ -805,16 +809,16 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
         live_settings.emplace(config_path,input_config,std::move(targets));
-        if (controlled) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // test runs exercise every choice whatever this PC has
+        if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has
         else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
             features_promise=std::make_shared<std::promise<std::string>>(); features_query=features_promise->get_future().share();
-            std::thread([promise=features_promise,exe=exe_path(),config=config_path] { promise->set_value(uc::query_features(exe,config)); }).detach();
+            std::thread([promise=features_promise,exe=exe_path(),config=config_path,backend=options.renderer_backend] { promise->set_value(uc::query_features(exe,config,30000,backend)); }).detach();
         }
         const auto config_language=uc::launcher::config_language(input_config);
         settings_menu.emplace(*live_settings,config_language=="system" ? uc::launcher::system_language() : config_language,[&]() -> const uc::FeatureReport* {
             if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
             return features ? &*features : nullptr;
-        },monitor_width,monitor_height);
+        },monitor_width,monitor_height,options.renderer_backend);
         settings_menu->set_mod_menu(&mod_menu);
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
         if(!kPublicRelease)settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log

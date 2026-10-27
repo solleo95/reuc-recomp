@@ -109,7 +109,7 @@ void Dlss5Runtime::release() {
     for(void* handle:handles_) backend_->release_feature(handle);
     handles_.clear();
 }
-bool Dlss5Runtime::prepare(VkCommandBuffer command, const Dlss5FeatureKey& key, uint32_t passes, const std::function<void()>& idle) {
+bool Dlss5Runtime::prepare(void* command, const Dlss5FeatureKey& key, uint32_t passes, const std::function<void()>& idle) {
     if(key==key_ && passes==wanted_passes_ && (failed_ || handles_.size()==passes)) return !failed_;
     if(!handles_.empty()) { if(idle) idle(); release(); }   // the old features may still be in flight
     key_=key; wanted_passes_=passes; failed_=false; reason_.clear();
@@ -126,7 +126,7 @@ bool Dlss5Runtime::prepare(VkCommandBuffer command, const Dlss5FeatureKey& key, 
     if(!reason_.empty()) { release(); failed_=true; return false; }
     return true;
 }
-bool Dlss5Runtime::evaluate(VkCommandBuffer command, uint32_t pass, const Dlss5Run& run) {
+bool Dlss5Runtime::evaluate(void* command, uint32_t pass, const Dlss5Run& run) {
     if(failed_ || pass>=handles_.size()) return false;
     uint32_t result=kNgxSuccess;
     if(!run_parameters_) run_parameters_=backend_->allocate_parameters(result);   // every run sets all of them again

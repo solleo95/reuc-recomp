@@ -1,4 +1,5 @@
 // Columns: en, ru, de, fr, es, it, pt-BR, pl, uk, tr, ja, ko, zh-Hans.
+{"renderer",{"Graphics API","Графический API","Grafik-API","API graphique","API gráfica","API grafica","API gráfica","API graficzne","Графічний API","Grafik API","グラフィックスAPI","그래픽 API","图形 API"}},
 {"update_title",{"Client update","Обновление клиента","Client-Update","Mise à jour du client","Actualización del cliente","Aggiornamento del client","Atualização do cliente","Aktualizacja klienta","Оновлення клієнта","İstemci güncellemesi","クライアントの更新","클라이언트 업데이트","客户端更新"}},
 {"update_current",{"Installed version","Установленная версия","Installierte Version","Version installée","Versión instalada","Versione installata","Versão instalada","Zainstalowana wersja","Установлена версія","Yüklü sürüm","インストール済みバージョン","설치된 버전","已安装版本"}},
 {"update_new",{"New version","Новая версия","Neue Version","Nouvelle version","Nueva versión","Nuova versione","Nova versão","Nowa wersja","Нова версія","Yeni sürüm","新しいバージョン","새 버전","新版本"}},

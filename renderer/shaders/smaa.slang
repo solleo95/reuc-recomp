@@ -16,18 +16,18 @@
 #define SMAA_BRANCH [branch]
 #define discard return float2(0.0, 0.0)   // the edge detectors' "no edge" exit; a compute pass writes the zero instead of discarding the fragment
 struct Metrics { float4 rt; };   // 1/width, 1/height, width, height of the region
-[[vk::push_constant]] ConstantBuffer<Metrics> pushed;
+[[vk::push_constant]] ConstantBuffer<Metrics> pushed : register(b0);
 #define SMAA_RT_METRICS pushed.rt
-[[vk::binding(0, 0)]] SamplerState LinearSampler;
-[[vk::binding(1, 0)]] SamplerState PointSampler;
-[[vk::binding(2, 0)]] Texture2D colorTex;
-[[vk::binding(3, 0)]] Texture2D edgesTex;
-[[vk::binding(4, 0)]] Texture2D blendTex;
-[[vk::binding(5, 0)]] Texture2D areaTex;
-[[vk::binding(6, 0)]] Texture2D searchTex;
-[[vk::binding(7, 0)]] [[vk::image_format("rg8")]] RWTexture2D<float2> edgesOut;
-[[vk::binding(8, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> weightsOut;
-[[vk::binding(9, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> colorOut;
+[[vk::binding(0, 0)]] SamplerState LinearSampler : register(s0);
+[[vk::binding(1, 0)]] SamplerState PointSampler : register(s1);
+[[vk::binding(2, 0)]] Texture2D colorTex : register(t0);
+[[vk::binding(3, 0)]] Texture2D edgesTex : register(t1);
+[[vk::binding(4, 0)]] Texture2D blendTex : register(t2);
+[[vk::binding(5, 0)]] Texture2D areaTex : register(t3);
+[[vk::binding(6, 0)]] Texture2D searchTex : register(t4);
+[[vk::binding(7, 0)]] [[vk::image_format("rg8")]] RWTexture2D<float2> edgesOut : register(u0);
+[[vk::binding(8, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> weightsOut : register(u1);
+[[vk::binding(9, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> colorOut : register(u2);
 #include "SMAA.hlsl"
 
 [shader("compute")] [numthreads(8, 8, 1)]

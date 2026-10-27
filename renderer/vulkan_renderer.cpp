@@ -280,7 +280,10 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;   // queue_info.queueCount: 3 with the interpolation swapchain
     device_info.enabledExtensionCount = uint32_t(device_extensions.size()); device_info.ppEnabledExtensionNames = device_extensions.data();
     vk_check(through_streamline ? streamline_->create_device(instance_, physical_, device_info, device) : vkCreateDevice(physical_, &device_info, nullptr, &device), "vkCreateDevice");
-    if (through_streamline) base_present_=streamline_->present_functions(device);
+    if (through_streamline) {
+        base_present_=streamline_->present_functions(device);
+        present_.present=base_present_.present;   // SR/RR also need Streamline's per-present tag recycling and garbage collection.
+    }
     if (upscaler_kind_==UpscalerKind::dlss && frame_generation_ && dlss_g_available_) {
         dlss_presentation_=true; present_=base_present_;
     }
@@ -992,6 +995,7 @@ bool VulkanRenderer::set_upscaling(UpscalerKind kind, UpscaleMode mode, bool sha
         fsr_presentation_=fsr_presentation;
         dlss_presentation_=dlss_presentation;
         present_=fsr_presentation_ ? fsr_g_->present_functions() : dlss_presentation_ ? base_present_ : PresentFunctions{};
+        if (!fsr_presentation_ && streamline_ && streamline_->active()) present_.present=base_present_.present;
     }
     if (reconstruction_changed) upscaler_.reset();
     if (multiplier!=frame_generation_multiplier_) { dlss_g_.reset(); fg_waited_value_=0; }

@@ -20,8 +20,24 @@ struct Params {
     uint mode;            // 0: reflections, 1: lighting (one diffuse bounce, plan p6: the same machinery with cosine-weighted rays, the signal is the mean hit colour)
     float padding;
 };
+#ifdef UC_DIRECTX
+ConstantBuffer<Params> params : register(b0);
+#else
 [[vk::push_constant]] ConstantBuffer<Params> params;
+#endif
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
+#ifdef UC_DIRECTX
+RaytracingAccelerationStructure scene : register(t0);
+Texture2D<float> sceneDepth : register(t1);
+Texture2D<float4> sceneGBuffer : register(t2);
+Texture2D<uint> sceneMaterial : register(t3);
+StructuredBuffer<Record> records : register(t4);
+Texture2D<float4> signalIn : register(t6);
+Texture2D<float4> colorRead : register(t7);
+Texture2D<float4> sceneAlbedo : register(t8);
+RWTexture2D<float4> signalOut : register(u0);
+RWTexture2D<float4> sceneColor : register(u1);
+#else
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
 [[vk::binding(2, 0)]] Texture2D<float4> sceneGBuffer;
@@ -31,6 +47,8 @@ struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint 
 [[vk::binding(6, 0)]] Texture2D<float4> signalIn;
 [[vk::binding(7, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> sceneColor;
 [[vk::binding(8, 0)]] Texture2D<float4> sceneAlbedo;   // the RT albedo target (stage-0 texture x material colour): the lighting composite's reflectance
+#define colorRead sceneColor
+#endif
 
 static const float kFresnelF0 = 0.04;
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
@@ -87,7 +105,7 @@ float4 hitSample(float3 origin, float3 direction) {
     if (abs(frameZ - abs(hit.z)) > 0.03 * abs(hit.z)) return none;   // hidden from the camera: the frame shows something else there
     const float2 edge = saturate(min(at - params.viewport.xy, params.viewport.xy + params.viewport.zw - at) / (0.08 * params.viewport.zw));   // fade out toward the screen edge
     const float confidence = edge.x * edge.y * (1.0 - (t / params.reach) * (t / params.reach));   // rt_light_math.h rt_hit_confidence
-    return float4(sceneColor[hitPixel].rgb, saturate(confidence));
+    return float4(colorRead[hitPixel].rgb, saturate(confidence));
 }
 // A reflection ray's contribution: the hit's colour as its difference from `own` (zero where nothing is reflected).
 float3 reflectedDelta(float3 origin, float3 direction, float3 own) {
@@ -99,7 +117,7 @@ float3 reflectedDelta(float3 origin, float3 direction, float3 own) {
 void traceMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.signalSize)) return;
     const int2 pixel = int2(min(id.xy * params.divisor + params.divisor / 2, params.region - 1));
-    const float3 own = sceneColor[pixel].rgb;
+    const float3 own = colorRead[pixel].rgb;
     float3 result = float3(0.0, 0.0, 0.0);   // no reflection: no difference; no bounce: no light
     const float4 texel = sceneGBuffer.Load(int3(pixel, 0));
     const float stored = sceneDepth.Load(int3(pixel, 0));
@@ -163,14 +181,14 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     }
     const float3 delta = weights > 0.0 ? sum / weights : float3(0.0, 0.0, 0.0);
     if (params.mode == 1u) {   // lighting: albedo x the bounced colour x the preset's share, only ever adding light (rt_light_math.h rt_light_add)
-        float4 lit = sceneColor[id.xy];
+        float4 lit = colorRead[id.xy];
         lit.rgb = min(lit.rgb + sceneAlbedo.Load(int3(pixel, 0)).rgb * max(delta, 0.0) * params.strength * (1.0 - texel.z), 1.0);
         sceneColor[id.xy] = lit;
         return;
     }
     const float3 normal = decodeGBufferNormal(texel.xy);
     const float weight = saturate(fresnel(dot(normal, -normalize(position))) * reflectivity * params.strength) * (1.0 - texel.z);   // faded by the GX fog
-    float4 color = sceneColor[id.xy];
+    float4 color = colorRead[id.xy];
     color.rgb = saturate(color.rgb + delta * weight);   // lerp(own, hit, w) = own + w (hit - own)
     sceneColor[id.xy] = color;
 }

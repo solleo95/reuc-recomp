@@ -27,7 +27,11 @@ struct Params {
     uint recordCount;     // records of the frame
     float clampRadiance;  // the most one path may add per channel
 };
+#ifdef UC_DIRECTX
+ConstantBuffer<Params> params : register(b0);
+#else
 [[vk::push_constant]] ConstantBuffer<Params> params;
+#endif
 static uint pathsOf() { return params.counts & 255u; }
 static uint bouncesOf() { return (params.counts >> 8) & 255u; }
 static uint aoRaysOf() { return (params.counts >> 16) & 255u; }
@@ -35,6 +39,25 @@ static uint lightsOf() { return params.counts >> 24; }
 static uint divisorOf(){ return params.divisorFrame & 255u; }
 static uint frameOf() { return params.divisorFrame >> 8; }
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
+#ifdef UC_DIRECTX
+// Descriptor index and first word replace Vulkan device pointers; the remaining hit record stays shared.
+struct HitGeometry { uint2 positions; uint2 indices; uint record; uint strideWords; uint flags; uint padding; };
+ByteAddressBuffer hitBuffers[] : register(t0, space1);
+RaytracingAccelerationStructure scene : register(t0);
+Texture2D<float> sceneDepth : register(t1);
+Texture2D<float4> sceneGBuffer : register(t2);
+Texture2D<uint> sceneMaterial : register(t3);
+StructuredBuffer<Record> records : register(t4);
+Texture2D<float4> signalIn : register(t6);
+Texture2D<float4> colorRead : register(t7);
+Texture2D<float4> sceneAlbedo : register(t8);
+StructuredBuffer<HitGeometry> hitTable : register(t9);
+StructuredBuffer<uint> hitBases : register(t10);
+RWTexture2D<float4> signalOut : register(u0);
+RWTexture2D<float4> sceneColor : register(u1);
+RWStructuredBuffer<uint> albedoSums : register(u2);
+RWStructuredBuffer<uint> lightList : register(u3);
+#else
 struct HitGeometry { uint* positions; uint* indices; uint record; uint strideWords; uint flags; uint padding; };           // renderer/rt_scene.h RtHitGeometry
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
@@ -49,6 +72,8 @@ struct HitGeometry { uint* positions; uint* indices; uint record; uint strideWor
 [[vk::binding(10, 0)]] StructuredBuffer<uint> hitBases;
 [[vk::binding(11, 0)]] RWStructuredBuffer<uint> albedoSums;   // 12 words per record: the sums of the albedo's 8-bit channels (0-2), the sample count (3), the shown colour (4-6) and the view position x 16 (7-9, signed)
 [[vk::binding(12, 0)]] RWStructuredBuffer<uint> lightList;     // word 0: the number of emitters found; light i from word 4 + 8 i: position xyz, area, radiance rgb, weight (floats as bits)
+#define colorRead sceneColor
+#endif
 static const uint kStride = 12, kMaxLights = 32;
 static const float kKeyShadow = 0.65;   // rt_shadow_math.h kRtOverheadStrength
 static const float kLightCone = 1.0, kKeyCone = 0.06, kGridStep = 4.0, kPositionScale = 16.0;   // rt_path_math.h: the emitter's soft shadow, the overhead light's (rt_shadow_math.h), the accumulation grid
@@ -98,13 +123,21 @@ bool occluded(float3 origin, float3 direction, float reach) {
 }
 // The geometric normal of the triangle a ray hit, in view space (the object-to-world rows bring a cached mesh from object space)
 float3 hitNormal(HitGeometry geometry, uint primitive, float3x4 toView) {
+#ifdef UC_DIRECTX
+    const uint3 triangle = hitBuffers[NonUniformResourceIndex(geometry.indices.x)].Load3((geometry.indices.y + 3 * primitive) * 4) * geometry.strideWords;
+#else
     uint* indices = geometry.indices;
     uint* positions = geometry.positions;
     const uint3 triangle = uint3(indices[3 * primitive], indices[3 * primitive + 1], indices[3 * primitive + 2]) * geometry.strideWords;
+#endif
     float3 corner[3];
     for (int i = 0; i < 3; ++i) {
         const uint at = triangle[i];
+#ifdef UC_DIRECTX
+        corner[i] = mul(toView, float4(asfloat(hitBuffers[NonUniformResourceIndex(geometry.positions.x)].Load3((geometry.positions.y + at) * 4)), 1.0));
+#else
         corner[i] = mul(toView, float4(asfloat(positions[at]), asfloat(positions[at + 1]), asfloat(positions[at + 2]), 1.0));
+#endif
     }
     const float3 normal = cross(corner[1] - corner[0], corner[2] - corner[0]);
     const float length2 = dot(normal, normal);
@@ -119,7 +152,7 @@ void accumulateMain(uint3 id : SV_DispatchThreadID) {   // a grid with a step of
     const uint record = sceneMaterial.Load(int3(pixel, 0));
     if (record == 0xFFFFFFFFu || record >= params.recordCount) return;
     const uint3 rgb = uint3(saturate(sceneAlbedo.Load(int3(pixel, 0)).rgb) * 255.0 + 0.5);
-    const uint3 shown = uint3(saturate(sceneColor[uint2(pixel)].rgb) * 255.0 + 0.5);
+    const uint3 shown = uint3(saturate(colorRead[uint2(pixel)].rgb) * 255.0 + 0.5);
     InterlockedAdd(albedoSums[record * 12], rgb.x);
     InterlockedAdd(albedoSums[record * 12 + 1], rgb.y);
     InterlockedAdd(albedoSums[record * 12 + 2], rgb.z);
@@ -268,7 +301,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     }
     float3 light = weights > 0.0 ? max(sum / weights, 0.0) : float3(kReference, kReference, kReference);
     if (any(isnan(light)) || any(isinf(light))) light = float3(kReference, kReference, kReference);   // a bad sample leaves the pixel as the game drew it
-    float4 color = sceneColor[id.xy];
+    float4 color = colorRead[id.xy];
     const float3 scale = clamp(light / kReference, kMinScale, kMaxScale);   // rt_path_math.h rt_path_compose: the game's colour keeps its textures
     const float3 gain = lerp(float3(1.0, 1.0, 1.0), scale, saturate(params.mixAmount) * (1.0 - texel.z));
     // Roll positive gain off toward white: multiplying the already lit SDR colour would clip its texture detail before bloom.

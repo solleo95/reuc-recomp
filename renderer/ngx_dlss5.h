@@ -14,7 +14,7 @@ namespace uc {
 constexpr uint32_t kNgxFeatureDlss5 = 18;         // NVSDK_NGX_Feature_Reserved18
 constexpr uint32_t kNgxSuccess = 1;               // NVSDK_NGX_Result_Success; failures are 0xBADxxxxx
 constexpr const char* kDlss5Runtime = "nvngx_dlssnr.dll";
-struct NgxImage { VkImage image=VK_NULL_HANDLE; VkImageView view=VK_NULL_HANDLE; VkFormat format=VK_FORMAT_UNDEFINED; VkExtent2D extent{}; bool read_write=false; VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT; };
+struct NgxImage { VkImage image=VK_NULL_HANDLE; VkImageView view=VK_NULL_HANDLE; VkFormat format=VK_FORMAT_UNDEFINED; VkExtent2D extent{}; bool read_write=false; VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT; void* native_resource=nullptr; };
 // The parameter object an NGX call reads (a recording fake in the tests).
 class NgxParameters {
 public:
@@ -31,6 +31,7 @@ struct NgxInit {
     std::filesystem::path runtime_directory;   // where nvngx_dlssnr.dll lives (the exe directory)
     std::filesystem::path log_file;            // the NGX log callback appends here (debug/)
     bool verbose=false;
+    void* native_device=nullptr;              // ID3D12Device for the native backend
 };
 class NgxBackend {
 public:
@@ -38,13 +39,14 @@ public:
     virtual uint32_t init(const NgxInit&)=0;                          // NGX result, kNgxSuccess when ready
     virtual uint32_t requirements(NgxRequirement&)=0;                 // NVSDK_NGX_VULKAN_GetFeatureRequirements for the DLSS 5 feature
     virtual std::unique_ptr<NgxParameters> allocate_parameters(uint32_t& result)=0;
-    virtual uint32_t create_feature(VkCommandBuffer, NgxParameters&, void*& handle)=0;
-    virtual uint32_t evaluate(VkCommandBuffer, void* handle, NgxParameters&)=0;
+    virtual uint32_t create_feature(void* command, NgxParameters&, void*& handle)=0;
+    virtual uint32_t evaluate(void* command, void* handle, NgxParameters&)=0;
     virtual void release_feature(void* handle)=0;
     virtual void shutdown()=0;
     virtual std::string diagnostic() const=0;                         // the most informative recent NGX log line, empty when none
 };
 std::unique_ptr<NgxBackend> make_ngx_backend();                                              // ngx_vulkan.cpp
+std::unique_ptr<NgxBackend> make_native_ngx_backend();                                       // ID3D12GraphicsCommandList commands
 // Vulkan extensions the feature needs (NGX is asked; no init needed). Instance extensions before vkCreateInstance, device ones for the chosen physical device.
 std::vector<std::string> ngx_dlss5_instance_extensions(const std::filesystem::path& runtime_directory);
 std::vector<std::string> ngx_dlss5_device_extensions(VkInstance, VkPhysicalDevice, const std::filesystem::path& runtime_directory);
@@ -76,8 +78,8 @@ public:
     static std::unique_ptr<Dlss5Runtime> open(std::unique_ptr<NgxBackend> backend, const NgxInit&, std::string& reason);
     ~Dlss5Runtime();
     // Makes `passes` features for `key` (re-creating them when the key changed). `command` is open. false: `reason()` says why; the same key is not retried.
-    bool prepare(VkCommandBuffer command, const Dlss5FeatureKey& key, uint32_t passes, const std::function<void()>& idle);
-    bool evaluate(VkCommandBuffer command, uint32_t pass, const Dlss5Run&);
+    bool prepare(void* command, const Dlss5FeatureKey& key, uint32_t passes, const std::function<void()>& idle);
+    bool evaluate(void* command, uint32_t pass, const Dlss5Run&);
     const std::string& reason() const { return reason_; }
     uint32_t passes() const { return uint32_t(handles_.size()); }
 private:

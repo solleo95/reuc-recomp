@@ -45,16 +45,6 @@ void image_barrier(VkCommandBuffer command, VkImage image, VkImageLayout before,
     vkCmdPipelineBarrier2(command,&info);
 }
 }
-AoPreset ao_preset(EffectLevel level) {
-    switch(level) {
-    case EffectLevel::low: return {1,2,false};
-    case EffectLevel::medium: return {2,2,false};
-    case EffectLevel::high: return {3,3,true};
-    case EffectLevel::ultra: return {9,3,true};
-    case EffectLevel::off: break;
-    }
-    return {0,0,false};
-}
 uint32_t OcclusionPass::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
     for (uint32_t i=0;i<memory_.memoryTypeCount;++i) if ((mask&(1u<<i)) && (memory_.memoryTypes[i].propertyFlags&properties)==properties) return i;
     throw std::runtime_error("occlusion: required memory type unavailable");

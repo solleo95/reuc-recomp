@@ -23,7 +23,9 @@ extern "C" sl::Result slGetFeatureFunction(sl::Feature feature, const char* name
 }
 
 namespace uc {
-std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction) {
+std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction,RendererBackend backend) {
+    if(g_api) {reason="Streamline already owns another renderer device";return nullptr;}
+    if(backend!=RendererBackend::vulkan && backend!=RendererBackend::directx11 && backend!=RendererBackend::directx12) {reason="invalid renderer backend";return nullptr;}
     const auto interposer=std::filesystem::absolute(directory / "sl.interposer.dll");
     if (!std::filesystem::exists(interposer)) { reason="sl.interposer.dll missing"; return nullptr; }
     if (!sl::security::verifyEmbeddedSignature(interposer.c_str())) { reason="sl.interposer.dll is not signed by NVIDIA"; return nullptr; }
@@ -37,7 +39,8 @@ std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& direct
     if (!get(api.init,"slInit") || !get(api.shutdown,"slShutdown") || !get(api.is_feature_supported,"slIsFeatureSupported") ||
         !get(api.get_feature_function,"slGetFeatureFunction") || !get(api.get_new_frame_token,"slGetNewFrameToken") ||
         !get(api.set_tag_for_frame,"slSetTagForFrame") || !get(api.set_constants,"slSetConstants") || !get(api.evaluate_feature,"slEvaluateFeature") ||
-        !get(api.free_resources,"slFreeResources") || !get(api.get_instance_proc,"vkGetInstanceProcAddr") || !get(api.get_device_proc,"vkGetDeviceProcAddr")) {
+        !get(api.free_resources,"slFreeResources") ||
+        (backend==RendererBackend::vulkan ? (!get(api.get_instance_proc,"vkGetInstanceProcAddr") || !get(api.get_device_proc,"vkGetDeviceProcAddr")) : (!get(api.set_d3d_device,"slSetD3DDevice") || !get(api.upgrade_interface,"slUpgradeInterface")))) {
         reason="sl.interposer.dll lacks an expected export"; return nullptr;
     }
     // DLSS-G needs Reflex and PCL (latency markers); they load only with frame generation.
@@ -58,20 +61,55 @@ std::unique_ptr<Streamline> Streamline::load(const std::filesystem::path& direct
     preferences.featuresToLoad=features.data(); preferences.numFeaturesToLoad=uint32_t(features.size());
     preferences.engine=sl::EngineType::eCustom; preferences.engineVersion="uc-recomp";
     preferences.projectId="3f5c9a1e-6b2d-4e8a-9c7f-1d2b3a4c5e6f";
-    preferences.renderAPI=sl::RenderAPI::eVulkan;
+    preferences.renderAPI=backend==RendererBackend::vulkan ? sl::RenderAPI::eVulkan : backend==RendererBackend::directx11 ? sl::RenderAPI::eD3D11 : sl::RenderAPI::eD3D12;
     g_api=&api;
     if (const auto result=api.init(preferences, sl::kSDKVersion); result!=sl::Result::eOk) {
         g_api=nullptr; reason=std::string("slInit failed: ")+sl::getResultAsStr(result); return nullptr;
     }
-    sl->initialized_=true; sl->frame_generation_=frame_generation;
+    sl->initialized_=true; sl->frame_generation_=frame_generation; sl->ray_reconstruction_=ray_reconstruction;
     return sl;
+}
+bool Streamline::set_native_device(void* device,std::string& reason) {
+    if(!device || !initialized_ || !api_->set_d3d_device) {reason="native Streamline device unavailable";return false;}
+    const auto result=api_->set_d3d_device(device);
+    if(result==sl::Result::eOk)return true;
+    reason=std::string("slSetD3DDevice failed: ")+sl::getResultAsStr(result);return false;
+}
+bool Streamline::native_dlss_supported(const std::array<uint8_t,8>& luid,std::string& reason) const {
+    auto bytes=luid;sl::AdapterInfo adapter{};adapter.deviceLUID=bytes.data();adapter.deviceLUIDSizeInBytes=uint32_t(bytes.size());
+    const auto result=api_->is_feature_supported(sl::kFeatureDLSS,adapter);
+    if(result==sl::Result::eOk)return true;
+    reason=sl::getResultAsStr(result);return false;
+}
+bool Streamline::native_ray_reconstruction_supported(const std::array<uint8_t,8>& luid,std::string& reason) const {
+    if(!initialized_ || !ray_reconstruction_) {reason="Ray Reconstruction plugin was not loaded";return false;}
+    auto bytes=luid;sl::AdapterInfo adapter{};adapter.deviceLUID=bytes.data();adapter.deviceLUIDSizeInBytes=uint32_t(bytes.size());
+    const auto result=api_->is_feature_supported(sl::kFeatureDLSS_RR,adapter);
+    if(result==sl::Result::eOk)return true;
+    reason=sl::getResultAsStr(result);return false;
+}
+bool Streamline::native_dlss_g_supported(const std::array<uint8_t,8>& luid,std::string& reason) const {
+    if(!initialized_ || !frame_generation_) { reason="DLSS Frame Generation plugins were not loaded"; return false; }
+    auto bytes=luid; sl::AdapterInfo adapter{}; adapter.deviceLUID=bytes.data(); adapter.deviceLUIDSizeInBytes=uint32_t(bytes.size());
+    const auto result=api_->is_feature_supported(sl::kFeatureDLSS_G,adapter);
+    if(result==sl::Result::eOk) return true;
+    reason=sl::getResultAsStr(result); return false;
+}
+bool Streamline::upgrade_native_interface(void** object,std::string& reason) const {
+    if(!initialized_ || !api_->upgrade_interface || !object || !*object) { reason="native Streamline interface unavailable"; return false; }
+    const auto result=api_->upgrade_interface(object);
+    if(result==sl::Result::eOk) return true;
+    reason=std::string("slUpgradeInterface failed: ")+sl::getResultAsStr(result); return false;
 }
 Streamline::~Streamline() {
     shutdown();
     if (module_) FreeLibrary(static_cast<HMODULE>(module_));
 }
 void Streamline::shutdown() {
-    if (initialized_) { api_->shutdown(); initialized_=false; }
+    if (initialized_) {
+        const auto result=api_->shutdown(); initialized_=false;
+        if(result!=sl::Result::eOk) std::fprintf(stderr,"Streamline shutdown failed: %s\n",sl::getResultAsStr(result));
+    }
     if (g_api==api_.get()) g_api=nullptr;
 }
 VkResult Streamline::create_instance(const VkInstanceCreateInfo& info, VkInstance& instance) const {

@@ -24,7 +24,8 @@ std::string last_json_line(std::string_view output) {
     }
     return result;
 }
-std::string query_features(const std::filesystem::path& executable,const std::filesystem::path& config,unsigned timeout_ms) {
+std::string query_features(const std::filesystem::path& executable,const std::filesystem::path& config,unsigned timeout_ms,std::optional<RendererBackend> backend) {
+    if(backend && renderer_backend_name(*backend).empty())throw std::invalid_argument("invalid feature-query renderer");
     const auto exe=std::filesystem::absolute(executable);
     if(!std::filesystem::is_regular_file(exe))return {};
     const auto output=std::filesystem::temp_directory_path()/("uc-features-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+".txt");
@@ -33,6 +34,7 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
     if(out==INVALID_HANDLE_VALUE)return {};
     HANDLE null=CreateFileW(L"NUL",GENERIC_WRITE,FILE_SHARE_WRITE,&inherit,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     auto command=quote_windows_arg(exe.wstring())+L" --features --config "+quote_windows_arg(std::filesystem::absolute(config).wstring());
+    if(backend) {const auto name=renderer_backend_name(*backend);command+=L" --renderer "+std::wstring(name.begin(),name.end());}
     STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;
     startup.hStdOutput=out;startup.hStdError=null==INVALID_HANDLE_VALUE ? out : null;startup.hStdInput=nullptr;
     PROCESS_INFORMATION process{};
@@ -40,7 +42,17 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
     if(CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,exe.parent_path().c_str(),&startup,&process)) {
         std::fprintf(stderr,"[launch] GPU probe child pid=%lu timeout_ms=%u\n",process.dwProcessId,timeout_ms);
         CloseHandle(process.hThread);
-        if(WaitForSingleObject(process.hProcess,timeout_ms)==WAIT_TIMEOUT) {std::fprintf(stderr,"[launch] GPU probe timed out\n");TerminateProcess(process.hProcess,1);WaitForSingleObject(process.hProcess,5000);}
+        // The report is read as soon as it is written: the child's exit (GPU driver and NGX teardown) takes 8 s or more and is not waited for.
+        const auto deadline=GetTickCount64()+timeout_ms;bool reported=false,exited=false;
+        while(!exited && !reported && GetTickCount64()<deadline) {
+            exited=WaitForSingleObject(process.hProcess,100)==WAIT_OBJECT_0;
+            std::ifstream in(output,std::ios::binary);text.assign(std::istreambuf_iterator<char>(in),{});
+            reported=!last_json_line(text).empty();
+        }
+        if(!exited) {
+            if(!reported)std::fprintf(stderr,"[launch] GPU probe timed out\n");
+            TerminateProcess(process.hProcess,reported ? 0 : 1);if(!reported)WaitForSingleObject(process.hProcess,5000);
+        }
         DWORD code=0;GetExitCodeProcess(process.hProcess,&code);std::fprintf(stderr,"[launch] GPU probe exit=%lu\n",code);
         CloseHandle(process.hProcess);
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_effects.h"
+#include "raster_effects_math.h"
 #include "scene_lights.h"
 #include "shadow_math.h"
 #include "upscaler.h"
@@ -30,9 +31,6 @@ struct OcclusionInputs {
     uint64_t targets_generation=0;       // VulkanRenderer::targets_generation(): changes when the scene targets were recreated
     uint32_t noise_frame=0;             // frame index for the noise pattern; 0 keeps it fixed (a temporal upscaler is what averages it)
 };
-// The slices, steps and resolution of a preset.
-struct AoPreset { uint32_t slices, steps; bool full_resolution; };
-AoPreset ao_preset(EffectLevel level);
 // Ground-truth ambient occlusion on the scene colour (shaders/gtao.slang): a horizon search at the preset's resolution, a depth-aware blur, and a
 // composite that multiplies the colour of every pixel a depth-writing draw covered, faded by its GX fog. Compute only.
 class OcclusionPass {

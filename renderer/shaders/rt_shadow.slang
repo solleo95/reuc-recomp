@@ -26,10 +26,26 @@ struct Params {
 };
 // A lamp's ray ends this far before the lamp (its fixture would block every ray); a surface closer than that is not traced (rt_shadow_math.h kRtLampClearance)
 static const float kLampClearance = 1.0;
+#ifdef UC_DIRECTX
+ConstantBuffer<Params> params : register(b0);
+#else
 [[vk::push_constant]] ConstantBuffer<Params> params;
+#endif
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
 struct NativeLight { float4 color; float4 cosine; float4 distance; float4 position; float4 direction; };                          // gx::LightUniform
 static const uint kRtModelValid = 1;
+#ifdef UC_DIRECTX
+RaytracingAccelerationStructure scene : register(t0);
+Texture2D<float> sceneDepth : register(t1);
+Texture2D<float4> sceneGBuffer : register(t2);
+Texture2D<uint> sceneMaterial : register(t3);
+StructuredBuffer<Record> records : register(t4);
+StructuredBuffer<NativeLight> lights : register(t5);
+Texture2D<float4> signalIn : register(t6);
+Texture2D<float4> colorRead : register(t7);
+RWTexture2D<float> signalOut : register(u0);
+RWTexture2D<float4> sceneColor : register(u1);
+#else
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
 [[vk::binding(2, 0)]] Texture2D<float4> sceneGBuffer;
@@ -39,6 +55,8 @@ static const uint kRtModelValid = 1;
 [[vk::binding(6, 0)]] [[vk::image_format("r16f")]] RWTexture2D<float> signalOut;
 [[vk::binding(7, 0)]] Texture2D<float4> signalIn;
 [[vk::binding(8, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> sceneColor;
+#define colorRead sceneColor
+#endif
 
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
 float3 viewPositionAt(int2 pixel, float stored) {
@@ -205,7 +223,7 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
         sum += signalIn.Load(int3(tap, 0)).x * w; weights += w;
     }
     const float factor = weights > 0.0 ? sum / weights : 1.0;
-    float4 color = sceneColor[id.xy];
+    float4 color = colorRead[id.xy];
     color.rgb *= lerp(1.0, saturate(factor), 1.0 - texel.z);   // faded by the GX fog
     sceneColor[id.xy] = color;
 }

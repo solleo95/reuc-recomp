@@ -3,7 +3,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <d3d12.h>
 #include "ngx_dlss5.h"
+#include <nvsdk_ngx.h>
 #include <nvsdk_ngx_vk.h>
 #include <algorithm>
 #include <chrono>
@@ -53,15 +55,22 @@ DWORD WINAPI snippet_module_name(HMODULE module, LPWSTR name, DWORD size) {
 std::mutex snippet_mutex;   // NGX entry points and import updates are not thread safe
 class Snippet {
 public:
-    explicit Snippet(const std::filesystem::path& directory) {
+    explicit Snippet(const std::filesystem::path& directory,bool native=false) {
         const auto file=std::filesystem::absolute(directory/kDlss5Runtime);
         module_=LoadLibraryExW(file.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if(!module_) { const DWORD code=GetLastError(); error_="cannot load "+file.string()+" (Windows error "+std::to_string(code)+")"; return; }
-        bind(init,"NVSDK_NGX_VULKAN_Init_Ext2"); bind(create,"NVSDK_NGX_VULKAN_CreateFeature1");
-        bind(evaluate,"NVSDK_NGX_VULKAN_EvaluateFeature"); bind(release,"NVSDK_NGX_VULKAN_ReleaseFeature");
-        bind(shutdown,"NVSDK_NGX_VULKAN_Shutdown1");
-        bind(instance_extensions,"NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements");
-        bind(device_extensions,"NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements");
+        if(native) {
+            bind(native_init,"NVSDK_NGX_D3D12_Init_Ext"); bind(native_create,"NVSDK_NGX_D3D12_CreateFeature");
+            bind(native_evaluate,"NVSDK_NGX_D3D12_EvaluateFeature"); bind(native_release,"NVSDK_NGX_D3D12_ReleaseFeature");
+            native_shutdown=reinterpret_cast<decltype(native_shutdown)>(GetProcAddress(module_,"NVSDK_NGX_D3D12_Shutdown1"));
+            if(!native_shutdown) bind(native_shutdown_all,"NVSDK_NGX_D3D12_Shutdown");
+        } else {
+            bind(init,"NVSDK_NGX_VULKAN_Init_Ext2"); bind(create,"NVSDK_NGX_VULKAN_CreateFeature1");
+            bind(evaluate,"NVSDK_NGX_VULKAN_EvaluateFeature"); bind(release,"NVSDK_NGX_VULKAN_ReleaseFeature");
+            bind(shutdown,"NVSDK_NGX_VULKAN_Shutdown1");
+            bind(instance_extensions,"NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements");
+            bind(device_extensions,"NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements");
+        }
         if(error_.empty() && !identify_caller()) error_="nvngx_dlssnr.dll caller-identity import could not be installed";
     }
     ~Snippet() { if(module_) FreeLibrary(module_); }
@@ -76,6 +85,12 @@ public:
     decltype(&NVSDK_NGX_VULKAN_Shutdown1) shutdown=nullptr;
     decltype(&NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements) instance_extensions=nullptr;
     decltype(&NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements) device_extensions=nullptr;
+    NVSDK_NGX_Result (NVSDK_CONV *native_init)(unsigned long long,const wchar_t*,ID3D12Device*,NVSDK_NGX_Version,const NVSDK_NGX_Parameter*)=nullptr;
+    NVSDK_NGX_Result (NVSDK_CONV *native_create)(ID3D12GraphicsCommandList*,NVSDK_NGX_Feature,const NVSDK_NGX_Parameter*,NVSDK_NGX_Handle**)=nullptr;
+    decltype(&NVSDK_NGX_D3D12_EvaluateFeature) native_evaluate=nullptr;
+    decltype(&NVSDK_NGX_D3D12_ReleaseFeature) native_release=nullptr;
+    decltype(&NVSDK_NGX_D3D12_Shutdown1) native_shutdown=nullptr;
+    NVSDK_NGX_Result (NVSDK_CONV *native_shutdown_all)()=nullptr;
 private:
     template<class T> void bind(T& function, const char* name) {
         function=reinterpret_cast<T>(GetProcAddress(module_,name));
@@ -140,13 +155,14 @@ std::vector<std::string> names(uint32_t count, const VkExtensionProperties* prop
 
 class Parameters final : public NgxParameters {
 public:
-    explicit Parameters(NVSDK_NGX_Parameter* parameters) : parameters_(parameters) {}
-    ~Parameters() override { std::lock_guard lock(snippet_mutex); NVSDK_NGX_VULKAN_DestroyParameters(parameters_); }
+    explicit Parameters(NVSDK_NGX_Parameter* parameters,bool native=false) : parameters_(parameters),native_(native) {}
+    ~Parameters() override { std::lock_guard lock(snippet_mutex); if(native_) NVSDK_NGX_D3D12_DestroyParameters(parameters_); else NVSDK_NGX_VULKAN_DestroyParameters(parameters_); }
     NVSDK_NGX_Parameter* get() const { return parameters_; }
     void set_uint(const char* name, uint32_t value) override { NVSDK_NGX_Parameter_SetUI(parameters_,name,value); }
     void set_int(const char* name, int value) override { NVSDK_NGX_Parameter_SetI(parameters_,name,value); }
     void set_float(const char* name, float value) override { NVSDK_NGX_Parameter_SetF(parameters_,name,value); }
     void set_image(const char* name, const NgxImage& image) override {
+        if(native_) { NVSDK_NGX_Parameter_SetD3d12Resource(parameters_,name,static_cast<ID3D12Resource*>(image.native_resource)); return; }
         NVSDK_NGX_Resource_VK resource{};
         resource.Type=NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW; resource.ReadWrite=image.read_write;
         resource.Resource.ImageViewInfo={image.view,image.image,{image.aspect,0,1,0,1},image.format,image.extent.width,image.extent.height};
@@ -156,18 +172,32 @@ public:
     }
 private:
     NVSDK_NGX_Parameter* parameters_;
+    bool native_=false;
     std::deque<NVSDK_NGX_Resource_VK> resources_;
 };
 
 class Backend final : public NgxBackend {
 public:
+    explicit Backend(bool native=false) : native_(native) {}
     uint32_t init(const NgxInit& in) override {
         std::lock_guard lock(snippet_mutex);
         ngx_log().open(in.log_file);
-        snippet_=std::make_unique<Snippet>(in.runtime_directory);
+        snippet_=std::make_unique<Snippet>(in.runtime_directory,native_);
         if(!snippet_->ready()) { error_=snippet_->error(); return uint32_t(NVSDK_NGX_Result_FAIL_UnableToInitializeFeature); }
         discovery_=std::make_unique<Discovery>(in.runtime_directory,in.log_file.has_parent_path() ? in.log_file.parent_path() : std::filesystem::path());
         discovery_->info.LoggingInfo.MinimumLoggingLevel=in.verbose ? NVSDK_NGX_LOGGING_LEVEL_VERBOSE : NVSDK_NGX_LOGGING_LEVEL_ON;
+        if(native_) {
+            native_device_=static_cast<ID3D12Device*>(in.native_device);
+            if(!native_device_) { error_="native NGX requires a DirectX 12 device"; return uint32_t(NVSDK_NGX_Result_FAIL_InvalidParameter); }
+            auto result=NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId,NVSDK_NGX_ENGINE_TYPE_CUSTOM,"uc-recomp",discovery_->data.c_str(),native_device_,&discovery_->info,NVSDK_NGX_Version_API);
+            sdk_started_=NVSDK_NGX_SUCCEED(result); if(!sdk_started_) return uint32_t(result);
+            NVSDK_NGX_Parameter* parameters=nullptr; result=NVSDK_NGX_D3D12_AllocateParameters(&parameters);
+            if(NVSDK_NGX_FAILED(result) || !parameters) return uint32_t(NVSDK_NGX_FAILED(result) ? result : NVSDK_NGX_Result_FAIL_InvalidParameter);
+            result=snippet_->native_init(0,discovery_->data.c_str(),native_device_,NVSDK_NGX_Version_API,parameters);
+            NVSDK_NGX_D3D12_DestroyParameters(parameters); started_=NVSDK_NGX_SUCCEED(result);
+            if(!started_) error_="direct nvngx_dlssnr.dll DX12 init: "+ngx_result_name(uint32_t(result));
+            return uint32_t(result);
+        }
         device_=in.device;
         auto result=NVSDK_NGX_VULKAN_Init_with_ProjectID(kProjectId,NVSDK_NGX_ENGINE_TYPE_CUSTOM,"uc-recomp",discovery_->data.c_str(),in.instance,in.physical,in.device,
             in.instance_proc,in.device_proc,&discovery_->info,NVSDK_NGX_Version_API);
@@ -189,29 +219,31 @@ public:
     std::unique_ptr<NgxParameters> allocate_parameters(uint32_t& result) override {
         std::lock_guard lock(snippet_mutex);
         NVSDK_NGX_Parameter* parameters=nullptr;
-        result=uint32_t(NVSDK_NGX_VULKAN_AllocateParameters(&parameters));
+        result=uint32_t(native_ ? NVSDK_NGX_D3D12_AllocateParameters(&parameters) : NVSDK_NGX_VULKAN_AllocateParameters(&parameters));
         if(NVSDK_NGX_FAILED(NVSDK_NGX_Result(result)) || !parameters) return nullptr;
-        return std::make_unique<Parameters>(parameters);
+        return std::make_unique<Parameters>(parameters,native_);
     }
-    uint32_t create_feature(VkCommandBuffer command, NgxParameters& parameters, void*& handle) override {
+    uint32_t create_feature(void* command, NgxParameters& parameters, void*& handle) override {
         std::lock_guard lock(snippet_mutex);
         NVSDK_NGX_Handle* created=nullptr;
-        const auto result=snippet_->create(device_,command,kFeature,static_cast<Parameters&>(parameters).get(),&created);
+        const auto result=native_ ? snippet_->native_create(static_cast<ID3D12GraphicsCommandList*>(command),kFeature,static_cast<Parameters&>(parameters).get(),&created) :
+            snippet_->create(device_,static_cast<VkCommandBuffer>(command),kFeature,static_cast<Parameters&>(parameters).get(),&created);
         if(NVSDK_NGX_FAILED(result)) error_="direct nvngx_dlssnr.dll create: "+ngx_result_name(uint32_t(result));
         handle=created;
         return uint32_t(result);
     }
-    uint32_t evaluate(VkCommandBuffer command, void* handle, NgxParameters& parameters) override {
+    uint32_t evaluate(void* command, void* handle, NgxParameters& parameters) override {
         std::lock_guard lock(snippet_mutex);
-        const auto result=snippet_->evaluate(command,static_cast<NVSDK_NGX_Handle*>(handle),static_cast<Parameters&>(parameters).get(),nullptr);
+        const auto result=native_ ? snippet_->native_evaluate(static_cast<ID3D12GraphicsCommandList*>(command),static_cast<NVSDK_NGX_Handle*>(handle),static_cast<Parameters&>(parameters).get(),nullptr) :
+            snippet_->evaluate(static_cast<VkCommandBuffer>(command),static_cast<NVSDK_NGX_Handle*>(handle),static_cast<Parameters&>(parameters).get(),nullptr);
         if(NVSDK_NGX_FAILED(result)) error_="direct nvngx_dlssnr.dll evaluate: "+ngx_result_name(uint32_t(result));
         return uint32_t(result);
     }
-    void release_feature(void* handle) override { std::lock_guard lock(snippet_mutex); snippet_->release(static_cast<NVSDK_NGX_Handle*>(handle)); }
+    void release_feature(void* handle) override { std::lock_guard lock(snippet_mutex); if(native_) snippet_->native_release(static_cast<NVSDK_NGX_Handle*>(handle)); else snippet_->release(static_cast<NVSDK_NGX_Handle*>(handle)); }
     void shutdown() override {
         std::lock_guard lock(snippet_mutex);
-        if(started_) { snippet_->shutdown(device_); started_=false; }
-        if(sdk_started_) { NVSDK_NGX_VULKAN_Shutdown1(device_); sdk_started_=false; }
+        if(started_) { if(native_) { if(snippet_->native_shutdown) snippet_->native_shutdown(native_device_); else snippet_->native_shutdown_all(); } else snippet_->shutdown(device_); started_=false; }
+        if(sdk_started_) { if(native_) NVSDK_NGX_D3D12_Shutdown1(native_device_); else NVSDK_NGX_VULKAN_Shutdown1(device_); sdk_started_=false; }
         snippet_.reset();
     }
     std::string diagnostic() const override { return error_.empty() ? ngx_log().informative() : error_; }
@@ -221,10 +253,13 @@ private:
     std::unique_ptr<Snippet> snippet_;
     std::string error_;
     VkDevice device_=VK_NULL_HANDLE;
+    ID3D12Device* native_device_=nullptr;
+    bool native_=false;
     bool started_=false, sdk_started_=false;
 };
 }
 std::unique_ptr<NgxBackend> make_ngx_backend() { return std::make_unique<Backend>(); }
+std::unique_ptr<NgxBackend> make_native_ngx_backend() { return std::make_unique<Backend>(true); }
 std::vector<std::string> ngx_dlss5_instance_extensions(const std::filesystem::path& runtime_directory) {
     std::lock_guard lock(snippet_mutex);
     Snippet snippet(runtime_directory); if(!snippet.ready()) return {};

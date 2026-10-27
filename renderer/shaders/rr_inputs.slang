@@ -10,14 +10,27 @@ struct Params {
     uint2 region;         // scene region size in pixels
     uint2 padding;
 };
+#ifdef UC_DIRECTX
+ConstantBuffer<Params> params : register(b0);
+#else
 [[vk::push_constant]] ConstantBuffer<Params> params;
+#endif
 struct Record { float4 materialColor; float4 ambientColor; uint lightMask; uint lightsOffset; uint flags; float roughness; };   // renderer/rt_material.h RtMaterialRecord
+#ifdef UC_DIRECTX
+Texture2D<float> sceneDepth : register(t1);
+Texture2D<float4> sceneGBuffer : register(t2);
+Texture2D<uint> sceneMaterial : register(t3);
+StructuredBuffer<Record> records : register(t4);
+RWTexture2D<float4> normalRoughness : register(u0);
+RWTexture2D<float4> specularAlbedo : register(u1);
+#else
 [[vk::binding(0, 0)]] Texture2D<float> sceneDepth;
 [[vk::binding(1, 0)]] Texture2D<float4> sceneGBuffer;
 [[vk::binding(2, 0)]] Texture2D<uint> sceneMaterial;
 [[vk::binding(3, 0)]] StructuredBuffer<Record> records;
 [[vk::binding(4, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> normalRoughness;
 [[vk::binding(5, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> specularAlbedo;
+#endif
 
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
 float3 viewPositionAt(int2 pixel, float stored) {

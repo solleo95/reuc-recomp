@@ -65,9 +65,11 @@ int main() {
     {   // The wake (callsite 8006CED4, in the player's tint) follows only the local reticle and is not scaled.
         std::vector<gx::DrawPacket> draws{tinted(quad(0x8006CED4, 0.f, 0.f, 100), red), tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue), quad(0x8006CED4, 0.f, 0.f, 100)};
         const std::array<float,2> other{0.5f, -0.2f};
-        CHECK(mark(draws, {aim, other}, 1) == 1 && !draws[0].late_aim && draws[1].late_aim && !draws[2].late_aim && !draws[1].reticle);
+        CHECK(gx::mark_reticle_draws(draws, Aims{aim, other}, 1, true) == 1 && !draws[0].late_aim && draws[1].late_aim && !draws[2].late_aim && !draws[1].reticle);
         std::vector<gx::DrawPacket> single{tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue)};
-        CHECK(mark(single, {aim, std::nullopt}, 0) == 1 && single[0].late_aim);
+        CHECK(gx::mark_reticle_draws(single, Aims{aim, std::nullopt}, 0, true) == 1 && single[0].late_aim);
+        std::vector<gx::DrawPacket> solo{tinted(quad(0x8006CED4, 0.f, 0.f, 100), red)};   // single-player: the game's own wake stays put
+        CHECK(mark(solo, {aim, std::nullopt}, 0) == 0 && !solo[0].late_aim && !solo[0].wake);
     }
     {   // The wake strip is laid along the mouse path: centres on it, half-width and side kept, pairs turned square to the path.
         std::vector<std::array<float,2>> strip;   // an old strip along +y (older pairs lower), 0.02 half-width on the right

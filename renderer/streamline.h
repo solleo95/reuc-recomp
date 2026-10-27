@@ -1,7 +1,9 @@
 #pragma once
 #include "present_functions.h"
+#include "renderer_backend.h"
 #include <vulkan/vulkan.h>
 #include <filesystem>
+#include <array>
 #include <memory>
 #include <string>
 
@@ -13,7 +15,14 @@ struct StreamlineApi;   // streamline_api.h: the loaded sl* entry points (DLSS u
 class Streamline {
 public:
     // nullptr and `reason` when Streamline cannot run (missing or unsigned DLLs, slInit failure).
-    static std::unique_ptr<Streamline> load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction=false);
+    static std::unique_ptr<Streamline> load(const std::filesystem::path& directory, bool frame_generation, std::string& reason, bool ray_reconstruction=false,RendererBackend backend=RendererBackend::vulkan);
+    bool set_native_device(void* device,std::string& reason);
+    bool native_dlss_supported(const std::array<uint8_t,8>& luid,std::string& reason) const;
+    bool native_ray_reconstruction_supported(const std::array<uint8_t,8>& luid,std::string& reason) const;
+    bool ray_reconstruction_loaded() const {return ray_reconstruction_;}
+    bool native_dlss_g_supported(const std::array<uint8_t,8>& luid,std::string& reason) const;
+    // Manual DXGI hooking: upgrades the owned interface reference in place before its first use.
+    bool upgrade_native_interface(void** object,std::string& reason) const;
     ~Streamline();
     Streamline(const Streamline&)=delete;
     Streamline& operator=(const Streamline&)=delete;
@@ -40,6 +49,6 @@ private:
     Streamline()=default;
     std::unique_ptr<StreamlineApi> api_;
     void* module_=nullptr;
-    bool frame_generation_=false, initialized_=false;
+    bool frame_generation_=false, ray_reconstruction_=false, initialized_=false;
 };
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_effects.h"
+#include "raster_effects_math.h"
 #include "upscaler.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
@@ -16,9 +17,6 @@ struct MotionBlurInputs {
     EffectLevel level=EffectLevel::off;
     uint64_t targets_generation=0;            // VulkanRenderer::targets_generation()
 };
-// The shutter fraction and the sample count of a preset.
-struct BlurPreset { float shutter; uint32_t samples; };
-BlurPreset blur_preset(EffectLevel level);
 // Per-object motion blur (shaders/motion_blur.slang): a tile-max of the vectors, then a gather along each pixel's (or its neighbourhood's) vector from a
 // copy of the colour. Compute only.
 class MotionBlurPass {

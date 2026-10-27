@@ -1,5 +1,7 @@
 # Graphics effects
 
+Backend selection and DirectX-specific SDK requirements: [DirectX renderers](directx.md).
+
 Design: `docs/superpowers/specs/2026-10-19-graphics-enhancements-design.md`; plan of phases 0–3: `docs/superpowers/plans/2026-10-19-graphics-enhancements-p0-3.md`; survey of the game's lighting: `docs/spikes/S6-graphics-survey.md`.
 
 All effects live in the renderer (GPU passes recorded on the render thread); the guest threads are never touched and no effect reads pixels back. Every one is a separate option in the launcher (Graphics page) and in the in-game menu (Insert, Effects tab), saved in `config.json` and overridable on the command line. All off with anisotropy 1 is the original picture.
@@ -21,7 +23,7 @@ All effects live in the renderer (GPU passes recorded on the render thread); the
 | Ray-traced lighting | `rt_lighting` | `--rt-lighting` | off, low, medium, high, ultra (off) | the master switch on |
 | DLSS Ray Reconstruction | `ray_reconstruction` | `--ray-reconstruction` | on/off (off) | DLSS, an RT effect, a GPU with Ray Reconstruction (`uc.exe --features`: `ray_reconstruction`) |
 
-"The effects path" = `VK_EXT_dynamic_rendering_unused_attachments` + `independentBlend` (the same the upscalers need); without it those options are greyed out with a reason (`uc.exe --features` reports `effects`, `effects_reason`, `anisotropy_max`).
+On Vulkan, "the effects path" requires `VK_EXT_dynamic_rendering_unused_attachments` + `independentBlend` (the same the upscalers need). DirectX uses native scene targets and compute passes. Unavailable options are greyed out with a reason (`uc.exe --features --renderer <api>` reports `effects`, `effects_reason`, `anisotropy_max`).
 
 ## How it renders
 

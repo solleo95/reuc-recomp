@@ -4,11 +4,13 @@
 #include "dlss_frame_generation.h"
 #include "streamline.h"
 #include "streamline_api.h"
+#include "native_upscaler.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 namespace uc {
 namespace {
@@ -63,27 +65,28 @@ DlssFrameGeneration::DlssFrameGeneration(const Streamline& streamline, uint32_t 
     }
     sl::DLSSGState state{};
     uint32_t most=1;
-    if (UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)==sl::Result::eOk && state.numFramesToGenerateMax>=1) most=state.numFramesToGenerateMax;
+    if (UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)==sl::Result::eOk) { state_valid_=true; minimum_dimension_=state.minWidthOrHeight; if(state.numFramesToGenerateMax>=1) most=state.numFramesToGenerateMax; }
     multiplier_=std::clamp<uint32_t>(multiplier,2,most+1);
     if (multiplier_!=multiplier) std::fprintf(stderr,"DLSS Frame Generation: %ux requested, this GPU allows %ux\n",multiplier,multiplier_);
     std::fprintf(stderr,"DLSS Frame Generation: %ux\n",multiplier_);
 }
 DlssFrameGeneration::~DlssFrameGeneration() {
-    sl::DLSSGOptions options{}; options.mode=sl::DLSSGMode::eOff;
-    UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGSetOptions,kViewport,options);
+    if(!configured_) return;
+    set_active(false,true);
     streamline_.api().free_resources(sl::kFeatureDLSS_G,kViewport);
 }
-void DlssFrameGeneration::set_active(bool active, bool reset) {
+bool DlssFrameGeneration::set_active(bool active, bool reset) {
     (void)reset;   // the scene change flag travels in the common constants (DLSS SR sets Constants::reset for the same frame)
-    if (configured_ && active==active_) return;
+    if (configured_ && active==active_) return true;
     sl::DLSSGOptions options{};
     options.mode=active ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     options.numFramesToGenerate=multiplier_-1;
     options.flags=sl::DLSSGFlags::eRetainResourcesWhenOff;   // menus and movies come and go: no reallocation stutter
     if (const auto result=UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGSetOptions,kViewport,options); result!=sl::Result::eOk) {
-        std::fprintf(stderr,"DLSS Frame Generation: options failed: %s\n",sl::getResultAsStr(result)); return;
+        std::fprintf(stderr,"DLSS Frame Generation: options failed: %s\n",sl::getResultAsStr(result)); return false;
     }
     active_=active; configured_=true;
+    return true;
 }
 void DlssFrameGeneration::tag_hudless(VkCommandBuffer command, const UpscaleImage& hudless) {
     const auto& api=streamline_.api();
@@ -98,7 +101,8 @@ void DlssFrameGeneration::tag_hudless(VkCommandBuffer command, const UpscaleImag
 }
 void DlssFrameGeneration::after_present() {
     sl::DLSSGState state{};
-    if (UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)!=sl::Result::eOk) return;
+    state_valid_=UC_SL_CALL(sl::kFeatureDLSS_G,slDLSSGGetState,kViewport,state,nullptr)==sl::Result::eOk;
+    if (!state_valid_) return;
     fence_=static_cast<VkSemaphore>(state.inputsProcessingCompletionFence);
     fence_value_=state.lastPresentInputsProcessingCompletionFenceValue;
     presented_+=state.numFramesActuallyPresented; ++rendered_;
@@ -107,5 +111,27 @@ void DlssFrameGeneration::after_present() {
     last_status_=uint32_t(state.status);
     if (active_ && rendered_%600==0) std::fprintf(stderr,"DLSS Frame Generation: %.2f presented per rendered frame\n",double(presented_-reported_presented_)/600.0);
     if (rendered_%600==0) reported_presented_=presented_;
+}
+void DlssFrameGeneration::tag_hudless_native(void* command,const NativeUpscaleImage& hudless) {
+    const auto& api=streamline_.api();
+    if(!api.frame || !command || !hudless.resource) throw std::invalid_argument("DLSS Frame Generation: missing native frame input");
+    sl::Resource resource(sl::ResourceType::eTex2d,hudless.resource,nullptr,nullptr,hudless.state);
+    resource.width=hudless.extent.width; resource.height=hudless.extent.height; resource.nativeFormat=hudless.format; resource.mipLevels=resource.arrayLayers=1;
+    const sl::Extent extent{0,0,hudless.extent.width,hudless.extent.height};
+    const sl::ResourceTag tags[]{
+        {&resource,sl::kBufferTypeHUDLessColor,sl::ResourceLifecycle::eValidUntilPresent,&extent},
+        {nullptr,sl::kBufferTypeUIColorAndAlpha,sl::ResourceLifecycle::eValidUntilPresent,nullptr}};
+    if(const auto result=api.set_tag_for_frame(*api.frame,kViewport,tags,2,command); result!=sl::Result::eOk)
+        throw std::runtime_error(std::string("DLSS Frame Generation: native HUD-less tag failed: ")+sl::getResultAsStr(result));
+}
+void DlssFrameGeneration::clear_native_tags() {
+    const auto& api=streamline_.api(); if(!api.frame) return;
+    const sl::ResourceTag tags[]{
+        {nullptr,sl::kBufferTypeDepth,sl::ResourceLifecycle::eValidUntilPresent,nullptr},
+        {nullptr,sl::kBufferTypeMotionVectors,sl::ResourceLifecycle::eValidUntilPresent,nullptr},
+        {nullptr,sl::kBufferTypeHUDLessColor,sl::ResourceLifecycle::eValidUntilPresent,nullptr},
+        {nullptr,sl::kBufferTypeUIColorAndAlpha,sl::ResourceLifecycle::eValidUntilPresent,nullptr}};
+    if(const auto result=api.set_tag_for_frame(*api.frame,kViewport,tags,4,nullptr); result!=sl::Result::eOk)
+        throw std::runtime_error(std::string("DLSS Frame Generation: clearing native tags failed: ")+sl::getResultAsStr(result));
 }
 }

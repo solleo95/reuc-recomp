@@ -29,16 +29,6 @@ void image_barrier(VkCommandBuffer command, VkImage image, VkImageLayout before,
     vkCmdPipelineBarrier2(command,&info);
 }
 }
-BlurPreset blur_preset(EffectLevel level) {
-    switch(level) {
-    case EffectLevel::low: return {0.3f,8};
-    case EffectLevel::medium: return {0.5f,12};
-    case EffectLevel::high: return {0.7f,20};
-    case EffectLevel::ultra: return {0.7f,32};
-    case EffectLevel::off: break;
-    }
-    return {0,0};
-}
 uint32_t MotionBlurPass::memory_type(uint32_t mask, VkMemoryPropertyFlags properties) const {
     for (uint32_t i=0;i<memory_.memoryTypeCount;++i) if ((mask&(1u<<i)) && (memory_.memoryTypes[i].propertyFlags&properties)==properties) return i;
     throw std::runtime_error("motion blur: required memory type unavailable");

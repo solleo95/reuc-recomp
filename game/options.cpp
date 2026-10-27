@@ -59,6 +59,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || (tick!=30 && tick!=60 && tick!=120 && tick!=144 && tick!=240))return "invalid value for --net-tick (30, 60, 120, 144 or 240)";
             options.net_tick=tick;
         }
+        else if (arg == "--renderer") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --renderer";
+            const auto backend = renderer_backend_from_name(arguments[i]);
+            if (!backend) return "invalid value for --renderer (vulkan, dx11 or dx12)";
+            options.renderer_backend = *backend;
+        }
         else if (arg == "--headless") options.headless = true;
         else if (arg == "--validation") options.validation = true;
         else if (arg == "--log-dvd") options.log_dvd = true;

@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
             }
         }
         CHECK(renderer.presentation_count()==19);
-        CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+6); // one pool per frame slot
+        CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+16); // one pool per frame slot (VulkanRenderer::kFrameSlots)
         auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr,bool display=true) {
             auto& target=selected ? *selected : renderer;
             auto until=std::chrono::steady_clock::now()+3s;
@@ -336,7 +336,7 @@ int main(int argc, char** argv) {
         ephemeral.reset(); work.draws[0].texture.reset();
         work.serial=63; submit(work); CHECK(!released.expired());
         for(uint64_t serial=64;serial<=68;++serial) { work.serial=serial; submit(work); }
-        CHECK(released.expired());
+        CHECK(!released.expired()); // The renderer now retains sixteen slots, not six.
         work=packet; work.serial=69;
         work.draws[0]=quad; // A full-screen red quad, limited by native viewport and scissor.
         work.draws[0].state.edit().viewport=std::array<float,6>{0,0,320,480,0,1};
@@ -401,6 +401,7 @@ int main(int argc, char** argv) {
         work.draws[0].uniforms.edit().lights[0].color={128,128,128,255};
         work.draws[0].uniforms.edit().lights[0].position={0,0,1,0};
         submit(work); sampled=renderer.capture(80);
+        CHECK(released.expired()); // Both owning slots have completed a full ring cycle.
         CHECK(sampled.rgba[center]==137 && sampled.rgba[center+1]==137);
         work=packet; work.serial=81; work.draws[0]=quad; work.draws[0].state.edit().cull=3;
         submit(work); sampled=renderer.capture(81);
@@ -427,19 +428,8 @@ int main(int argc, char** argv) {
         work.draws.resize(1); work.serial=91; submit(work);
         work.draws.clear(); work.serial=92; submit(work);
         work.draws.assign(8,quad); work.serial=93; submit(work);
-        CHECK(renderer.descriptor_pool_creations()==pools_after_growth);
+        CHECK(renderer.descriptor_pool_creations()==pools_after_growth+1); // The 16-slot ring reaches one unwarmed slot after the six growth submissions.
         sampled=renderer.capture(93); CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
-        uint64_t warmed_copy_allocations=0;
-        for(uint64_t serial=94;serial<106;++serial) {
-            auto version=std::make_shared<gx::TexturePixels>(); version->gpu_only=true;
-            version->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
-            work=packet; work.serial=serial; work.present=false; work.clear_after_copy=false; work.draws[0]=quad;
-            for(auto& vertex:work.draws[0].vertices) vertex.color[0]=serial&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
-            work.texture_copy=gx::TextureCopy{{0,0,640,480},version}; submit(work);
-            work.texture_copy.reset(); version.reset();
-            if(serial==101) warmed_copy_allocations=renderer.texture_creations();
-            if(serial>101) CHECK(renderer.texture_creations()==warmed_copy_allocations);
-        }
         work=packet; work.serial=106; work.draws[0]=quad; work.draws[0].texture=old_copy;
         for(auto& vertex:work.draws[0].vertices) { vertex.color[0]={255,255,255,255}; vertex.texcoord[0]={.5f,.5f}; }
         submit(work); sampled=renderer.capture(106);
@@ -672,7 +662,22 @@ int main(int argc, char** argv) {
         CHECK(invalid_scale);
         renderer.set_render_scale(0.5);
         std::this_thread::sleep_for(uc::kRebuildInterval);
-        packet.serial = 143;packet.prompts=work.prompts;draw.indices[2] = 999;
+        const auto final_prompts=work.prompts;
+        // Warm every slot twice before measuring recycling; the renderer retains copies in its 16-slot ring.
+        uint64_t warmed_copy_allocations=0;
+        for(uint64_t serial=200;serial<264;++serial) {
+            auto version=std::make_shared<gx::TexturePixels>();version->gpu_only=true;version->levels={{4,4,{}},{2,2,{}},{1,1,{}}};
+            work=packet;work.serial=serial;work.present=false;work.clear_after_copy=false;work.draws[0]=quad;
+            for(auto& vertex:work.draws[0].vertices)vertex.color[0]=serial&1 ? std::array<uint8_t,4>{0,255,0,255} : std::array<uint8_t,4>{255,0,0,255};
+            work.texture_copy=gx::TextureCopy{{0,0,640,480},version};submit(work);work.texture_copy.reset();version.reset();
+            if(serial==231)warmed_copy_allocations=renderer.texture_creations();
+            if(serial>231)CHECK(renderer.texture_creations()==warmed_copy_allocations);
+        }
+        work=packet;work.serial=264;work.draws[0]=quad;work.draws[0].texture=old_copy;
+        for(auto& vertex:work.draws[0].vertices) {vertex.color[0]={255,255,255,255};vertex.texcoord[0]={.5f,.5f};}
+        submit(work);sampled=renderer.capture(264);center=(size_t(sampled.height/2)*sampled.width+sampled.width/2)*4;
+        CHECK(sampled.rgba[center]==255 && sampled.rgba[center+1]==0);
+        packet.serial = 265;packet.prompts=final_prompts;draw.indices[2] = 999;
         try { renderer.render(packet); } catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected); draw.indices[2] = 2;
         std::atomic<bool> wrong_owner_rejected{false};
@@ -681,7 +686,7 @@ int main(int argc, char** argv) {
         auto end = std::chrono::steady_clock::now() + 3s;
         while (!renderer.render(packet)) { CHECK(std::chrono::steady_clock::now() < end); std::this_thread::sleep_for(1ms); }
         renderer.shutdown();
-        CHECK(renderer.poll_completions() == std::vector<uint64_t>({143}));
+        CHECK(renderer.poll_completions() == std::vector<uint64_t>({265}));
         CHECK(renderer.validation_errors() == 0);
         uc::VulkanRenderer portrait;
         portrait.initialize(window,validation,executable_dir()/"data"/"shaders",0.5,0.25,expect_exclusive_fullscreen);

@@ -16,21 +16,27 @@ struct Params {
     uint noise;          // frame index for the noise pattern (0: a fixed pattern)
     uint flags;
     float strength;
+#ifdef UC_DIRECTX
+    float reservedAlignment;
+#endif
     float2 depthRange;   // the viewport's near and far depth
     float4 light;        // contact shadows: the dominant light, xyz = view-space position (a directional light's far point is its direction), w = 1 for a spot light
     uint2 contactSize;   // size of the contact-shadow image
     uint2 reserved;
 };
 // flags: bit 0 = ambient occlusion on, bit 1 = contact shadows on
-[[vk::push_constant]] ConstantBuffer<Params> params;
-[[vk::binding(0, 0)]] SamplerState linearSampler;
-[[vk::binding(1, 0)]] Texture2D<float> sceneDepth;
-[[vk::binding(2, 0)]] Texture2D<float4> sceneGBuffer;
-[[vk::binding(3, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> sceneColor;
-[[vk::binding(4, 0)]] Texture2D<float> rawOcclusion;
-[[vk::binding(5, 0)]] Texture2D<float> occlusion;
-[[vk::binding(6, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> rawOcclusionOut;
-[[vk::binding(7, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> occlusionOut;
+[[vk::push_constant]] ConstantBuffer<Params> params : register(b0);
+[[vk::binding(0, 0)]] SamplerState linearSampler : register(s0);
+[[vk::binding(1, 0)]] Texture2D<float> sceneDepth : register(t0);
+[[vk::binding(2, 0)]] Texture2D<float4> sceneGBuffer : register(t1);
+[[vk::binding(3, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> sceneColor : register(u0);
+[[vk::binding(4, 0)]] Texture2D<float> rawOcclusion : register(t2);
+[[vk::binding(5, 0)]] Texture2D<float> occlusion : register(t3);
+[[vk::binding(6, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> rawOcclusionOut : register(u1);
+[[vk::binding(7, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> occlusionOut : register(u2);
+#ifdef UC_DIRECTX
+Texture2D<float4> sourceColor : register(t6);
+#endif
 // Shadows (renderer/occlusion_pass.cpp ShadowBlock, dynamic offset per frame slot): the view -> light-box matrix, the map's texel size and the preset.
 struct ShadowBlock {
     float4 rows[3];       // view -> light: x, y in -1..1 over the box, z in 0..1 along the light
@@ -38,10 +44,10 @@ struct ShadowBlock {
     uint4 taps;           // x = filter taps, y = blocker-search taps, z = soft (PCSS), w = enabled
     float4 toLight;       // xyz = unit view-space direction to the light
 };
-[[vk::binding(10, 0)]] ConstantBuffer<ShadowBlock> shadow;
-[[vk::binding(11, 0)]] Texture2D<float> shadowMap;
-[[vk::binding(8, 0)]] Texture2D<float> contactTex;
-[[vk::binding(9, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> contactOut;
+[[vk::binding(10, 0)]] ConstantBuffer<ShadowBlock> shadow : register(b1);
+[[vk::binding(11, 0)]] Texture2D<float> shadowMap : register(t4);
+[[vk::binding(8, 0)]] Texture2D<float> contactTex : register(t5);
+[[vk::binding(9, 0)]] [[vk::image_format("r8")]] RWTexture2D<float> contactOut : register(u3);
 
 static const float kPi = 3.14159265;
 ViewParams viewParams() { ViewParams v; v.xScale = params.viewA.x; v.yScale = params.viewA.y; v.xOffset = params.viewA.z; v.yOffset = params.viewA.w; v.depthA = params.viewB.x; v.depthB = params.viewB.y; return v; }
@@ -77,6 +83,11 @@ float3 geometricNormal(int2 pixel, float3 position, float3 fallback) {
     float3 up = viewAt(float2(pixel) + float2(0.5, -0.5)), down = viewAt(float2(pixel) + float2(0.5, 1.5));
     float3 dx = abs(left.z - position.z) < abs(right.z - position.z) ? position - left : right - position;
     float3 dy = abs(up.z - position.z) < abs(down.z - position.z) ? position - up : down - position;
+    // At image edges the clamped neighbour is the centre; use the actual one-sided surface derivative.
+    if(pixel.x==0) dx=right-position;
+    else if(pixel.x==int(params.region.x)-1) dx=position-left;
+    if(pixel.y==0) dy=down-position;
+    else if(pixel.y==int(params.region.y)-1) dy=position-up;
     float3 n = cross(dx, dy);
     float len = length(n);
     if (len < 1e-8) return fallback;
@@ -110,6 +121,9 @@ void aoMain(uint3 id : SV_DispatchThreadID) {
     float noiseA = interleavedGradientNoise(float2(pixel), params.noise);
     float noiseB = interleavedGradientNoise(float2(pixel) + 17.0, params.noise);
     float visibility = 0.0, unoccluded = 0.0;
+#ifdef UC_DIRECTX
+    [loop]
+#endif
     for (uint slice = 0; slice < params.slices; ++slice) {
         float phi = (float(slice) + noiseA) / float(params.slices) * kPi;
         float2 direction = float2(cos(phi), sin(phi));
@@ -125,10 +139,18 @@ void aoMain(uint3 id : SV_DispatchThreadID) {
         float n = sign(dot(sliceDirection, projected)) * acos(cosN);
         float lowHorizon0 = cos(n + kPi * 0.5), lowHorizon1 = cos(n - kPi * 0.5);   // the tangent plane: nothing occludes below it
         float horizon0 = lowHorizon0, horizon1 = lowHorizon1;
+#ifdef UC_DIRECTX
+        [loop]
+#endif
         for (uint step = 0; step < params.steps; ++step) {
             float s = (float(step) + noiseB) / float(params.steps);
             float2 offset = direction * max(s * s * radiusPixels, 1.0 + float(step));
-            [unroll] for (int side = 0; side < 2; ++side) {   // side 0 walks along the slice direction (positive angles), side 1 against it
+#ifdef UC_DIRECTX
+            [loop]
+#else
+            [unroll]
+#endif
+            for (int side = 0; side < 2; ++side) {   // side 0 walks along the slice direction (positive angles), side 1 against it
                 float2 samplePoint = centre + (side == 0 ? offset : -offset);
                 float3 delta = viewAt(samplePoint) - position;
                 float distance = length(delta);
@@ -287,6 +309,9 @@ float filterContact(uint2 pixel, float3 position, float3 normal) {
 [shader("compute")] [numthreads(8, 8, 1)]
 void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.region)) return;
+#ifdef UC_DIRECTX
+    sceneColor[id.xy] = sourceColor.Load(int3(id.xy, 0));
+#endif
     float3 position, normal;
     if (!surfaceAt(int2(id.xy), position, normal)) return;
     float fog = sceneGBuffer.Load(int3(int2(id.xy), 0)).z;
@@ -296,7 +321,11 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     float visibility = (params.flags & 4u) != 0 ? shadowVisibility(position, normal) : 1.0;
     bool lit = (uint(round(sceneGBuffer.Load(int3(int2(id.xy), 0)).w * 65535.0)) & kGBufferLit) != 0;
     float facing = lit ? smoothstep(0.0, 0.3, dot(normal, shadow.toLight.xyz)) : 1.0;   // a lit surface turned away from the light is dark already
+#ifdef UC_DIRECTX
+    float4 color = sourceColor.Load(int3(id.xy, 0));
+#else
     float4 color = sceneColor[id.xy];
+#endif
     color.rgb *= lerp(1.0, ao, saturate(params.strength) * (1.0 - fog)) * lerp(1.0, contact, 0.6 * (1.0 - fog)) * lerp(1.0, visibility, 0.55 * facing * (1.0 - fog));
     sceneColor[id.xy] = color;
 }

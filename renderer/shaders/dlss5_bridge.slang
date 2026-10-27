@@ -4,13 +4,21 @@
 // RESOLVE: the network's RGBA16F output -> L -> Scaling Domain, resampled to the picture's size with the upsample filter. Scale Reconstruction "RGB residual" resamples the
 //          network's change (output minus the downsampled input in `original`) and adds it to the full-size picture; "processed image" resamples the output itself.
 //          The result is divided by the gain and encoded back into the picture's RGBA8 region.
-#if defined(PREPARE)
+#if defined(UC_DIRECTX)
+Texture2D<float4> source : register(t0);
+RWTexture2D<float4> target : register(u0);
+#if !defined(PREPARE)
+Texture2D<float4> original : register(t1);
+Texture2D<float4> targetRead : register(t2);
+#endif
+#elif defined(PREPARE)
 [[vk::binding(0, 0)]] Texture2D<float4> source;                                          // RGBA8 picture
 [[vk::binding(1, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> target;        // bridge image
 #else
 [[vk::binding(0, 0)]] Texture2D<float4> source;                                          // the network's output (bridge image)
 [[vk::binding(1, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> target;          // RGBA8 picture
 [[vk::binding(2, 0)]] Texture2D<float4> original;                                        // the network's input at the processing size (residual mode)
+#define targetRead target
 #endif
 struct Constants {
     int2 source_size;     // texels of the region read
@@ -26,7 +34,11 @@ struct Constants {
     int residual;         // RESOLVE: 1 = RGB residual
     int unused;
 };
+#ifdef UC_DIRECTX
+ConstantBuffer<Constants> constants : register(b0);
+#else
 [[vk::push_constant]] ConstantBuffer<Constants> constants;
+#endif
 
 static const float kM1 = 0.1593017578125, kM2 = 78.84375, kC1 = 0.8359375, kC2 = 18.8515625, kC3 = 18.6875;
 float3 sgn(float3 v) { return select(v < 0.0, float3(-1, -1, -1), float3(1, 1, 1)); }
@@ -126,8 +138,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     target[out_p] = float4(nrEncode(domainFrom(value)), 1.0);
 #else
     float3 base = float3(0, 0, 0);
-    if (constants.residual != 0) base = domainTo(constants.gain * decodeSource(target[out_p].rgb));
+    if (constants.residual != 0) base = domainTo(constants.gain * decodeSource(targetRead[out_p].rgb));
     float3 l = domainFrom(base + value) / constants.gain;
-    target[out_p] = float4(saturate(encodeSource(l)), target[out_p].a);
+    target[out_p] = float4(saturate(encodeSource(l)), targetRead[out_p].a);
 #endif
 }

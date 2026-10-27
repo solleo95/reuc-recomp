@@ -14,12 +14,12 @@ struct Params {
     float headroom;     // downFirstMain: what 1.0 in the 8-bit scene counts as (paper white = 1)
     uint2 reserved;
 };
-[[vk::push_constant]] ConstantBuffer<Params> params;
-[[vk::binding(0, 0)]] SamplerState linearSampler;
-[[vk::binding(1, 0)]] Texture2D<float4> imageA;
-[[vk::binding(2, 0)]] Texture2D<float4> imageB;
-[[vk::binding(3, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> outLevel;
-[[vk::binding(4, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> outColor;
+[[vk::push_constant]] ConstantBuffer<Params> params : register(b0);
+[[vk::binding(0, 0)]] SamplerState linearSampler : register(s0);
+[[vk::binding(1, 0)]] Texture2D<float4> imageA : register(t0);
+[[vk::binding(2, 0)]] Texture2D<float4> imageB : register(t1);
+[[vk::binding(3, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> outLevel : register(u0);
+[[vk::binding(4, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> outColor : register(u1);
 
 static const float kKnee = 0.6;   // kBloomKnee
 
@@ -100,7 +100,12 @@ void compositeMain(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= params.region)) return;
     float2 uv = (float2(id.xy) + 0.5) / float2(params.region);
     float3 glow = imageA.SampleLevel(linearSampler, uv, 0).rgb;
+#ifdef UC_DIRECTX
+    // SM5 guarantees RGBA8 typed UAV stores; a separate SRV also avoids read/write aliasing.
+    float4 colour = imageB.Load(int3(id.xy, 0));
+#else
     float4 colour = outColor[id.xy];
+#endif
     float3 lit = saturate(pow(pow(saturate(colour.rgb), 2.2) + glow, 1.0 / 2.2));
     const float bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
     float dither = ((bayer[(id.y & 3) * 4 + (id.x & 3)] + 0.5) / 16.0 - 0.5) / 255.0;   // +-0.5 LSB, a fixed pattern

@@ -58,12 +58,13 @@ struct StandBackend final : uc::NgxBackend {
     uint32_t init(const uc::NgxInit&) override { return uc::kNgxSuccess; }
     uint32_t requirements(uc::NgxRequirement&) override { return uc::kNgxSuccess; }
     std::unique_ptr<uc::NgxParameters> allocate_parameters(uint32_t& result) override { result=uc::kNgxSuccess; return std::make_unique<Images>(); }
-    uint32_t create_feature(VkCommandBuffer, uc::NgxParameters&, void*& handle) override {
+    uint32_t create_feature(void*, uc::NgxParameters&, void*& handle) override {
         ++stand.creates;
         if(stand.mode==Stand::refuse) return 0xBAD0000B;
         handle=reinterpret_cast<void*>(uintptr_t(stand.creates)); return uc::kNgxSuccess;
     }
-    uint32_t evaluate(VkCommandBuffer command, void*, uc::NgxParameters& parameters) override {
+    uint32_t evaluate(void* opaque, void*, uc::NgxParameters& parameters) override {
+        const auto command=static_cast<VkCommandBuffer>(opaque);
         ++stand.evaluates;
         const auto& p=static_cast<Images&>(parameters);
         const auto& color=p.images.at("DLSSNR.Color"); const auto& output=p.images.at("DLSSNR.Output");

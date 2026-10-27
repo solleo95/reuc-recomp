@@ -24,7 +24,8 @@ struct FrameRow {
     double gpu_rt_path_ms = 0;          // path tracing likewise
     double gpu_rt_as_ms = 0;   // ray tracing: acceleration structures summed over the frame's packets
     uint32_t rt_blas = 0; uint64_t rt_triangles = 0;   // the frame's BLASes (one per scene packet with instances) and their triangles
-    double gpu_ms = 0;   // longest GPU execution of one submission retired since the previous present (timestamp queries)
+    double gpu_ms = 0;   // longest GPU execution of one submission retired since the previous present (timestamp queries; summed on DirectX)
+    double gpu_sum_ms = 0;   // GPU execution of every submission retired since the previous present, summed (the load, comparable across APIs)
     double sealed_to_done_ms = 0, taken_to_done_ms = 0;   // worst presenting packet completed since the previous present: sealed by the guest -> GPU done, and taken by the renderer -> GPU done
     uint32_t events = 0, queued = 0, outstanding = 0;
     uint64_t retraces = 0, textures = 0, decodes = 0, dvd_reads = 0, audio_blocks = 0, seal_wait_ns = 0, switches = 0;

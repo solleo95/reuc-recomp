@@ -1,5 +1,7 @@
 # Upscaling and frame generation (DLSS 4.5, FSR 3.1)
 
+The native DirectX backends share the upscaling settings and shader algorithms described here. API-specific SDK availability and fixture commands are listed in [DirectX renderers](directx.md). Vulkan-specific extension, queue and swapchain details below apply to Vulkan.
+
 Design and plan: `docs/superpowers/specs/2026-10-18-dlss-fsr-design.md`, `docs/superpowers/plans/2026-10-18-dlss-fsr.md`; scene boundary and vectors: `docs/spikes/S2-motion-vectors.md`.
 
 ## What the player gets

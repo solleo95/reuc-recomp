@@ -39,12 +39,12 @@ struct Fake final : NgxBackend {
     uint32_t init(const NgxInit&) override { ++stats.inits; return config.init_result; }
     uint32_t requirements(NgxRequirement& out) override { out=config.requirement; return config.requirement_result; }
     std::unique_ptr<NgxParameters> allocate_parameters(uint32_t& result) override { result=kNgxSuccess; return std::make_unique<Recording>(); }
-    uint32_t create_feature(VkCommandBuffer, NgxParameters& p, void*& handle) override {
+    uint32_t create_feature(void*, NgxParameters& p, void*& handle) override {
         ++stats.creates; stats.created.push_back(static_cast<Recording&>(p));
         if(config.create_result!=kNgxSuccess) return config.create_result;
         handle=reinterpret_cast<void*>(uintptr_t(0x100+stats.creates)); stats.created_handles.push_back(handle); return kNgxSuccess;
     }
-    uint32_t evaluate(VkCommandBuffer, void* handle, NgxParameters& p) override { ++stats.evaluates; stats.evaluated.push_back(static_cast<Recording&>(p)); stats.evaluated_handles.push_back(handle); return config.evaluate_result; }
+    uint32_t evaluate(void*, void* handle, NgxParameters& p) override { ++stats.evaluates; stats.evaluated.push_back(static_cast<Recording&>(p)); stats.evaluated_handles.push_back(handle); return config.evaluate_result; }
     void release_feature(void* handle) override { ++stats.releases; stats.released.push_back(handle); }
     void shutdown() override { ++stats.shutdowns; }
     std::string diagnostic() const override { return config.log; }

@@ -6,6 +6,7 @@
 #include "input_prompts.h"
 #include "upscale_mode.h"
 #include "netplay.h"
+#include "renderer_backend.h"
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -16,6 +17,7 @@ namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
 std::filesystem::path default_game_folder();   // "game" next to the executable
 struct Options {
+    RendererBackend renderer_backend=RendererBackend::vulkan;
     std::optional<net::Endpoint> netplay;
     uint32_t net_tick=60;   // Simulation steps per second both players run in network play: 60 or 30 (the original rate).
     std::filesystem::path game = default_game_folder();

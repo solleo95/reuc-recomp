@@ -24,9 +24,9 @@ struct DrawState {
     uint4 indCmd[4];
     uint4 tevWords[17];   // pipeline key words 1..67 (only the ubershader reads them)
 };
-[[vk::binding(2,0)]] ConstantBuffer<DrawState> drawState;
-[[vk::binding(0,0)]] Texture2D<float4> images[8];
-[[vk::binding(1,0)]] SamplerState imageSamplers[8];
+[[vk::binding(2,0)]] ConstantBuffer<DrawState> drawState : register(b0);
+[[vk::binding(0,0)]] Texture2D<float4> images[8] : register(t0);
+[[vk::binding(1,0)]] SamplerState imageSamplers[8] : register(s0);
 TEV_CONST(0, stageCount);
 TEV_CONST(1, swapTables);
 TEV_CONST(2, colorEnv0);
@@ -94,8 +94,13 @@ TEV_CONST(63, alphaEnv15);
 TEV_CONST(64, order15);
 TEV_CONST(65, konst15);
 
-#ifdef UBER
+#ifdef UC_SPEC
+// DirectX specialization (-DUBER -DUC_SPEC): the HLSL keeps UC_TEV(i); the renderer compiles it with a constant table of the draw's TEV words in front.
+uint tevWord(uint i) { __intrinsic_asm "UC_TEV($0)"; }
+#elif defined(UBER)
 uint tevWord(uint i) { return drawState.tevWords[i / 4][i % 4]; }
+#endif
+#ifdef UBER
 #define LOAD_STAGE(n) colorEnv##n = tevWord(2 + 4 * n); alphaEnv##n = tevWord(3 + 4 * n); order##n = tevWord(4 + 4 * n); konst##n = tevWord(5 + 4 * n);
 void loadTevKey() {
     stageCount = tevWord(0); swapTables = tevWord(1);

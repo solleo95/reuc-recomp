@@ -1,12 +1,12 @@
 // HDR10 encode of the finished SDR frame (renderer/hdr_pass.h). The math mirrors renderer/hdr_math.h (tested there).
 // Gamma 2.2 decode (not the piecewise sRGB curve: its linear toe lifts the shadows, the "grey blacks" of SDR content in Windows HDR),
 // luminance-only highlight expansion from paper white to the peak, the port's overlays at their own brightness, BT.709 -> BT.2020, PQ.
-[[vk::binding(0, 0)]] Texture2D<float4> scene;
-[[vk::binding(1, 0)]] Texture2D<float4> overlay;   // premultiplied (the ImGui blend over a cleared layer), the target's size
-[[vk::binding(2, 0)]] Texture2D<float4> glow;   // the bloom's glow (renderer/bloom_pass.h): scene-referred linear light, 1.0 = paper white
-[[vk::binding(3, 0)]] SamplerState glowSampler;
+[[vk::binding(0, 0)]] Texture2D<float4> scene : register(t0);
+[[vk::binding(1, 0)]] Texture2D<float4> overlay : register(t1);   // premultiplied (the ImGui blend over a cleared layer), the target's size
+[[vk::binding(2, 0)]] Texture2D<float4> glow : register(t2);   // the bloom's glow (renderer/bloom_pass.h): scene-referred linear light, 1.0 = paper white
+[[vk::binding(3, 0)]] SamplerState glowSampler : register(s0);
 struct Constants { int2 origin; int2 size; int2 extent; float paper; float peak; float ui; uint has_overlay; float2 bloom_origin; float2 bloom_size; uint has_bloom; uint reserved; };
-[[vk::push_constant]] ConstantBuffer<Constants> constants;
+[[vk::push_constant]] ConstantBuffer<Constants> constants : register(b0);
 
 static const float kKnee = 0.6;   // kHdrKnee
 static const float3x3 kBt709To2020 = float3x3(
@@ -28,7 +28,11 @@ float3 pq(float3 nits) {
 
 struct VertexOut { float4 position : SV_Position; };
 [shader("vertex")]
+#ifdef UC_DIRECTX
+VertexOut vertexMain(uint id : SV_VertexID) {
+#else
 VertexOut vertexMain(uint id : SV_VulkanVertexID) {   // gl_VertexIndex as is: no DrawParameters capability (not enabled on the device)
+#endif
     float2 uv = float2((id << 1) & 2, id & 2);   // one triangle over the target
     VertexOut output; output.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
     return output;

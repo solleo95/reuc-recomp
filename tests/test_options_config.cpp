@@ -1,6 +1,31 @@
 #include "check.h"
 #include "options_config.h"
 int main() {
+    for (const char* invalid : {R"({"graphics":{"renderer":"opengl"}})",R"({"graphics":{"renderer":11}})",R"({"graphics":{"renderer":null}})"}) {
+        bool rejected=false;
+        try { uc::options_from_config(uc::parse_config(invalid)); }
+        catch (const std::invalid_argument&) { rejected=true; }
+        CHECK(rejected);
+    }
+    CHECK(uc::options_from_config(uc::parse_config("{}")).renderer_backend==uc::RendererBackend::vulkan);
+    for (const auto& [name,backend] : {std::pair{"vulkan",uc::RendererBackend::vulkan},
+                                      {"dx11",uc::RendererBackend::directx11}, {"dx12",uc::RendererBackend::directx12}}) {
+        auto config=uc::parse_config(R"({"graphics":{"future_setting":17}})");
+        config.properties["graphics"]["renderer"]=name;
+        auto selected=uc::options_from_config(config);
+        CHECK(selected.renderer_backend==backend);
+        const auto override=uc::parse_options(std::array<std::string_view,2>{"--renderer","vulkan"},selected);
+        CHECK(std::get<uc::Options>(override).renderer_backend==uc::RendererBackend::vulkan);
+        uc::store_options(config,selected);
+        CHECK(config.properties["graphics"]["renderer"]==name && config.properties["graphics"]["future_setting"]==17);
+        CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(config))).renderer_backend==backend);
+        selected.renderer_backend=static_cast<uc::RendererBackend>(99);
+        const auto before=uc::serialize_config(config);
+        bool rejected=false;
+        try { uc::store_options(config,selected); }
+        catch (const std::invalid_argument&) { rejected=true; }
+        CHECK(rejected && uc::serialize_config(config)==before);
+    }
     auto document=uc::parse_config(R"({"graphics":{"render_scale":2,"window_mode":"borderless","future_dlss":7},"skip_intro":true,"game":"C:/Games/Test/game"})");
     auto options=uc::options_from_config(document);
     CHECK(options.prompt_style==uc::PromptStyle::sculpted);   // absent: the default is the cyan style

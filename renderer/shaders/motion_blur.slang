@@ -10,12 +10,12 @@ struct Params {
     uint tileSize;       // scene-target pixels per tile
     uint reserved;
 };
-[[vk::push_constant]] ConstantBuffer<Params> params;
-[[vk::binding(1, 0)]] Texture2D<float4> sourceColor;
-[[vk::binding(2, 0)]] Texture2D<float2> sceneMotion;
-[[vk::binding(3, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> outputColor;
-[[vk::binding(4, 0)]] Texture2D<float2> tileMax;
-[[vk::binding(5, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> tileMaxOut;
+[[vk::push_constant]] ConstantBuffer<Params> params : register(b0);
+[[vk::binding(1, 0)]] Texture2D<float4> sourceColor : register(t0);
+[[vk::binding(2, 0)]] Texture2D<float2> sceneMotion : register(t1);
+[[vk::binding(3, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> outputColor : register(u0);
+[[vk::binding(4, 0)]] Texture2D<float2> tileMax : register(t2);
+[[vk::binding(5, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> tileMaxOut : register(u1);
 
 float2 longer(float2 a, float2 b) { return dot(a, a) >= dot(b, b) ? a : b; }
 // Motion vector (previous minus current, scene-target pixels) at an output pixel.

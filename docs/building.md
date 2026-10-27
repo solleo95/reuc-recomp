@@ -19,7 +19,7 @@ This page explains how to build the port yourself, run its tests and work on it.
 
 ## How the build works
 
-The port is a *static recompilation*: a translator reads the game's PowerPC program (`main.dol`) and writes C++ source code for it, which is compiled together with the runtime (memory, threads, the Wii SDK replaced by native code), a Vulkan renderer, the launcher and the modding platform.
+The port is a *static recompilation*: a translator reads the game's PowerPC program (`main.dol`) and writes C++ source code for it, which is compiled together with the runtime (memory, threads, the Wii SDK replaced by native code), Vulkan and DirectX renderers, the launcher and the modding platform.
 
 Two consequences:
 
@@ -39,7 +39,7 @@ Two consequences:
 | **Vulkan SDK** | `VULKAN_SDK` must be set and the SDK must contain `slangc` (the shader compiler) |
 | Internet access during the first configure | CMake downloads the pinned NVIDIA Streamline and AMD FidelityFX SDKs and some libraries (SHA-256 is checked) |
 | Your unpacked game | `...\game\DATA\sys\main.dol` |
-| A GPU with Vulkan 1.3 | Needed to run the game and the GPU tests |
+| A compatible GPU | Vulkan 1.3, DirectX 11.1 with logic operations, or DirectX 12 with Shader Model 6.0 and logic operations; GPU tests require their selected API. See [DirectX support](directx.md). |
 
 `scripts\env.bat` finds all of these (it calls `vcvars64.bat`, looks for `clang-cl`, `cmake`, `ninja` and the Vulkan SDK) and prints what is missing.
 
@@ -108,7 +108,7 @@ The harness copies your saves into `build\autotest\<run>\saves` and never plays 
 |---|---|
 | `tools/translator`, `common/analyzer`, `common/ppc` | The PowerPC to C++ translator and its analysis |
 | `runtime` | The game's runtime: memory, threads, SDK replacements (HLE), audio, DVD file system |
-| `renderer` | The Vulkan renderer, upscalers, frame generation, effects, ray tracing |
+| `renderer` | Vulkan, DirectX 11 and DirectX 12 renderers, upscalers, frame generation, effects, ray tracing |
 | `game` | `uc.exe`: startup, window, input, in-game menu |
 | `launcher` | `uc_launcher.exe`: settings, bindings, multiplayer lobby, updates |
 | `updater` | The isolated updater |
