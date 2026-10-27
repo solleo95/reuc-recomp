@@ -31,6 +31,12 @@ static void bad_id() {
     CHECK(longest.manifest);
 }
 
+static void upper_case_id() {   // an id written with capitals is the same mod as its lower-case form, also in depends
+    const auto r = parse_manifest(R"({"id":"FFRU","name":"n","version":"1","api":"1.0","depends":[{"id":"Base-Mod"}]})");
+    CHECK(r.manifest && r.manifest->id == "ffru" && r.manifest->depends.at(0).id == "base-mod");
+    CHECK(!parse_manifest(R"({"id":"ENABLED","name":"n","version":"1","api":"1.0"})").manifest);   // reserved names stay reserved in any case
+}
+
 static void invalid_json() {
     const auto r = parse_manifest("{ not json");
     CHECK(!r.manifest && r.errors.size() == 1);
@@ -126,7 +132,7 @@ static void audio_key_is_optional() {
 }
 
 int main() {
-    valid_minimal(); bad_id(); invalid_json(); api_format(); settings_types(); script_and_native_paths(); script_extension(); depends_and_names();
+    valid_minimal(); bad_id(); upper_case_id(); invalid_json(); api_format(); settings_types(); script_and_native_paths(); script_extension(); depends_and_names();
     audio_loops_parse(); audio_loop_start_not_before_end_is_an_error(); audio_stem_with_a_path_is_an_error(); audio_key_is_optional();
     std::puts("ok");
 }

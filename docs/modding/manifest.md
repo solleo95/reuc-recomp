@@ -38,7 +38,7 @@ A zip may hold the files directly or inside one top-level folder. It is unpacked
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Unique, lower-case letters, digits, `_` and `-`, 1 to 48 characters, starting with a letter or digit. `enabled`, `order`, `allow_native` and `native_hash` are reserved (they are keys of the config's `mods` section). |
+| `id` | yes | Unique, letters, digits, `_` and `-`, 1 to 48 characters, starting with a letter or digit. Capitals are allowed but the game stores the id in lower case (`FFRU` is `ffru` in the config, log and cache; the same goes for ids in `depends`). `enabled`, `order`, `allow_native` and `native_hash` are reserved (they are keys of the config's `mods` section). |
 | `name`, `version` | yes | Shown in the Mods tab. Versions are dotted numbers (`1.10` is newer than `1.2`). |
 | `api` | yes | The mod API version the mod was written for, `"major.minor"`. A game with the same major version and an equal or newer minor version can run it. |
 | `author`, `description` | no | Shown in the Mods tab. |

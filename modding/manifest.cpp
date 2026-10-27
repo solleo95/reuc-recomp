@@ -14,6 +14,12 @@ bool valid_id(std::string_view id) {
     return std::all_of(id.begin() + 1, id.end(), [&](char c) { return lower_digit(c) || c == '_' || c == '-'; });
 }
 
+// Ids are compared and stored (config keys, cache folders, depends) in lower case, so "FFRU" and "ffru" are one mod.
+std::string lower_ascii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return c >= 'A' && c <= 'Z' ? char(c + 32) : char(c); });
+    return text;
+}
+
 bool reserved_id(std::string_view id) { return id == "enabled" || id == "order" || id == "allow_native" || id == "native_hash"; }   // keys of the config "mods" section
 
 std::string extension(std::string_view path) {
@@ -165,8 +171,8 @@ ManifestResult parse_manifest(std::string_view text) {
     if (!root.is_object()) { result.errors.push_back("mod.json must contain a JSON object"); return result; }
     auto& errors = result.errors;
     ModManifest m;
-    m.id = required_string(root, "id", errors);
-    if (!m.id.empty() && (!valid_id(m.id) || reserved_id(m.id))) errors.push_back("id '" + m.id + "' is not allowed (lower-case letters, digits, '_' and '-', 1-48 characters, not a reserved name)");
+    m.id = lower_ascii(required_string(root, "id", errors));
+    if (!m.id.empty() && (!valid_id(m.id) || reserved_id(m.id))) errors.push_back("id '" + m.id + "' is not allowed (letters, digits, '_' and '-', 1-48 characters, not a reserved name)");
     m.name = required_string(root, "name", errors);
     m.version = required_string(root, "version", errors);
     m.author = optional_string(root, "author", errors);
@@ -182,7 +188,7 @@ ManifestResult parse_manifest(std::string_view text) {
         else for (const auto& d : root["depends"]) {
             if (!d.is_object()) { errors.push_back("depends entries must be objects"); continue; }
             ModDependency dep;
-            dep.id = required_string(d, "id", errors);
+            dep.id = lower_ascii(required_string(d, "id", errors));
             if (!dep.id.empty() && !valid_id(dep.id)) errors.push_back("depends id '" + dep.id + "' is not a valid mod id");
             dep.min_version = optional_string(d, "min_version", errors);
             m.depends.push_back(std::move(dep));

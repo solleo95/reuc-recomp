@@ -134,7 +134,7 @@ All paths inside a mod are **relative to the mod's folder**, use `/` as the sepa
 
 | Field | What it means |
 |---|---|
-| `id` | A unique short name: lower-case letters, digits, `_` and `-`, up to 48 characters, starting with a letter or a digit. It is used in the config, the log and the cache. |
+| `id` | A unique short name: letters, digits, `_` and `-`, up to 48 characters, starting with a letter or a digit. Capitals are allowed, but the game uses the lower-case form (`FFRU` becomes `ffru`) in the config, the log and the cache. |
 | `name`, `version` | Shown in the Mods tab. Versions are dotted numbers (`1.10` is newer than `1.2`). |
 | `api` | The mod API version you wrote the mod for, `"major.minor"`. Use `"1.1"` for anything that uses enemies, events, game state, input or calling game functions, `"1.0"` otherwise. |
 | `touches_gameplay` | Set `true` if the mod changes how the game plays. The game enforces it: without it, scripts cannot write to the game, and data patches and hooks are refused. |
