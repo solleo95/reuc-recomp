@@ -46,6 +46,10 @@ int main() {
     options.skip_tutorials=true;uc::store_options(document,options);
     CHECK(document.properties["skip_tutorials"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).skip_tutorials);
     options.skip_tutorials=false;uc::store_options(document,options);
+    CHECK(!options.logs && document.properties["logs"]==false);   // absent: no logs in a release client
+    options.logs=true;uc::store_options(document,options);
+    CHECK(document.properties["logs"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).logs);
+    options.logs=false;uc::store_options(document,options);
     options.bloom=false;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["bloom"]==false && !uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom);
     options.bloom=true;uc::store_options(document,options);

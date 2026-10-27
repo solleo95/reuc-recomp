@@ -271,8 +271,10 @@ Result<InstallPlan> plan_install(const fs::path& install,const Package& package)
         auto actual=snapshot(root,path);
         if(failed(actual)) return std::get<Error>(actual);
         auto old=std::get<std::optional<FileEntry>>(actual);
-        if(old && !old_files.contains(key)) return Error{ErrorCode::unsafe_path,"New release collides with an unowned file: "+path};
         auto next=new_files.find(key);
+        // An unowned file already byte-identical to the new release (copied by hand, left by a dev deploy) is adopted: nothing to lose.
+        const bool identical=old && next!=new_files.end() && old->sha256==next->second.sha256 && old->size==next->second.size;
+        if(old && !old_files.contains(key) && !identical) return Error{ErrorCode::unsafe_path,"New release collides with an unowned file: "+path};
         if(next==new_files.end() && !old) continue;
         if(next!=new_files.end() && old && old->sha256==next->second.sha256 && old->size==next->second.size) continue;
         plan.operations.push_back({path,old.has_value(),old?old->size:0,old?old->sha256:"",

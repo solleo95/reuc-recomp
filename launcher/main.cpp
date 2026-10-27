@@ -16,6 +16,7 @@
 #include "stun.h"
 #include "diagnostic_log.h"
 #include "graphite.h"
+#include "image_unpack.h"
 #include "ui_fonts.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -163,7 +164,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
@@ -219,6 +220,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     std::unique_ptr<uc::net::NatMapping> nat;
     std::vector<std::unique_ptr<uc::net::NatMapping>> retiring_nat;
     std::optional<uc::net::Endpoint> pending_network;
+    std::unique_ptr<uc::launcher::ImageUnpack> unpack;   // while a disc image is being unpacked into the game folder
     std::string network_address,network_error,punch_address;
     size_t network_local_address=0;
     bool network_modal=false,network_open_requested=false,network_host=false;
@@ -244,8 +246,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
-    reload();std::string game_path=utf8(options.game);
-    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
+    reload();std::string game_path=utf8(options.game);    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
     auto features_backend=options.renderer_backend;
@@ -568,6 +569,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         if(page==0) {
             toggle("##skip-game",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
+            ImGui::Dummy({0,8*unit});toggle("##logs-game",tr("enable_logs"),options.logs);
             ImGui::Dummy({0,8*unit});ImGui::TextWrapped("%s",tr("alt"));
         } else if(page==1) {
             const float column_gap=88*unit;
@@ -883,9 +885,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const auto foot=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
         const float path_width=width*.55f,launch_x=foot.x+width*.605f;
         std::error_code path_error;const bool game_found=fs::is_regular_file(options.game/L"DATA"/L"sys"/L"main.dol",path_error);
+        const bool image_selected=!game_found && fs::is_regular_file(options.game,path_error);   // a disc image in the game folder field is unpacked by Play
         if(page!=2) {
         ImGui::BeginGroup();ImGui::TextUnformatted(tr("folder"));
-        ImGui::PushFont(ui.sans,std::round(22*unit));ImGui::SetNextItemWidth(path_width-70*unit);
+        ImGui::PushFont(ui.sans,std::round(22*unit));ImGui::SetNextItemWidth(path_width-140*unit);
         if(ImGui::InputText("##game",&game_path))options.game=fs::path(std::u8string(game_path.begin(),game_path.end()));
         ImGui::SameLine(0,12*unit);
         if(button("##browse","browse",{58*unit,ImGui::GetFrameHeight()})) {
@@ -896,7 +899,17 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const ImVec2 c{std::round((a.x+b.x)/2),std::round((a.y+b.y)/2)};
         ImVec2 folder_points[]={{c.x-13*unit,c.y-9*unit},{c.x-3*unit,c.y-9*unit},{c.x+1*unit,c.y-5*unit},{c.x+13*unit,c.y-5*unit},{c.x+13*unit,c.y+9*unit},{c.x-13*unit,c.y+9*unit}};
         folder_draw->AddConvexPolyFilled(folder_points,6,IM_COL32(192,196,196,255));
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("browse"));ImGui::PopFont();
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("browse"));
+        ImGui::SameLine(0,12*unit);
+        if(button("##browse-image","browse-image",{58*unit,ImGui::GetFrameHeight()})) {
+            try {auto selected=options.game;if(uc::launcher::choose_image_file(ui.window,selected)) {options.game=selected;game_path=utf8(selected);}}
+            catch(const std::exception& e) {error=e.what();}
+        }
+        a=ImGui::GetItemRectMin();b=ImGui::GetItemRectMax();
+        const ImVec2 disc{std::round((a.x+b.x)/2),std::round((a.y+b.y)/2)};
+        folder_draw->AddCircleFilled(disc,12*unit,IM_COL32(192,196,196,255),24);
+        folder_draw->AddCircleFilled(disc,4*unit,ImGui::GetColorU32(ImGuiCol_Button),16);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("image_browse"));ImGui::PopFont();
         ImGui::Dummy({0,20*unit});
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+path_width);ImGui::PushStyleColor(ImGuiCol_Text,game_found ? ImVec4{.47f,.74f,.52f,1} : ImVec4{.85f,.68f,.42f,1});
         if(game_found) {
@@ -906,21 +919,27 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             d->AddLine({p.x+9*unit,p.y+16*unit},{p.x+15*unit,p.y+9*unit},IM_COL32(14,45,25,255),2*unit);
             ImGui::Dummy({22*unit,0});ImGui::SameLine(0,9*unit);
         }
-        ImGui::TextWrapped("%s",tr(game_found ? "found" : "missing"));ImGui::PopStyleColor();ImGui::PopTextWrapPos();
+        ImGui::TextWrapped("%s",tr(game_found ? "found" : image_selected ? "image_selected" : "missing"));ImGui::PopStyleColor();ImGui::PopTextWrapPos();
         ImGui::EndGroup();
         }
         const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
-        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !game_found || network_modal || network || pending_network || updates.blocks_game_launch());
+        const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !(game_found || image_selected) || unpack || network_modal || network || pending_network || updates.blocks_game_launch());
         push_font(ui.serif,22);
         const float launch_gap=8*unit,launch_width=(width*.395f-launch_gap)/2;
+        ImGui::BeginDisabled(!game_found);   // a disc image has to be unpacked by Singleplayer first
         if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
+        ImGui::EndDisabled();
         ImGui::SameLine(0,launch_gap);
         ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
-        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{launch_width,74*unit}) && save(options)) {
-            launch_requested=true;
-            std::fprintf(stderr,"[cpu-calibration] Play requested: %s\n",cpu_ready ? "ready" : "waiting");
+        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{launch_width,74*unit})) {
+            // The image path is not saved: until the unpack succeeds, the folder that was configured before stays in config.json.
+            if(image_selected)unpack=std::make_unique<uc::launcher::ImageUnpack>(directory,fs::absolute(options.game));   // Play continues when it is done
+            else if(save(options)) {
+                launch_requested=true;
+                std::fprintf(stderr,"[cpu-calibration] Play requested: %s\n",cpu_ready ? "ready" : "waiting");
+            }
         }
         ImGui::PopFont();ImGui::PopStyleColor(3);ImGui::EndDisabled();
         ImGui::EndDisabled();ImGui::PopFont();ImGui::EndChild();ImGui::EndChild();ImGui::PopFont();
@@ -1044,6 +1063,40 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PopFont();ImGui::EndPopup();
         }
         ImGui::PopFont();ImGui::PopStyleVar(2);
+        {   // unpacking a disc image into the game folder; Play goes on by itself when it is done
+            const std::string unpack_title=std::string(tr("unpack_title"))+"###unpack";
+            if(unpack && !ImGui::IsPopupOpen("###unpack"))ImGui::OpenPopup("###unpack");
+            ImGui::SetNextWindowSize({660*unit,0},ImGuiCond_Always);
+            ImGui::SetNextWindowSizeConstraints({0,0},{10000,ImGui::GetIO().DisplaySize.y-32});
+            ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x/2,ImGui::GetIO().DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{12*unit,12*unit});
+            push_font(ui.sans,28);
+            if(unpack && ImGui::BeginPopupModal(unpack_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+                push_font(ui.sans,22);
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+600*unit);
+                const auto state=unpack->status();
+                if(state==uc::launcher::UnpackStatus::running) {
+                    ImGui::TextWrapped("%s",tr("unpack_working"));
+                    ImGui::ProgressBar(unpack->percent()/100.f,{600*unit,0});
+                    if(button(tr("update_cancel"),"unpack-cancel"))unpack->cancel();
+                } else if(state==uc::launcher::UnpackStatus::done) {
+                    options.game=directory/L"game";game_path=utf8(options.game);
+                    unpack.reset();ImGui::CloseCurrentPopup();
+                    if(save(options))launch_requested=true;
+                } else {
+                    using uc::launcher::UnpackError;
+                    if(state==uc::launcher::UnpackStatus::failed) {
+                        const auto reason=unpack->error();
+                        ImGui::TextWrapped("%s",tr(reason==UnpackError::wit_missing ? "unpack_wit_missing" : reason==UnpackError::wrong_image ? "unpack_wrong_image"
+                            : reason==UnpackError::image_in_game_folder ? "unpack_inside_game" : reason==UnpackError::no_space ? "unpack_no_space" : "unpack_failed"));
+                    }
+                    if(button(tr("unpack_close"),"unpack-close") || state==uc::launcher::UnpackStatus::cancelled) {unpack.reset();ImGui::CloseCurrentPopup();}
+                }
+                ImGui::PopTextWrapPos();ImGui::PopFont();ImGui::EndPopup();
+            }
+            ImGui::PopFont();ImGui::PopStyleVar(2);
+        }
         if(!network_modal && !editor.capturing()) {
             push_font(ui.sans,22);
             if(uc::launcher::draw_update_modal(updates,active_language,running,unit)) {launch_requested=false;cancel_network();}
@@ -1222,7 +1275,9 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         }
         auto session=uc::enter_client_session(executable_dir(),resume?std::optional{resume->ticket}:std::nullopt);
         if(auto* error=std::get_if<std::error_code>(&session)) throw std::runtime_error("Client is updating or requires recovery: "+error->message());
-        if(!uc::public_release())diagnostics.emplace("launcher",executable_dir()/L"logs");   // a release client writes no logs
+        bool logs=!uc::public_release();   // a release client writes no logs unless "Enable logs" is on in config.json (read here: it takes effect from the next start)
+        if(!logs)try {logs=uc::options_from_config(uc::load_config(executable_dir()/L"config.json")).logs;} catch(const std::exception&) {}   // a missing or broken config: no logs, run() reports it
+        if(logs)diagnostics.emplace("launcher",executable_dir()/L"logs");
         result=run(resume?1:count,arguments,resume?&*resume:nullptr);
     } catch(const std::exception& e) {
         std::fprintf(stderr,"launcher failed: %s\n",e.what());

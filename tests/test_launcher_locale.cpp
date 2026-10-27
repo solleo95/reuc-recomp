@@ -39,6 +39,11 @@ int main() {
         for(const auto& choice:uc::dlss5_field("hook")->choices) CHECK(!text(language.code,"dlss5_hook_desc_"+std::string(choice.name)).empty());
     }
     CHECK(text("ru","dlss5_hook")=="Метод подключения" && text("en","dlss5_hook_desc_off")=="Off: Disabled");
+    // The disc image unpacking texts exist in all 13 languages (an empty or missing one would throw or show nothing).
+    for(const auto& language:languages())
+        for(const auto& key:{"image_browse","image_selected","unpack_title","unpack_working","unpack_wit_missing","unpack_wrong_image","unpack_inside_game","unpack_no_space","unpack_failed","unpack_close"})
+            CHECK(text(language.code,key).size()>3);
+    CHECK(text("en","image_browse")=="Select a disc image…" && text("ru","unpack_title")=="Распаковка игры");
     CHECK(text("en","play")=="Singleplayer");
     CHECK(text("ru","play")=="Одиночная игра");
     CHECK(text("ja","play")=="シングルプレイ");

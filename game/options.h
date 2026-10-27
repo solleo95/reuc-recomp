@@ -66,6 +66,7 @@ struct Options {
     std::string test_server; // agent test server pipe name [A-Za-z0-9_-]{1,32}
     bool god = false;        // test-mode cheat: health and ammo stay at their maxima, needs test_server
     bool skip_tutorials = false;   // tutorial pages never open (launcher "Skip tutorials", config skip_tutorials, --skip-tutorials)
+    bool logs = false;   // launcher "Enable logs", config logs: a release client (see public_release.h) writes logs and crash reports again; the launcher passes UC_LOGS=1 to uc.exe
     uint32_t speed = 1;     // test-mode virtual clock factor 1..32, needs test_server
 };
 // Names used by the CLI and config.json; blit is accepted only with allow_test (CLI).

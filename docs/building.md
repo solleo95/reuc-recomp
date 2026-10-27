@@ -23,7 +23,7 @@ The port is a *static recompilation*: a translator reads the game's PowerPC prog
 
 Two consequences:
 
-- **You need your own copy of the game** unpacked on the disc: the build reads `game\DATA\sys\main.dol`. Unpack your `RBUE08` (NTSC-U) image with Wit as described in [Installation](../README.md#2-unpack-your-game-image-with-wit). Other regions do not work.
+- **You need your own copy of the game** unpacked on the disc: the build reads `game\DATA\sys\main.dol`. Unpack your `RBUE08` (NTSC-U) image with Wit as described in [Installation](../README.md#2-unpack-your-game-image-in-the-launcher-or-with-wit). Other regions do not work.
 - The translated code is written to `generated\` (git-ignored). It is derived from the game's code: never commit it, never publish it, never attach it to issues or pull requests.
 
 ## What you need
@@ -83,7 +83,7 @@ Two consequences:
 
 Build outputs: `build\` (build tree and logs: `configure.log`, `translator_build.log`, `translate.log`), `dist\` (the staged game), `generated\` (translated code). All are git-ignored.
 
-**Logs and debug files.** A build from source writes session logs and crash reports to `logs\` and debug files to `debug\` next to `uc.exe` and `uc_launcher.exe`. An installed release client (the one with `release.json`, the update manifest, next to the executables) writes none of them; it is the same executable, `build-release.bat` needs no second build. To get the logs from a release client anyway (for example to debug an update), set the environment variable `UC_LOGS=1` before starting it.
+**Logs and debug files.** A build from source writes session logs and crash reports to `logs\` and debug files to `debug\` next to `uc.exe` and `uc_launcher.exe`. An installed release client (the one with `release.json`, the update manifest, next to the executables) writes none of them; it is the same executable, `build-release.bat` needs no second build. A player turns the logs on with the "Enable logs" checkbox on the first launcher tab (`"logs": true` in `config.json`): the launcher passes `UC_LOGS=1` to the game, and the launcher's own log starts from its next launch. A developer can set the environment variable `UC_LOGS=1` before starting the client instead.
 
 ## Tests
 

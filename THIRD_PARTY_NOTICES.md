@@ -18,6 +18,7 @@ Their licence texts are in the `licenses` folder next to the game.
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) 0.10.1 | JavaScript scripts of mods | `licenses/quickjs-ng/LICENSE` |
 | [mimalloc](https://github.com/microsoft/mimalloc) 3.6.0 | memory allocator of the game | `licenses/mimalloc/LICENSE` |
 | [miniz](https://github.com/richgel999/miniz) 3.0.2 | zip files of mods | `licenses/miniz/LICENSE` |
+| [Wit (Wiimms ISO Tools)](https://wit.wiimm.de/) v3.05a r8638, Windows build, with its Cygwin libraries (`tools/wit/`) | unpacking the game disc image selected in the launcher, run as a separate program | `licenses/wit/` (GPL-2.0, source locations, library licences) |
 | [stb_vorbis](https://github.com/nothings/stb) 1.22 | Ogg Vorbis audio of mods | public domain (dedication and MIT alternative at the end of `modding/third_party/stb_vorbis.c`) |
 
 NVIDIA, GeForce RTX, DLSS and Reflex are trademarks and/or registered trademarks of NVIDIA Corporation. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc.

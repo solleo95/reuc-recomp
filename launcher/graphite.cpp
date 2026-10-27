@@ -124,7 +124,9 @@ SDL_Texture* load_banner(SDL_Renderer* renderer, const std::filesystem::path& pa
     return texture;
 }
 
-bool choose_game_folder(SDL_Window* window, std::filesystem::path& path) {
+namespace {
+// A folder picker, or a file picker for the disc images that Wit reads.
+bool choose_path(SDL_Window* window, std::filesystem::path& path, bool folder) {
     if (!window) throw std::runtime_error("Folder picker requires an SDL window");
     const auto properties = SDL_GetWindowProperties(window);
     if (!properties) throw std::runtime_error(std::string("Read folder picker window: ") + SDL_GetError());
@@ -138,8 +140,12 @@ bool choose_game_folder(SDL_Window* window, std::filesystem::path& path) {
         IID_PPV_ARGS(dialog.GetAddressOf())), "Create folder picker");
     FILEOPENDIALOGOPTIONS options{};
     require(dialog->GetOptions(&options), "Read folder picker options");
-    require(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR),
+    require(dialog->SetOptions(options | (folder ? FOS_PICKFOLDERS : 0) | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR),
         "Set folder picker options");
+    if (!folder) {
+        const COMDLG_FILTERSPEC types[] = {{L"*.iso, *.wbfs, *.ciso, *.wdf, *.wia", L"*.iso;*.wbfs;*.ciso;*.wdf;*.wia"}, {L"*.*", L"*.*"}};
+        require(dialog->SetFileTypes(UINT(std::size(types)), types), "Set disc image types");
+    }
     const HRESULT result = dialog->Show(owner);
     if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return false;
     require(result, "Show folder picker");
@@ -154,4 +160,8 @@ bool choose_game_folder(SDL_Window* window, std::filesystem::path& path) {
     path.swap(selected);
     return true;
 }
+}
+
+bool choose_game_folder(SDL_Window* window, std::filesystem::path& path) { return choose_path(window, path, true); }
+bool choose_image_file(SDL_Window* window, std::filesystem::path& path) { return choose_path(window, path, false); }
 }

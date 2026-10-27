@@ -95,6 +95,11 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(read(f.root/"added.txt")=="USER");
     }
     {
+        Fixture f;write(f.root/"added.txt","NEW");pass(apply_install(ok(plan_install(f.root,f.package))));
+        CHECK(read(f.root/"added.txt")=="NEW");CHECK(read(f.root/"uc.exe")=="NEW");
+        pass(recover_install(f.root,f.operation));CHECK(read(f.root/"added.txt")=="NEW");
+    }
+    {
         Fixture f;auto j=Json::parse(read(f.root/"release.json"));j["files"][0]["path"]="config.json";
         write(f.root/"release.json",j.dump());CHECK(failed(plan_install(f.root,f.package)));
     }

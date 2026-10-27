@@ -30,7 +30,7 @@
 When you report a problem, please say what GPU, driver and Windows version you use, and describe how to reproduce the problem (see [Reporting problems](#reporting-problems)).
 
 > [!IMPORTANT]
-> **No game files are included and none will ever be.** This is not a piracy tool. You need your **own copy** of the game (a disc image of _Resident Evil: The Umbrella Chronicles_ for the Wii, region **NTSC-U, game ID `RBUE08`**), and you unpack it yourself with [Wit](https://wit.wiimm.de/wit/). See [Installation](#installation). The project is not affiliated with, endorsed by or connected to Capcom, Nintendo, NVIDIA or AMD.
+> **No game files are included and none will ever be.** This is not a piracy tool. You need your **own copy** of the game (a disc image of _Resident Evil: The Umbrella Chronicles_ for the Wii, region **NTSC-U, game ID `RBUE08`**), and you unpack it yourself: the launcher does it with the built-in [Wit](https://wit.wiimm.de/wit/), or you run Wit by hand. See [Installation](#installation). The project is not affiliated with, endorsed by or connected to Capcom, Nintendo, NVIDIA or AMD.
 
 ## Gameplay video
 
@@ -45,7 +45,7 @@ When you report a problem, please say what GPU, driver and Windows version you u
 - [System requirements](#system-requirements)
 - [Installation](#installation)
   - [1. Download the port](#1-download-the-port)
-  - [2. Unpack your game image with Wit](#2-unpack-your-game-image-with-wit)
+  - [2. Unpack your game image (in the launcher or with Wit)](#2-unpack-your-game-image-in-the-launcher-or-with-wit)
   - [3. First launch and settings](#3-first-launch-and-settings)
   - [4. Updating](#4-updating)
 - [In-game menu and controls](#in-game-menu-and-controls)
@@ -97,6 +97,7 @@ Details: [Upscaling and frame generation](docs/upscaling.md) · [Graphics effect
 
 - Built-in **launcher in 13 languages**: English, Русский, Deutsch, Français, Español, Italiano, Português, Polski, Українська, Türkçe, 日本語, 한국어, 简体中文.
 - All settings in one place: resolution, window mode, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings. Features your GPU cannot run are greyed out with the reason.
+- **Unpacks your game image for you:** choose the disc image in the launcher and it unpacks it itself with the built-in Wit, no manual steps ([details](#way-a-the-launcher-unpacks-the-image)).
 - **One-click updates:** the launcher checks the latest release, verifies the files (SHA-256) and replaces them, keeping your settings, saves and mods.
 - Multiplayer lobby with automatic router port opening (UPnP) and NAT punching ([details](#multiplayer-online-co-op)).
 
@@ -144,13 +145,36 @@ The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windo
 1. Open the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest) and download **`UC-Windows-X.Y.Z.zip`**.
 2. Unpack it into a folder where you have write permission (for example `C:\Games\Umbrella Chronicles`; **not** `Program Files`). The archive contents go directly into that folder: you will see `uc_launcher.exe`, `uc.exe` and several DLL files.
 
-### 2. Unpack your game image with Wit
+### 2. Unpack your game image (in the launcher or with Wit)
 
-The port does not contain the game. It reads the game's files from a folder where **you** unpack **your own** disc image. The tool for this is **Wit** (Wiimms ISO Tools).
+The port does not contain the game. It reads the game's files from a folder where **your own** disc image is unpacked (the folder that contains `DATA`). There are two ways to get it, pick one: the launcher unpacks the image for you (**way A**, the easiest), or you unpack it yourself with Wit (**way B**).
 
-**What you need:** an image of your own disc of the NTSC-U version (`RBUE08`) in `.iso`, `.wbfs`, `.ciso`, `.wdf` or `.wia` format. (The `.rvz` format of Dolphin is not supported by Wit: convert it to ISO in Dolphin first, _right-click the game → Convert File…_.) You can dump your disc with a Wii and homebrew software.
+**What you need (both ways):** an image of your own disc of the NTSC-U version (`RBUE08`) in `.iso`, `.wbfs`, `.ciso`, `.wdf` or `.wia` format, and about 4 GB of free disk space. (The `.rvz` format of Dolphin is not supported: convert it to ISO in Dolphin first, _right-click the game → Convert File…_. Discs in a drive are not supported either: use an image.) You can dump your disc with a Wii and homebrew software.
 
-**Unpacking:**
+#### Way A. The launcher unpacks the image
+
+The unpacking tool **Wit** (Wiimms ISO Tools) is already built into the port (the `tools\wit` folder), so there is nothing to download and no command to type.
+
+1. Run **`uc_launcher.exe`**. If the game is not found yet, the launcher asks you to select the extracted game folder.
+2. Click the **disc button** (the round disc icon, tooltip _"Select a disc image…"_) to the right of the folder button and choose your image file. You can also paste the path of the image into the **Game folder** field. The message under the field changes to _"Disc image selected. It is unpacked into the game folder before the game starts."_
+3. Press the red **Singleplayer** button. The **Unpacking the game** window opens with a progress bar and a **Cancel** button. It takes about a minute.
+4. When it is done, the launcher sets the **Game folder** to the new `game` folder next to `uc.exe` and starts the game by itself. The next time just press **Singleplayer**: the image is not needed any more, you can keep it or delete it.
+
+What to know:
+
+- **Only the NTSC-U image (`RBUE08`) is accepted.** The launcher reads the disc ID first. An image of another region, or a file that is not a disc image, is refused with a message, and nothing on your disk is changed.
+- **The `game` folder next to `uc.exe` is replaced.** When the image is accepted, the launcher **deletes the old `game` folder** (if there is one) and unpacks the game into a new one. If you put your own files into that folder, back them up first. The old folder counts as free space, so 4 GB free *after* deleting it is enough.
+- **The image must not be inside the `game` folder** (it would be deleted together with it): move it somewhere else. The launcher tells you if you picked such a file.
+- **A half-unpacked game is never left behind.** If you press **Cancel** or the unpacking fails (damaged image, disk full) or `DATA\sys\main.dol` is missing at the end, the half-unpacked `game` folder is removed. If this happens after the old `game` folder was deleted, there is no `game` folder until you select the image and press **Singleplayer** again.
+- The path of the image is **not saved** in `config.json`: until the unpacking succeeds, the launcher keeps the folder that was set before.
+- **Multiplayer** stays unavailable until the game is unpacked: first press **Singleplayer** once.
+- The game is always unpacked into `game` next to `uc.exe`. If you want it in another folder, use way B.
+
+Messages you may see: _"The Wit tool is missing next to the launcher"_ (the `tools\wit` folder was deleted: reinstall or update the port); _"This is not an image of the NTSC-U disc (RBUE08)"_; _"Not enough free disk space"_; _"The image is inside the game folder"_; _"Unpacking failed: the image may be damaged or the disk is full"_.
+
+#### Way B. Unpack by hand with Wit
+
+Use it if you want the game in another folder or do not want the launcher to touch the `game` folder.
 
 1. Download **Wit** for Windows from <https://wit.wiimm.de/wit/> and unpack it somewhere, for example to `C:\Tools\wit`.
 2. Open **PowerShell** or the command prompt in the folder with the port (where `uc.exe` is) and run (change the paths to yours):
@@ -184,7 +208,7 @@ If you unpacked the game into another folder, you will select it in the launcher
 
 ### 3. First launch and settings
 
-1. Run **`uc_launcher.exe`**. If the launcher says _"Select the extracted game folder"_, click the **Game folder** field and pick the folder from step 2 (the one that contains `DATA`). A green check mark means the game is found.
+1. Run **`uc_launcher.exe`**. If the launcher says _"Select the extracted game folder"_, click the **Game folder** field and pick the folder from step 2 (the one that contains `DATA`), or choose your disc image with the disc button and press **Singleplayer** (the launcher unpacks the image first, see [way A](#way-a-the-launcher-unpacks-the-image)). A green check mark means the game is found.
 2. Choose the language of the launcher (top of the window), the resolution and the window mode.
 3. Set the graphics options. Good starting point:
    - **Upscaler:** DLSS (RTX GPU) or FSR (any GPU), mode _Quality_. Without an upscaler the game renders at your resolution as is.

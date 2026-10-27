@@ -62,6 +62,7 @@
 #include "localization.h"
 #include "prompt_hooks.h"
 #include "settings_menu.h"
+#include "system_report.h"
 #include "netplay_game.h"
 #include "game_checkpoint.h"
 #include "gx_scene.h"
@@ -251,6 +252,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         std::printf("%s\n",uc::to_json(report).c_str());
         return 0;   // the caller reads the report as soon as it is written and does not wait for this process to unload the NGX/Streamline runtimes
     }
+    if(!uc::diagnostic_directory().empty())uc::log_system_report(exe_dir());   // only while a log is written
     const bool server_mode=!options.test_server.empty();
     if(server_mode && !options.test_control.empty()) throw std::invalid_argument("--test-server replaces --test-control; use only one");
     const bool controlled=!options.test_control.empty() || server_mode;

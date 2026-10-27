@@ -73,8 +73,8 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
-  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static uc_public_release)
+  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp system_report.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static uc_public_release dxgi)
   target_link_libraries(uc PRIVATE uc_directx)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm shell32
     uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch uc_game_mods uc_mod_menu uc_netplay_game)

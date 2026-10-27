@@ -85,7 +85,15 @@ GameProcess launch_game(const std::filesystem::path& executable,const std::files
     }
     if(command.size()>=32767)throw std::invalid_argument("launch command exceeds Windows limit");
     STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
-    if(!CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,exe.parent_path().c_str(),&startup,&process))
+    std::wstring environment;   // "Enable logs": a release client writes no logs unless UC_LOGS is set (common/public_release.h)
+    if(options.logs) {
+        if(wchar_t* strings=GetEnvironmentStringsW()) {
+            for(const wchar_t* item=strings;*item;item+=std::wcslen(item)+1)if(_wcsnicmp(item,L"UC_LOGS=",8))environment.append(item,std::wcslen(item)+1);
+            FreeEnvironmentStringsW(strings);
+        }
+        environment+=L"UC_LOGS=1";environment.push_back(L'\0');environment.push_back(L'\0');
+    }
+    if(!CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW|(options.logs ? CREATE_UNICODE_ENVIRONMENT : 0),options.logs ? environment.data() : nullptr,exe.parent_path().c_str(),&startup,&process))
         throw std::runtime_error("CreateProcessW failed: Windows error "+std::to_string(GetLastError()));
     std::fprintf(stderr,"[launch] game child pid=%lu network=%s port=%u\n",process.dwProcessId,network ? (network->host ? "host" : "client") : "off",network ? network->port : 0);
     CloseHandle(process.hThread);return GameProcess(process.hProcess);

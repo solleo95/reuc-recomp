@@ -1,0 +1,19 @@
+Wit (Wiimms ISO Tools)
+======================
+
+The launcher unpacks the disc image that the player selects by running the unmodified program wit.exe (a separate process, not linked into
+the launcher). It is installed in the folder tools\wit next to the launcher together with the libraries it needs.
+
+Program:  Wiimms ISO Tools v3.05a r8638, Windows (Cygwin 64-bit) build, https://wit.wiimm.de/
+Licence:  GNU General Public License, version 2 or (at your option) any later version. The text is in gpl-2.0.txt.
+Source:   the source code of this release is available in the SVN repository named in wit-source.txt
+          and as a copy on https://github.com/Wiimm/wiimms-iso-tools
+
+Libraries that come with the Windows build and are installed unchanged next to wit.exe:
+  cygwin1.dll         Cygwin, https://cygwin.com/  (licence: https://cygwin.com/licensing.html, source: https://cygwin.com/git/newlib-cygwin.git)
+  cygz.dll            zlib (zlib licence), https://zlib.net/
+  cygcrypto-1.1.dll   OpenSSL 1.1 (OpenSSL licence), https://www.openssl.org/
+  cygncursesw-10.dll  ncurses (X11 licence), https://invisible-island.net/ncurses/
+The source packages of these libraries are published by the Cygwin project: https://cygwin.com/packages/
+
+The port contains no game data. Wit only reads the disc image that the player owns.
