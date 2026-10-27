@@ -91,8 +91,10 @@ int wmain(int argc,wchar_t** argv) {
         pass(recover_install(f.root,f.operation));CHECK(tree(f.root)==committed);
     }
     {
-        Fixture f;write(f.root/"added.txt","USER");CHECK(failed(plan_install(f.root,f.package)));
-        CHECK(read(f.root/"added.txt")=="USER");
+        Fixture f;write(f.root/"added.txt","USER");write(f.root/"uc.exe","EDITED");auto before=tree(f.root);
+        pass(apply_install(ok(plan_install(f.root,f.package))));
+        CHECK(read(f.root/"added.txt")=="NEW");CHECK(read(f.root/"uc.exe")=="NEW");CHECK(read(f.root/"unknown.txt")=="UNKNOWN");
+        pass(recover_install(f.root,f.operation));CHECK(tree(f.root)==before);
     }
     {
         Fixture f;write(f.root/"added.txt","NEW");pass(apply_install(ok(plan_install(f.root,f.package))));

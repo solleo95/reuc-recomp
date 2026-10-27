@@ -126,18 +126,20 @@ Status verify_recovery(const fs::path& recovery,const Manifest& manifest) {
     }
     return std::monostate{};
 }
-Status copy_recovery(const fs::path& install,const fs::path& operation) {
-    auto parsed=installed_manifest(install);if(failed(parsed)) return std::get<Error>(parsed);
+// The helper comes from the verified package, so edits to the installed copy (antivirus, hand-copied builds) cannot block an update.
+Status copy_recovery(const fs::path& operation) {
+    const auto stage=operation/"stage";
+    auto parsed=installed_manifest(stage);if(failed(parsed)) return std::get<Error>(parsed);
     auto manifest=std::get<Manifest>(std::move(parsed));
-    auto check=verify_recovery(install,manifest);if(failed(check)) return check;
+    auto check=verify_recovery(stage,manifest);if(failed(check)) return check;
     auto recovery=operation/"recovery";
     auto parent=lock_parent(operation,"recovery");if(failed(parent)) return std::get<Error>(parent);
     if(!CreateDirectoryW(recovery.c_str(),nullptr)) return file_error("Create recovery directory");
     auto paths=manifest.helper_files;paths.push_back("release.json");
     for(const auto& path:paths) {
-        auto source_parent=lock_parent(install,path);if(failed(source_parent)) return std::get<Error>(source_parent);
+        auto source_parent=lock_parent(stage,path);if(failed(source_parent)) return std::get<Error>(source_parent);
         auto destination_parent=lock_parent(recovery,path);if(failed(destination_parent)) return std::get<Error>(destination_parent);
-        if(!CopyFileW((install/utf8_path(path)).c_str(),(recovery/utf8_path(path)).c_str(),TRUE)) return file_error("Copy recovery file");
+        if(!CopyFileW((stage/utf8_path(path)).c_str(),(recovery/utf8_path(path)).c_str(),TRUE)) return file_error("Copy recovery file");
     }
     return verify_recovery(recovery,manifest);
 }
@@ -260,7 +262,7 @@ Result<HelperProcess> start_update_helper(const fs::path& install,const Package&
     auto pending=pending_install(install,package.root.parent_path());if(failed(pending)) return std::get<Error>(pending);
     if(std::get<bool>(pending)) return Error{ErrorCode::recovery_required,"An unfinished update requires recovery"};
     auto plan=plan_install(install,package);if(failed(plan)) {defer_cleanup(package.root.parent_path());return std::get<Error>(plan);}
-    auto copied=copy_recovery(install,package.root.parent_path());
+    auto copied=copy_recovery(package.root.parent_path());
     if(failed(copied)) {defer_cleanup(package.root.parent_path());return std::get<Error>(copied);}
     return start_helper(package.root.parent_path(),false,timeout);
 }

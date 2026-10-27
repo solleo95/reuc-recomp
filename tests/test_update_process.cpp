@@ -57,7 +57,8 @@ void helper_tests(const fs::path& base) {
     using namespace uc::update;
     wchar_t module[32768]{};CHECK(GetModuleFileNameW(nullptr,module,32768));
     auto child=fs::path(module).parent_path()/"update_test_child.exe";
-    for(auto scenario:{"helper-success","exit-before-ack","hold-parent","kill-helper","broken-helper","never-ready"}) {
+    for(auto scenario:{"helper-success","modified-helper","exit-before-ack","hold-parent","kill-helper","broken-helper","never-ready"}) {
+        const bool succeeds=std::string_view(scenario)=="helper-success" || std::string_view(scenario)=="modified-helper";
         auto root=base/scenario,operation=root/".uc-update"/"11111111-1111-4111-8111-111111111111",stage=operation/"stage";
         fs::create_directories(stage);
         for(const auto& folder:{root,stage}) {
@@ -72,7 +73,8 @@ void helper_tests(const fs::path& base) {
                 {"files",files},{"helper_files",nlohmann::json::array({"uc_updater.exe"})}};
             std::ofstream(folder/"release.json")<<manifest.dump();
         }
-        if(std::string_view(scenario)!="helper-success") std::ofstream(root/scenario)<<"fixture";
+        if(std::string_view(scenario)=="modified-helper") std::ofstream(root/"uc_updater.exe",std::ios::app|std::ios::binary)<<"EDITED";
+        else if(!succeeds) std::ofstream(root/scenario)<<"fixture";
         std::array<std::wstring,1> args{L"--driver"};
         auto driver=ok(create_child(child,root,args));CHECK(WaitForSingleObject(driver.get(),10000)==WAIT_OBJECT_0);
         DWORD code=0;CHECK(GetExitCodeProcess(driver.get(),&code));
@@ -97,10 +99,10 @@ void helper_tests(const fs::path& base) {
             CHECK(WaitForSingleObject(recovery.get(),10000)==WAIT_OBJECT_0);
             CHECK(GetExitCodeProcess(recovery.get(),&code));CHECK(code==0);
         }
-        auto marker=root/(std::string_view(scenario)=="helper-success"?"child-committed":"old-restarted");
+        auto marker=root/(succeeds?"child-committed":"old-restarted");
         for(int i=0;i<500 && !fs::exists(marker);++i) Sleep(10);
         CHECK(fs::exists(marker));CHECK(!ok(pending_install(root,operation)));
-        CHECK(ok(read_text(root/"uc.exe",100))==(std::string_view(scenario)=="helper-success"?"NEW":"OLD"));
+        CHECK(ok(read_text(root/"uc.exe",100))==(succeeds?"NEW":"OLD"));
         auto guard=take(uc::reserve_client_install(root));CHECK(!guard.wait_until_unused(1000ms));
     }
 }

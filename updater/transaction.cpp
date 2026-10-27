@@ -178,7 +178,7 @@ Result<Journal> load_journal(const fs::path& install,const fs::path& operation) 
             op.existed=j.at("existed").get<bool>();op.old_size=j.at("old_size").get<uint64_t>();op.old_sha256=j.at("old_sha256").get<std::string>();
             auto valid_hash=[](const std::string& hash) {return hash.size()==64 && std::all_of(hash.begin(),hash.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');});};
             if(op.old_size>max_zip_size || (op.existed && (!valid_hash(op.old_sha256) ||
-                (op.path!="release.json" && !old_files.contains(key)))))
+                (op.path!="release.json" && !old_files.contains(key) && !new_files.contains(key)))))
                 return recovery_error("Invalid original file ownership");
             if(!j.at("replacement").is_null()) {
                 const auto& r=j.at("replacement");
@@ -272,9 +272,7 @@ Result<InstallPlan> plan_install(const fs::path& install,const Package& package)
         if(failed(actual)) return std::get<Error>(actual);
         auto old=std::get<std::optional<FileEntry>>(actual);
         auto next=new_files.find(key);
-        // An unowned file already byte-identical to the new release (copied by hand, left by a dev deploy) is adopted: nothing to lose.
-        const bool identical=old && next!=new_files.end() && old->sha256==next->second.sha256 && old->size==next->second.size;
-        if(old && !old_files.contains(key) && !identical) return Error{ErrorCode::unsafe_path,"New release collides with an unowned file: "+path};
+        // Whatever sits on a release path (user edit, hand-copied build, unowned file) is backed up and replaced; rollback restores it.
         if(next==new_files.end() && !old) continue;
         if(next!=new_files.end() && old && old->sha256==next->second.sha256 && old->size==next->second.size) continue;
         plan.operations.push_back({path,old.has_value(),old?old->size:0,old?old->sha256:"",
