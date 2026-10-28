@@ -28,7 +28,7 @@ A hardware exception inside a callback is caught and counts as a failure, and ca
 ## Files and saves
 
 - Every path in a mod is confined to the mod folder; zip entries that try to leave it (`..`, absolute paths) refuse the whole zip. Zips are limited to 20 000 entries and 512 MiB unpacked.
-- Mods that change gameplay (`touches_gameplay`) play on the game's normal saves: there is no separate save folder, so a gameplay mod can change what ends up in a save. Back up `saves/` before trying one. The flag is enforced: a mod without it cannot change the game through the API, memory writes, data patches or hooks.
+- Mods that change gameplay (`touches_gameplay`) play on the game's normal saves: there is no separate save folder, so a gameplay mod can change what ends up in a save. Back up `saves/` before trying one. The flag is enforced: a mod without it cannot change the game through the API, memory writes, data patches or hooks. Text (`text/`), files (`files/`) and the character names of `dol/names.json` are cosmetic and need no flag.
 - What a mod sets in the game (switches such as `invulnerable`, weapon values) belongs to that mod: when it is switched off, reloaded or the game exits, the switches go off and weapon values return to the game's own. If two mods set the same weapon value, the last one wins.
 - Mod files do not replace anything outside the game's disc tree and the `textures/` lookup.
 

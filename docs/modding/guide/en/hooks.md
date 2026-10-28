@@ -97,6 +97,7 @@ The order at one function is: all `pre` hooks, then all `replace` hooks (if ther
 |---|---|---|
 | `GameWeaponUpdate` | `0x8006C268` | Per-step update of a player's weapon. `r3` is the weapon **object** (the player's is at `player + 0x48`), `r4` the "allowed" flag. Checked in the game. |
 | `PlayerEventHandler` | `0x800676A0` | The player's event handler (damage, firing and similar events). Unit-tested, not yet confirmed in a live fight (`unverified`). |
+| `StringCopy` | `0x802933D8` | The game's `strcpy`: `r3` is the destination, `r4` the source. Every string copy of the game passes through it, so keep the callback short (`unverified`). The port itself hooks it to give the character names of `dol/names.json`. |
 
 The list grows with every release; the [API reference](../../api/README.md#hookable-functions) always has the current table.
 

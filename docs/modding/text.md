@@ -45,3 +45,15 @@ Cut the entries you do not want to change and edit the rest. The files are in `g
 - The placeholders (`%s`, `%d`, `%c`) of a record must match the original's, in the same order: the game passes some texts to `printf`, and a missing or extra one would crash it or print garbage. An entry that does not match is refused (the original text stays) and the Mods tab says so. Write `%%` for a percent sign: `100% damage` is read as the conversion `% d`.
 
 The original files are never changed: the patched copies live in `mods/.cache/_text/`, one folder per version, and older folders are deleted at the next start. Subtitle tables (`movie_jimaku*.csvtbl`) are replaced as whole files through `files/` (see [files-and-textures.md](files-and-textures.md)).
+
+## Character names in main.dol
+
+Eight short names (Ada, Billy, Carlos, Chris, HUNK, Jill, Rebecca, Wesker) are not in the text file: the game keeps them in `main.dol` (the label table at `0x803DE4C0`) and copies each one with `strcpy` into a 16-byte field of its character slot (offset 924 of the 3052-byte slot record). `mods/<id>/dol/names.json` replaces them:
+
+```json
+{ "Rebecca": "Ребекка", "Chris": "Крис" }
+```
+
+- Keys are the original English names, values UTF-8 text of 1 to 15 bytes (no NUL). The port hooks the game's `strcpy` (`StringCopy`) and writes the mod's text into the slot instead of the original; `main.dol` and its table are never written. The names are used the next time the game sets its slots up (a chapter start).
+- `dol/charmap.json` (optional, an object of one character to one character or a whole number 1 to 255) maps characters to the single byte a font draws them with; other characters stay their UTF-8 bytes.
+- The last mod that names a character wins. A mod that is switched off gives its names back. An unknown name, an empty or too long one, or a `main.dol` whose table is elsewhere is logged as `name patch: ...` and skipped; the other names apply. A file over 64 KiB is skipped. No `touches_gameplay` flag is needed.

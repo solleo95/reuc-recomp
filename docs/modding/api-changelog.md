@@ -4,6 +4,7 @@ The API is versioned `major.minor`. A new minor version only adds members or mak
 
 ## 1.1
 
+- Hookable function `StringCopy` (the game's `strcpy`). The port uses it for `dol/names.json`, a mod file that renames the eight short character names kept in `main.dol` (see [Text](text.md#character-names-in-maindol)); no API call is needed for that. Mod ids may now contain capital letters (stored in lower case).
 - `hook.post` and `hook.replace` (Lua, JavaScript, native `hook_post` / `hook_replace`): code after a hookable function or instead of it. `UC_MOD_API_MINOR` is 1.
 - `weapon.fire_rate` and a confirmed `weapon.damage` (both were announced for 1.0 but only checked later).
 - `input.held`, `input.fire_held`, `input.aim` (what the game sees on player 1's pad) and `input.force_held`, `input.block_held`, `input.aim_override` (add to or take away from it).
