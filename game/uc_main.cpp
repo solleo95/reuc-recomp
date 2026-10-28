@@ -24,6 +24,7 @@
 #include "input_config.h"
 #include "options_config.h"
 #include "host_input.h"
+#include "gamepad_input.h"
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -437,8 +438,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if (!options.demo_record.empty()) input.demo_record(options.demo_record);
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
+    input.pad_settings(options.gamepad);
     uc::HostInput host_input;
     host_input.sensitivity(options.mouse_sensitivity);
+    std::optional<uc::GamepadInput> gamepad;   // real gamepads feed the game window only: not in headless or harness runs (those inject pad events through the test server)
+    if(!options.headless && !controlled) {
+        try { gamepad.emplace(); }
+        catch(const std::exception& error) { std::fprintf(stderr,"[gamepad] gamepads unavailable, keyboard and mouse only: %s\n",error.what()); }   // a broken joystick backend must not stop the game
+    }
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
@@ -502,6 +509,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::input_probe_init(options.input_probe);
     uc::entry_probe_init(options.input_probe);
     uc::prompt_hooks_init(input_config.input,options.input_probe);
+    bool pad_last_used=false,shown_pad_last=false;   // the last device used was a gamepad (control type "auto" shows that device's prompts); what the prompts were built for
+    unsigned pad_changes=0;
+    const auto refresh_prompt_device=[&] {   // the gamepad's prompts: its table and the look of the connected pad or the chosen model
+        const auto status=gamepad ? gamepad->status() : uc::PadStatus{};
+        const auto& pad=options.gamepad;
+        uc::prompt_hooks_set_gamepad(pad.bindings,uc::resolve_prompt_device(pad.type,pad.model,pad_last_used,status.connected,status.family,pad.gyro.mode!=uc::GyroMode::off,status.has_gyro));
+    };
+    refresh_prompt_device();
     uc::input_hle_set_probe(options.input_probe ? uc::input_probe_sample : nullptr);
     std::optional<uc::TestPipes> test_pipes;
     std::optional<NativeInputSink> test_sink;
@@ -828,6 +843,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
+        targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
         live_settings.emplace(config_path,input_config,std::move(targets));
         if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has
         else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
@@ -840,6 +856,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             return features ? &*features : nullptr;
         },monitor_width,monitor_height,options.renderer_backend);
         settings_menu->set_mod_menu(&mod_menu);
+        settings_menu->set_pad_status([&] { return gamepad ? gamepad->status() : uc::PadStatus{}; });
+        if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
         if(!kPublicRelease)settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
             const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
@@ -851,6 +869,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     const auto apply_host_keys=[&] {
         if (options.headless) return;
         renderer.set_menu(host_keys.menu_open ? std::function<void()>([&] { settings_menu->build(); }) : std::function<void()>(),[&] { settings_menu->setup(); });
+        if (!host_keys.menu_open && settings_menu) settings_menu->menu_closed();   // a binding capture waiting for a pad press must not outlive the menu
         uc::game_pacing_set_paused(host_keys.paused);
         static bool audio_paused=false;   // only a real change: resuming drops the queued audio (a click when the menu merely opens)
         if (audio && audio_paused!=host_keys.paused) { audio->pause(host_keys.paused); audio_paused=host_keys.paused; }
@@ -886,6 +905,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             auto frame_json=uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped());
             frame_json.pop_back(); frame_json+=std::string(",\"menu_open\":")+(host_keys.menu_open ? "true" : "false")+",\"paused\":"+(host_keys.paused ? "true" : "false")
                 +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")
+                +",\"aim\":["+std::to_string(input.latest_aim()[0])+","+std::to_string(input.latest_aim()[1])+"]"   // the pointer, -1..1 of the window (x right, y down)
                 +",\"game_seconds\":"+std::to_string(uc::game_pacing_stats().timestep_ns/1e9)
                 +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
                 +",\"network_waiting\":"+(network_wait_screen ? "true" : "false")
@@ -909,6 +929,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     document.properties["graphics"].update(nlohmann::ordered_json::parse(graphics));
                     live_settings->apply(uc::options_from_config(document));
                 } catch (const std::exception& error) { std::fprintf(stderr,"[test-server] options rejected: %s\n",error.what()); }
+            }
+            for (const auto& gamepad_keys : pumped.gamepad) if (live_settings) {   // the same for the "gamepad" object: its keys merged over the saved ones (a nested object such as gyro replaces the saved one)
+                try {
+                    uc::ConfigDocument document; uc::store_options(document,live_settings->options());
+                    document.properties["gamepad"].update(nlohmann::ordered_json::parse(gamepad_keys));
+                    live_settings->apply(uc::options_from_config(document));
+                    if (live_settings->error()) std::fprintf(stderr,"[test-server] gamepad options rejected: %s\n",live_settings->error()->c_str());
+                } catch (const std::exception& error) { std::fprintf(stderr,"[test-server] gamepad options rejected: %s\n",error.what()); }
             }
             close|=pumped.quit;
             if(test_pipes->disconnected() && !test_released) { test_released=true; test_server->release_all(); }
@@ -993,6 +1021,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
+                if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
+                if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) pad_last_used=true;
+                else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) pad_last_used=false;
                 // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
                 if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && event.key.scancode==SDL_SCANCODE_TAB && !settings_menu->capturing()) {
@@ -1016,6 +1047,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 }
             }
             if (frame_log) frame_events_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-events_start).count());
+            {
+                int width=0,height=0;
+                if(SDL_GetWindowSizeInPixels(window.get(),&width,&height)) input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));   // stick speed and gyro counts are in pixels
+                if(gamepad) gamepad->update(input,!host_keys.menu_open && !host_keys.paused && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+                if(gamepad && (gamepad->changes()!=pad_changes || pad_last_used!=shown_pad_last)) {pad_changes=gamepad->changes();shown_pad_last=pad_last_used;refresh_prompt_device();}   // a pad came or went, or the other device was used
+            }
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();
             // A game frame is ~23 packets: do not pay a wait per packet. A pending renderer restart stops at the end of a frame.

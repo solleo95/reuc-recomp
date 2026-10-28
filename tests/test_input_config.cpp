@@ -29,6 +29,12 @@ int main() {
         R"({"input":{"version":1,"bindings":{"fire":[{"kind":"interact_fire"}]}}})",
         R"({"input":{"version":1,"bindings":{"fire":[{"kind":"key","code":9},{"kind":"key","code":9}]}}})",
         R"({"input":{"version":1,"bindings":{"fire":null}}})"}) rejects([&]{parse_config(text);});
+    // The recenter action (gamepad): an older file without the key loads with the default (empty keyboard entry); a file that sets it round-trips and is written back.
+    CHECK(parse_config(R"({"input":{"version":1,"bindings":{"fire":[]}}})").input[size_t(Action::recenter)].empty());
+    auto recenter=parse_config(R"({"input":{"version":1,"bindings":{"recenter":[{"kind":"key","code":9}]}}})");
+    CHECK(recenter.input[size_t(Action::recenter)].size()==1 && parse_config(serialize_config(recenter)).input==recenter.input);
+    CHECK(nlohmann::ordered_json::parse(serialize_config(parse_config("{}")))["input"]["bindings"].contains("recenter"));
+    rejects([]{parse_config(R"({"input":{"version":1,"bindings":{"fire":[{"kind":"pad_button","code":0}]}}})");});   // the keyboard table holds no gamepad input
     rejects([]{parse_config("{\"future\":\""+std::string(1024*1024,'x')+"\"}");});
     rejects([]{parse_config("{\"future\":"+std::string(33,'[')+"0"+std::string(33,']')+"}");});
     CHECK(parse_config("{\"future\":"+std::string(30,'[')+"0"+std::string(30,']')+"}").input==default_bindings());

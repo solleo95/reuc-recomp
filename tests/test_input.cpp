@@ -88,7 +88,32 @@ static void raw_demo_sample_remains_compatible() {
     std::filesystem::remove(path);
 }
 
+// The analog camera rides in the demo as its own tag after the action record; a demo without the tag (every older recording) replays with a zero camera.
+static void demo_carries_the_analog_camera() {
+    const auto path=std::filesystem::temp_directory_path()/std::filesystem::path("uc-camera-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".demo");
+    {
+        uc::NativeInput recording;recording.focus(true);recording.context(uc::InputContext::gameplay);recording.demo_record(path);
+        recording.consume_actions();                                  // frame 1: no camera
+        recording.host_camera({64,-127});recording.consume_actions(); // frame 2
+        recording.host_camera({0,0});recording.consume_actions();     // frame 3: back to rest
+    }
+    uc::NativeInput replay;replay.demo_play(path);
+    CHECK((replay.consume_actions().camera==std::array<int8_t,2>{0,0}));
+    CHECK((replay.consume_actions().camera==std::array<int8_t,2>{64,-127}));
+    CHECK((replay.consume_actions().camera==std::array<int8_t,2>{0,0}));
+    std::filesystem::remove(path);
+    // A recording made before the camera existed: one action frame with held bits, no camera tag.
+    std::vector<uint8_t> legacy{uint8_t(2)};   // Tag::actions
+    const uint64_t head[5]={0,0,0,7,0};
+    legacy.insert(legacy.end(),reinterpret_cast<const uint8_t*>(head),reinterpret_cast<const uint8_t*>(head)+sizeof head);
+    {std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(legacy.data()),std::streamsize(legacy.size()));CHECK(out.good());}
+    uc::NativeInput old;old.demo_play(path);
+    const auto frame=old.consume_actions();CHECK((frame.generation==7 && frame.camera==std::array<int8_t,2>{0,0}));
+    std::filesystem::remove(path);
+}
+
 int main() {
+    demo_carries_the_analog_camera();
     raw_demo_sample_remains_compatible();
     host_actions_have_separate_consumers();
     host_test_commands_are_atomic_and_acknowledged();

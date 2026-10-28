@@ -33,6 +33,28 @@ int main() {
     CHECK(options.kind==TestRequestKind::options && options.text==R"({"bloom":false,"upscaler":"fsr","render_scale":2})");
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options"})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options","graphics":5})")).empty());
+    // The gamepad: buttons and axis presses (held like keys), stick positions and gyro rates (set until changed).
+    const auto pad_button=ok(parse_test_request(R"({"id":16,"cmd":"input","hold_frames":4,"pad_button":{"button":3,"down":true}})"));
+    CHECK(pad_button.input.device==TestDevice::pad_button && pad_button.input.code==3 && pad_button.input.down && pad_button.input.hold_frames==4);
+    const auto pad_axis=ok(parse_test_request(R"({"id":17,"cmd":"input","pad_axis":{"code":11,"down":true}})"));
+    CHECK(pad_axis.input.device==TestDevice::pad_axis && pad_axis.input.code==11 && pad_axis.input.down);
+    const auto stick=ok(parse_test_request(R"({"id":18,"cmd":"input","pad_stick":{"side":"right","x":0.5,"y":-1}})"));
+    CHECK(stick.input.device==TestDevice::pad_stick && stick.input.code==1 && stick.input.x==.5f && stick.input.y==-1.f);
+    CHECK(ok(parse_test_request(R"({"id":19,"cmd":"input","pad_stick":{"side":"left","x":0,"y":0}})")).input.code==0);
+    const auto gyro=ok(parse_test_request(R"({"id":20,"cmd":"input","pad_gyro":{"x":1.5,"y":-2}})"));
+    CHECK(gyro.input.device==TestDevice::pad_gyro && gyro.input.x==1.5f && gyro.input.y==-2.f);
+    for(auto text:{R"({"id":1,"cmd":"input","pad_button":{"button":32,"down":true}})",R"({"id":1,"cmd":"input","pad_button":{"button":-1,"down":true}})",
+        R"({"id":1,"cmd":"input","pad_button":{"button":3}})",R"({"id":1,"cmd":"input","pad_axis":{"code":16,"down":true}})",
+        R"({"id":1,"cmd":"input","pad_stick":{"side":"up","x":0,"y":0}})",R"({"id":1,"cmd":"input","pad_stick":{"side":"left","x":1.5,"y":0}})",
+        R"({"id":1,"cmd":"input","pad_stick":{"x":0,"y":0}})",R"({"id":1,"cmd":"input","pad_gyro":{"x":100,"y":0}})",
+        R"({"id":1,"cmd":"input","hold_frames":2,"pad_stick":{"side":"left","x":0,"y":0}})",R"({"id":1,"cmd":"input","hold_frames":2,"pad_gyro":{"x":0,"y":0}})",
+        R"({"id":1,"cmd":"input","pad_gyro":{"x":0,"y":0},"key":{"code":4,"down":true}})"}) CHECK(!err(parse_test_request(text)).empty());
+    // Gamepad settings change live like the graphics ones (config.json "gamepad" keys), alone or together.
+    const auto pad_options=ok(parse_test_request(R"({"id":21,"cmd":"options","gamepad":{"type":"gamepad","model":"xbox"}})"));
+    CHECK(pad_options.kind==TestRequestKind::options && pad_options.text.empty() && pad_options.gamepad==R"({"type":"gamepad","model":"xbox"})");
+    const auto both_options=ok(parse_test_request(R"({"id":22,"cmd":"options","graphics":{"bloom":false},"gamepad":{"model":"nintendo"}})"));
+    CHECK(both_options.text==R"({"bloom":false})" && both_options.gamepad==R"({"model":"nintendo"})");
+    CHECK(!err(parse_test_request(R"({"id":1,"cmd":"options","gamepad":7})")).empty());
     // Rejections change nothing and name the problem.
     CHECK(!err(parse_test_request("not json")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":2,"y":0,"buttons":0}})")).empty());     // out of range

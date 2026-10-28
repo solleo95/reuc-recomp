@@ -14,17 +14,24 @@ constexpr uint64_t kKnifeWindowNs=60000000ull,kKnifeReportNs=8000000ull;
 // (a slow wave is aiming) and may pause at most kShakeGapNs between reports.
 constexpr double kShakeStroke=20,kShakeMinPath=24,kShakePathSeconds=.06;
 constexpr uint64_t kShakeGapNs=100000000ull;
-enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,count };
+enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,recenter,count };   // recenter: gamepad aim reset, bound in the gamepad table
 enum class InputContext:uint8_t { inactive,menu,gameplay,qte };
-enum class PhysicalKind:uint8_t { key,mouse,wheel };
+// pad_button code: SDL_GamepadButton (0..31). pad_axis code: SDL_GamepadAxis*2 + (positive direction ? 1 : 0), a stick direction or a trigger pulled past half (0..15).
+enum class PhysicalKind:uint8_t { key,mouse,wheel,pad_button,pad_axis };
+enum class PadFamily:uint8_t { xbox,playstation,nintendo,generic };   // which controller's look the prompts and button names use
 struct PhysicalInput { PhysicalKind kind=PhysicalKind::key; uint16_t code=0; bool operator==(const PhysicalInput&) const=default; };
 enum class BindingKind:uint8_t { physical,interact_fire,interact_motion,qte_motion };
 struct Binding { BindingKind kind=BindingKind::physical; PhysicalInput input; std::vector<PhysicalInput> modifiers; bool operator==(const Binding&) const=default; };
 using Bindings=std::array<std::vector<Binding>,size_t(Action::count)>;
 Bindings default_bindings();
-std::optional<std::string> validate_bindings(const Bindings&);
+Bindings default_pad_bindings();   // the gamepad table: only pad_button / pad_axis inputs (and the special kinds), kept apart from the keyboard table
+std::optional<std::string> validate_bindings(const Bindings&);       // keyboard and mouse table
+std::optional<std::string> validate_pad_bindings(const Bindings&);   // gamepad table
+// Both tables as one for the resolver: per action the keyboard entries, then the gamepad entries that the keyboard table does not already list.
+Bindings merge_bindings(const Bindings& keyboard,const Bindings& pad);
 struct ActionEvent { Action action; bool down; float direction_x=0,direction_y=0; bool pulse=false; };
-struct ActionFrame { uint64_t held=0,pressed=0,released=0,generation=0; std::array<ActionEvent,256> events{}; size_t count=0; };
+// camera: the analog camera stick (gamepad), -127..127 per axis, x right and y up positive like InputSample::stick_x/stick_y; the camera_* actions stay digital and add to it.
+struct ActionFrame { uint64_t held=0,pressed=0,released=0,generation=0; std::array<ActionEvent,256> events{}; size_t count=0; std::array<int8_t,2> camera{}; };
 class BindingResolver {
 public:
     void replace(const Bindings&);
@@ -32,6 +39,8 @@ public:
     void qte_window(bool);
     void focus(bool);
     void button(PhysicalInput,bool);
+    bool down(PhysicalInput) const;   // a key, mouse button or gamepad input that is held right now (never the wheel)
+    void release_pad();               // releases every held gamepad button and axis input: a gamepad went away or focus left
     void wheel(int);
     void motion(float,float,uint64_t timestamp_ns=0);
     ActionFrame consume();
@@ -49,8 +58,7 @@ private:
     Bindings bindings_=default_bindings();
     InputContext context_=InputContext::inactive;
     bool focused_=false,suppress_fire_=false,qte_window_=false;
-    std::bitset<512> keys_,blocked_keys_;
-    std::bitset<256> mouse_,blocked_mouse_;
+    std::bitset<816> down_,blocked_;   // one slot per physical button: keys 0..511, mouse 512..767, gamepad buttons 768..799, gamepad axes 800..815
     uint64_t raw_actions_=0,canceled_releases_=0;
     ActionFrame frame_;
     std::optional<size_t> motion_event_;

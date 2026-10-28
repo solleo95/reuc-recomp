@@ -144,8 +144,10 @@ InputSample game_input_buttons(InputContext context,const ActionFrame& frame) {
     result.released&=~result.held;
     if(context==InputContext::gameplay) {
         const auto actions=frame.held|frame.pressed;
-        result.stick_x=float(bool(actions&bit(Action::camera_right)))-float(bool(actions&bit(Action::camera_left)));
-        result.stick_y=float(bool(actions&bit(Action::camera_up)))-float(bool(actions&bit(Action::camera_down)));
+        // The keys are digital ±1; the gamepad stick is analog (frame.camera) and adds to them, so a demo or network frame without it plays as before.
+        const float x=float(bool(actions&bit(Action::camera_right)))-float(bool(actions&bit(Action::camera_left)))+frame.camera[0]/127.f;
+        const float y=float(bool(actions&bit(Action::camera_up)))-float(bool(actions&bit(Action::camera_down)))+frame.camera[1]/127.f;
+        result.stick_x=std::clamp(x,-1.f,1.f); result.stick_y=std::clamp(y,-1.f,1.f);
     }
     return result;
 }

@@ -26,6 +26,7 @@ int main() {
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
     targets.hdr=[&](const uc::HdrSettings&){ calls.push_back("hdr"); };
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
+    targets.gamepad=[&](const uc::GamepadSettings&){ calls.push_back("gamepad"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
     const auto saved=[&]{ return uc::options_from_config(uc::load_config(path)); };
     CHECK(live.options().upscaler==uc::UpscalerKind::dlss && live.options().render_scale==0);
@@ -47,6 +48,16 @@ int main() {
     {   // the mouse sensitivity alone reaches only its target
         calls.clear(); auto next=live.options(); next.mouse_sensitivity=180; live.apply(next);
         CHECK((calls==std::vector<std::string>{"mouse_sensitivity"}) && saved().mouse_sensitivity==180 && !live.error());
+    }
+    {   // the gamepad settings reach only their target (once) and are saved in the "gamepad" object
+        calls.clear(); auto next=live.options(); next.gamepad.model=uc::PadModel::nintendo; next.gamepad.gyro.mode=uc::GyroMode::always; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"gamepad"}) && saved().gamepad.model==uc::PadModel::nintendo && saved().gamepad.gyro.mode==uc::GyroMode::always && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        calls.clear(); next.gamepad.aim_stick=next.gamepad.camera_stick=uc::StickRole::left;   // invalid: reported, nothing applied or saved
+        live.apply(next);
+        CHECK(calls.empty() && live.error() && live.options().gamepad.aim_stick==uc::StickRole::left && live.options().gamepad.camera_stick==uc::StickRole::right);
+        next=live.options(); next.gamepad.gyro.mode=uc::GyroMode::hold; live.apply(next); CHECK(!live.error());   // the next valid change clears the error
+        calls.clear();
     }
     {   // HDR and its sliders reach only the HDR target
         calls.clear(); auto next=live.options(); next.hdr.enabled=true; next.hdr.peak_nits=800; live.apply(next);

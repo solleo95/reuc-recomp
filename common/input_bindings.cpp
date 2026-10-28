@@ -5,16 +5,58 @@
 namespace uc {
 namespace {
 constexpr uint64_t bit(Action a) { return uint64_t(1)<<unsigned(a); }
-bool valid(PhysicalInput input,bool wheel=true) {
+enum class Device { keyboard,pad,both };   // which inputs a table may hold
+bool valid(PhysicalInput input,Device device,bool wheel=true) {
     switch(input.kind) {
-    case PhysicalKind::key: return input.code>0 && input.code<512;
-    case PhysicalKind::mouse: return input.code>0 && input.code<256;
-    case PhysicalKind::wheel: return wheel && (input.code==1 || input.code==2);
+    case PhysicalKind::key: return device!=Device::pad && input.code>0 && input.code<512;
+    case PhysicalKind::mouse: return device!=Device::pad && input.code>0 && input.code<256;
+    case PhysicalKind::wheel: return device!=Device::pad && wheel && (input.code==1 || input.code==2);
+    case PhysicalKind::pad_button: return device!=Device::keyboard && input.code<32;
+    case PhysicalKind::pad_axis: return device!=Device::keyboard && input.code<16;
     }
     return false;
 }
+// Slot of a held button in BindingResolver::down_; SIZE_MAX for inputs that are not held (the wheel).
+size_t slot_of(PhysicalInput input) {
+    switch(input.kind) {
+    case PhysicalKind::key: return input.code;
+    case PhysicalKind::mouse: return 512+input.code;
+    case PhysicalKind::pad_button: return 768+input.code;
+    case PhysicalKind::pad_axis: return 800+input.code;
+    case PhysicalKind::wheel: break;
+    }
+    return SIZE_MAX;
+}
 Binding key(uint16_t code) { return {BindingKind::physical,{PhysicalKind::key,code},{}}; }
 Binding mouse(uint16_t code) { return {BindingKind::physical,{PhysicalKind::mouse,code},{}}; }
+Binding pad_button(uint16_t code) { return {BindingKind::physical,{PhysicalKind::pad_button,code},{}}; }
+Binding pad_axis(uint16_t code) { return {BindingKind::physical,{PhysicalKind::pad_axis,code},{}}; }
+std::optional<std::string> validate(const Bindings& bindings,Device device) {
+    for(size_t a=0;a<bindings.size();++a) {
+        const auto& entries=bindings[a];
+        if(entries.size()>64) return "too many bindings for action";
+        for(size_t i=0;i<entries.size();++i) {
+            const auto& b=entries[i];
+            if(b.kind==BindingKind::physical) {
+                if(!valid(b.input,device) || b.modifiers.size()>4) return "invalid physical binding";
+                for(size_t m=0;m<b.modifiers.size();++m) {
+                    if(!valid(b.modifiers[m],device,false) || b.modifiers[m]==b.input) return "invalid binding modifier";
+                    if(std::find(b.modifiers.begin(),b.modifiers.begin()+m,b.modifiers[m])!=b.modifiers.begin()+m) return "duplicate binding modifier";
+                }
+            } else if((b.kind==BindingKind::interact_fire && a==size_t(Action::grenade)) ||
+                      (b.kind==BindingKind::interact_motion && a==size_t(Action::knife)) ||
+                      (b.kind==BindingKind::qte_motion && a==size_t(Action::qte_shake))) {
+                if(b.input!=PhysicalInput{} || !b.modifiers.empty()) return "invalid action combination";
+            } else return "invalid binding kind for action";
+            for(size_t j=0;j<i;++j) {
+                const auto& other=entries[j];
+                if(other.kind==b.kind && other.input==b.input && other.modifiers.size()==b.modifiers.size() &&
+                   std::is_permutation(other.modifiers.begin(),other.modifiers.end(),b.modifiers.begin())) return "duplicate action binding";
+            }
+        }
+    }
+    return {};
+}
 }
 Bindings default_bindings() {
     Bindings result;
@@ -39,31 +81,32 @@ Bindings default_bindings() {
     result[size_t(Action::camera_right)]={key(79)};
     return result;
 }
-std::optional<std::string> validate_bindings(const Bindings& bindings) {
-    for(size_t a=0;a<bindings.size();++a) {
-        const auto& entries=bindings[a];
-        if(entries.size()>64) return "too many bindings for action";
-        for(size_t i=0;i<entries.size();++i) {
-            const auto& b=entries[i];
-            if(b.kind==BindingKind::physical) {
-                if(!valid(b.input) || b.modifiers.size()>4) return "invalid physical binding";
-                for(size_t m=0;m<b.modifiers.size();++m) {
-                    if(!valid(b.modifiers[m],false) || b.modifiers[m]==b.input) return "invalid binding modifier";
-                    if(std::find(b.modifiers.begin(),b.modifiers.begin()+m,b.modifiers[m])!=b.modifiers.begin()+m) return "duplicate binding modifier";
-                }
-            } else if((b.kind==BindingKind::interact_fire && a==size_t(Action::grenade)) ||
-                      (b.kind==BindingKind::interact_motion && a==size_t(Action::knife)) ||
-                      (b.kind==BindingKind::qte_motion && a==size_t(Action::qte_shake))) {
-                if(b.input!=PhysicalInput{} || !b.modifiers.empty()) return "invalid action combination";
-            } else return "invalid binding kind for action";
-            for(size_t j=0;j<i;++j) {
-                const auto& other=entries[j];
-                if(other.kind==b.kind && other.input==b.input && other.modifiers.size()==b.modifiers.size() &&
-                   std::is_permutation(other.modifiers.begin(),other.modifiers.end(),b.modifiers.begin())) return "duplicate action binding";
-            }
-        }
-    }
-    return {};
+Bindings default_pad_bindings() {
+    // SDL positions: south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, shoulders 9/10; axes: left trigger 9, right trigger 11.
+    Bindings result;
+    result[size_t(Action::interact)]={pad_button(0)};
+    result[size_t(Action::fire)]={pad_axis(11)};
+    result[size_t(Action::weapon_previous)]={pad_button(9)};
+    result[size_t(Action::weapon_next)]={pad_button(10)};
+    result[size_t(Action::reload)]={pad_button(2)};
+    // No special kinds here: the interact+fire throw, the swing and the shake are switched by the keyboard table's entries for them, for every device (the gyro swings and shakes like a mouse).
+    result[size_t(Action::grenade)]={pad_button(3)};
+    result[size_t(Action::knife)]={pad_button(1)};
+    result[size_t(Action::pause)]={pad_button(6)};
+    result[size_t(Action::confirm)]={pad_button(0)};
+    result[size_t(Action::back)]={pad_button(1)};
+    result[size_t(Action::screenshot)]={pad_button(4)};
+    result[size_t(Action::qte_shake)]={pad_button(8)};
+    result[size_t(Action::recenter)]={pad_button(7)};
+    return result;
+}
+std::optional<std::string> validate_bindings(const Bindings& bindings) { return validate(bindings,Device::keyboard); }
+std::optional<std::string> validate_pad_bindings(const Bindings& bindings) { return validate(bindings,Device::pad); }
+Bindings merge_bindings(const Bindings& keyboard,const Bindings& pad) {
+    Bindings result=keyboard;
+    for(size_t a=0;a<result.size();++a) for(const auto& binding:pad[a])
+        if(std::find(result[a].begin(),result[a].end(),binding)==result[a].end()) result[a].push_back(binding);
+    return result;
 }
 bool BindingResolver::allowed(Action action) const {
     if(!focused_) return false;
@@ -75,7 +118,8 @@ bool BindingResolver::allowed(Action action) const {
         action==Action::reload || action==Action::knife || action==Action::pause);
 }
 bool BindingResolver::held(PhysicalInput input) const {
-    return input.kind==PhysicalKind::key ? keys_[input.code] : input.kind==PhysicalKind::mouse && mouse_[input.code];
+    const auto slot=slot_of(input);
+    return slot!=SIZE_MAX && down_[slot];
 }
 bool BindingResolver::matches(const Binding& binding,PhysicalInput input) const {
     return binding.kind==BindingKind::physical && binding.input==input &&
@@ -92,14 +136,14 @@ uint64_t BindingResolver::physical_actions() const {
     return result;
 }
 void BindingResolver::cancel() {
-    blocked_keys_|=keys_; blocked_mouse_|=mouse_; keys_.reset(); mouse_.reset();
+    blocked_|=down_; down_.reset();
     canceled_releases_|=frame_.released|frame_.held;
     frame_={}; frame_.released=canceled_releases_; raw_actions_=0; suppress_fire_=false;
     motion_event_.reset(); motion_x_=motion_y_=0;
     shake_={};
 }
 void BindingResolver::replace(const Bindings& bindings) {
-    if(auto error=validate_bindings(bindings)) throw std::invalid_argument(*error);
+    if(auto error=validate(bindings,Device::both)) throw std::invalid_argument(*error);
     auto next=bindings; cancel(); bindings_=std::move(next);
 }
 void BindingResolver::context(InputContext context) {
@@ -142,16 +186,16 @@ void BindingResolver::finish_motion() {
     motion_event_.reset();
 }
 void BindingResolver::button(PhysicalInput input,bool down) {
-    if(!valid(input,false)) throw std::invalid_argument("invalid input button");
+    if(!valid(input,Device::both,false)) throw std::invalid_argument("invalid input button");
     finish_motion();
-    const bool blocked=input.kind==PhysicalKind::key ? blocked_keys_[input.code] : blocked_mouse_[input.code];
-    if(blocked) {
-        if(!down) {if(input.kind==PhysicalKind::key)blocked_keys_[input.code]=false;else blocked_mouse_[input.code]=false;}
+    const auto slot=slot_of(input);
+    if(blocked_[slot]) {
+        if(!down) blocked_[slot]=false;
         return;
     }
     if(!focused_) return;
     const bool was=held(input); if(was==down)return;
-    if(input.kind==PhysicalKind::key) keys_[input.code]=down; else mouse_[input.code]=down;
+    down_[slot]=down;
     const auto next=physical_actions();
     const bool chord=context_==InputContext::gameplay && (frame_.held&bit(Action::interact)) &&
         (next&bit(Action::fire)) && !(raw_actions_&bit(Action::fire)) && special(Action::grenade,BindingKind::interact_fire);
@@ -165,6 +209,14 @@ void BindingResolver::button(PhysicalInput input,bool down) {
     for(size_t a=0;a<bindings_.size();++a) if(changed&bit(Action(a))) {
         const bool pressed=(active&bit(Action(a)))!=0;
         emit(Action(a),pressed,pressed && Action(a)==Action::knife ? kKnifeKeyDirectionX : 0.0f,pressed && Action(a)==Action::knife ? kKnifeKeyDirectionY : 0.0f);
+    }
+}
+bool BindingResolver::down(PhysicalInput input) const { return held(input); }
+void BindingResolver::release_pad() {
+    for(unsigned slot=768;slot<816;++slot) {
+        blocked_[slot]=false;
+        if(!down_[slot]) continue;
+        button(slot<800 ? PhysicalInput{PhysicalKind::pad_button,uint16_t(slot-768)} : PhysicalInput{PhysicalKind::pad_axis,uint16_t(slot-800)},false);
     }
 }
 void BindingResolver::wheel(int steps) {

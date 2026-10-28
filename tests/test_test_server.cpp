@@ -79,6 +79,37 @@ int main() {
     for(int i=0;i<10000;++i) pipes.send("{\"type\":\"frame\"}",true);
     pipes.send(R"({"id":99,"ok":true})",false);
     CHECK(!await_line(server,lines,"\"id\":99",15,30000).empty() && pipes.dropped()>0);
+    {   // The gamepad devices reach the sink as host events: buttons and axis presses are held and released like keys, a stick position and a gyro rate stay until changed.
+        sink.hosts.clear();
+        write_line(cmd,R"({"id":30,"cmd":"input","hold_frames":2,"pad_button":{"button":3,"down":true}})");
+        write_line(cmd,R"({"id":31,"cmd":"input","pad_stick":{"side":"right","x":0.5,"y":-0.25}})");
+        write_line(cmd,R"({"id":32,"cmd":"input","pad_gyro":{"x":1,"y":2}})");
+        write_line(cmd,R"({"id":33,"cmd":"input","pad_axis":{"code":11,"down":true}})");
+        write_line(cmd,R"({"id":102,"cmd":"state"})");
+        CHECK(!await_line(server,lines,"\"id\":102",16).empty());
+        server.pump(17,"{}");
+        CHECK(sink.hosts.size()==4);
+        CHECK(sink.hosts[0].kind==uc::HostEventKind::pad_button && sink.hosts[0].code==3 && sink.hosts[0].value==1);
+        CHECK(sink.hosts[1].kind==uc::HostEventKind::pad_stick && sink.hosts[1].code==1 && sink.hosts[1].x==.5f && sink.hosts[1].y==-.25f);
+        CHECK(sink.hosts[2].kind==uc::HostEventKind::pad_gyro && sink.hosts[2].x==1.f && sink.hosts[2].y==2.f);
+        CHECK(sink.hosts[3].kind==uc::HostEventKind::pad_axis && sink.hosts[3].code==11 && sink.hosts[3].value==1);
+        server.pump(18,"{}"); CHECK(sink.hosts.size()==5 && sink.hosts[4].kind==uc::HostEventKind::pad_axis && sink.hosts[4].value==0);   // one frame held
+        server.pump(19,"{}"); CHECK(sink.hosts.size()==6 && sink.hosts[5].kind==uc::HostEventKind::pad_button && sink.hosts[5].code==3 && sink.hosts[5].value==0);   // two frames held
+        sink.hosts.clear();
+        write_line(cmd,R"({"id":34,"cmd":"input","hold_frames":100,"pad_button":{"button":9,"down":true}})");
+        write_line(cmd,R"({"id":35,"cmd":"input","pad_stick":{"side":"left","x":1,"y":0}})");
+        write_line(cmd,R"({"id":103,"cmd":"state"})");
+        CHECK(!await_line(server,lines,"\"id\":103",19).empty());
+        server.pump(20,"{}"); CHECK(sink.hosts.size()==2);
+        sink.hosts.clear(); server.release_all();   // a disconnect lets go of the held pad button and returns the sticks to rest
+        bool released=false,rested=false;
+        for(const auto& event:sink.hosts) {
+            released|=event.kind==uc::HostEventKind::pad_button && event.code==9 && event.value==0;
+            rested|=event.kind==uc::HostEventKind::pad_stick && event.code==0 && event.x==0 && event.y==0;
+        }
+        CHECK(released && rested);
+        sink.hosts.clear();
+    }
     // disconnect_releases_inputs: key held, client closes, server releases.
     write_line(cmd,R"({"id":3,"cmd":"input","hold_frames":100,"key":{"code":21,"down":true}})");
     write_line(cmd,R"({"id":101,"cmd":"state"})");

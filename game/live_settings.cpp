@@ -6,13 +6,16 @@ LiveSettings::LiveSettings(std::filesystem::path config,ConfigDocument loaded,Se
     : path_(std::move(config)),document_(std::move(loaded)),options_(options_from_config(document_)),targets_(std::move(targets)) {}
 void LiveSettings::apply(const Options& next) {
     const auto& was=options_;
+    if(next.gamepad!=was.gamepad) {   // an invalid set is reported before anything is applied or saved
+        if(auto problem=validate_gamepad(next.gamepad)) { error_=*problem; return; }
+    }
     const bool scale=next.render_scale!=was.render_scale;
     const bool upscaling=next.upscaler!=was.upscaler || next.upscale_mode!=was.upscale_mode || next.sharpening!=was.sharpening || next.sharpness!=was.sharpness
         || next.frame_generation!=was.frame_generation || next.frame_generation_multiplier!=was.frame_generation_multiplier;
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom_settings()!=was.bloom_settings(), style=next.prompt_style!=was.prompt_style;
     const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale, hdr=next.hdr!=was.hdr;
-    const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity) return;
+    const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity, gamepad=next.gamepad!=was.gamepad;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -24,6 +27,7 @@ void LiveSettings::apply(const Options& next) {
     if(sensitivity) targets_.mouse_sensitivity(next.mouse_sensitivity);
     if(style) targets_.prompt_style(next.prompt_style);
     if(hdr) targets_.hdr(next.hdr);
+    if(gamepad) targets_.gamepad(next.gamepad);
     save();
 }
 void LiveSettings::apply(const Bindings& next) {

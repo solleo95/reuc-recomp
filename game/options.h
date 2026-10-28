@@ -1,6 +1,7 @@
 #pragma once
 #include "bloom_math.h"
 #include "dlss5_settings.h"
+#include "gamepad_config.h"
 #include "graphics_effects.h"
 #include "hdr_math.h"
 #include "input_prompts.h"
@@ -30,6 +31,7 @@ struct Options {
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
     uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
+    GamepadSettings gamepad;   // the "gamepad" object of config.json: control type, model, sticks, gyro and the gamepad's bindings
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off
     UpscalerKind upscaler=UpscalerKind::off;

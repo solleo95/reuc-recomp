@@ -136,6 +136,7 @@ Options options_from_config(const ConfigDocument& document) {
             else invalid("unknown window_mode");
         }
     }
+    options.gamepad=gamepad_from_config(document);
     // A section written by the first DLSS 5 build (an "enabled" switch and a "stage") has other keys and values than the table: it is dropped (defaults) and rewritten on the next save.
     const bool legacy_dlss5=root.contains("dlss5") && root["dlss5"].is_object() && (root["dlss5"].contains("enabled") || root["dlss5"].contains("stage"));
     if(root.contains("dlss5") && !legacy_dlss5) {
@@ -230,6 +231,7 @@ void store_options(ConfigDocument& document,const Options& options) {
         case Dlss5Kind::choice:dlss5[key]=std::string(field.choices[size_t(value)].name);break;
         }
     }
+    store_gamepad(replacement,options.gamepad);
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

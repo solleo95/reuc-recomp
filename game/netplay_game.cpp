@@ -59,6 +59,7 @@ void validate_net_frame(const NetFrame& f) {
         if(unsigned(e.action)>=unsigned(Action::count))throw std::runtime_error("invalid network action");
         scalar(e.direction_x,1); scalar(e.direction_y,1);
     }
+    if(a.camera[0]<-127 || a.camera[1]<-127)throw std::runtime_error("invalid network camera");
 }
 std::vector<uint8_t> bytes(const Json& json) {
     const auto text=json.dump();
@@ -93,7 +94,7 @@ uint64_t saves_hash(const std::filesystem::path& root) {
 std::vector<uint8_t> encode_net_frame(const NetFrame& f) {
     validate_net_frame(f);
     const auto& s=f.input.sample;const auto& a=f.input.actions;
-    std::vector<uint8_t> wire{'U','C','F',1}; wire.reserve(108+a.count*11);
+    std::vector<uint8_t> wire{'U','C','F',2}; wire.reserve(110+a.count*11);   // version 2 closes the frame with the analog camera (two int8); version 1 frames are refused
     const auto put=[&](uint64_t value,unsigned width) { for(unsigned i=0;i<width;++i)wire.push_back(uint8_t(value>>(i*8))); };
     const auto real=[&](float value) { put(std::bit_cast<uint32_t>(value),4); };
     // Fixed prefix: marker/version, then the uint64 LE input number for transport deduplication.
@@ -106,6 +107,7 @@ std::vector<uint8_t> encode_net_frame(const NetFrame& f) {
         const auto& e=a.events[i];
         put(unsigned(e.action),1); put(e.down,1); real(e.direction_x); real(e.direction_y); put(e.pulse,1);
     }
+    put(uint8_t(a.camera[0]),1); put(uint8_t(a.camera[1]),1);
     return wire;
 }
 uint64_t net_work_estimate(std::array<uint64_t,3> recent,uint64_t previous) {
@@ -179,7 +181,7 @@ bool same_net_input(const NetFrame& a,const NetFrame& b) {
     if(x.host!=y.host || x.generation!=y.generation ||
        p.x!=q.x || p.y!=q.y || p.dx!=q.dx || p.dy!=q.dy || p.held!=q.held || p.pressed!=q.pressed || p.released!=q.released || p.valid!=q.valid) return false;
     const auto& u=x.actions; const auto& v=y.actions;
-    if(u.held!=v.held || u.pressed!=v.pressed || u.released!=v.released || u.generation!=v.generation || u.count!=v.count) return false;
+    if(u.held!=v.held || u.pressed!=v.pressed || u.released!=v.released || u.generation!=v.generation || u.count!=v.count || u.camera!=v.camera) return false;
     // The window epoch only changes filtering of shake gestures, not ordinary input.
     const bool different_qte=a.qte_epoch!=b.qte_epoch;
     if(different_qte && ((u.held|u.pressed|u.released)&(uint64_t(1)<<unsigned(Action::qte_shake))))return false;
@@ -207,8 +209,8 @@ void NetQteState::filter(NetFrame& frame) const {
     actions.count=std::remove_if(actions.events.begin(),end,[](auto event){return event.action==Action::qte_shake;})-actions.events.begin();
 }
 NetFrame decode_net_frame(std::span<const uint8_t> data) {
-    constexpr std::array<uint8_t,4> marker{'U','C','F',1};
-    if(data.size()<108 || data.size()>net::max_packet || !std::equal(marker.begin(),marker.end(),data.begin()))throw std::runtime_error("invalid network frame size or version");
+    constexpr std::array<uint8_t,4> marker{'U','C','F',2};
+    if(data.size()<110 || data.size()>net::max_packet || !std::equal(marker.begin(),marker.end(),data.begin()))throw std::runtime_error("invalid network frame size or version");
     size_t at=marker.size();
     const auto get=[&](unsigned width) {
         if(width>data.size()-at)throw std::runtime_error("truncated network frame");
@@ -224,11 +226,12 @@ NetFrame decode_net_frame(std::span<const uint8_t> data) {
     f.input.host=flag(); f.input.generation=get(8);
     auto& a=f.input.actions;
     a.held=get(8); a.pressed=get(8); a.released=get(8); a.generation=get(8); a.count=size_t(get(2));
-    if(a.count>a.events.size() || data.size()-at!=a.count*11)throw std::runtime_error("invalid network action count or frame length");
+    if(a.count>a.events.size() || data.size()-at!=a.count*11+2)throw std::runtime_error("invalid network action count or frame length");
     for(size_t i=0;i<a.count;++i) {
         auto& e=a.events[i];
         e.action=Action(get(1)); e.down=flag(); e.direction_x=real(); e.direction_y=real(); e.pulse=flag();
     }
+    a.camera={int8_t(get(1)),int8_t(get(1))};
     validate_net_frame(f);
     return f;
 }

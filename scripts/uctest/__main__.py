@@ -49,6 +49,7 @@ def main(argv=None):
     run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
     run.add_argument("--game-arg", action="append", default=[], help="extra uc.exe argument, repeatable (e.g. --game-arg=--validation)")
     run.add_argument("--chapter", type=int, default=1, choices=range(1, 5), help="chapter to start (2..4 must be unlocked in the saves)")
+    run.add_argument("--model", choices=("xbox", "playstation", "nintendo", "generic"), default=None, help="gamepad_prompts: the controller whose button look the prompts use (default xbox)")
     run.add_argument("--save-as", help="after the run, keep its saves as checkpoint NAME (build/autotest/checkpoints/NAME)")
     run.add_argument("--wave-offset", type=int, default=None, help="fight: game seconds after the 30-actor wave starts where the run drops to x1 (default: the learned F5 point)")
     run.add_argument("--slow-at", type=int, default=0, help="fight: drop to speed 1 at this game second (retraces / 60) instead of the learned point")

@@ -1,7 +1,7 @@
 set(UC_GENERATED_DIR ${CMAKE_SOURCE_DIR}/generated CACHE PATH "translator output")
 add_library(uc_options STATIC options.cpp window_mode.cpp)
 target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
-target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts uc_netplay)
+target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts uc_netplay uc_gamepad_config)
 add_library(uc_options_config STATIC options_config.cpp)
 target_include_directories(uc_options_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_options_config PUBLIC uc_options uc_input_config)
@@ -26,6 +26,9 @@ target_link_libraries(uc_prompt_bridge PUBLIC uc_input_prompts uc_gx)
 add_library(uc_host_input STATIC host_input.cpp)
 target_include_directories(uc_host_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_host_input PUBLIC uc_runtime SDL3::SDL3)
+add_library(uc_gamepad_input STATIC gamepad_input.cpp)   # SDL gamepads: events in, NativeInput sticks, buttons and gyro out
+target_include_directories(uc_gamepad_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_gamepad_input PUBLIC uc_input uc_gamepad_math SDL3::SDL3)   # no runtime: the launcher reads gamepads too
 add_library(uc_game_mods STATIC game_mods.cpp)   # the port's side of the mod platform (modding/)
 target_include_directories(uc_game_mods PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_mods PUBLIC uc_mods uc_diagnostics PRIVATE uc_public_release)
@@ -76,8 +79,8 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp system_report.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
   target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static uc_public_release dxgi)
   target_link_libraries(uc PRIVATE uc_directx)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_test_server uc_crash_bundle winmm shell32
-    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_launch uc_game_mods uc_mod_menu uc_netplay_game)
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_test_server uc_crash_bundle winmm shell32
+    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_launch uc_game_mods uc_mod_menu uc_netplay_game)
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders

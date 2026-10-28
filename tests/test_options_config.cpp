@@ -187,6 +187,20 @@ int main() {
         bool wrapped=false;try {uc::options_from_config(uc::parse_config(R"({"game":"C:/Games/Test/game","graphics":{"anisotropy":4294967312}})"));}catch(const std::invalid_argument&){wrapped=true;}
         CHECK(wrapped);
     }
+    {   // the gamepad object: defaults without it, a round trip through store_options, and a refusal that leaves the file alone
+        CHECK(uc::options_from_config(uc::parse_config("{}")).gamepad==uc::GamepadSettings{});
+        auto document=uc::parse_config(R"({"game":"C:/Games/Test/game"})");
+        auto options=uc::options_from_config(document);
+        options.gamepad.type=uc::ControlType::gamepad; options.gamepad.model=uc::PadModel::xbox; options.gamepad.camera_stick=uc::StickRole::none;
+        uc::store_options(document,options);
+        CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).gamepad==options.gamepad);
+        auto bad=options; bad.gamepad.aim_stick=bad.gamepad.camera_stick=uc::StickRole::right;
+        const auto before=uc::serialize_config(document); bool refused=false;
+        try {uc::store_options(document,bad);}catch(const std::invalid_argument&){refused=true;}
+        CHECK(refused && uc::serialize_config(document)==before);
+        bool malformed=false;try {uc::options_from_config(uc::parse_config(R"({"gamepad":{"model":"sega"}})"));}catch(const std::invalid_argument&){malformed=true;}
+        CHECK(malformed);
+    }
     for(auto text:{R"({"skip_intro":1})",R"({"game":null})",R"({"game":"a\u0000b"})",R"({"graphics":{"render_scale":8}})",
         R"({"graphics":{"render_scale":-1}})",R"({"graphics":{"width":-1}})",R"({"graphics":{"window_mode":"bad"}})",
         R"({"graphics":{"bloom":"off"}})",R"({"graphics":{"bloom":0}})",R"({"graphics":{"bloom":null}})",R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})",R"({"graphics":{"fps_limit":-1}})",R"({"graphics":{"fps_limit":10}})",

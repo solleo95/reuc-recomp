@@ -199,7 +199,73 @@ static void qte_mouse_shake_profiles() {
     CHECK(sine_shake_steps(60,.5,4,1000)==0 && sine_shake_steps(60,1,4,1000)==0);   // a slow wave is aiming, not shaking
     CHECK(sine_shake_steps(15,8,4,1000)==0 && sine_shake_steps(10,10,4,1000)==0);   // tremor-sized jitter
 }
+static PhysicalInput pad(uint16_t code) { return {PhysicalKind::pad_button,code}; }
+static PhysicalInput axis(uint16_t code) { return {PhysicalKind::pad_axis,code}; }
+// SDL gamepad codes: buttons south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, left shoulder 9, right shoulder 10; axis codes are axis*2+1 (left trigger 9, right trigger 11).
+static BindingResolver pad_game(InputContext context=InputContext::gameplay) {
+    BindingResolver r; r.replace(merge_bindings(default_bindings(),default_pad_bindings())); r.context(context); r.focus(true); return r;
+}
+static void pad_tables_validate_and_stay_separate() {
+    CHECK(!validate_pad_bindings(default_pad_bindings()));
+    CHECK(!validate_bindings(default_bindings()));
+    auto keyboard=default_bindings(); keyboard[size_t(Action::fire)].push_back(physical(pad(0))); CHECK(validate_bindings(keyboard));
+    keyboard=default_bindings(); keyboard[size_t(Action::fire)][0].modifiers={axis(9)}; CHECK(validate_bindings(keyboard));
+    auto gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back(physical(key(9))); CHECK(validate_pad_bindings(gamepad));
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back(physical(mouse(1))); CHECK(validate_pad_bindings(gamepad));
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back(physical(pad(32))); CHECK(validate_pad_bindings(gamepad));
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back(physical(axis(16))); CHECK(validate_pad_bindings(gamepad));
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back({BindingKind::physical,pad(5),{axis(9)}}); CHECK(!validate_pad_bindings(gamepad));
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::fire)].push_back(gamepad[size_t(Action::fire)][0]); CHECK(validate_pad_bindings(gamepad));
+    const auto defaults=default_pad_bindings();
+    CHECK(defaults[size_t(Action::fire)].size()==1 && defaults[size_t(Action::fire)][0].input==axis(11));
+    CHECK(defaults[size_t(Action::interact)][0].input==pad(0) && defaults[size_t(Action::reload)][0].input==pad(2));
+    CHECK(defaults[size_t(Action::weapon_previous)][0].input==pad(9) && defaults[size_t(Action::weapon_next)][0].input==pad(10));
+    CHECK(defaults[size_t(Action::recenter)][0].input==pad(7) && defaults[size_t(Action::screenshot)][0].input==pad(4));
+    CHECK(defaults[size_t(Action::release_cursor)].empty() && defaults[size_t(Action::camera_up)].empty());
+}
+static void merge_appends_pad_entries_without_duplicates() {
+    const auto merged=merge_bindings(default_bindings(),default_pad_bindings());
+    const auto keyboard=default_bindings();
+    CHECK(merged[size_t(Action::interact)].size()==keyboard[size_t(Action::interact)].size()+1);
+    CHECK(merged[size_t(Action::interact)].front()==keyboard[size_t(Action::interact)].front() && merged[size_t(Action::interact)].back().input==pad(0));
+    size_t specials=0; for(const auto& b:merged[size_t(Action::grenade)]) specials+=b.kind==BindingKind::interact_fire; CHECK(specials==1);   // the pad table has none: the keyboard's entry serves every device
+    auto both=default_pad_bindings(); both[size_t(Action::grenade)].push_back({BindingKind::interact_fire,{},{}}); CHECK(!validate_pad_bindings(both));
+    const auto twice=merge_bindings(keyboard,both);
+    specials=0; for(const auto& b:twice[size_t(Action::grenade)]) specials+=b.kind==BindingKind::interact_fire; CHECK(specials==1);   // listed twice, merged once
+    auto cleared=keyboard; cleared[size_t(Action::grenade)].pop_back();                                  // the chord switched off in the keyboard table is off for the gamepad too
+    auto off=pad_game(); off.replace(merge_bindings(cleared,default_pad_bindings())); off.button(pad(0),true); off.consume(); off.button(axis(11),true);
+    auto after=off.consume(); CHECK(downs(after,Action::grenade)==0 && downs(after,Action::fire)==1);
+    CHECK(!validate_bindings(keyboard));
+    fails<std::invalid_argument>([&]{BindingResolver r; auto bad=merged; bad[size_t(Action::fire)].push_back(bad[size_t(Action::fire)].front()); r.replace(bad);});
+}
+static void pad_buttons_drive_actions_by_context() {
+    auto r=pad_game(); r.button(axis(11),true); auto f=r.consume(); CHECK(f.held==bit(Action::fire) && downs(f,Action::fire)==1);
+    r.button(axis(11),false); r.consume();
+    r.button(pad(2),true); CHECK(downs(r.consume(),Action::reload)==1);
+    r.button(pad(9),true); CHECK(downs(r.consume(),Action::weapon_previous)==1);
+    r.button(pad(10),true); CHECK(downs(r.consume(),Action::weapon_next)==1);
+    r.button(pad(6),true); CHECK(downs(r.consume(),Action::pause)==1);
+    r.button(pad(4),true); CHECK(downs(r.consume(),Action::screenshot)==1);
+    r.button(pad(7),true); CHECK(downs(r.consume(),Action::recenter)==1);
+    r.button(pad(0),true); f=r.consume(); CHECK(f.held&bit(Action::interact));
+    auto menu=pad_game(InputContext::menu); menu.button(pad(0),true); CHECK(menu.consume().pressed==bit(Action::confirm));
+    menu.button(pad(1),true); CHECK(menu.consume().pressed==bit(Action::back));
+    menu.button(pad(7),true); CHECK(menu.consume().pressed==0);   // recenter is a gameplay action
+    auto qte=pad_game(InputContext::qte); qte.button(pad(7),true); CHECK(qte.consume().pressed==0);
+    qte.qte_window(true); qte.button(pad(8),true); CHECK(downs(qte.consume(),Action::qte_shake)==1);   // R3 shakes inside a QTE window
+}
+static void pad_chord_and_cancel() {
+    auto r=pad_game(); r.button(pad(0),true); r.consume(); r.button(axis(11),true); auto f=r.consume();
+    CHECK(downs(f,Action::grenade)==1 && downs(f,Action::fire)==0);   // interact+fire chord throws, like the keyboard
+    auto d=pad_game(); d.button(axis(11),true); d.consume(); d.focus(false); auto g=d.consume(); CHECK(g.held==0);
+    d.focus(true); d.button(axis(11),true); CHECK(d.consume().held==0);   // a held trigger stays blocked until it is released
+    d.button(axis(11),false); d.button(axis(11),true); CHECK(d.consume().held==bit(Action::fire));
+    fails<std::invalid_argument>([&]{d.button(pad(32),true);});
+    fails<std::invalid_argument>([&]{d.button(axis(16),true);});
+    auto keyboard_only=game(); keyboard_only.button(pad(0),true); CHECK(keyboard_only.consume().pressed==0);   // default resolver has no pad table
+}
 int main() {
+    pad_tables_validate_and_stay_separate(); merge_appends_pad_entries_without_duplicates(); pad_buttons_drive_actions_by_context(); pad_chord_and_cancel();
     defaults_and_context(); multiple_sources_and_short_click(); ordered_chord_and_dedup(); clear_special_and_remap();
     wheel_keyboard_repeat_and_chords(); replace_focus_and_context_cancel(); knife_direction_bursts_and_overflow(); knife_key_direction_and_mouse_threshold();
     wheel_pulse_preserves_keyboard_hold(); validation_preserves_configuration();

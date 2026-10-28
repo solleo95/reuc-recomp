@@ -1,4 +1,6 @@
 #include "binding_editor.h"
+#include "gamepad_panel.h"
+#include "gamepad_input.h"
 #include "public_release.h"
 #include "launch.h"
 #include "cpu_calibration.h"
@@ -166,7 +168,7 @@ std::string binding_name(const uc::Binding& binding) {
 bool same_options(const uc::Options& a,const uc::Options& b) {
     return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad;
 }
 bool update_handoff=false;   // set when the update helper waits for this process to end (see wWinMain)
 int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
@@ -216,6 +218,12 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         if(fs::is_directory(saves,saves_error))fs::copy(saves,diagnostic.save_root,fs::copy_options::recursive|fs::copy_options::skip_existing);
     }
     uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
+    uc::BindingEditor pad_editor{uc::default_pad_bindings(),uc::BindingTable::gamepad};uc::GamepadPanelState pad_panel;
+    std::optional<uc::GamepadInput> pads;   // after `ui`: the gamepads close before SDL quits; none when SDL cannot start its gamepad subsystem
+    try {
+        pads.emplace();
+        pads->capture_sink([&](uc::PhysicalInput input,bool down) {pad_editor.event(input,down);});   // the Gamepad window waits for a pad press
+    } catch(const std::exception&) {pads.reset();}   // the launcher works without gamepads
     std::string error;bool blocked=false;
     std::unique_ptr<uc::net::NetworkSession> network;
     std::unique_ptr<uc::net::NatMapping> nat;
@@ -243,7 +251,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
             }
             network_address=std::move(last_peer);
-            editor=uc::BindingEditor(loaded.input);document=std::move(loaded);options=saved_options=settings;
+            editor=uc::BindingEditor(loaded.input);pad_editor=uc::BindingEditor(settings.gamepad.bindings,uc::BindingTable::gamepad);document=std::move(loaded);options=saved_options=settings;
             language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
@@ -307,7 +315,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
             if(event.type==SDL_EVENT_QUIT || (event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID==SDL_GetWindowID(ui.window)))done=true;
-            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST)editor.focus(false);
+            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) {editor.focus(false);pad_editor.focus(false);}
+            if(pads)pads->event(event,nullptr);   // the connected gamepad and the presses of the Gamepad window's capture
             if(smoke.empty()) {
                 if(editor.capturing()) {
                     if((event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) && !event.key.repeat)editor.event({uc::PhysicalKind::key,uint16_t(event.key.scancode)},event.key.down);
@@ -508,9 +517,9 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         auto* draw=ImGui::GetWindowDrawList();
         if(ui.brand)ui.art(ui.brand,*draw,{0,0},{sidebar,std::round(446*unit)},{0,0},{342,446});
         else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
-        const char* sections[]={"game","graphics","controls","audio"};
+        const char* sections[]={"game","graphics","controls","controllers","audio"};
         ImGui::SetCursorPos({6*unit,455*unit});
-        constexpr int kNavigationTabs=3;   // the Sound tab (index 3, page code below) is hidden; set to 4 to bring it back
+        constexpr int kNavigationTabs=4;   // the Sound tab (index 4, page code below) is hidden; set to 5 to bring it back
         for(int i=0;i<kNavigationTabs;++i) {
             ImGui::SetCursorPosX(std::round(6*unit));
             ImGui::PushID(i);auto p=ImGui::GetCursorScreenPos();
@@ -521,7 +530,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PopStyleColor(2);ImGui::PopStyleVar();
             const auto color=page==i ? IM_COL32(246,243,237,255) : IM_COL32(161,164,164,255);
             if(page==i)draw->AddRectFilled(p,{p.x+5*unit,p.y+60*unit},IM_COL32(200,33,47,255),2*unit);
-            uc::launcher::draw_navigation_icon(*draw,i,{std::round(p.x+32*unit),std::round(p.y+15*unit)},30*unit,color);
+            uc::launcher::draw_navigation_icon(*draw,i==3 ? 4 : i==4 ? 3 : i,{std::round(p.x+32*unit),std::round(p.y+15*unit)},30*unit,color);
             draw->AddText(ui.sans,std::round(24*unit),{std::round(p.x+89*unit),std::round(p.y+16*unit)},color,tr(sections[i]));
             ImGui::PopID();
         }
@@ -561,7 +570,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         ImGui::BeginChild("body",{main_size.x-104*unit,main_size.y-hero_height-32*unit},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         push_font(ui.serif,36);ImGui::TextUnformatted(tr(page==1 ? "graphics_title" : sections[page]));ImGui::PopFont();
         ImGui::PushFont(ui.sans,std::round(22*unit));
-        const char* hints[]={"game_hint","graphics_hint","controls_hint","audio_hint"};
+        const char* hints[]={"game_hint","graphics_hint","controls_hint","controllers_hint","audio_hint"};
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
         ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
         auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false,const char* why=nullptr) {
@@ -862,7 +871,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
                 ImGui::TableSetupColumn("+",ImGuiTableColumnFlags_WidthFixed,46*unit);
                 ImGui::TableSetupColumn(tr("clear"),ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(tr("clear")).x+28*unit);
-                for(size_t i=0;i<size_t(uc::Action::count);++i) {
+                for(size_t i=0;i<size_t(uc::Action::recenter);++i) {   // recenter is a gamepad action: the controllers tab lists it, this page is keyboard and mouse only
                     auto action=uc::Action(i);ImGui::PushID(int(i));ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::AlignTextToFramePadding();ImGui::TextWrapped("%s",tr(uc::action_names[i]));
                     ImGui::TableSetColumnIndex(1);const auto& entries=editor.bindings()[i];
                     std::string names;
@@ -899,6 +908,13 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             ImGui::PopStyleColor();ImGui::PopStyleVar();
             ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
+        } else if(page==3) {
+            push_font(ui.sans,22);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*unit,10*unit});   // the Controls page's own spacing, so the tab and its window match the other pages
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{8*unit,8*unit});
+            pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;
+            uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
+            ImGui::PopStyleVar(2);ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
         if(!error.empty()) {

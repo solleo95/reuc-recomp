@@ -2,7 +2,41 @@
 #include "binding_editor.h"
 using namespace uc;
 static PhysicalInput key(uint16_t code) {return {PhysicalKind::key,code};}
+static PhysicalInput button(uint16_t code) {return {PhysicalKind::pad_button,code};}
+static PhysicalInput axis(uint16_t code) {return {PhysicalKind::pad_axis,code};}
+// The gamepad table: its own defaults and rule, only gamepad inputs are captured, and no modifier keys.
+static void gamepad_editor() {
+    BindingEditor editor(default_pad_bindings(),BindingTable::gamepad);
+    CHECK(editor.bindings()==default_pad_bindings());
+    editor.begin_capture(Action::reload,true);
+    editor.event(key(4),true); editor.event({PhysicalKind::mouse,1},true); editor.wheel(1);
+    CHECK(editor.capturing() && editor.bindings()==default_pad_bindings());                  // the keyboard and mouse do nothing while a pad button is awaited
+    editor.event(button(3),true);
+    CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)]==std::vector<Binding>({{BindingKind::physical,button(3),{}}}));
+    editor.begin_capture(Action::fire);                                                       // the trigger pull and a held shoulder button are one binding each
+    editor.event(axis(9),true);
+    CHECK(!editor.capturing() && editor.bindings()[size_t(Action::fire)].size()==2 && editor.bindings()[size_t(Action::fire)].back().input==axis(9));
+    editor.begin_capture(Action::fire);editor.event(button(9),false);                         // a release alone is not a press
+    CHECK(editor.capturing());
+    editor.event(button(9),true);
+    CHECK(!editor.capturing() && editor.bindings()[size_t(Action::fire)].back().input==button(9) && editor.bindings()[size_t(Action::fire)].back().modifiers.empty());
+    editor.begin_capture(Action::pause);editor.event(button(32),true);                        // outside SDL's buttons: refused, still waiting
+    CHECK(editor.capturing() && editor.error());
+    editor.event(button(6),true); CHECK(editor.capturing() && editor.error());               // Start is already Pause: a duplicate is refused, the capture goes on
+    editor.cancel_capture(); CHECK(editor.bindings()[size_t(Action::pause)].size()==1);
+    CHECK(editor.add(Action::fire,{BindingKind::physical,key(9),{}}));                        // a key does not belong in this table
+    CHECK(!editor.add(Action::fire,{BindingKind::physical,button(12),{}}));
+    CHECK(editor.add(Action::fire,{BindingKind::physical,button(12),{}}));                    // and no duplicates
+    editor.begin_capture(Action::knife); editor.focus(false); editor.event(button(5),true);
+    CHECK(!editor.capturing());
+    editor.restore_defaults(); CHECK(editor.bindings()==default_pad_bindings());              // defaults are the gamepad's, not the keyboard's
+    BindingEditor keyboard;                                                                   // and the keyboard editor ignores the pad
+    keyboard.begin_capture(Action::reload,true); keyboard.event(button(3),true); keyboard.event(axis(9),true);
+    CHECK(keyboard.capturing() && keyboard.bindings()==default_bindings());
+    CHECK(keyboard.add(Action::fire,{BindingKind::physical,button(3),{}}));
+}
 int main() {
+    gamepad_editor();
     BindingEditor editor;
     editor.clear(Action::grenade); CHECK(editor.bindings()[size_t(Action::grenade)].empty());
     CHECK(!editor.add(Action::grenade,{BindingKind::physical,key(11),{}}));

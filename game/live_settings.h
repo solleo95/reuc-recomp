@@ -18,6 +18,7 @@ struct SettingsTargets {
     std::function<void(PromptStyle)> prompt_style;
     std::function<void(const HdrSettings&)> hdr;               // HDR output and its brightness sliders
     std::function<void(const Bindings&)> bindings;
+    std::function<void(const GamepadSettings&)> gamepad;       // control type, sticks, gyro and the gamepad bindings
 };
 // The in-game settings: the options saved in config.json (not the command-line overrides of a run). Every change goes to the targets
 // whose fields changed and is saved at once; a refused save leaves the change applied and reports why.

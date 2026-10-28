@@ -131,6 +131,113 @@ def camera_stick(g, args):
     return result
 
 
+def gamepad(g, args):
+    """The gamepad reaches the guest through the host-event path of a real pad: the right stick is the analog Nunchuk stick, the left stick moves the pointer,
+    L3 centres it, the buttons and the right trigger act, and the gyro swings the knife."""
+    import struct
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    manager = 0x8043A82C   # fn80068DBC channel 0; fn8003B558 copies Nunchuk samples to +4228.
+
+    def axes():
+        return struct.unpack(">ff", bytes.fromhex(g.request({"cmd": "peek", "addr": manager + 4228, "size": 8})["hex"]))
+
+    def near(a, b, tolerance=.03):
+        return all(abs(x - y) <= tolerance for x, y in zip(a, b))
+
+    def act(name, press):
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.actions()   # drop stale events
+        press()
+        found = []
+        g.wait(lambda _f: found.extend(a for a in g.actions() if a["name"] == name and a["accepted"]) or bool(found), seconds=10, awaited=f"{name} accepted")
+
+    result = {}
+    # The camera is analog: half a push is about half the Nunchuk stick (a 10% dead zone first), not a digital 1.
+    with g.step("camera_half"):
+        steps.wait_gameplay(g)
+        g.pad_stick("right", .55, 0); g.advance(20)
+        observed = axes()
+        if not near(observed, (.504, 0.)):
+            g.fail(f"half push: Nunchuk stick {observed}, expected about (0.504, 0)", "analog camera")
+        result["camera_half"] = observed
+    with g.step("camera_up"):
+        g.pad_stick("right", 0, -1); g.advance(20)   # SDL y points down: pushed up is camera up
+        observed = axes()
+        if not near(observed, (0., 1.)):
+            g.fail(f"up: Nunchuk stick {observed}, expected (0, 1)", "camera up")
+        result["camera_up"] = {"axes": observed, "capture": g.capture()}
+    with g.step("camera_rest"):
+        g.pad_stick("right", 0, 0); g.advance(8)
+        if axes() != (0., 0.):
+            g.fail(f"rest: Nunchuk stick {axes()}, expected (0, 0)", "neutral stick")
+    # The left stick moves the pointer by speed, and L3 puts it back in the middle.
+    with g.step("aim_stick"):
+        steps.wait_gameplay(g)
+        g.pad_button(7); g.advance(10)
+        centre = g.frame["aim"]
+        g.pad_stick("left", 1, 0); g.advance(30); g.pad_stick("left", 0, 0); g.advance(6)
+        moved = g.frame["aim"]
+        if moved[0] < centre[0] + .2 or abs(moved[1] - centre[1]) > .05:
+            g.fail(f"left stick moved the pointer from {centre} to {moved}", "aim stick")
+        g.pad_button(7); g.advance(10)
+        back = g.frame["aim"]
+        if abs(back[0]) > .02 or abs(back[1]) > .02:
+            g.fail(f"L3 left the pointer at {back}", "recenter")
+        result["aim"] = {"centre": centre, "moved": moved, "recentred": back}
+    # Buttons and the right trigger: the same actions as the keyboard and mouse.
+    with g.step("fire"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        before = g.frame["player"]["magazine"]
+        for _ in range(3):
+            g.pad_axis(11, frames=3); g.advance(20)
+        if g.frame["player"]["magazine"] >= before:
+            g.fail(f"the right trigger did not fire: magazine {before} -> {g.frame['player']['magazine']}", "pad fire")
+    with g.step("reload"):
+        act("Reload", lambda: g.pad_button(2))
+    with g.step("grenade"):
+        act("Grenade", lambda: g.pad_button(3))
+    with g.step("knife"):
+        act("Knife", lambda: g.pad_button(1))
+    # The gyro: a swing with interact held is the knife, like a mouse swing. The gyro is off by default: switch it on live.
+    with g.step("gyro_swing"):
+        g.set_gamepad(gyro={"mode": "always"})
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.actions()
+        g.pad_gyro(0, 0)
+        g.pad_button(0, frames=40, wait=False)   # interact held
+        g.advance(6)
+        for _ in range(6):
+            g.pad_gyro(-4.0, 0); g.advance(1); g.pad_gyro(0, 0); g.advance(2)
+        if not any(a["name"] == "Knife" and a["accepted"] for a in g.actions()):
+            g.fail("a gyro swing with interact held did not swing the knife", "gyro knife")
+        g.set_gamepad(gyro={"mode": "off"})
+    result["capture"] = g.capture()
+    return result
+
+
+def gamepad_prompts(g, args):
+    """The in-game prompts (tutorial pages) in the look of a gamepad: Xbox, PlayStation, Nintendo or generic (--model), captured for a look."""
+    model = getattr(args, "model", None) or "xbox"
+    g.set_gamepad(type="gamepad", model=model)
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    captures = []
+    for target in route(args.chapter):
+        with g.step(target):
+            steps.select(g, target)
+        if target in ("character_rebecca", "loadout_confirm"):   # menu pages with button prompts at the bottom
+            g.advance(40)
+            captures.append(g.capture())
+    with g.step("wait_gameplay"):
+        steps.wait_gameplay(g)
+    with g.step("pause"):   # the pause screen has prompts too (Start pauses)
+        g.pad_button(6); g.advance(40)
+        captures.append(g.capture())
+        g.pad_button(6); g.advance(20)
+    return {"model": model, "captures": captures}
+
+
 def perf(g, args):
     g.set_speed(8)   # menus and loading at 8x; the measurement itself runs at speed 1
     reach_gameplay(g, args.chapter)
@@ -1328,5 +1435,7 @@ SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"], "dol_names": ["dol_names"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a fixture that leaves input unchanged
 SCENARIOS["camera_stick"] = camera_stick
+SCENARIOS["gamepad"] = gamepad
+SCENARIOS["gamepad_prompts"] = gamepad_prompts
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
 SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}, "randomizer_live": {"randomizer": {"seed": 1, "strength": 100, "start_weapon": True}}}   # stored settings of the mods a scenario installs

@@ -12,9 +12,14 @@ namespace uc {
 namespace {
 PromptRegistry registry;
 Bindings assignments;   // guest baton owns it; a menu change arrives through `pending`
+Bindings pad_assignments=default_pad_bindings();   // the same for the gamepad table, shown while `device` is a gamepad
+PromptDevice device;
 std::mutex pending_mutex;
 std::optional<Bindings> pending;
+std::optional<std::pair<Bindings,PromptDevice>> pending_pad;
 std::atomic<bool> has_pending{false};
+// The table the prompts are read from and the device they are drawn for.
+const Bindings& shown() { return device.gamepad ? pad_assignments : assignments; }
 bool initialized=false;
 bool trace_owners=false;
 std::set<std::string> owners_seen,decisions_seen;
@@ -33,21 +38,29 @@ gx::Memory memory(const ppc::Ctx& c) {
 }
 void prompt_hooks_init(const Bindings& bindings,bool trace) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
-    registry={};assignments=bindings;initialized=true;
+    registry={};assignments=bindings;pad_assignments=default_pad_bindings();device={};initialized=true;
     trace_owners=trace;owners_seen.clear();decisions_seen.clear();invalid_owners=0;glyphs_seen.clear();rejected_prompts=0;
 }
 void prompt_hooks_set_bindings(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
     std::lock_guard lock(pending_mutex);pending=bindings;has_pending=true;
 }
-struct PromptSnapshot { PromptRegistry registry; Bindings assignments; };
-std::shared_ptr<const PromptSnapshot> prompt_checkpoint() {
-    return std::make_shared<PromptSnapshot>(PromptSnapshot{registry,assignments});
+void prompt_hooks_set_gamepad(const Bindings& pad,const PromptDevice& next) {
+    if(auto error=validate_pad_bindings(pad))throw std::invalid_argument(*error);
+    std::lock_guard lock(pending_mutex);pending_pad=std::make_pair(pad,next);has_pending=true;
 }
-void prompt_restore(const PromptSnapshot& saved) { registry=saved.registry; assignments=saved.assignments; }
+struct PromptSnapshot { PromptRegistry registry; Bindings assignments,pad_assignments; PromptDevice device; };
+std::shared_ptr<const PromptSnapshot> prompt_checkpoint() {
+    return std::make_shared<PromptSnapshot>(PromptSnapshot{registry,assignments,pad_assignments,device});
+}
+void prompt_restore(const PromptSnapshot& saved) { registry=saved.registry; assignments=saved.assignments; pad_assignments=saved.pad_assignments; device=saved.device; }
 PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),exceptions_(std::uncaught_exceptions()) {
     if(!initialized || !c.mem)return;
-    if(has_pending.exchange(false)) {std::lock_guard lock(pending_mutex);if(pending)assignments=std::move(*pending);pending.reset();}
+    if(has_pending.exchange(false)) {
+        std::lock_guard lock(pending_mutex);
+        if(pending)assignments=std::move(*pending);pending.reset();
+        if(pending_pad) {pad_assignments=std::move(pending_pad->first);device=pending_pad->second;}pending_pad.reset();
+    }
     if(entry==0x8024F280) {object_=c.r[3];gate_=test_state_skip_tutorial(c);return;}   // original tutorial opener, r3 = tutorial object
     if(entry==0x8038AD94) {registry.unregister_layout(c.r[3]);return;}
     if(entry==0x80389B20) {registry.unregister_pane(c.r[3]);return;}
@@ -73,7 +86,7 @@ PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),excepti
         if(trace_owners && glyphs_seen.size()<64 && glyphs_seen.insert(code|uint32_t(menu)<<16).second)
             std::fprintf(stderr,"[prompt-glyph] U+%04X menu %u covered %u caller %08X\n",code,menu,!actions.empty(),c.lr);
         if(actions.empty())return;
-        description_=actions.size()==1 ? primary_prompt(assignments,{actions[0]}) : primary_prompt(assignments,{actions[0],actions[1]});
+        description_=actions.size()==1 ? primary_prompt(shown(),{actions[0]},device) : primary_prompt(shown(),{actions[0],actions[1]},device);
         compact_=true;checkpoint_=gx_prompt_checkpoint();
     } else if(entry==0x80394038 && c.lr==0x8038BD1C) {
         if(trace_owners && owners_seen.size()<256) {
@@ -103,8 +116,8 @@ PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),excepti
         }
         if(registry.actions(memory(c),c.r[28],InputContext::qte).empty())return;
         const auto found=registry.actions(memory(c),c.r[28],prompt_context(c));
-        if(found.size()==1)description_=primary_prompt(assignments,{found[0]});   // the first assigned input only, never "X or Y"
-        else if(found.size()==2)description_=chord_prompt(assignments,found[0],found[1]);
+        if(found.size()==1)description_=primary_prompt(shown(),{found[0]},device);   // the first assigned input only, never "X or Y"
+        else if(found.size()==2)description_=chord_prompt(shown(),found[0],found[1],device);
         if(description_)checkpoint_=gx_prompt_checkpoint();
     }
 }

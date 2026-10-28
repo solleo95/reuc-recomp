@@ -138,7 +138,7 @@ struct World {
     }
     // The Mods tab, then the gear of one mod: its settings open in a modal window (rect_of keys "setting/..." and "ui/..." exist while it is open).
     bool open_settings(const std::string& id) {
-        select(3);
+        select(4);
         if (!click("manager/settings/" + id)) return false;
         frames(3);
         return true;
@@ -159,9 +159,9 @@ static const char* kSettings = R"("settings":[{"key":"on","type":"bool","default
 // Mods have no tabs of their own: one manager tab, and per mod a gear (when it has settings or something to draw) in a fixed column left of the order arrows.
 static void mods_have_one_tab_and_a_gear_each() {
     World w("menu_tabs", {{"alpha", kSettings}, {"beta", "", true, true}, {"gamma", kSettings, true, true}, {"quiet", ""}, {"off", kSettings, false}});
-    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1);   // Main, Effects, Controls (DLSS 5 only when enabled), Mods
-    CHECK(w.tab_name(3) == "Mods");
-    w.select(3);
+    CHECK(w.tabs && w.tabs->Tabs.Size == 4 + 1);   // Main, Effects, Controls, Controllers (DLSS 5 only when enabled), Mods
+    CHECK(w.tab_name(4) == "Mods");
+    w.select(4);
     const auto gear = [&](const char* id) { return w.ui->rect_of(std::string("manager/settings/") + id); };
     CHECK(gear("alpha") && gear("beta") && gear("gamma") && gear("off") && !gear("quiet"));   // "off" has declared settings: reachable while switched off
     CHECK((*gear("alpha"))[0] == (*gear("gamma"))[0] && (*gear("beta"))[0] == (*gear("off"))[0] && (*gear("alpha"))[0] == (*gear("beta"))[0]);   // one column
@@ -175,8 +175,8 @@ static void many_mods_do_not_add_tabs() {
     std::vector<ModSpec> specs;
     for (int i = 0; i < 12; ++i) specs.push_back({"mod" + std::string(i < 10 ? "0" : "") + std::to_string(i), kSettings});
     World w("menu_many", specs);
-    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1 && (w.tabs->Flags & ImGuiTabBarFlags_FittingPolicyScroll) != 0);
-    w.select(3);
+    CHECK(w.tabs && w.tabs->Tabs.Size == 4 + 1 && (w.tabs->Flags & ImGuiTabBarFlags_FittingPolicyScroll) != 0);
+    w.select(4);
     CHECK(w.ui->rect_of("manager/settings/mod11").has_value());
 }
 
@@ -259,7 +259,7 @@ static void free_draw_ids_unique_between_mods() {
 // Mods are switched on and off from the manager while the game runs: the change is saved and then applied (GameMods::apply in the game).
 static void manager_toggle_switches_mods_live() {
     World w("menu_manager", {{"alpha", ""}, {"beta", "", false}});
-    w.select(3);
+    w.select(4);
     const auto count = [&](const char* id, const char* event) { return std::count(w.behavior(id)->events.begin(), w.behavior(id)->events.end(), event); };
     CHECK(w.registry.wanted("alpha") && !w.registry.wanted("beta") && w.host->status()[0].running && !w.host->status()[1].running && w.applies == 0);
     CHECK(w.click("manager/enable/beta"));
@@ -277,7 +277,7 @@ static void manager_toggle_switches_mods_live() {
 // The order buttons are real arrow buttons, flush right at the same x in every row.
 static void manager_order_buttons_are_aligned_and_work() {
     World w("menu_order", {{"alpha", ""}, {"beta", ""}, {"gamma", ""}});
-    w.select(3);
+    w.select(4);
     const auto up_a = w.ui->rect_of("manager/up/alpha"), up_b = w.ui->rect_of("manager/up/beta"), down_a = w.ui->rect_of("manager/down/alpha"), down_c = w.ui->rect_of("manager/down/gamma");
     CHECK(up_a && up_b && down_a && down_c);
     CHECK((*up_a)[0] == (*up_b)[0] && (*down_a)[0] == (*down_c)[0] && (*up_a)[2] - (*up_a)[0] == (*up_a)[3] - (*up_a)[1]);   // same column in every row, square buttons
@@ -294,7 +294,7 @@ static void native_confirmation_flow() {
     World w("menu_native", {{"native_mod", R"("native":"native/mod.dll")", false}});
     fs::create_directories(w.dir / "native_mod" / "native");
     std::ofstream(w.dir / "native_mod" / "native" / "mod.dll", std::ios::binary) << "abc";   // only its hash matters here
-    w.select(3);
+    w.select(4);
     CHECK(w.click("manager/enable/native_mod") && w.registry.wanted("native_mod"));
     CHECK(!w.ui->rect_of("manager/confirm/native_mod"));          // nothing to confirm while native mods are off
     CHECK(w.click("manager/allow_native"));
@@ -314,8 +314,8 @@ static void native_confirmation_flow() {
 
 static void no_mods_menu_is_harmless() {
     World w("menu_empty", {});
-    CHECK(w.tabs && w.tabs->Tabs.Size == 3 + 1);   // just the manager tab, which says there are no mods
-    w.select(3);
+    CHECK(w.tabs && w.tabs->Tabs.Size == 4 + 1);   // just the manager tab, which says there are no mods
+    w.select(4);
 }
 
 int main() {

@@ -43,13 +43,14 @@ struct NativeInput::Snapshot {
     uint8_t host;
     uint64_t demo_generation,speed_calls;
     uint32_t speed_now,speed_last;
+    std::array<int8_t,2> camera;
 };
 std::shared_ptr<const NativeInput::Snapshot> NativeInput::checkpoint() {
     std::lock_guard lock(mutex_);
     if(demo_out_) throw std::logic_error("rollback cannot rewind an input recording");
     return std::make_shared<Snapshot>(Snapshot{actions_,services_,state_,previous_x_,previous_y_,sequence_,host_sequence_,
         consumed_sequence_,generation_,legacy_test_input_,context_,network_frame_,demo_sample_at_,demo_action_at_,demo_speed_at_,
-        demo_host_,demo_generation_,speed_calls_,speed_now_,speed_last_});
+        demo_host_,demo_generation_,speed_calls_,speed_now_,speed_last_,camera_});
 }
 void NativeInput::restore(const Snapshot& saved) {
     std::lock_guard lock(mutex_);
@@ -58,6 +59,7 @@ void NativeInput::restore(const Snapshot& saved) {
     generation_=saved.generation; legacy_test_input_=saved.legacy; context_=saved.context; network_frame_=saved.network;
     demo_sample_at_=saved.sample_at; demo_action_at_=saved.action_at; demo_speed_at_=saved.speed_at; demo_host_=saved.host;
     demo_generation_=saved.demo_generation; speed_calls_=saved.speed_calls; speed_now_=saved.speed_now; speed_last_=saved.speed_last;
+    camera_=saved.camera;
 }
 NativeInput::~NativeInput() { if(demo_out_)std::fclose(demo_out_); }
 void NativeInput::demo_record(const std::filesystem::path& path) {
@@ -91,6 +93,10 @@ void NativeInput::demo_play(const std::filesystem::path& path) {
             }
             demo_actions_.push_back(std::move(frame)); break;
         }
+        case Tag::camera: {
+            need(at,2); if(demo_actions_.empty())throw std::runtime_error("the input demo has a camera record before any actions");
+            std::memcpy(demo_actions_.back().camera.data(),&data[at],2); at+=2; break;
+        }
         case Tag::speed: { need(at,12); uint64_t call; uint32_t factor; std::memcpy(&call,&data[at],8); std::memcpy(&factor,&data[at+8],4); at+=12; demo_speeds_.emplace_back(call,factor); break; }
         default: throw std::runtime_error("the input demo has an unknown record");
         }
@@ -119,15 +125,86 @@ void NativeInput::demo_put(Tag tag,const void* data,size_t size) {
 
 void NativeInput::bindings(const Bindings& bindings) {
     if(auto error=validate_bindings(bindings))throw std::invalid_argument(*error);
-    auto game=bindings,service=bindings;
-    for(size_t i=0;i<bindings.size();++i) {
+    std::lock_guard lock(mutex_);
+    auto previous=keyboard_; keyboard_=bindings;
+    try { install_bindings(); } catch(...) { keyboard_=std::move(previous); throw; }
+}
+void NativeInput::install_bindings() {
+    const auto merged=merge_bindings(keyboard_,pad_.bindings);
+    auto game=merged,service=merged;
+    for(size_t i=0;i<merged.size();++i) {
         const bool is_service=i==size_t(Action::release_cursor) || i==size_t(Action::screenshot);
         (is_service ? game : service)[i].clear();
     }
-    std::lock_guard lock(mutex_);
     auto next_game=actions_,next_service=services_;
     next_game.replace(game); next_service.replace(service);
     actions_=std::move(next_game); services_=std::move(next_service); ++generation_;
+}
+void NativeInput::extent(uint32_t width,uint32_t height) {
+    if(!width || !height)return;
+    std::lock_guard lock(mutex_); width_=width; height_=height;
+}
+void NativeInput::pad_settings(const GamepadSettings& settings) {
+    if(auto error=validate_gamepad(settings))throw std::invalid_argument(*error);
+    std::lock_guard lock(mutex_);
+    auto previous=pad_; pad_=settings;
+    try { install_bindings(); } catch(...) { pad_=std::move(previous); throw; }
+    update_camera();
+}
+void NativeInput::update_camera() {
+    int x=0,y=0;
+    if(!state_.valid) {camera_={};return;}   // a released cursor: the camera stick does nothing
+    for(const auto& pad:sticks_) for(unsigned side=0;side<2;++side) {
+        if(pad_.camera_stick!=(side==0 ? StickRole::left : StickRole::right))continue;
+        const auto axes=camera_axes(pad[side][0],-pad[side][1],pad_.camera_dead_zone);   // SDL y points down, the camera's y up
+        x+=axes[0]; y+=axes[1];
+    }
+    camera_={int8_t(std::clamp(x,-127,127)),int8_t(std::clamp(y,-127,127))};
+}
+void NativeInput::host_pad_stick(unsigned pad,PadSide side,float x,float y) {
+    if(pad>=kPadSlots || !std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1)throw std::invalid_argument("invalid gamepad stick");
+    std::lock_guard lock(mutex_);
+    sticks_[pad][size_t(side)]={x,y};
+    update_camera();
+}
+void NativeInput::step_pointer(uint64_t now_ns) {
+    const double dt=step_ns_ && now_ns>step_ns_ ? std::min(.1,double(now_ns-step_ns_)/1e9) : 0.0;   // a hitch or a pause counts as a tenth of a second, never a jump
+    step_ns_=now_ns;
+    if(!state_.valid || dt==0)return;
+    float vx=0,vy=0;
+    for(const auto& pad:sticks_) for(unsigned side=0;side<2;++side) {
+        if(pad_.aim_stick!=(side==0 ? StickRole::left : StickRole::right))continue;
+        const auto v=stick_aim_velocity(pad[side][0],pad[side][1],pad_.aim);   // each pad has its own dead zone: an idle drifting pad adds nothing
+        vx+=v[0]; vy+=v[1];
+    }
+    if(vx==0 && vy==0)return;
+    state_.x=std::clamp(state_.x+float(2*vx*dt*height_/width_),-1.0f,1.0f);
+    state_.y=std::clamp(state_.y+float(2*vy*dt),-1.0f,1.0f);
+    note_aim();
+}
+void NativeInput::host_pad_gyro(float yaw,float pitch,uint64_t timestamp_ns) {
+    if(!std::isfinite(yaw) || !std::isfinite(pitch))throw std::invalid_argument("invalid gyro rate");
+    std::lock_guard lock(mutex_);
+    try { gyro_motion(yaw,pitch,timestamp_ns); } catch(const std::overflow_error&) { cancel_host(); throw; }
+}
+void NativeInput::gyro_motion(float yaw,float pitch,uint64_t timestamp_ns) {
+    if(pad_.gyro.mode==GyroMode::off || (pad_.gyro.mode==GyroMode::hold && !actions_.down(pad_.gyro_hold))) {gyro_ns_=0;return;}
+    const uint64_t gap=gyro_ns_ && timestamp_ns>gyro_ns_ ? timestamp_ns-gyro_ns_ : 0;
+    gyro_ns_=timestamp_ns;
+    if(!gap || gap>50000000ull)return;   // the first sample of a stream, or one after a pause, has no interval to integrate
+    const auto counts=gyro_aim_counts(yaw,pitch,float(gap)/1e9f,pad_.gyro);
+    if(counts[0]==0 && counts[1]==0)return;
+    if(state_.valid) {
+        state_.x=std::clamp(state_.x+2*counts[0]/width_,-1.0f,1.0f);
+        state_.y=std::clamp(state_.y+2*counts[1]/height_,-1.0f,1.0f);
+        note_aim();
+    }
+    actions_.motion(counts[0],counts[1],timestamp_ns);   // the same detectors as a mouse swing or shake
+}
+void NativeInput::pad_reset() {
+    std::lock_guard lock(mutex_);
+    sticks_={}; gyro_ns_=0; update_camera();
+    try { actions_.release_pad(); services_.release_pad(); } catch(const std::overflow_error&) { cancel_host(); throw; }
 }
 void NativeInput::context(InputContext context) {
     std::lock_guard lock(mutex_); actions_.context(context);
@@ -149,8 +226,12 @@ void NativeInput::host_motion(float x,float y,uint64_t timestamp_ns) {
     try { actions_.motion(x,y,timestamp_ns ? timestamp_ns : motion_time()); }
     catch(const std::overflow_error&) { cancel_host(); throw; }
 }
+void NativeInput::host_camera(std::array<int8_t,2> camera) {
+    if(camera[0]<-127 || camera[1]<-127) throw std::invalid_argument("camera axis out of range");
+    std::lock_guard lock(mutex_); camera_=camera;
+}
 void NativeInput::cancel_host() {
-    ++generation_;
+    ++generation_; camera_={}; sticks_={}; gyro_ns_=0;
     actions_.focus(false); services_.focus(false);
     state_.valid=false; state_.released|=state_.held; state_.held=state_.pressed=0;
 }
@@ -162,11 +243,20 @@ ActionFrame NativeInput::consume_actions() {
         if(demo_action_at_>=demo_actions_.size()) { result.generation=demo_generation_; return result; }
         const auto& frame=demo_actions_[demo_action_at_++];
         result.held=frame.held; result.pressed=frame.pressed; result.released=frame.released; result.generation=frame.generation; result.count=frame.events.size();
+        result.camera=frame.camera;
         std::copy(frame.events.begin(),frame.events.end(),result.events.begin());
         return result;
     }
     if(host_sequence_==sequence_)consumed_sequence_=sequence_;
-    auto result=actions_.consume(); result.generation=generation_;
+    auto result=actions_.consume(); result.generation=generation_; result.camera=camera_;
+    if(result.pressed&(uint64_t(1)<<unsigned(Action::recenter))) {   // applied here and kept out of the frame: demos and the network carry the resulting pointer, not the action
+        state_.x=state_.y=0; note_aim();
+    }
+    {
+        constexpr uint64_t recenter=uint64_t(1)<<unsigned(Action::recenter);
+        result.held&=~recenter; result.pressed&=~recenter; result.released&=~recenter;
+        result.count=size_t(std::remove_if(result.events.begin(),result.events.begin()+result.count,[](const ActionEvent& e){return e.action==Action::recenter;})-result.events.begin());
+    }
     if(demo_out_) {
         const uint64_t head[5]={result.held,result.pressed,result.released,result.generation,result.count};
         demo_put(Tag::actions,head,sizeof head);
@@ -174,6 +264,7 @@ ActionFrame NativeInput::consume_actions() {
             const auto& e=result.events[i]; const uint8_t event[11]={uint8_t(e.action),uint8_t(e.down),uint8_t(e.pulse),0,0,0,0,0,0,0,0}; const float direction[2]={e.direction_x,e.direction_y};
             demo_put(Tag::actions,event,sizeof event); demo_put(Tag::actions,direction,sizeof direction);
         }
+        if(result.camera[0] || result.camera[1])demo_put(Tag::camera,result.camera.data(),2);
     }
     return result;
 }
@@ -182,7 +273,8 @@ void NativeInput::focus(bool focused) {
     std::lock_guard lock(mutex_);
     state_.valid=focused;
     actions_.focus(focused); services_.focus(focused);
-    if(!focused)++generation_;
+    if(!focused) {++generation_;gyro_ns_=0;}   // the sticks keep their state (GamepadInput releases them when the window loses focus): they act again when focus is back
+    update_camera();
     if (!focused) { state_.released|=state_.held; state_.held=0; state_.pressed=0; }
 }
 bool NativeInput::move_raw(float dx,float dy,uint32_t width,uint32_t height) {
@@ -231,7 +323,8 @@ std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { aut
 void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; aim_exact=true; }
 bool input_aim_exact() { return aim_exact; }
 unsigned input_aim_channel() { return aim_channel; }
-InputSample NativeInput::consume() {
+InputSample NativeInput::consume() { return consume_at(motion_time()); }
+InputSample NativeInput::consume_at(uint64_t now_ns) {
     std::lock_guard lock(mutex_);
     if(network_frame_)return network_frame_->sample;
     if(replaying_) {
@@ -240,6 +333,7 @@ InputSample NativeInput::consume() {
         demo_host_=item.host; demo_generation_=item.generation;
         return item.sample;
     }
+    step_pointer(now_ns);
     auto result=state_;
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
@@ -277,8 +371,13 @@ uint64_t NativeInput::generation() {
 }
 bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint32_t width,uint32_t height) {
     if(!sequence || !std::isfinite(event.x) || !std::isfinite(event.y))return false;
-    if(event.kind!=HostEventKind::motion && (event.x!=0 || event.y!=0))return false;
+    const bool analog=event.kind==HostEventKind::motion || event.kind==HostEventKind::pad_stick || event.kind==HostEventKind::pad_gyro;
+    if(!analog && (event.x!=0 || event.y!=0))return false;
     switch(event.kind) {
+    case HostEventKind::pad_button: if(event.code>=32 || event.value<0 || event.value>1)return false; break;
+    case HostEventKind::pad_axis: if(event.code>=16 || event.value<0 || event.value>1)return false; break;
+    case HostEventKind::pad_stick: if(event.code>1 || event.value || std::abs(event.x)>1 || std::abs(event.y)>1)return false; break;
+    case HostEventKind::pad_gyro: if(event.code || event.value)return false; break;
     case HostEventKind::key: if(!event.code || event.code>=512 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::mouse: if(!event.code || event.code>=256 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::wheel: if((event.code!=1 && event.code!=2) || event.value<=0 || event.value>256)return false; break;
@@ -287,7 +386,7 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
     default: return false;
     }
     std::lock_guard lock(mutex_);
-    const bool release=(event.kind==HostEventKind::key || event.kind==HostEventKind::mouse) && event.value==0;
+    const bool release=(event.kind==HostEventKind::key || event.kind==HostEventKind::mouse || event.kind==HostEventKind::pad_button || event.kind==HostEventKind::pad_axis) && event.value==0;
     if(sequence<=sequence_ || (!state_.valid && event.kind!=HostEventKind::focus && !release))return false;
     try {
         switch(event.kind) {
@@ -300,6 +399,15 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
             const int steps=event.code==1 ? event.value : -event.value;
             actions_.wheel(steps); services_.wheel(steps); break;
         }
+        case HostEventKind::pad_button:
+        case HostEventKind::pad_axis: {
+            const PhysicalInput button{event.kind==HostEventKind::pad_button ? PhysicalKind::pad_button : PhysicalKind::pad_axis,uint16_t(event.code)};
+            actions_.button(button,event.value!=0); services_.button(button,event.value!=0); break;
+        }
+        case HostEventKind::pad_stick:
+            sticks_[0][event.code]={event.x,event.y}; update_camera(); break;
+        case HostEventKind::pad_gyro:
+            gyro_motion(event.x,event.y,motion_time()); break;
         case HostEventKind::motion:
             state_.x=std::clamp(state_.x+2*event.x/width,-1.f,1.f);
             state_.y=std::clamp(state_.y+2*event.y/height,-1.f,1.f);
@@ -307,6 +415,7 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
         case HostEventKind::focus:
             state_.valid=event.value!=0;
             actions_.focus(state_.valid); services_.focus(state_.valid);
+            update_camera();
             if(!state_.valid)cancel_host();
             break;
         }

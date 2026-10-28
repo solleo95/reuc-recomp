@@ -1,5 +1,6 @@
 #include "check.h"
 #include "settings_menu.h"
+#include "localization.h"
 #include "vulkan_renderer.h"
 #include <intrin.h>
 #include <SDL3/SDL.h>
@@ -20,7 +21,7 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     CHECK(context.TabBars.GetAliveCount()==1);
     auto* tabs=context.TabBars.GetByIndex(0);
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
-    CHECK(tabs->Tabs.Size==4);   // Main, Effects, DLSS 5, Controls
+    CHECK(tabs->Tabs.Size==5);   // Main, Effects, DLSS 5, Controls, Controllers
     CHECK((tabs->Flags&ImGuiTabBarFlags_FittingPolicyScroll)!=0);   // more tabs than the width (mods) scroll instead of shrinking
     CHECK(tabs->Tabs[3].Offset+tabs->Tabs[3].Width<=tabs->BarRect.GetWidth());
     // Open the first combo through ImGui input, then inspect the actual popup geometry.
@@ -111,6 +112,69 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         CHECK(entries.size()==1 && entries[0].input.kind==uc::PhysicalKind::key && entries[0].input.code==SDL_SCANCODE_F6 && !live.error());
         capture("camera-bindings");
     }
+    {   // The Controllers tab: the Gamepad button opens a window with the gamepad's own bindings; a pad press captures one
+        tabs->NextSelectedTabId=tabs->Tabs[4].ID; frame(); frame();   // the last tab scrolls into view in a narrow menu (like the mod tabs): it is selected directly here
+        CHECK(tabs->SelectedTabId==tabs->Tabs[4].ID);
+        capture("controllers");
+        window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);   // the tab bar and the selected tab are on the ID stack of the tab's widgets
+        const auto gamepad_button=window->GetID(std::string(uc::launcher::text("ru","gamepad")).c_str());   // the menu runs in Russian here
+        window->IDStack.pop_back(); window->IDStack.pop_back();
+        bool found=false;
+        for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
+            io.AddMousePosEvent(window->Pos.x+90,y); frame();
+            if(context.HoveredId==gamepad_button) {click(io.MousePos);found=true;break;}
+        }
+        CHECK(found);
+        frame(); frame();
+        ImGuiWindow* modal=nullptr;
+        for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("gamepad-modal")!=std::string_view::npos) modal=candidate;
+        CHECK(modal);
+        capture("gamepad-window");
+        ImGuiWindow* pad_bindings=nullptr;
+        for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("pad-body")!=std::string_view::npos) pad_bindings=candidate;
+        CHECK(pad_bindings);
+        pad_bindings->IDStack.push_back(pad_bindings->GetID(int(uc::Action::interact)));
+        const auto interact_button=pad_bindings->GetID("##bind");   // the binding is drawn as the controller's picture over this button
+        pad_bindings->IDStack.pop_back();
+        // The binding rows sit below the sticks and the gyro settings: scroll the window's body until the first row's button is under the pointer, then click it.
+        const auto click_binding=[&](ImGuiID id) {
+            io.AddMousePosEvent(pad_bindings->InnerClipRect.GetCenter().x,pad_bindings->InnerClipRect.GetCenter().y); frame();
+            for(int attempt=0;attempt<10;++attempt) {
+                for(float y=pad_bindings->InnerClipRect.Min.y+4;y<pad_bindings->InnerClipRect.Max.y;y+=3) {
+                    io.AddMousePosEvent(pad_bindings->InnerClipRect.Min.x+pad_bindings->InnerClipRect.GetWidth()*.6f,y); frame();
+                    if(context.HoveredId==id) {click(io.MousePos);return true;}
+                }
+                io.AddMouseWheelEvent(0,-3); frame(); frame();
+            }
+            return false;
+        };
+        found=click_binding(interact_button);
+        CHECK(found);
+        menu.pad_capture({uc::PhysicalKind::pad_button,3},true); frame(); menu.commit(); frame();
+        const auto& entries=live.options().gamepad.bindings[size_t(uc::Action::interact)];
+        CHECK(entries.size()==1 && entries[0].input==(uc::PhysicalInput{uc::PhysicalKind::pad_button,3}) && !live.error());
+        CHECK(live.bindings()[size_t(uc::Action::interact)]==uc::default_bindings()[size_t(uc::Action::interact)]);   // the keyboard table is untouched
+        capture("gamepad-bindings");
+        {   // gamepad bindings changed from outside (the harness, a script) are shown, not reverted by the tab's own stale editor
+            auto next=live.options(); next.gamepad.bindings[size_t(uc::Action::fire)].clear(); live.apply(next);
+            for(int i=0;i<3;++i) frame();
+            menu.commit(); frame(); menu.commit();
+            CHECK(live.options().gamepad.bindings[size_t(uc::Action::fire)].empty() && !live.error());
+        }
+        {   // the menu closing (Esc or Insert reach the host, not the window) cancels a capture waiting for a pad press: nothing is rebound afterwards
+            pad_bindings->IDStack.push_back(pad_bindings->GetID(int(uc::Action::interact)));
+            const auto again=pad_bindings->GetID("##bind");
+            pad_bindings->IDStack.pop_back();
+            found=click_binding(again);
+            CHECK(found);
+            menu.menu_closed();
+            menu.pad_capture({uc::PhysicalKind::pad_button,5},true); frame(); menu.commit(); frame(); menu.commit();
+            const auto& after=live.options().gamepad.bindings[size_t(uc::Action::interact)];
+            CHECK(after.size()==1 && after[0].input==(uc::PhysicalInput{uc::PhysicalKind::pad_button,3}));
+        }
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        tabs->NextSelectedTabId=tabs->Tabs[0].ID; for(int i=0;i<40;++i) frame();   // back to the first tab: the bar scrolls home for the clicks below
+    }
     {   // the Effects tab: pick 4x anisotropic filtering through the combo
         click({tabs->BarRect.Min.x+tabs->Tabs[1].Offset+tabs->Tabs[1].Width*.5f,tabs->BarRect.GetCenter().y});
         CHECK(tabs->SelectedTabId==tabs->Tabs[1].ID);
@@ -199,8 +263,7 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     std::puts("Settings menu passed: stable scale, tabs, dropdown selection, RCAS save, drag");
 }
 
-int main(int argc,char** argv) {
-    const bool gpu=argc==4 && std::string_view(argv[1])=="--gpu";
+int main(int argc,char** argv) {    const bool gpu=argc==4 && std::string_view(argv[1])=="--gpu";
     const auto folder=std::filesystem::temp_directory_path()/std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     std::filesystem::create_directories(folder);
     uc::ConfigDocument document; uc::Options options; options.upscaler=uc::UpscalerKind::dlss; options.dlss5_enabled=true;
@@ -208,7 +271,7 @@ int main(int argc,char** argv) {
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
     targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.mouse_sensitivity=[](uint32_t){}; targets.effects=[](const uc::GraphicsEffects&){};
-    targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){};
+    targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){}; targets.gamepad=[](const uc::GamepadSettings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;
     uc::SettingsMenu menu(live,"ru",[&]{return &features;},2560,1440);

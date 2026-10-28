@@ -164,7 +164,7 @@ int main() {
     original.input.generation=original.input.actions.generation=4;
     original.input.actions.events[0]={uc::Action::reload,true,0,0,false};original.input.actions.count=1;
     const auto wire=uc::encode_net_frame(original);
-    CHECK(wire.size()==119 && wire[0]=='U' && wire[1]=='C' && wire[2]=='F' && wire[3]==1);
+    CHECK(wire.size()==121 && wire[0]=='U' && wire[1]=='C' && wire[2]=='F' && wire[3]==2);
     CHECK(wire[4]==17 && wire[5]==0); // uint64 LE frame number follows the four-byte marker.
     auto decoded=uc::decode_net_frame(wire);
     CHECK(uc::same_net_input(original,decoded));
@@ -206,7 +206,19 @@ int main() {
         for(unsigned i=0;i<width;++i)changed[offset+i]=uint8_t(value>>(i*8));
         CHECK(rejects(changed));
     };
-    mutation(0,'X',1); mutation(3,2,1); // Magic and version.
+    mutation(0,'X',1); mutation(3,1,1); mutation(3,3,1); // Magic and version: frame version 2 carries the analog camera; version 1 is refused.
+    {
+        auto steered=original; steered.input.actions.camera={64,-127};
+        const auto steered_wire=uc::encode_net_frame(steered);
+        CHECK(steered_wire.size()==wire.size() && steered_wire[steered_wire.size()-2]==64 && steered_wire.back()==uint8_t(int8_t(-127)));   // the camera closes the frame
+        const auto round=uc::decode_net_frame(steered_wire);
+        CHECK((round.input.actions.camera==std::array<int8_t,2>{64,-127} && uc::same_net_input(steered,round)));
+        CHECK(!uc::same_net_input(original,steered));                                                  // a different camera is a different input
+        CHECK(uc::predict_net_frame(steered,18).input.actions.camera==steered.input.actions.camera);   // a held stick stays held while the remote input is predicted
+        auto invalid=steered; invalid.input.actions.camera[0]=-128;
+        bool failed=false;try {uc::encode_net_frame(invalid);}catch(const std::exception&){failed=true;}CHECK(failed);   // -128 is not on the scale
+        auto bytes=steered_wire; bytes[bytes.size()-2]=uint8_t(int8_t(-128)); CHECK(rejects(bytes));
+    }
     mutation(20,1000000001,8); // Work estimate bound.
     mutation(36,0x7FC00000,4); mutation(40,std::bit_cast<uint32_t>(1.01f),4);
     mutation(44,std::bit_cast<uint32_t>(2.01f),4);
@@ -225,7 +237,7 @@ int main() {
     actions.count=actions.events.size();
     for(size_t i=0;i<actions.count;++i)actions.events[i]={uc::Action(i%unsigned(uc::Action::count)),bool(i%2),-1,1,bool(i%3)};
     const auto maximum_wire=uc::encode_net_frame(maximum);
-    CHECK(maximum_wire.size()==108+256*11);
+    CHECK(maximum_wire.size()==108+256*11+2);
     const auto maximum_decoded=uc::decode_net_frame(maximum_wire);
     CHECK(uc::same_net_input(maximum,maximum_decoded));
     CHECK(maximum_decoded.number==UINT64_MAX && maximum_decoded.checksum==UINT64_MAX && maximum_decoded.qte_epoch==UINT64_MAX);

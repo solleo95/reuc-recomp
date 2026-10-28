@@ -338,6 +338,27 @@ class Game:
     def key(self, code, frames=2, wait=True):
         return self._input({"cmd": "input", "hold_frames": frames, "key": {"code": code, "down": True}}, wait)
 
+    # gamepad (host events through the same path as a real pad: sticks, buttons, axis presses, gyro) --------------------
+    def pad_button(self, code, frames=2, wait=True):
+        """A gamepad button (SDL_GamepadButton: south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, LB 9, RB 10, d-pad 11..14) held for `frames`."""
+        return self._input({"cmd": "input", "hold_frames": frames, "pad_button": {"button": code, "down": True}}, wait)
+
+    def pad_axis(self, code, frames=2, wait=True):
+        """A stick direction or trigger pulled past half (axis*2 + direction: left trigger 9, right trigger 11) held for `frames`."""
+        return self._input({"cmd": "input", "hold_frames": frames, "pad_axis": {"code": code, "down": True}}, wait)
+
+    def pad_stick(self, side, x, y, wait=True):
+        """A stick position ("left"/"right", -1..1, y down positive); it stays until set again."""
+        return self._input({"cmd": "input", "pad_stick": {"side": side, "x": x, "y": y}}, wait)
+
+    def pad_gyro(self, x, y, wait=True):
+        """A gyro rate in rad/s (x turning left, y tilting up); it stays until set again."""
+        return self._input({"cmd": "input", "pad_gyro": {"x": x, "y": y}}, wait)
+
+    def set_gamepad(self, **settings):
+        """Change gamepad settings live, as the in-game menu does (config.json "gamepad" keys: type, model, aim_stick, gyro, ...)."""
+        self.request({"cmd": "options", "gamepad": settings})
+
     def capture(self):
         return self.request({"cmd": "capture"})["path"]
 

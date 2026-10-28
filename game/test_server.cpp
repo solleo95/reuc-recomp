@@ -18,11 +18,13 @@ void TestServer::fail_request(uint64_t request, const std::string& message) {
 void TestServer::schedule(const TestRequest& r, uint64_t frame) {
     const auto& in = r.input;
     const uint64_t due = std::max(in.at_frame, frame + 1);
-    const bool holds = in.device == TestDevice::kpad || ((in.device == TestDevice::key || in.device == TestDevice::mouse) && in.down);
+    const bool held_input = in.device == TestDevice::key || in.device == TestDevice::mouse || in.device == TestDevice::pad_button || in.device == TestDevice::pad_axis;
+    const bool holds = in.device == TestDevice::kpad || (held_input && in.down);
     const auto insert = [&](Item item) {
         items_.insert(std::upper_bound(items_.begin(), items_.end(), item.due, [](uint64_t d, const Item& i) { return d < i.due; }), item);
     };
-    insert({due, r.id, in.device, in.device == TestDevice::kpad || in.down || in.device == TestDevice::wheel || in.device == TestDevice::motion, !holds, in});
+    insert({due, r.id, in.device, in.device == TestDevice::kpad || in.down || in.device == TestDevice::wheel || in.device == TestDevice::motion
+                                  || in.device == TestDevice::pad_stick || in.device == TestDevice::pad_gyro, !holds, in});
     if (holds) insert({due + in.hold_frames, r.id, in.device, false, true, in});
     open_requests_.insert(r.id);
 }
@@ -49,6 +51,18 @@ bool TestServer::apply(const Item& item, uint64_t) {
     }
     case TestDevice::wheel: return sink_.host(sequence, {HostEventKind::wheel, in.delta > 0 ? 1u : 2u, std::abs(in.delta)});
     case TestDevice::motion: return sink_.host(sequence, {HostEventKind::motion, 0, 0, in.x, in.y});
+    case TestDevice::pad_button:
+    case TestDevice::pad_axis: {
+        const bool button = item.device == TestDevice::pad_button;
+        if (!sink_.host(sequence, {button ? HostEventKind::pad_button : HostEventKind::pad_axis, in.code, item.press ? 1 : 0})) return false;
+        auto& held = button ? held_pad_buttons_ : held_pad_axes_;
+        if (item.press) held.insert(in.code); else held.erase(in.code);
+        return true;
+    }
+    case TestDevice::pad_stick:
+        if (!sink_.host(sequence, {HostEventKind::pad_stick, in.code, 0, in.x, in.y})) return false;
+        sticks_used_ = true; return true;
+    case TestDevice::pad_gyro: return sink_.host(sequence, {HostEventKind::pad_gyro, 0, 0, in.x, in.y});
     }
     return false;
 }
@@ -79,7 +93,10 @@ void TestServer::handle(const std::string& line, uint64_t frame, const std::stri
     case TestRequestKind::quit: pipes_.send(test_reply_ok(r.id), false); out.quit = true; break;
     case TestRequestKind::host_key: out.host_keys.push_back(r.input.code); pipes_.send(test_reply_ok(r.id), false); break;   // applied by the main loop this iteration
     case TestRequestKind::menu_click: out.menu_clicks.emplace_back(r.mx, r.my); pipes_.send(test_reply_ok(r.id), false); break;   // the main loop feeds it to the menu
-    case TestRequestKind::options: out.options.push_back(r.text); pipes_.send(test_reply_ok(r.id), false); break;
+    case TestRequestKind::options:
+        if (!r.text.empty()) out.options.push_back(r.text);
+        if (!r.gamepad.empty()) out.gamepad.push_back(r.gamepad);
+        pipes_.send(test_reply_ok(r.id), false); break;
     case TestRequestKind::input:
         if (open_requests_.size() >= kMaxOpenRequests) pipes_.send(test_reply_error(r.id, "too many queued commands"), false);
         else if (open_requests_.count(r.id)) pipes_.send(test_reply_error(r.id, "duplicate id"), false);
@@ -126,8 +143,14 @@ void TestServer::capture_failed(const std::string& message) {
 void TestServer::release_all() {
     for (auto code : held_keys_) sink_.host(next_sequence_++, {HostEventKind::key, code, 0});
     for (auto code : held_mouse_) sink_.host(next_sequence_++, {HostEventKind::mouse, code, 0});
+    for (auto code : held_pad_buttons_) sink_.host(next_sequence_++, {HostEventKind::pad_button, code, 0});
+    for (auto code : held_pad_axes_) sink_.host(next_sequence_++, {HostEventKind::pad_axis, code, 0});
+    if (sticks_used_) {   // the sticks back to rest and the gyro to still
+        sink_.host(next_sequence_++, {HostEventKind::pad_stick, 0, 0, 0, 0}); sink_.host(next_sequence_++, {HostEventKind::pad_stick, 1, 0, 0, 0});
+        sink_.host(next_sequence_++, {HostEventKind::pad_gyro, 0, 0, 0, 0});
+    }
     if (kpad_buttons_) sink_.kpad(next_sequence_++, aim_x_, aim_y_, 0);
-    held_keys_.clear(); held_mouse_.clear(); kpad_buttons_ = 0;
+    held_keys_.clear(); held_mouse_.clear(); held_pad_buttons_.clear(); held_pad_axes_.clear(); sticks_used_ = false; kpad_buttons_ = 0;
     items_.clear(); waiting_.clear(); open_requests_.clear();
 }
 }  // namespace uc

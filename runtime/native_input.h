@@ -1,6 +1,8 @@
 #pragma once
 #include "ppc_rt.h"
 #include "input_bindings.h"
+#include "gamepad_config.h"
+#include "gamepad_target.h"
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -19,22 +21,31 @@ struct InputSample {
     float stick_x=0,stick_y=0; // Derived from camera actions after raw input/demo/network sampling.
 };
 struct InputFrame { InputSample sample; ActionFrame actions; uint64_t generation=0; bool host=true; };
-enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus };
+// pad_button/pad_axis: code is the PhysicalInput code, value 0/1 (an axis press is a stick direction or trigger past half). pad_stick: code 0 left / 1 right
+// stick of pad 0, x/y -1..1 (y down positive). pad_gyro: x yaw, y pitch in rad/s (yaw positive turning left, pitch positive tilting up).
+enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus,pad_button,pad_axis,pad_stick,pad_gyro };
 struct HostEvent { HostEventKind kind; uint32_t code; int value; float x=0,y=0; };
 using InputProbe=void(*)(const ppc::Ctx&,const InputSample&);
 void input_hle_set_probe(InputProbe probe);
 using InputMap=InputSample(*)(const ppc::Ctx&,const InputSample&);
 void input_hle_set_map(InputMap map);
-class NativeInput {
+class NativeInput : public GamepadTarget {
 public:
     NativeInput();
     void focus(bool focused);
     void bindings(const Bindings&);
     void context(InputContext);
     void qte_window(bool);
-    void host_button(PhysicalInput,bool);
+    void host_button(PhysicalInput,bool) override;
     void host_wheel(int);
     void host_motion(float,float,uint64_t timestamp_ns=0);
+    void host_camera(std::array<int8_t,2>);   // the analog camera stick (-127..127, x right, y up); it stays until changed, released by focus loss (the next stick update replaces it)
+    void extent(uint32_t width,uint32_t height);   // the window in pixels: gyro counts and stick speed are in pixels
+    void pad_settings(const GamepadSettings&);     // roles, curves, gyro, gamepad bindings; throws std::invalid_argument for an invalid set
+    // The aim stick moves the pointer while deflected, the camera stick is the analog camera; the gyro moves the pointer and feeds the knife/shake detectors per GyroMode.
+    void host_pad_stick(unsigned pad,PadSide,float x,float y) override;
+    void host_pad_gyro(float yaw_rate,float pitch_rate,uint64_t timestamp_ns) override;
+    void pad_reset() override;   // the keyboard and mouse are untouched
     ActionFrame consume_actions();
     ActionFrame consume_service_actions();
     bool move_raw(float dx,float dy,uint32_t width,uint32_t height);
@@ -46,6 +57,7 @@ public:
     uint64_t last_consumed_sequence();
     void button(uint32_t mask,bool down);
     InputSample consume();
+    InputSample consume_at(uint64_t now_ns);   // consume() with the clock given (the stick moves the pointer by the time since the previous call): tests
     InputFrame capture_frame();
     void install_frame(const InputFrame&);
     struct AimPoint { int64_t ns=0; float x=0,y=0; };
@@ -62,12 +74,12 @@ public:
     uint32_t demo_speed(uint32_t live);   // clock speed factor the game pacing uses in a deterministic run: recorded when it changes, replayed at the same pacing call
     ~NativeInput();
 private:
-    enum class Tag:uint8_t { sample=1,actions,host,generation,speed };
+    enum class Tag:uint8_t { sample=1,actions,host,generation,speed,camera };   // camera: 2 int8 after an actions record, written only while not (0,0); older demos have none
     void demo_put(Tag,const void*,size_t);
     // Playing: the i-th consume() returns the i-th recorded sample and the i-th consume_actions() the i-th recorded action frame, whatever order the
     // guest's reads interleave in (a build that schedules guest threads differently still gets the same input at the same frame); using_host_input()
     // and generation() hold the values recorded after the sample just returned.
-    struct DemoActions { uint64_t held,pressed,released,generation; std::vector<ActionEvent> events; };
+    struct DemoActions { uint64_t held,pressed,released,generation; std::vector<ActionEvent> events; std::array<int8_t,2> camera{}; };
     struct DemoSample { InputSample sample; uint8_t host; uint64_t generation; };
     std::FILE* demo_out_=nullptr;
     std::vector<DemoSample> demo_samples_;
@@ -81,9 +93,19 @@ private:
     uint32_t speed_now_=1,speed_last_=0;
     bool replaying_=false;
     void cancel_host(); // Requires mutex_.
+    void install_bindings();   // Requires mutex_: the keyboard table and the gamepad table as the resolvers' one table.
+    void update_camera();      // Requires mutex_: the analog camera from the sticks with the camera role.
+    void step_pointer(uint64_t now_ns);   // Requires mutex_: the aim stick moves the pointer for the time since the previous step.
+    void gyro_motion(float yaw,float pitch,uint64_t timestamp_ns);   // Requires mutex_.
+    Bindings keyboard_=default_bindings();
+    GamepadSettings pad_;
+    std::array<std::array<std::array<float,2>,2>,kPadSlots> sticks_{};   // [pad][side][x,y]
+    uint64_t step_ns_=0,gyro_ns_=0;
+    uint32_t width_=1280,height_=720;
     std::mutex mutex_;
     BindingResolver actions_,services_;
     InputSample state_;
+    std::array<int8_t,2> camera_{};
     std::array<AimPoint,1024> trail_{};   // recent pointer positions, a ring ordered by time: aim_ago()
     size_t trail_head_=0;
     void note_aim();

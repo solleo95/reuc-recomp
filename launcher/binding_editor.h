@@ -1,9 +1,12 @@
 #pragma once
 #include "input_bindings.h"
 namespace uc {
+// Which table the editor edits: the keyboard and mouse table (the Controls tab) or the gamepad table (the Controllers tab). Each table takes only its own inputs,
+// has its own defaults, and the gamepad table has no modifier keys: a pressed button is a binding at once.
+enum class BindingTable:uint8_t { keyboard,gamepad };
 class BindingEditor {
 public:
-    explicit BindingEditor(Bindings bindings=default_bindings());
+    explicit BindingEditor(Bindings bindings=default_bindings(),BindingTable table=BindingTable::keyboard);
     const Bindings& bindings() const {return bindings_;}
     std::optional<Action> capturing() const {return capture_;}
     const std::optional<std::string>& error() const {return error_;}
@@ -18,6 +21,8 @@ public:
     void focus(bool);
 private:
     void capture(PhysicalInput);
+    std::optional<std::string> validate(const Bindings&) const;
+    BindingTable table_;
     Bindings bindings_;
     std::optional<Action> capture_;
     bool replace_=false;

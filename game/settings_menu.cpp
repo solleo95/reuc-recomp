@@ -27,7 +27,7 @@ bool compact_checkbox(const char* id,const char* label,bool& value,float unit) {
 }
 }
 SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height,RendererBackend backend)
-    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()) {}
+    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad) {}
 const char* SettingsMenu::tr(std::string_view key) const { return launcher::text(language_,key).data(); }
 void SettingsMenu::setup() {
     fonts_=ui::load_fonts(*ImGui::GetIO().Fonts);   // the previous menu context (if any) is gone: its atlas no longer reads the old bytes
@@ -59,13 +59,15 @@ void SettingsMenu::build() {
     ImGui::SetNextWindowBgAlpha(.94f);
     ImGui::PushFont(fonts_.sans,font_size);
     ImGui::Begin("##settings",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushFont(fonts_.serif,std::round(32*font_scale));ImGui::TextWrapped("%s",tr("menu_title"));ImGui::PopFont();
+    heading_size_=std::round(32*font_scale);
+    ImGui::PushFont(fonts_.serif,heading_size_);ImGui::TextWrapped("%s",tr("menu_title"));ImGui::PopFont();
     ImGui::Dummy({0,6*unit});
     if(ImGui::BeginTabBar("tabs",ImGuiTabBarFlags_FittingPolicyScroll)) {   // tabs that do not fit (mods add more) scroll with arrow buttons
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
         if(backend_ui_.dlss5 && current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("controllers"))) { controllers_tab(unit); ImGui::EndTabItem(); }
         if(mod_menu_) {   // mods: one manager tab; each mod's settings open in a window from there
             if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
         }
@@ -310,6 +312,15 @@ void SettingsMenu::dlss5_tab(float unit) {
     ImGui::EndChild();
     pending_=options;
 }
+void SettingsMenu::controllers_tab(float unit) {
+    auto options=current();
+    // Bindings changed from outside (a script, the test server) are shown: the editor follows the saved table when it is not the editor's own pending change.
+    if(!pad_editor_.capturing() && options.gamepad.bindings!=pad_editor_.bindings() && options.gamepad.bindings!=pad_seen_) pad_editor_=BindingEditor(options.gamepad.bindings,BindingTable::gamepad);
+    pad_seen_=options.gamepad.bindings;
+    pad_panel_.heading=fonts_.serif; pad_panel_.heading_size=heading_size_; pad_panel_.control_width=.75f;   // the menu's own title font and control width
+    const PadStatus status=pad_status_ ? pad_status_() : PadStatus{};
+    if(gamepad_tab(pad_panel_,options.gamepad,pad_editor_,status,unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+}
 void SettingsMenu::controls_tab(float unit) {
     auto options=current();
     ImGui::Dummy({0,8*unit});
@@ -353,7 +364,7 @@ void SettingsMenu::controls_tab(float unit) {
     if(editor_.error()) ImGui::TextWrapped("%s: %s",tr("rejected"),editor_.error()->c_str());
     ImGui::BeginDisabled(editor_.capturing().has_value());
     if(ImGui::BeginChild("bindings",{0,0})) {
-        for(size_t i=0;i<size_t(Action::count);++i) {
+        for(size_t i=0;i<size_t(Action::recenter);++i) {   // recenter is a gamepad action: the controllers tab lists it, this page is keyboard and mouse only
             const auto action=Action(i); ImGui::PushID(int(i));
             ImGui::TextWrapped("%s",tr(action_names[i]));
             const auto& entries=editor_.bindings()[i];

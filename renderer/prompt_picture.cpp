@@ -1,5 +1,6 @@
 #include "prompt_picture.h"
 #include "prompt_icons.h"
+#include "pad_glyphs.h"
 #include <intrin.h>
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -13,7 +14,8 @@
 #include <windows.h>
 namespace uc {
 namespace {
-struct Token {std::string label;std::optional<PhysicalInput> input;bool cap=false;bool both_directions=false;};
+struct Token {std::string label;std::optional<PhysicalInput> input;bool cap=false;bool both_directions=false;bool gyro=false;};   // gyro: the gamepad's motion icon (the gesture of a shake or swing)
+bool pad_token(const Token& token) {return token.input && (token.input->kind==PhysicalKind::pad_button || token.input->kind==PhysicalKind::pad_axis);}
 std::string physical_name(PhysicalInput input) {
     if(input.kind==PhysicalKind::mouse) {
         if(input.code==1)return "ЛКМ";
@@ -46,9 +48,10 @@ std::vector<std::vector<Token>> tokens(const PromptDescription& description,bool
                 row.push_back({icon ? "" : physical_name(binding.input),binding.input,true});
             }
         }
-        if(alternative.gesture) {   // a mouse picture stands in for the Wii Remote of the shake/swing prompts and moves with its pane
+        if(alternative.gesture) {   // a mouse picture (a gamepad with turning arrows for a gamepad) stands in for the Wii Remote of the shake/swing prompts and moves with its pane
             if(!row.empty() && row.back().label!="/")row.push_back({"+",{},false});
-            row.push_back({"",PhysicalInput{PhysicalKind::mouse,0},true});
+            if(description.device.gamepad)row.push_back({"",{},true,false,true});
+            else row.push_back({"",PhysicalInput{PhysicalKind::mouse,0},true});
         }
     }
     // "Control Pad up/down" bound to wheel up and wheel down reads as one two-way wheel icon.
@@ -71,9 +74,12 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,RenderExtent extent,c
     auto* font=ImGui::GetFont();
     const float density=float(extent.height)/720;
     float font_size=height*.6f;   // icons fill the pane of the original picture; the fit loop below shrinks wide combinations
-    auto has_icon=[](const Token& token){return token.cap && (!token.input || token.input->kind!=PhysicalKind::key);};
-    auto mouse=[](const Token& token){return token.input && token.input->kind!=PhysicalKind::key;};
+    const PadFamily family=prompt.description.device.family;
+    auto has_icon=[](const Token& token){return token.cap && !token.gyro && !pad_token(token) && (!token.input || token.input->kind!=PhysicalKind::key);};
+    auto mouse=[](const Token& token){return token.input && token.input->kind!=PhysicalKind::key && !pad_token(token);};
     auto token_width=[&](const Token& token) {
+        if(pad_token(token))return pad_glyph_aspect(*token.input)*font_size*1.2f;   // gamepad inputs are drawn in the look of the controller, not as keys
+        if(token.gyro)return gyro_icon_aspect()*font_size*1.2f;
         const float label=font->CalcTextSizeA(font_size,FLT_MAX,0,token.label.c_str()).x;
         if(mouse(token))return label+font_size*.85f;
         return label+(token.cap ? font_size*.8f : 0)+(has_icon(token) ? font_size : 0);
@@ -86,7 +92,9 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,RenderExtent extent,c
             for(const auto& token:row) {
                 const float w=token_width(token),h=font_size*1.55f;
                 if(!prompt.compact && x>pad && x+w>width-pad) {x=pad;y+=h;}
-                if(draw) {
+                if(draw && pad_token(token)) draw_pad_glyph(list,{x,y+font_size*.2f},{w,font_size*1.2f},*token.input,family);
+                else if(draw && token.gyro) draw_gyro_icon(list,{x,y+font_size*.2f},{w,font_size*1.2f},family);
+                else if(draw) {
                     if(token.cap && !mouse(token))draw_keycap(list,{x,y},{w,h},style);
                     float text_x=x+(token.cap && !mouse(token) ? font_size*.4f : 0);
                     if(mouse(token)) {

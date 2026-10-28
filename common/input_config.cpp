@@ -32,11 +32,21 @@ PhysicalInput physical(const Json& value) {
     if(name=="key")type=PhysicalKind::key;
     else if(name=="mouse")type=PhysicalKind::mouse;
     else if(name=="wheel")type=PhysicalKind::wheel;
+    else if(name=="pad_button")type=PhysicalKind::pad_button;
+    else if(name=="pad_axis")type=PhysicalKind::pad_axis;
     else invalid("unknown physical kind "+name);
     return {type,uint16_t(code)};
 }
 Json physical_json(PhysicalInput input) {
-    return {{"kind",input.kind==PhysicalKind::key ? "key" : input.kind==PhysicalKind::mouse ? "mouse" : "wheel"},{"code",input.code}};
+    const char* name="wheel";
+    switch(input.kind) {
+    case PhysicalKind::key: name="key"; break;
+    case PhysicalKind::mouse: name="mouse"; break;
+    case PhysicalKind::pad_button: name="pad_button"; break;
+    case PhysicalKind::pad_axis: name="pad_axis"; break;
+    case PhysicalKind::wheel: break;
+    }
+    return {{"kind",name},{"code",input.code}};
 }
 std::optional<std::string> read_file(const std::filesystem::path& path) {
     std::error_code error;
@@ -63,31 +73,14 @@ struct Handle {
     throw std::runtime_error(std::string("config: ")+message+": "+std::system_category().message(int(GetLastError())));
 }
 }
-ConfigDocument parse_config(std::string_view bytes) {
-    if(bytes.size()>kMaxBytes)invalid("file exceeds 1 MiB");
-    ConfigDocument result;
-    std::vector<std::set<std::string>> keys;
+Bindings bindings_from_json(const nlohmann::ordered_json& bindings,Bindings result) {
     try {
-        result.properties=Json::parse(bytes,[&](int depth,Json::parse_event_t event,Json& value) {
-            if(depth>32)invalid("nesting exceeds 32");
-            if(event==Json::parse_event_t::object_start)keys.emplace_back();
-            else if(event==Json::parse_event_t::object_end)keys.pop_back();
-            else if(event==Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)invalid("duplicate property "+value.get<std::string>());
-            return true;
-        });
-        if(!result.properties.is_object())invalid("root must be an object");
-        if(!result.properties.contains("input"))return result;
-        const auto& input=result.properties["input"];
-        fields(input,{"version","bindings"});
-        if(!input.contains("version") || !input["version"].is_number_unsigned() || input["version"]!=1)invalid("unsupported input version");
-        if(!input.contains("bindings"))return result;
-        const auto& bindings=input["bindings"];
         if(!bindings.is_object())invalid("bindings must be an object");
         for(auto i=bindings.begin();i!=bindings.end();++i) {
             auto name=std::find(action_names.begin(),action_names.end(),i.key());
             if(name==action_names.end())invalid("unknown action "+i.key());
             if(!i->is_array() || i->size()>64)invalid("action bindings must be an array of at most 64 entries");
-            auto& output=result.input[size_t(name-action_names.begin())]; output.clear();
+            auto& output=result[size_t(name-action_names.begin())]; output.clear();
             for(const auto& value:*i) {
                 if(!value.is_object())invalid("binding must be an object");
                 Binding binding;
@@ -107,6 +100,49 @@ ConfigDocument parse_config(std::string_view bytes) {
             }
         }
     } catch(const Json::exception& error) {invalid(error.what());}
+    return result;
+}
+nlohmann::ordered_json bindings_to_json(const Bindings& bindings) {
+    auto result=Json::object();
+    for(size_t i=0;i<bindings.size();++i) {
+        auto entries=Json::array();
+        for(const auto& binding:bindings[i]) {
+            Json value;
+            if(binding.kind==BindingKind::physical) {
+                value=physical_json(binding.input);
+                if(!binding.modifiers.empty()) {
+                    value["modifiers"]=Json::array();
+                    for(auto modifier:binding.modifiers)value["modifiers"].push_back(physical_json(modifier));
+                }
+            } else value={{"kind",binding.kind==BindingKind::interact_fire ? "interact_fire" : binding.kind==BindingKind::interact_motion ? "interact_motion" : "qte_motion"}};
+            entries.push_back(std::move(value));
+        }
+        result[std::string(action_names[i])]=std::move(entries);
+    }
+    return result;
+}
+Json physical_input_json(PhysicalInput input) { return physical_json(input); }
+PhysicalInput physical_input_from_json(const Json& value) { fields(value,{"kind","code"}); return physical(value); }
+ConfigDocument parse_config(std::string_view bytes) {
+    if(bytes.size()>kMaxBytes)invalid("file exceeds 1 MiB");
+    ConfigDocument result;
+    std::vector<std::set<std::string>> keys;
+    try {
+        result.properties=Json::parse(bytes,[&](int depth,Json::parse_event_t event,Json& value) {
+            if(depth>32)invalid("nesting exceeds 32");
+            if(event==Json::parse_event_t::object_start)keys.emplace_back();
+            else if(event==Json::parse_event_t::object_end)keys.pop_back();
+            else if(event==Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)invalid("duplicate property "+value.get<std::string>());
+            return true;
+        });
+        if(!result.properties.is_object())invalid("root must be an object");
+        if(!result.properties.contains("input"))return result;
+        const auto& input=result.properties["input"];
+        fields(input,{"version","bindings"});
+        if(!input.contains("version") || !input["version"].is_number_unsigned() || input["version"]!=1)invalid("unsupported input version");
+        if(!input.contains("bindings"))return result;
+        result.input=bindings_from_json(input["bindings"],result.input);
+    } catch(const Json::exception& error) {invalid(error.what());}
     if(auto error=validate_bindings(result.input))invalid(*error);
     return result;
 }
@@ -119,23 +155,7 @@ std::string serialize_config(const ConfigDocument& document) {
     if(auto error=validate_bindings(document.input))invalid(*error);
     if(!document.properties.is_object())invalid("root must be an object");
     auto properties=document.properties;
-    auto bindings=Json::object();
-    for(size_t i=0;i<document.input.size();++i) {
-        auto entries=Json::array();
-        for(const auto& binding:document.input[i]) {
-            Json value;
-            if(binding.kind==BindingKind::physical) {
-                value=physical_json(binding.input);
-                if(!binding.modifiers.empty()) {
-                    value["modifiers"]=Json::array();
-                    for(auto modifier:binding.modifiers)value["modifiers"].push_back(physical_json(modifier));
-                }
-            } else value={{"kind",binding.kind==BindingKind::interact_fire ? "interact_fire" : binding.kind==BindingKind::interact_motion ? "interact_motion" : "qte_motion"}};
-            entries.push_back(std::move(value));
-        }
-        bindings[std::string(action_names[i])]=std::move(entries);
-    }
-    properties["input"]={{"version",1},{"bindings",std::move(bindings)}};
+    properties["input"]={{"version",1},{"bindings",bindings_to_json(document.input)}};
     auto bytes=properties.dump(2)+"\n";
     if(bytes.size()>kMaxBytes)invalid("serialized file exceeds 1 MiB");
     return bytes;

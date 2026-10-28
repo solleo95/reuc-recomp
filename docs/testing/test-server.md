@@ -22,7 +22,7 @@ Every command carries an integer `id` (≥ 1, unique among open commands) and ge
 
 | `cmd` | Fields | Reply fields |
 |---|---|---|
-| `input` | `at_frame` (default: next frame), `hold_frames` 1..600 (default 1, kpad/key/mouse only), exactly one of `kpad:{x,y,buttons}` (x,y in [-1,1]; buttons ⊆ 0x1C10 = A 0x800, B 0x400, plus 0x1000, minus 0x10), `key:{code 1..511,down}`, `mouse:{button 1..255,down}`, `wheel:{delta ±256}`, `motion:{x,y}` | `consumed_frame` once KPADRead consumed it |
+| `input` | `at_frame` (default: next frame), `hold_frames` 1..600 (default 1, kpad/key/mouse/pad_button/pad_axis only), exactly one of `kpad:{x,y,buttons}` (x,y in [-1,1]; buttons ⊆ 0x1C10 = A 0x800, B 0x400, plus 0x1000, minus 0x10), `key:{code 1..511,down}`, `mouse:{button 1..255,down}`, `wheel:{delta ±256}`, `motion:{x,y}`, or the gamepad: `pad_button:{button 0..31,down}` (SDL gamepad button: south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, left shoulder 9, right shoulder 10, d-pad 11..14), `pad_axis:{code 0..15,down}` (a stick direction or trigger pulled past half, code = axis*2 + direction: left trigger 9, right trigger 11), `pad_stick:{side:"left"\|"right",x,y}` (-1..1, y down positive, stays until set again), `pad_gyro:{x,y}` (rad/s, x turning left, y tilting up, ±50, stays until set again) | `consumed_frame` once KPADRead consumed it |
 | `capture` | — | `path` of the PNG (after the GPU slot completes) |
 | `state` | — | `state` = the latest `frame` event |
 | `speed` | `factor` 1..32 | `factor` |
@@ -30,10 +30,12 @@ Every command carries an integer `id` (≥ 1, unique among open commands) and ge
 | `peek` | `addr` (MEM1 `0x80000000`+24 MB or MEM2 `0x90000000`+64 MB), `size` 1..262144 | `hex` (uppercase) — read-only diagnostics / reverse engineering |
 | `host_key` | `code`: SDL scancode 1..511 — the port's own keys: 73 Insert (settings menu), 19 P (pause), 41 Escape (closes the menu) | — (applied in the main loop's next iteration; frame fields `menu_open`, `paused`) |
 | `menu_click` | `x`, `y`: window pixels (0..16384) | — (a left click on the in-game menu: the pointer moves there, then presses and releases; ignored while the menu is closed) |
-| `options` | `graphics`: object of `config.json` graphics keys (`render_scale`, `upscaler`, `upscale_mode`, `frame_generation`, `fps_limit`, `bloom`, `prompt_style`, ...) | — merged over the saved settings, applied live and saved, as the in-game menu does; frame fields `upscaler`, `frame_generation` show what the renderer runs. The harness passes `--config <run dir>/config.json` (a copy of the dist config), so saves never touch it |
+| `options` | `graphics`: object of `config.json` graphics keys (`render_scale`, `upscaler`, `upscale_mode`, `frame_generation`, `fps_limit`, `bloom`, `prompt_style`, ...); `gamepad`: object of `config.json` gamepad keys (`type`, `model`, `aim_stick`, `camera_stick`, `gyro`, ...; a nested object such as `gyro` replaces the saved one), either or both | — merged over the saved settings, applied live and saved, as the in-game menu does; frame fields `upscaler`, `frame_generation` show what the renderer runs. The harness passes `--config <run dir>/config.json` (a copy of the dist config), so saves never touch it |
 | `quit` | — | process exits normally after the reply |
 
-A `kpad` press holds its buttons for `hold_frames` and then releases them keeping the aim; key/mouse `down:true` releases after `hold_frames`. A later kpad command owns the pad state, an earlier command's release is then skipped. When the client disconnects the game releases every held input and keeps running until `--seconds`.
+Real gamepads are not read in harness runs (the game never opens SDL gamepads there); the `pad_*` inputs enter through the same host-event path as a real pad's events, so sticks, buttons, triggers and the gyro go through the whole pipeline: `python -m uctest run gamepad` checks the analog camera, stick aim, L3 recenter, the buttons and a gyro swing; `python -m uctest run gamepad_prompts --model xbox|playstation|nintendo|generic` captures the menus' button prompts in that controller's look. The `frame` event also carries `aim` (the pointer, -1..1 of the window, y down).
+
+A `kpad` press holds its buttons for `hold_frames` and then releases them keeping the aim; key/mouse/pad_button/pad_axis `down:true` releases after `hold_frames`. A later kpad command owns the pad state, an earlier command's release is then skipped. When the client disconnects the game releases every held input and keeps running until `--seconds`.
 
 ## Events (no `id`)
 

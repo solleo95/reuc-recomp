@@ -92,6 +92,17 @@ int main() {
     CHECK(uc::game_input_buttons(uc::InputContext::menu,frame).released==0x410);
     frame.held=bit(uc::Action::confirm); frame.released|=bit(uc::Action::interact);
     CHECK(!(uc::game_input_buttons(uc::InputContext::menu,frame).released&uc::kButtonA));
+    // Camera: the keys give the digital ±1 as before; an analog camera (int8, -127..127) adds to it, clamped to the unit circle's axis range.
+    frame={}; frame.held=bit(uc::Action::camera_left);
+    sample=uc::game_input_buttons(uc::InputContext::gameplay,frame); CHECK(sample.stick_x==-1 && sample.stick_y==0);
+    frame={}; frame.camera={64,-127};
+    sample=uc::game_input_buttons(uc::InputContext::gameplay,frame); CHECK(std::abs(sample.stick_x-64/127.f)<1e-6f && sample.stick_y==-1.f);
+    frame.held=bit(uc::Action::camera_right); frame.camera={-127,0};
+    sample=uc::game_input_buttons(uc::InputContext::gameplay,frame); CHECK(sample.stick_x==0);   // opposite inputs cancel
+    frame.camera={127,0};
+    sample=uc::game_input_buttons(uc::InputContext::gameplay,frame); CHECK(sample.stick_x==1.f);   // never beyond 1
+    frame={}; frame.camera={100,100};
+    sample=uc::game_input_buttons(uc::InputContext::menu,frame); CHECK(sample.stick_x==0 && sample.stick_y==0);   // only gameplay reads the camera
     Fix f; auto& c=f.c; const uint32_t binding=0x8044A808;
     ppc::wr32(c,binding+4+7*4,uc::kButtonB); ppc::wr8(c,binding+0x54+7,0);
     uc::NativeInput input; uc::game_input_init(&input);
