@@ -294,8 +294,12 @@ Status run_update_helper(const fs::path& operation,HANDLE parent,HANDLE ready,bo
         if(!GetProcessId(parent) || GetProcessId(parent)==GetCurrentProcessId())
             return unchanged_failure(Error{ErrorCode::startup,"Invalid launcher process handle"});
         if(!ready || !SetEvent(ready)) return unchanged_failure(file_error("Notify launcher of readiness"));
-        if(WaitForSingleObject(parent,static_cast<DWORD>(timeout.count()))!=WAIT_OBJECT_0)
-            return unchanged_failure(Error{ErrorCode::busy,"Launcher did not close; installation unchanged"});
+        const auto waited_from=std::chrono::steady_clock::now();
+        if(WaitForSingleObject(parent,static_cast<DWORD>(timeout.count()))!=WAIT_OBJECT_0) {
+            const auto seconds=std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now()-waited_from).count();
+            return unchanged_failure(Error{ErrorCode::busy,"Launcher (process "+std::to_string(GetProcessId(parent))+") did not close within "
+                +std::to_string(seconds)+" s; installation unchanged"});
+        }
     }
     if(auto ec=guard.wait_until_unused(timeout)) {
         if(!recover) defer_cleanup(operation);

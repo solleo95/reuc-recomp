@@ -168,6 +168,7 @@ bool same_options(const uc::Options& a,const uc::Options& b) {
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
+bool update_handoff=false;   // set when the update helper waits for this process to end (see wWinMain)
 int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
     for(int i=1;i<argc;++i) {
@@ -296,7 +297,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     while(!done) {
         const auto frame_start=SDL_GetTicksNS();
         updates.poll();
-        if(updates.close_requested()) {updates.handoff();break;}
+        if(updates.close_requested()) {updates.handoff();update_handoff=true;break;}
         std::erase_if(retiring_nat,[](const auto& item){return item->finished();});
         if(background_host) {
             if(!uc::game_running(process))break;
@@ -587,7 +588,12 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         } else if(page==1) {
             const float column_gap=88*unit;
             const float column=(ImGui::GetContentRegionAvail().x-column_gap)/2;
-            ImGui::BeginChild("display",{column,0},ImGuiChildFlags_None);
+            // The same scrollbar as in the right column; the negative indent keeps the controls flush with the page and leaves the same gap before the bar.
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,0});
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::BeginChild("display",{column,0},ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::Indent(-12*unit);
             ImGui::PushItemWidth(-1);ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);
             const char* renderer_names[]={"Vulkan","DirectX 11","DirectX 12"};
             const bool renderer_open=combo("##renderer",renderer_names[int(options.renderer_backend)]);track("renderer");
@@ -636,7 +642,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 for(const uint32_t value:limits) {if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value))options.fps_limit=value;track("fps"+std::to_string(value));}
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::PopItemWidth();ImGui::EndChild();
+            ImGui::PopFont();ImGui::PopItemWidth();ImGui::Unindent(-12*unit);ImGui::EndChild();
             ImGui::SameLine(0,column_gap);
             ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,0});
@@ -1306,5 +1312,8 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         result=2;
     }
     std::fprintf(stderr,"[session] launcher exit=%d\n",result);
-    LocalFree(arguments);return result;
+    LocalFree(arguments);
+    // The helper waits for this process to end for 30 s; skip the CRT and DLL teardown (graphics drivers can be slow there) once the log is closed.
+    if(update_handoff) {diagnostics.reset();TerminateProcess(GetCurrentProcess(),UINT(result));}
+    return result;
 }
