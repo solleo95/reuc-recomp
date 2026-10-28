@@ -144,6 +144,7 @@ int main() {
     CHECK(other_format!=changed_palette);
     for (uint32_t i=0;i<30;++i) cache.snapshot(0x80003000+i*32,{1,1,gx::TextureFormat::i8},bytes(data));
     CHECK(cache.resident_bytes()<=128 && first->levels[0].rgba[0]==17);
+    CHECK(cache.evictions()>=20);   // 30 inserts into a cache that holds a handful
     auto previous_decodes=cache.decodes();
     cache.snapshot(0x80001000,{1,1,gx::TextureFormat::i8},bytes(data));
     CHECK(cache.decodes()==previous_decodes+1);
@@ -170,6 +171,14 @@ int main() {
         std::vector<std::shared_ptr<const gx::TexturePixels>> burst;
         for (uint32_t i=0;i<300;++i) burst.push_back(async_cache.snapshot(0x80300000+i*32,{1,1,gx::TextureFormat::i8},indices));
         for (auto& texture : burst) { texture->wait(); CHECK(texture->levels[0].rgba[0]==255); }
+    }
+    // The default budget keeps a scene's worth of textures (the old 64 MiB one evicted a heavy scene's working set every frame: 110 decodes per frame, 10 FPS).
+    {
+        gx::TextureCache scene;
+        std::vector<std::byte> big_texture(5592576, std::byte(3));
+        const gx::TextureDesc big{1024,1024,gx::TextureFormat::rgba8,11};
+        for (int pass=0;pass<2;++pass) for (uint32_t i=0;i<20;++i) scene.snapshot(0x80400000+i*0x600000,big,big_texture);
+        CHECK(scene.decodes()==20 && scene.evictions()==0);
     }
     gx::TextureCache many;
     std::vector<std::shared_ptr<const gx::TexturePixels>> expected;

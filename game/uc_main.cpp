@@ -539,7 +539,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     auto last_profile_time=start;
     uint64_t last_profile_retrace=0;
     uint64_t last_retraces = 0;
-    uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,render_ns=0;
+    uint64_t last_profile_presents=0,last_profile_textures=0,last_profile_decodes=0,last_profile_evictions=0,render_ns=0;
     uint64_t loop_wait_ns=0,profile_loops=0,profile_retries=0,last_profile_draws=0,last_profile_copies=0,last_audio_frames=0;
     int stalled = 0, boot_seconds = 0, result = 0;
     bool close = false;
@@ -1043,8 +1043,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 std::fprintf(stderr,"[fps] window_ms %.3f retraces %llu:%llu presents %llu fps %.3f\n",profile_ms,(unsigned long long)last_profile_retrace,(unsigned long long)profile_retrace,(unsigned long long)(presents-last_profile_presents),1000.0*(presents-last_profile_presents)/profile_ms);
                 last_profile_time=now; last_profile_retrace=profile_retrace;
                 std::fprintf(stderr,"[gpu] passes: upscale %.2f ms, smaa %.2f ms, occlusion %.2f ms, shadow %.2f ms, motion blur %.2f ms (%llu runs), rt_as (last packet) %.2f ms, rt_shadows %.2f ms, bloom %.2f ms\n",renderer.pass_ms(uc::GpuPass::upscale),renderer.pass_ms(uc::GpuPass::smaa),renderer.pass_ms(uc::GpuPass::occlusion),renderer.pass_ms(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::motion_blur),(unsigned long long)renderer.pass_runs(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::rt_as),renderer.pass_ms(uc::GpuPass::rt_shadows),renderer.pass_ms(uc::GpuPass::bloom));
-                std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws());
-                last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; render_ns=0;
+                std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu cache evictions %llu cache MB %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws(),(unsigned long long)(uc::gx_stats().texture_evictions-last_profile_evictions),(unsigned long long)(uc::gx_stats().texture_resident>>20));
+                last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; last_profile_evictions=uc::gx_stats().texture_evictions; render_ns=0;
                 if(!present_intervals.empty()) {
                     std::sort(present_intervals.begin(),present_intervals.end());
                     double sum=0; for(double v:present_intervals) sum+=v;

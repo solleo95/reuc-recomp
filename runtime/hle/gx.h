@@ -3,7 +3,7 @@
 #include "sched.h"
 #include <string>
 namespace uc {
-struct GxStats { uint64_t draws = 0, vertices = 0, submitted = 0, completed = 0, outside_bytes = 0, copies = 0, texture_decodes = 0, geometry_hits = 0, geometry_misses = 0, prompt_annotations=0,prompt_present=0,prompt_fallback=0; };
+struct GxStats { uint64_t draws = 0, vertices = 0, submitted = 0, completed = 0, outside_bytes = 0, copies = 0, texture_decodes = 0, geometry_hits = 0, geometry_misses = 0, prompt_annotations=0,prompt_present=0,prompt_fallback=0, texture_evictions=0, texture_resident=0; };
 void gx_hle_init(Sched& sched, uint8_t* memory, gx::Packets* packets, bool profile=false);
 void gx_enable_async_textures(); // decode textures on a worker pool; the renderer waits on TexturePixels::wait() (the game; unit tests read pixels directly)
 void gx_set_texture_budget(size_t bytes);   // host bytes the texture cache keeps; a scene's upscaled replacements do not fit the 64 MiB default

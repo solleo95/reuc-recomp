@@ -235,7 +235,7 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
             for (auto it = indexed.first; it != indexed.second; ++it) {
                 if (it->second == last) { by_address_.erase(it); break; }
             }
-            resident_ -= entries_.back().bytes; entries_.pop_back();
+            resident_ -= entries_.back().bytes; entries_.pop_back(); ++evictions_;
         }
         entries_.push_front({address, desc, palette.format, {pixels.begin(), pixels.end()}, {palette.bytes.begin(), palette.bytes.end()}, result, bytes, watch_stamp(), 0});
         try {

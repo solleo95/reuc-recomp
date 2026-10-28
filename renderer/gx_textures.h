@@ -59,7 +59,7 @@ TexturePixels decode_texture(const TextureDesc& desc, std::span<const std::byte>
 size_t encoded_texture_size(const TextureDesc& desc);
 class TextureCache {
 public:
-    explicit TextureCache(size_t budget = 64 * 1024 * 1024);
+    explicit TextureCache(size_t budget = size_t(1) << 30);
     TextureCache(const TextureCache&) = delete;
     TextureCache& operator=(const TextureCache&) = delete;
     TextureCache(TextureCache&&) = delete;
@@ -70,6 +70,7 @@ public:
     void set_budget(size_t bytes) { budget_ = bytes; }   // any thread (mods can switch texture packs on while the game runs)
     size_t resident_bytes() const { return resident_; }
     uint64_t decodes() const { return decodes_; }
+    uint64_t evictions() const { return evictions_; }   // entries dropped to fit the budget; never reset
     void clear() { by_address_.clear(); entries_.clear(); resident_ = 0; decodes_ = 0; }
 private:
     struct Entry {
@@ -87,7 +88,7 @@ private:
     std::atomic<size_t> budget_;
     size_t resident_ = 0;
     uint64_t seen_generation_ = 0;
-    uint64_t decodes_ = 0;
+    uint64_t decodes_ = 0, evictions_ = 0;
     bool async_ = false;
 };
 } // namespace gx

@@ -178,7 +178,7 @@ std::set<uint64_t> det_early;
 std::map<uint64_t, uint32_t> finishes; // serial -> submitting thread's SDA base; guest baton only
 std::atomic<uint64_t> draw_count{0}, vertex_count{0}, submitted{0}, completed{0}, outside_bytes{0};
 std::atomic<uint64_t> copies{0};
-std::atomic<uint64_t> texture_decodes{0};
+std::atomic<uint64_t> texture_decodes{0},texture_evictions{0},texture_resident{0};
 
 // --profile only: wall time inside the two native draw entry points, printed once per second as "[gxtime]" (per-call figures compare builds
 // far more precisely than a whole-fight FPS, which varies several percent between runs).
@@ -521,7 +521,7 @@ std::shared_ptr<const gx::TexturePixels> snapshot_texture(const std::optional<Te
         palette={found->second->format,found->second->bytes};
     }
     auto result=texture_cache.snapshot(source->address,source->desc,bytes,palette);
-    texture_decodes=texture_cache.decodes();
+    texture_decodes=texture_cache.decodes(); texture_evictions=texture_cache.evictions(); texture_resident=texture_cache.resident_bytes();
     return result;
 }
 void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Transforms& transform_state,CopyState& copy,TextureBindings& textures,Palettes& loaded,gx::BlendState& blend,gx::DrawUniform& colors,TextureMatrices& matrices,MatrixIndices& indices,Imported& imported,CopiedTextures& versions,std::vector<uint32_t>& path) {
@@ -892,7 +892,7 @@ std::string gx_state_summary() {   // crash bundle gx.txt: bound arrays (12 = po
     if (recording) add("recorded", recording->input_state);
     return text;
 }
-GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load(),geometry_hits.load(),geometry_misses.load(),prompt_annotations.load(),prompt_present.load(),prompt_fallback.load()}; }
+GxStats gx_stats() { return {draw_count.load(), vertex_count.load(), submitted.load(), completed.load(), outside_bytes.load(),copies.load(),texture_decodes.load(),geometry_hits.load(),geometry_misses.load(),prompt_annotations.load(),prompt_present.load(),prompt_fallback.load(),texture_evictions.load(),texture_resident.load()}; }
 }
 void hle_GXBegin(ppc::Ctx& c) {
     uc::gx_audit_enter(0x80284FD0, c);
