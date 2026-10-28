@@ -11,7 +11,8 @@ void LiveSettings::apply(const Options& next) {
         || next.frame_generation!=was.frame_generation || next.frame_generation_multiplier!=was.frame_generation_multiplier;
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom_settings()!=was.bloom_settings(), style=next.prompt_style!=was.prompt_style;
     const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale, hdr=next.hdr!=was.hdr;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr) return;
+    const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -20,6 +21,7 @@ void LiveSettings::apply(const Options& next) {
     if(limit) targets_.fps_limit(next.fps_limit);
     if(bloom) targets_.bloom(next.bloom_settings());
     if(crosshair) targets_.crosshair_scale(next.crosshair_scale);
+    if(sensitivity) targets_.mouse_sensitivity(next.mouse_sensitivity);
     if(style) targets_.prompt_style(next.prompt_style);
     if(hdr) targets_.hdr(next.hdr);
     save();

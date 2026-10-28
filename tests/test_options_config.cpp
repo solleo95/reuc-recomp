@@ -54,6 +54,10 @@ int main() {
     CHECK(document.properties["graphics"]["bloom"]==false && !uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom);
     options.bloom=true;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["bloom"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom);
+    CHECK(uc::options_from_config(uc::parse_config(R"({})")).mouse_sensitivity==100);   // absent: the raw motion
+    options.mouse_sensitivity=250;uc::store_options(document,options);
+    CHECK(document.properties["mouse_sensitivity"]==250 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).mouse_sensitivity==250);
+    options.mouse_sensitivity=100;uc::store_options(document,options);
     CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).crosshair_scale==100);   // absent: the game's size
     options.crosshair_scale=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
@@ -191,6 +195,7 @@ int main() {
         R"({"graphics":{"sharpness":1.5}})",R"({"graphics":{"sharpening":1}})",R"({"graphics":{"frame_generation":"on"}})",
         R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
         R"({"graphics":{"bloom_strength":201}})",R"({"graphics":{"bloom_strength":-1}})",R"({"graphics":{"bloom_strength":50.5}})",R"({"graphics":{"bloom_strength":"x"}})",
+        R"({"mouse_sensitivity":9})",R"({"mouse_sensitivity":301})",R"({"mouse_sensitivity":-5})",R"({"mouse_sensitivity":99.5})",R"({"mouse_sensitivity":"x"})",
         R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",
         R"({"graphics":{"hdr":1}})",R"({"graphics":{"hdr_peak_nits":0}})",R"({"graphics":{"hdr_peak_nits":2001}})",R"({"graphics":{"hdr_paper_white_nits":79}})",
         R"({"graphics":{"hdr_paper_white_nits":"bright"}})",R"({"graphics":{"hdr_ui_nits":501}})",R"({"graphics":{"hdr_ui_nits":100.5}})"}) {

@@ -20,6 +20,7 @@ int main() {
     uc::BloomSettings last_bloom;
     targets.bloom=[&](const uc::BloomSettings& settings){ calls.push_back("bloom"); last_bloom=settings; };
     targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
+    targets.mouse_sensitivity=[&](uint32_t){ calls.push_back("mouse_sensitivity"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
@@ -42,6 +43,10 @@ int main() {
     {   // the crosshair size alone reaches only its target
         calls.clear(); auto next=live.options(); next.crosshair_scale=40; live.apply(next);
         CHECK((calls==std::vector<std::string>{"crosshair_scale"}) && saved().crosshair_scale==40 && !live.error());
+    }
+    {   // the mouse sensitivity alone reaches only its target
+        calls.clear(); auto next=live.options(); next.mouse_sensitivity=180; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"mouse_sensitivity"}) && saved().mouse_sensitivity==180 && !live.error());
     }
     {   // HDR and its sliders reach only the HDR target
         calls.clear(); auto next=live.options(); next.hdr.enabled=true; next.hdr.peak_nits=800; live.apply(next);

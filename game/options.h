@@ -16,6 +16,7 @@
 namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
 std::filesystem::path default_game_folder();   // "game" next to the executable
+constexpr uint32_t kMouseSensitivityMin=10, kMouseSensitivityMax=300;
 struct Options {
     RendererBackend renderer_backend=RendererBackend::vulkan;
     std::optional<net::Endpoint> netplay;
@@ -28,6 +29,7 @@ struct Options {
     bool bloom=true;   // the glow around lights (graphics.bloom); the renderer's own bloom replaces the game's, off means no bloom at all
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
+    uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off
     UpscalerKind upscaler=UpscalerKind::off;

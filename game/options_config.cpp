@@ -25,6 +25,11 @@ Options options_from_config(const ConfigDocument& document) {
     if(root.contains("skip_intro"))options.skip_intro=boolean(root["skip_intro"]);
     if(root.contains("skip_tutorials"))options.skip_tutorials=boolean(root["skip_tutorials"]);
     if(root.contains("logs"))options.logs=boolean(root["logs"]);
+    if(root.contains("mouse_sensitivity")) {
+        const auto& value=root["mouse_sensitivity"];
+        if(!value.is_number_unsigned() || value.get<uint64_t>()<kMouseSensitivityMin || value.get<uint64_t>()>kMouseSensitivityMax)invalid("mouse_sensitivity must be 10..300");
+        options.mouse_sensitivity=value.get<uint32_t>();
+    }
     if(root.contains("graphics")) {
         const auto& graphics=root["graphics"];if(!graphics.is_object())invalid("graphics must be an object");
         if(graphics.contains("renderer")) {
@@ -174,6 +179,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     replacement.properties["skip_intro"]=options.skip_intro;
     replacement.properties["skip_tutorials"]=options.skip_tutorials;
     replacement.properties["logs"]=options.logs;
+    replacement.properties["mouse_sensitivity"]=options.mouse_sensitivity;
     auto& graphics=replacement.properties["graphics"];
     if(graphics.is_null())graphics=nlohmann::ordered_json::object();
     if(!graphics.is_object())invalid("graphics must be an object");

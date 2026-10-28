@@ -438,6 +438,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
     uc::HostInput host_input;
+    host_input.sensitivity(options.mouse_sensitivity);
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
@@ -821,6 +822,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         };
         targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
+        targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); };
         targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };

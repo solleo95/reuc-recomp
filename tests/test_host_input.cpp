@@ -25,4 +25,7 @@ int main() {
     CHECK(input.consume_actions().held==0 && !input.consume().valid);
     e.type=SDL_EVENT_WINDOW_FOCUS_GAINED; host.event(e,input,false);
     e.type=SDL_EVENT_MOUSE_MOTION; e.motion.xrel=100; host.event(e,input,false); CHECK(input.consume().x==.2f);
+    input.focus(true); const auto base=input.consume();
+    host.sensitivity(50); host.event(e,input,true); const auto slow=input.consume();
+    CHECK(std::abs(slow.x-base.x-.1f)<1e-5f && std::abs(slow.y-base.y-.1f)<1e-5f);   // half of the .2 / .2 that 100 / 50 px move at 100%
 }

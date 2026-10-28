@@ -27,7 +27,7 @@ bool HostInput::event(const SDL_Event& event,NativeInput& input,bool captured) {
         break;
     }
     case SDL_EVENT_MOUSE_MOTION:
-        if(captured && input.move_raw(event.motion.xrel,event.motion.yrel,width_,height_))
+        if(captured && input.move_raw(event.motion.xrel*sensitivity_,event.motion.yrel*sensitivity_,width_,height_))
             input.host_motion(event.motion.xrel,event.motion.yrel,event.motion.timestamp);
         break;
     default: break;

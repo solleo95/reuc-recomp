@@ -313,6 +313,11 @@ void SettingsMenu::dlss5_tab(float unit) {
 void SettingsMenu::controls_tab(float unit) {
     auto options=current();
     ImGui::Dummy({0,8*unit});
+    ImGui::TextUnformatted(tr("mouse_sensitivity"));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    int sensitivity=int(options.mouse_sensitivity);
+    if(ImGui::SliderInt("##sensitivity",&sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax)));
+    ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("style"));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     const char* styles[]={tr("gray"),tr("cyan")};

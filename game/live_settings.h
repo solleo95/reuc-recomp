@@ -12,6 +12,7 @@ struct SettingsTargets {
     std::function<void(std::optional<uint32_t>)> fps_limit;
     std::function<void(const BloomSettings&)> bloom;
     std::function<void(uint32_t)> crosshair_scale;             // percent 0..100
+    std::function<void(uint32_t)> mouse_sensitivity;           // percent kMouseSensitivityMin..Max
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects
     std::function<void(const Dlss5Settings&)> dlss5;           // DLSS 5 Neural Rendering
     std::function<void(PromptStyle)> prompt_style;

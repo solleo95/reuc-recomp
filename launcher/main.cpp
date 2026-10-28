@@ -164,7 +164,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr;
 }
@@ -825,6 +825,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {
             push_font(ui.sans,22);
+            ImGui::TextUnformatted(tr("mouse_sensitivity"));
+            int sensitivity=int(options.mouse_sensitivity);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+            if(ImGui::SliderInt("##mouse_sensitivity",&sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax)));
+            track("mouse-sensitivity");
+            ImGui::Dummy({0,8*unit});
             ImGui::TextUnformatted(tr("style"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
             const char* styles[]={tr("gray"),tr("cyan")};   // indexed by PromptStyle; listed cyan first (Style 1), gray second (Style 2)
