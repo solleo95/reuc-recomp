@@ -299,19 +299,21 @@ void hle_GameMotionCount(ppc::Ctx& c) {
     const auto object=c.r[3];
     const bool first=c.lr==0x800672C0 || c.lr==0x800673A0;
     const bool second=c.lr==0x80067310 || c.lr==0x80067400;
-    PadScope selected(owner(object,first ? 0x5F8 : 0x610));
-    if(!input || !input->using_host_input() || c.r[4]!=0 || (!first && !second)) {
+    // Boss dodges: the timed-action manager (800DB2D4) counts gestures in 800DBBBC/800DBC28; the object is manager+468/+492+48*player and r4 is the player.
+    const bool manager=(c.lr==0x800DBBF0 || c.lr==0x800DBC5C) && c.r[4]<2;
+    PadScope selected(manager ? c.r[4] : owner(object,first ? 0x5F8 : 0x610));
+    if(!input || !input->using_host_input() || (!manager && c.r[4]!=0) || (!first && !second && !manager)) {
         original_update(c,0x80171D3C,64,24); return;
     }
     memory(c).read(object,24);
-    if(!actor || object!=actor+(first ? 0x5F8 : 0x610)) {c.r[3]=ppc::rd32(c,object+0x10);return;}
+    if(!actor || (!manager && object!=actor+(first ? 0x5F8 : 0x610))) {c.r[3]=ppc::rd32(c,object+0x10);return;}
     memory(c).read(actor,0x7A0);
     auto count=ppc::rd32(c,object+0x10);
     const auto state=uc::input_probe_snapshot(c);
     const bool window=current_requests() && current_context==uc::InputContext::qte &&
         uc::game_input_context(state,player)==uc::InputContext::qte && state.players[player].address==actor && (state.players[player].flags_798&2) &&
         ((uint64_t(state.players[player].mode_630)<<32)|state.players[player].qte_target_79C)==qte_token &&
-        state.players[player].mode_630==((c.lr==0x800672C0 || c.lr==0x80067310) ? 1u : 2u);
+        (manager || state.players[player].mode_630==((c.lr==0x800672C0 || c.lr==0x80067310) ? 1u : 2u));
     unsigned steps=0;
     for(auto i=requests.begin();i!=requests.end();) {
         if(i->action==uc::Action::qte_shake) {if(window)++steps;i=requests.erase(i);}else ++i;

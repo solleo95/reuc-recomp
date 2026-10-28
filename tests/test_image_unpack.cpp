@@ -19,13 +19,15 @@ static int fake_wit(int argc,wchar_t** argv) {
     wchar_t locale[32]{};GetEnvironmentVariableW(L"LC_ALL",locale,32);
     if(!std::wcscmp(argv[1],L"ID6")) {std::cout<<(!std::wcscmp(locale,L"en_US.UTF-8") ? text.substr(0,6) : std::string("LOCALE"))<<"\n";return 0;}
     if(std::wcscmp(argv[1],L"extract") || argc<5 || std::wcscmp(argv[4],L"--progress"))return 2;
-    const fs::path destination=argv[3];
-    fs::create_directories(destination/"DATA"/"sys");
+    // Like Wit with one partition on the image (a scrubbed WBFS): the files land in the folder itself unless --pmode name asks for the DATA prefix.
+    const bool prefixed=argc>=7 && !std::wcscmp(argv[5],L"--pmode") && !std::wcscmp(argv[6],L"name");
+    const fs::path destination=prefixed ? fs::path(argv[3])/"DATA" : fs::path(argv[3]);
+    fs::create_directories(destination/"sys");
     std::cout<<"wit: EXTRACT 1/1\n  10% copied in 0:01 (1.0 MiB/sec)  \r"<<std::flush;
     if(text.find("SLOW")!=std::string::npos)for(;;)Sleep(100);
     if(text.find("FAIL")!=std::string::npos)return 1;
     std::cout<<"  60% copied in 0:02 (1.0 MiB/sec)  \r"<<std::flush;
-    if(text.find("NODOL")==std::string::npos)std::ofstream(destination/"DATA"/"sys"/"main.dol")<<"dol";
+    if(text.find("NODOL")==std::string::npos)std::ofstream(destination/"sys"/"main.dol")<<"dol";
     return 0;
 }
 

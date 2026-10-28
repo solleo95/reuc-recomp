@@ -40,6 +40,9 @@ int main(int argc,char** argv) {
     }
     ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={1280,720};io.DeltaTime=1.f/60;
     io.ConfigInputTrickleEventQueue=false;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
+    // The launcher rebuilds its style every frame (theme, then scale): sizes the theme leaves alone (scrollbar, grab) must not compound, or popups lose their content at a scale above 1.
+    for(int i=0;i<8;++i) {graphite_style();ImGui::GetStyle().ScaleAllSizes(1.5f);}
+    CHECK(ImGui::GetStyle().ScrollbarSize==ImGuiStyle{}.ScrollbarSize*1.5f && ImGui::GetStyle().GrabMinSize==ImGuiStyle{}.GrabMinSize*1.5f);
     graphite_style();auto fonts=uc::ui::load_fonts(*io.Fonts);
     if(gpu) {CHECK(ImGui_ImplSDL3_InitForSDLRenderer(native,renderer));CHECK(ImGui_ImplSDLRenderer3_Init(renderer));}
     else io.BackendFlags|=ImGuiBackendFlags_RendererHasTextures;

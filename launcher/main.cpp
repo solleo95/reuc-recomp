@@ -1085,7 +1085,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{12*unit,12*unit});
             push_font(ui.sans,28);
-            if(unpack && ImGui::BeginPopupModal(unpack_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+            if(unpack && ImGui::BeginPopupModal(unpack_title.c_str(),nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoScrollbar)) {
                 push_font(ui.sans,22);
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+600*unit);
                 const auto state=unpack->status();

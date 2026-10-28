@@ -250,6 +250,19 @@ int main() {
     input.host_motion(32,0,2120000000);uc::game_input_sample(c,raw);
     ppc::wr32(c,actor+0x79C,6);uc::game_input_sample(c,raw);
     c.r[3]=actor+0x5F8;hle_GameMotionCount(c);CHECK(c.r[3]==1); // Already-published progress belongs to its original target.
+    {   // Boss dodge: the timed-action manager 800DB2D4 counts the gestures (800DBBBC/800DBC28), the object is manager+468/+492+48*player, r4 the player.
+        const uint32_t manager=0x80080000;
+        input.host_motion(32,0,2150000000);input.host_motion(-32,0,2180000000);uc::game_input_sample(c,raw);
+        c.r[3]=manager+468;c.r[4]=0;c.lr=0x800DBBF0;hle_GameMotionCount(c);
+        CHECK(c.r[3]==1 && ppc::rd32(c,manager+468+0x10)==1);
+        c.r[3]=manager+468;c.r[4]=0;c.lr=0x800DBBF0;hle_GameMotionCount(c);CHECK(c.r[3]==1); // No new gesture, no progress.
+        input.host_motion(32,0,2210000000);uc::game_input_sample(c,raw);
+        c.r[3]=manager+492;c.r[4]=0;c.lr=0x800DBC5C;hle_GameMotionCount(c);
+        CHECK(c.r[3]==1 && ppc::rd32(c,manager+492+0x10)==1); // The second gesture slot counts too.
+        ppc::wr32(c,actor+0x798,0);input.host_motion(-32,0,2240000000);input.host_motion(32,0,2270000000);uc::game_input_sample(c,raw);
+        c.r[3]=manager+468;c.r[4]=0;c.lr=0x800DBBF0;hle_GameMotionCount(c);CHECK(c.r[3]==1); // Outside the challenge window nothing counts.
+        ppc::wr32(c,actor+0x798,2);uc::game_input_sample(c,raw);
+    }
     c.r[1]=0x817D0000; c.r[3]=actor+0x5F8; c.lr=0x8006C4B8;
     hle_GameMotionCount(c); CHECK(c.r[3]==0x12345678 && c.r[1]==0x817D0000 && c.lr==0x8006C4B8);
     c.r[3]=0xCC008000; c.lr=0x800672C0; bool bad_motion_object=false;

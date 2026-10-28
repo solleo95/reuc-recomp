@@ -11,6 +11,8 @@ ImVec4 color(unsigned rgb, float alpha = 1.0f) {
 }
 
 void graphite_style() {
+    // ScaleAllSizes runs on this style every frame: start from unscaled metrics, including the fields the theme leaves at defaults, or they grow by the scale each frame.
+    ImGui::GetStyle() = ImGuiStyle{};
     ImGui::StyleColorsDark();
     auto& style = ImGui::GetStyle();
     style.WindowPadding = ImVec2(0, 0);

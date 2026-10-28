@@ -48,7 +48,6 @@ void SettingsMenu::build() {
     const float font_scale=std::max(.75f,io.DisplaySize.y/1080.f);
     const float unit=font_scale*.75f;
     const float font_size=std::round(22*font_scale);
-    ImGui::GetStyle()=ImGuiStyle{};   // ScaleAllSizes must always start from unscaled metrics, including fields the theme leaves at defaults.
     launcher::graphite_style(); ImGui::GetStyle().ScaleAllSizes(unit);
     const float previous_frame_height=font_size+2*std::floor(11*font_scale);
     ImGui::GetStyle().FramePadding.y=(previous_frame_height*.75f-font_size)*.5f;

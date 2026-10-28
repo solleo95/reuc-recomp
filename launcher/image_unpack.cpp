@@ -119,7 +119,8 @@ void ImageUnpack::run() {
         fs::remove_all(game,error);
         if(error)return finish(UnpackStatus::failed,UnpackError::extract_failed);
         std::string output;
-        const int extracted=wit(L"extract "+quote_windows_arg(image_.wstring())+L" "+quote_windows_arg(game.wstring())+L" --progress",output,true);
+        // --pmode name: without it Wit leaves out the DATA folder when the image holds a single partition (a scrubbed WBFS), and the game is not found.
+        const int extracted=wit(L"extract "+quote_windows_arg(image_.wstring())+L" "+quote_windows_arg(game.wstring())+L" --progress --pmode name",output,true);
         const bool cancelled=stopped();
         std::error_code check_error;
         const bool has_dol=fs::is_regular_file(game/L"DATA"/L"sys"/L"main.dol",check_error);
