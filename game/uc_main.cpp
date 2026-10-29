@@ -861,11 +861,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
     uc::HostKeys host_keys;
     std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert)
-    const auto set_menu_keys=[&](const uc::Bindings& bindings) {
-        menu_keys.clear();
-        for(const auto& binding:bindings[size_t(uc::Action::menu)]) if(binding.kind==uc::BindingKind::physical && binding.input.kind==uc::PhysicalKind::key) menu_keys.push_back(SDL_Scancode(binding.input.code));
+    std::vector<SDL_Scancode> speed_keys;   // the keys bound to the speed_up action (empty: no speed key)
+    const auto set_key_lists=[&](const uc::Bindings& bindings) {
+        for(const auto [action,keys]:{std::pair{uc::Action::menu,&menu_keys},std::pair{uc::Action::speed_up,&speed_keys}}) {
+            keys->clear();
+            for(const auto& binding:bindings[size_t(action)]) if(binding.kind==uc::BindingKind::physical && binding.input.kind==uc::PhysicalKind::key) keys->push_back(SDL_Scancode(binding.input.code));
+        }
     };
-    set_menu_keys(input_config.input);
+    set_key_lists(input_config.input);
     uint64_t menu_click_presents=0;
     std::deque<SDL_Event> menu_click_events;   // harness menu clicks: press and release, one per main-loop iteration
     bool restart_pending=false;   // apply upscaling changes at the next frame boundary; replace the device only when required
@@ -900,7 +903,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
-        targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_menu_keys(bindings); };
+        targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_key_lists(bindings); };
         targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
         targets.wiimote=[&](const uc::WiimoteSettings& settings) { options.wiimote=settings; input.wiimote_settings(settings); refresh_prompt_device(); };
         live_settings.emplace(config_path,input_config,std::move(targets));
@@ -1093,9 +1096,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
                 if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
                 else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) {pad_last_used=false;wii_last_used=false;}
-                // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
+                // Hold the speed key (Tab by default): game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
-                if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && event.key.scancode==SDL_SCANCODE_TAB && !settings_menu->capturing()) {
+                if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && std::find(speed_keys.begin(),speed_keys.end(),event.key.scancode)!=speed_keys.end() && !settings_menu->capturing()) {
                     if(!network && !event.key.repeat) uc::set_clock_speed(event.type==SDL_EVENT_KEY_DOWN && !host_keys.menu_open ? 8 : 1);
                     continue;
                 }

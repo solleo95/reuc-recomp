@@ -134,7 +134,7 @@ void NativeInput::install_bindings() {
     const auto merged=merge_bindings(keyboard_,pad_.bindings,wii_.bindings);
     auto game=merged,service=merged;
     for(size_t i=0;i<merged.size();++i) {
-        if(i==size_t(Action::menu)) { game[i].clear(); service[i].clear(); continue; }   // a host key (game/host_keys.h): neither the game nor the service table sees it
+        if(i==size_t(Action::menu) || i==size_t(Action::speed_up)) { game[i].clear(); service[i].clear(); continue; }   // host keys (game/host_keys.h, the speed key in uc_main): neither the game nor the service table sees them
         const bool is_service=i==size_t(Action::release_cursor) || i==size_t(Action::screenshot);
         (is_service ? game : service)[i].clear();
     }

@@ -43,7 +43,7 @@ std::optional<std::string> validate(const Bindings& bindings,Device device) {
             const auto& b=entries[i];
             if(b.kind==BindingKind::physical) {
                 if(!valid(b.input,device) || b.modifiers.size()>4) return "invalid physical binding";
-                if(a==size_t(Action::menu) && (b.input.kind!=PhysicalKind::key || !b.modifiers.empty())) return "the menu binding must be a single key";
+                if((a==size_t(Action::menu) || a==size_t(Action::speed_up)) && (b.input.kind!=PhysicalKind::key || !b.modifiers.empty())) return "a host key binding must be a single key";
                 for(size_t m=0;m<b.modifiers.size();++m) {
                     if(!valid(b.modifiers[m],device,false) || b.modifiers[m]==b.input) return "invalid binding modifier";
                     if(std::find(b.modifiers.begin(),b.modifiers.begin()+m,b.modifiers[m])!=b.modifiers.begin()+m) return "duplicate binding modifier";
@@ -85,6 +85,7 @@ Bindings default_bindings() {
     result[size_t(Action::camera_left)]={key(80)};
     result[size_t(Action::camera_right)]={key(79)};
     result[size_t(Action::menu)]={key(73)};   // Insert
+    result[size_t(Action::speed_up)]={key(43)};   // Tab
     return result;
 }
 Bindings default_pad_bindings() {

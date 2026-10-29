@@ -49,13 +49,15 @@ void BindingEditor::restore_defaults() {
 void BindingEditor::begin_capture(Action action,bool replace) {index(action);cancel_capture();capture_=action;replace_=replace;}
 void BindingEditor::cancel_capture() {capture_.reset();replace_=false;modifiers_.clear();error_.reset();}
 void BindingEditor::capture(PhysicalInput input) {
-    if(input.kind==PhysicalKind::key && table_==BindingTable::keyboard) {   // host keys of the port: the game never sees them (game/host_keys.h, the Tab speed key in uc_main)
-        const auto& menu_keys=bindings_[size_t(Action::menu)];
-        const bool menu_key=std::any_of(menu_keys.begin(),menu_keys.end(),[&](const Binding& b){return b.input==input;}) || (menu_keys.empty() && input.code==73);   // none bound: Insert
-        if(input.code==19 || input.code==43) { error_="P (pause) and Tab (game speed) are reserved"; return; }
-        if(*capture_==Action::menu && input.code==41) { error_="Escape closes the menu: it cannot open it"; return; }
+    if(input.kind==PhysicalKind::key && table_==BindingTable::keyboard) {   // host keys of the port: the game never sees them (game/host_keys.h, the speed key in uc_main)
+        const auto bound=[&](Action action) {const auto& keys=bindings_[size_t(action)];return std::any_of(keys.begin(),keys.end(),[&](const Binding& b){return b.input==input;});};
+        const bool menu_key=bound(Action::menu) || (bindings_[size_t(Action::menu)].empty() && input.code==73);   // none bound: Insert
+        const bool host_action=*capture_==Action::menu || *capture_==Action::speed_up;
+        if(input.code==19) { error_="P (pause) is reserved"; return; }
+        if(host_action && input.code==41) { error_="Escape closes the menu: it cannot be a host key"; return; }
         if(*capture_!=Action::menu && menu_key) { error_="This key opens the in-game menu"; return; }
-        if(*capture_==Action::menu) for(size_t a=0;a<bindings_.size();++a) if(a!=size_t(Action::menu))
+        if(*capture_!=Action::speed_up && bound(Action::speed_up)) { error_="This key speeds up the game"; return; }
+        if(host_action) for(size_t a=0;a<bindings_.size();++a) if(a!=size_t(*capture_))
             for(const auto& b:bindings_[a]) if(b.kind==BindingKind::physical && b.input==input && b.modifiers.empty()) { error_="This key is bound to another action"; return; }   // it would never reach it
     }
     auto modifiers=modifiers_; std::erase(modifiers,input);
