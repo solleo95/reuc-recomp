@@ -5,7 +5,7 @@ User selected concept 1. Native C++ / SDL3 / ImGui; no additional UI framework.
 ## Behavior
 
 - Graphite palette, train banner, persistent sidebar and launch/save footer.
-- Game, Graphics, Controls, Controllers, Audio sections retain existing settings and binding editor. Controls (keyboard and mouse) has the mouse sensitivity slider at the top; Controllers holds the control type, the gamepad model and the **Gamepad** window (`launcher/gamepad_panel.*`, shared with the in-game menu).
+- Game, Graphics, Controls, Controllers, Audio sections retain existing settings and binding editor. Controls (keyboard and mouse) has the mouse sensitivity slider at the top; Controllers holds the control type, the gamepad model and the **Gamepad** and **Wii Remote** windows (`launcher/gamepad_panel.*`, `launcher/wiimote_panel.*`, shared with the in-game menu). The pointing device (mouse or light gun), aim smoothing and the reload zone are on Controls. See [lightguns.md](lightguns.md).
 - Language selector applies immediately. Save (or Play) persists it to `launcher.language` in `config.json`.
 - Default `system` resolves the Windows preferred UI language at startup. Unsupported language falls back to English.
 - Languages: en, ru, de, fr, es, it, pt-BR, pl, uk, tr, ja, ko, zh-Hans.

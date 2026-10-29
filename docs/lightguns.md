@@ -49,3 +49,31 @@ The game also talks to a Wii Remote directly: the pointer from its infrared came
 **Not supported:** the Motion Plus gyro, rumble, the speaker, a second remote, the Classic Controller.
 
 The Wii Remote code was written from the Wii Remote's published protocol and tested with a simulated remote only, not with real hardware. The signs of the swing directions and the pointer range may need a small correction: please report what you see.
+
+## If something does not work
+
+**Light gun**
+- The crosshair drifts or jumps like a trackball: **Pointing device** is still on **Mouse**. Switch it to **Light gun (absolute pointer)**.
+- The crosshair does not match where the gun points: calibrate in the gun's own program, and use windowed or borderless mode, not exclusive fullscreen. The game follows the Windows cursor, so if the cursor is in the right place, the crosshair is too.
+- The crosshair shakes: raise **Aim smoothing** a little at a time.
+- A shot in the corner does nothing or fires: check that **Reload by shooting at the screen edge** is on and make the zone bigger. The mode works only while playing, not in menus.
+- The cursor is stuck in the window: that is the light gun mode. Switch back to **Mouse** to get the normal cursor, or press **Alt** in windowed mode.
+
+**Wii Remote**
+- The launcher says the remote is not connected: check that Windows lists it as an input device (Settings, Bluetooth and devices) and that its light is on. Press any button to wake it. The game looks for the remote again every couple of seconds, so it can be connected while the game runs.
+- "The Wii Remote cannot be used": another program holds the remote (Dolphin, Steam Input, a DolphinBar helper). Close it. Some Bluetooth adapters and drivers do not talk to the remote at all; a DolphinBar in mode 4 works on any PC.
+- Buttons work but there is no pointer: the camera needs to see the sensor bar. Put it centred above or below the screen, switch it on, point from 1 to 4 metres, and keep other bright lights and candles out of the remote's view.
+- The pointer shakes: raise the remote's **smoothing** in its window. Swings fire too easily or never: change the swing strength.
+- The launcher reads the remote only on the **Controllers** page and only while the game is not running. When you start the game, the launcher lets the remote go.
+
+## Settings in `config.json`
+
+The launcher and the in-game menu write these for you; they are listed for those who edit the file by hand.
+
+| Key | Values |
+|---|---|
+| `pointer` | `"relative"` (mouse, default) or `"absolute"` (light gun); command line `--pointer relative|absolute` |
+| `pointer_smoothing` | 0-90 (percent), 0 by default |
+| `reload_zone` | `"off"` (default), `"corner"` or `"edge"` |
+| `reload_zone_size` | 1-20 (percent of the window), 5 by default |
+| `wiimote` | object: `enabled`, `smoothing`, `swing_threshold`, `stick_dead_zone` and `bindings` |

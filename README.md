@@ -2,7 +2,7 @@
 
 # Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
 
-**The Wii game running natively on Windows: very fast loading, unlocked FPS, native ultrawide, mouse and gamepad aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+**The Wii game running natively on Windows: very fast loading, unlocked FPS, native ultrawide, mouse, gamepad, light gun and Wii Remote aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
 
 **English** · [Русский](README.ru.md)
 
@@ -76,12 +76,12 @@ When you report a problem, please say what GPU, driver and Windows version you u
 - **Mouse sensitivity slider** (10-300%, default 100%) at the top of the **Controls** page in the launcher and in the in-game menu. It changes the aim speed at once; shake and swipe gestures keep working the same way.
 - **Gamepad support.** Xbox, PlayStation (DualShock 4, DualSense), Nintendo Switch Pro and most other gamepads work as soon as they are plugged in. The left stick aims, the right stick is the analog stick of the Wii Nunchuk (it moves the camera), and the buttons follow the usual layout. A gamepad with a motion sensor can also aim by tilting it: swing it for the knife, shake it to break free. Motion aiming is off by default.
 - **Gamepad settings** are on the **Controllers** page (launcher and in-game menu): choose keyboard and mouse, gamepad or automatic, pick the gamepad model, and press **Gamepad** to change stick roles, dead zones, motion aiming and every button. The **Controls** page stays for keyboard and mouse.
-- **Light guns (Sinden, GUN4IR, Retro Shooter Reaper, Dolphin Bar in a mouse mode).** Set **Pointing device** to **Light gun** on the **Controls** page and the crosshair follows where the gun points instead of adding up mouse motion. Shooting in a corner or at the edge of the screen can reload. See [Light guns and the Wii Remote](docs/lightguns.md).
-- **Wii Remote.** A Wii Remote paired through Windows Bluetooth, or a Mayflash DolphinBar in mode 4, works directly: the pointer from its infrared camera, the buttons, a Nunchuk, swings and shakes, with its own bindings window on the **Controllers** page. See [Light guns and the Wii Remote](docs/lightguns.md). Not tried on real hardware yet.
-- **On-screen hints and prompts show the controller you play with:** mouse and keyboard icons, or Xbox, PlayStation and Nintendo button pictures for a gamepad (and they update when you rebind a key), instead of Wii-remote buttons.
+- **Light guns (Sinden, GUN4IR, Retro Shooter Reaper, Dolphin Bar in a mouse mode).** Set **Pointing device** to **Light gun (absolute pointer)** on the **Controls** page and the crosshair follows where the gun points instead of adding up mouse motion (which makes a gun drift like a trackball). **Aim smoothing** steadies a shaky pointer. **Reload by shooting at the screen edge** turns a shot in a corner or near an edge into a reload, for guns that have no off-screen reload. Setup per device: [Light guns and the Wii Remote](docs/lightguns.md).
+- **Wii Remote.** A Wii Remote paired through Windows Bluetooth, or a Mayflash DolphinBar in mode 4, works directly, with no extra program: the pointer from its infrared camera (you need a sensor bar), the buttons, a Nunchuk, swings for the knife and shakes. Its settings and bindings are in the **Wii Remote** window on the **Controllers** page. Pairing steps and the default layout: [Light guns and the Wii Remote](docs/lightguns.md). Not tried on real hardware yet.
+- **On-screen hints and prompts show the controller you play with:** mouse and keyboard icons, Xbox, PlayStation and Nintendo button pictures for a gamepad, or the Wii Remote's own buttons when you used the remote last (and they update when you rebind a key).
 - **Aim reticle you can restyle.** The **Reticle** tab of the in-game menu hides the aim trail, the laser dot, the white marks and the green ammo arc, sets a colour for each player, the size of the laser dot and the length of the trail, and fades your partner's reticle in co-op. In single-player the laser dot sits right under the mouse and the trail follows the real path of your hand.
 - Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel, gamepad buttons and key combinations are supported. The key that opens the in-game menu can be changed too.
-- Keyboard and mouse or a gamepad: the choice is yours. The in-game menu opens with **Insert** by default (see [In-game menu](#in-game-menu-and-controls)); the gamepad cannot move around the menus yet, use the mouse there.
+- Keyboard and mouse, a gamepad, a light gun or a Wii Remote: the choice is yours. The in-game menu opens with **Insert** by default (see [In-game menu](#in-game-menu-and-controls)); the gamepad cannot move around the menus yet, use the mouse there.
 
 <img src="assets/readme/prompts.png" alt="On-screen prompts with mouse icons: Pick Up, a tutorial text, OK and Back" width="100%">
 
@@ -104,7 +104,7 @@ Details: [Upscaling and frame generation](docs/upscaling.md) · [Graphics effect
 ### Launcher
 
 - Built-in **launcher in 13 languages**: English, Русский, Deutsch, Français, Español, Italiano, Português, Polski, Українська, Türkçe, 日本語, 한국어, 简体中文.
-- All settings in one place: resolution, window mode, ultrawide HUD position, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings, mouse sensitivity, gamepad settings. Features your GPU cannot run are greyed out with the reason.
+- All settings in one place: resolution, window mode, ultrawide HUD position, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings, mouse sensitivity, pointing device (mouse or light gun) and reload zone, gamepad and Wii Remote settings. Features your GPU cannot run are greyed out with the reason.
 - **Unpacks your game image for you:** choose the disc image in the launcher and it unpacks it itself with the built-in Wit, no manual steps ([details](#way-a-the-launcher-unpacks-the-image)).
 - **One-click updates:** the launcher checks the latest release, verifies the files (SHA-256) and replaces them, keeping your settings, saves and mods.
 - Multiplayer lobby with automatic router port opening (UPnP) and NAT punching ([details](#multiplayer-online-co-op)).
@@ -223,7 +223,7 @@ If you unpacked the game into another folder, you will select it in the launcher
    - **Frame generation:** leave it off until the game runs well, then try it. Choosing a generator also turns on the matching upscaler.
    - **Ray tracing, DLSS Ray Reconstruction, HDR:** only if your GPU supports them; entries that are not available are greyed out with an explanation.
    - **FPS limit:** the limit also sets how often the game simulation steps. With frame generation the displayed FPS is the limit multiplied by the generator multiplier.
-4. Open the **Controls** page if you want to change key bindings or the mouse sensitivity. Playing with a gamepad? Plug it in and open the **Controllers** page: pick the gamepad model if it is not detected right and press **Gamepad** to change its settings.
+4. Open the **Controls** page if you want to change key bindings or the mouse sensitivity. Playing with a gamepad? Plug it in and open the **Controllers** page: pick the gamepad model if it is not detected right and press **Gamepad** to change its settings. Playing with a light gun? Set **Pointing device** to **Light gun** on the **Controls** page. Using a Wii Remote? Connect it first (see [Light guns and the Wii Remote](docs/lightguns.md)), then open the **Controllers** page and press **Wii Remote**.
 5. Press the red **Singleplayer** button to start the game (**Multiplayer** is next to it).
 
 On the **first start** the launcher runs a short CPU calibration and the game compiles its shaders and pipelines before it shows the picture. The first start takes longer; later starts are faster.
@@ -242,6 +242,9 @@ The launcher checks for a new release when it starts and offers **Update** or **
 - Aiming is done with the mouse, the main actions are on the mouse buttons and the wheel; the full list, rebinding and the mouse sensitivity slider are in the launcher's **Controls** page and the in-game menu.
 - With a gamepad: the left stick aims (or tilt the pad if it has motion controls and you switched them on), the right stick moves the camera, **right trigger** fires, **A** interacts, **X** reloads, **B** is the knife, **Y** is the grenade, **Start** pauses and clicking the **left stick** puts the aim back in the centre. Everything can be changed on the **Controllers** page (button names follow your gamepad: on PlayStation pads they are Cross, Circle, Square, Triangle).
 - A gamepad that works through the Xbox driver (for example the GameSir G7 Pro in Xbox mode) gives the game no motion sensor, so motion aiming is not available with it.
+- With a light gun: set **Pointing device** to **Light gun** (**Controls** page or in-game menu, applied at once). The cursor is hidden and kept inside the game window, so use windowed or borderless mode (the Sinden border must stay visible). Gun buttons arrive as mouse buttons: bind **Fire** to the trigger and **Reload**, **Knife** and **Grenade** to the other buttons on the **Controls** page, or turn on **Reload by shooting at the screen edge** (**Corner** or **Edge**, zone size 1-20%).
+- With a Wii Remote: point at the screen to aim; **B** (trigger) fires, **A** interacts, **1** reloads, **2** is the grenade, **+** and **-** change weapon, **Home** pauses. With a Nunchuk the stick moves the camera, **Z** is the knife and **C** reloads. Hold **A** and swing the remote for the knife, shake it for the shake prompts. Everything can be changed in the **Wii Remote** window of the **Controllers** page.
+- For `config.json` and the command line: `"pointer": "relative"` or `"absolute"` (`--pointer relative|absolute`), `"pointer_smoothing"` 0-90, `"reload_zone"` `"off"`, `"corner"` or `"edge"`, `"reload_zone_size"` 1-20, and a `"wiimote"` object. The launcher writes all of them for you.
 - **Alt** releases the mouse cursor in windowed mode. **Esc** pauses.
 
 <img src="assets/readme/ingame-menu.png" alt="The in-game menu (Insert): the Main, Effects and Controls tabs" width="100%">
@@ -322,6 +325,7 @@ NAT punching works with most home routers. It will not work if either side has *
 - Ray tracing currently covers shadows only; other ray-traced effects are not finished.
 - Ultrawide: backgrounds across the whole screen (menus, fades) and the glow of the title logo stay stretched, and far to the sides something may appear a little late. Taller windows were checked only in the train car. Online co-op keeps 16:9.
 - Gamepads: tested with virtual gamepads and automatic tests only, so tell us if your model misbehaves. There is no camera sensitivity slider yet. Gamepads that talk the Xbox protocol (for example the GameSir G7 Pro in Xbox mode) have no motion sensor in the game. The menus cannot be moved around with a gamepad yet.
+- Light guns and the Wii Remote: written from the makers' documentation and the Wii Remote's published protocol, and tested with simulated input only, not with real hardware. The direction of swings and the pointer range of the Wii Remote may need a small correction; two guns or two remotes at once are not supported; the Motion Plus gyro, rumble and the Classic Controller are not supported. Please report what you see.
 
 Found something else? Tell us: [Reporting problems](#reporting-problems).
 
