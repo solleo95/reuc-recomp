@@ -63,7 +63,7 @@ inline bool is_hud_plate(const DrawPacket& draw) { return draw.texture && draw.t
 inline bool follows_pointer(const DrawPacket& draw) { return draw.reticle || draw.layer || draw.wake || draw.late_aim; }
 
 // Clusters the movable draws of a packet: draws whose rectangles touch (closer than kGap in NDC) belong together, large ones (wider or taller than 0.9: a
-// panel behind a text, a bar across the screen) never bridge two clusters. A pointer-following draw is a cluster of its own. A player's block is what lies
+// panel behind a text, a bar across the screen) never bridge two clusters; a thin wide bar (a boss's gauge, at most 0.12 tall) is no panel: it clusters with its caps. A pointer-following draw is a cluster of its own. A player's block is what lies
 // around its plate (is_hud_plate): the name, the bar, the weapon and the counts.
 inline std::vector<Anchor> cluster_anchors(const FramePacket& packet, const std::vector<bool>& movable, ViewFactors k, const std::vector<PlayerRegion>& known = {},
                                            std::vector<AnchoredBox>* found = nullptr, std::vector<PlayerRegion>* new_regions = nullptr) {
@@ -75,7 +75,8 @@ inline std::vector<Anchor> cluster_anchors(const FramePacket& packet, const std:
         if (!movable[i]) continue;
         const auto x = ortho_range(packet.draws[i], 0), y = ortho_range(packet.draws[i], 1);
         if (!x || !y) continue;
-        const bool large = (*x)[1] - (*x)[0] > 0.9f || (*y)[1] - (*y)[0] > 0.9f;
+        const bool bar = (*x)[1] - (*x)[0] > 0.9f && (*y)[1] - (*y)[0] <= 0.12f;   // a gauge's rail or fill (a boss's): part of the block it joins the caps and the label of
+        const bool large = !bar && ((*x)[1] - (*x)[0] > 0.9f || (*y)[1] - (*y)[0] > 0.9f);
         boxes.push_back({i, (*x)[0], (*x)[1], (*y)[0], (*y)[1], large, is_hud_plate(packet.draws[i]), follows_pointer(packet.draws[i])});
     }
     if (boxes.empty() || boxes.size() > 3000) return anchors;

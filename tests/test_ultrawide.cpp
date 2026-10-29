@@ -301,4 +301,30 @@ int main() {
         gx::widen_packet(menu, wide, menu_frame);
         CHECK(near(menu.prompts[0].efb_corners[0], 320 * (1 + 0.75f * 0.2f)));
     }
+    {   // A boss's gauge (measured in the game): a wide rail and fill (more than 0.9 wide but thin: bars, not panels), two caps and the label. They are one
+        // block: the rail keeps its ends at the caps and the fill its start at the left cap, however far the fill has run down, at any shape of the output.
+        const auto gauge = [](gx::FramePacket& packet, float fill_end) {
+            packet.draws.push_back(scene_draw());
+            packet.draws.push_back(ortho_quad(-0.64f, 0.64f, nullptr, -0.842f, -0.775f));       // 1: the rail
+            packet.draws.push_back(ortho_quad(-0.623f, fill_end, nullptr, -0.836f, -0.78f));     // 2: the fill
+            packet.draws.push_back(ortho_quad(-0.643f, -0.62f, nullptr, -0.842f, -0.775f));      // 3: the left cap
+            packet.draws.push_back(ortho_quad(0.62f, 0.643f, nullptr, -0.842f, -0.775f));        // 4: the right cap
+            packet.draws.push_back(ortho_quad(-0.789f, -0.65f, nullptr, -0.85f, -0.775f));       // 5: the label
+        };
+        const float c = (-0.789f + 0.643f) / 2;   // the block's centre
+        for (const float fill_end : {0.629f, -0.2f}) {
+            gx::FramePacket packet; gauge(packet, fill_end);
+            gx::WideFrame frame;
+            gx::widen_packet(packet, wide, frame);
+            const auto at = [&](float x) { return c + 0.75f * (x - c); };
+            CHECK(near(x_range(packet.draws[1])[0], at(-0.64f)) && near(x_range(packet.draws[1])[1], at(0.64f)));
+            CHECK(near(x_range(packet.draws[2])[0], at(-0.623f)) && near(x_range(packet.draws[2])[1], at(fill_end)));
+            CHECK(near(x_range(packet.draws[3])[1], at(-0.62f)) && near(x_range(packet.draws[4])[0], at(0.62f)));
+        }
+        gx::FramePacket tall; gauge(tall, 0.629f);
+        gx::WideFrame tall_frame;
+        gx::widen_packet(tall, gx::ViewFactors{1.f, 0.8f, false}, tall_frame);
+        CHECK(near(centre(y_range(tall.draws[1])), centre(y_range(tall.draws[3]))));                                                       // one row: the cap stays level with the rail
+        CHECK(near(centre(y_range(tall.draws[5])) - centre(y_range(tall.draws[1])), 0.8f * (-0.8125f + 0.8085f)));                         // the label's offset shrinks with the row, it does not jump
+    }
 }
