@@ -211,6 +211,7 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
     };
     if (async_) {
         auto pending = std::make_shared<TexturePixels>();
+        pending->desc_width = desc.width; pending->desc_height = desc.height;
         pending->job = std::make_shared<TextureJob>();
         bytes += replacement ? replacement->bytes : decoded_bytes(desc);
         DecodePool::instance().submit([pending, build, format = palette.format, encoded = std::vector<std::byte>(pixels.begin(), pixels.end()), colors = std::vector<std::byte>(palette.bytes.begin(), palette.bytes.end())] {
@@ -224,7 +225,9 @@ std::shared_ptr<const TexturePixels> TextureCache::snapshot(uint32_t address, co
         });
         result = pending;
     } else {
-        result = std::make_shared<const TexturePixels>(build(pixels, palette));
+        auto built = build(pixels, palette);
+        built.desc_width = desc.width; built.desc_height = desc.height;
+        result = std::make_shared<const TexturePixels>(std::move(built));
         for (const auto& level : result->levels) bytes += level.rgba.size();
     }
     ++decodes_;

@@ -2,7 +2,7 @@
 
 ## Current mode: input packets on a shared tick (2026-10-26)
 
-Only input and state hashes cross the network. Both PCs run the whole game on the
+Only input and state hashes cross the network. Each player may use keyboard and mouse or a gamepad: the input frame (`'U','C','F',2`) carries the buttons, the pointer and the analog camera stick (two signed bytes, -127..127), so a gamepad player and a mouse player can share a game. A version 1 frame is refused, so both players need the same release. The transport protocol version did not change. Both PCs run the whole game on the
 deterministic virtual clock at one shared simulation tick: 60 Hz by default, then
 chosen automatically from 30 (the original rate), 60, 120, 144 and 240 Hz
 (`--net-tick` sets the starting tick, agreed in the startup message). A frame limit

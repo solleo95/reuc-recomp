@@ -40,6 +40,7 @@ private:
     const char* tr(std::string_view key) const;
     void main_tab(float unit);
     void controls_tab(float unit);
+    void reticle_tab(float unit);
     void controllers_tab(float unit);
     void effects_tab(float unit);
     void dlss5_tab(float unit);

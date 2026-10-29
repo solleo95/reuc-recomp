@@ -1,6 +1,7 @@
 #include "intro.h"
 #include "dispatch.h"
 #include "gx_vertices.h"
+#include "wide_view.h"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -33,6 +34,31 @@ void hle_IntroLogoUpdate(ppc::Ctx& c) {
     ppc::wr32(c,stack-48,stack);
     c.r[1]=stack-48;
     uc::call_indirect(c,0x80245860);
+}
+
+// C_MTXPerspective(Mtx44 m, f32 fovY, f32 aspect, f32 near, f32 far): m[0][0] = cot(fovY / 2) / aspect. On a wider output the aspect grows by 1 / k
+// (renderer/wide_view.h), so every projection the game builds, and everything it derives from it (the pointer's range, hit tests, culling), sees
+// the wide picture. A taller output shrinks the field of view's tangent on the y axis instead. At 16:9 (or with the option off) the original runs unchanged.
+void hle_MTXPerspective(ppc::Ctx& c) {
+    // Static lowering of 80265464's stwu r1,-64(r1); 80265468 continues the original compiled body.
+    const auto stack=c.r[1];
+    ppc::wr32(c,stack-64,stack);
+    c.r[1]=stack-64;
+    {
+        const auto factors=gx::view_factors();
+        const float kx=factors.x,ky=factors.y;
+        float aspect=float(c.f[2]),fov=float(c.f[1]);
+        if((kx<1.f || ky<1.f) && std::isfinite(aspect) && aspect>0 && std::isfinite(fov) && fov>0 && fov<180) {   // at 16:9 the arguments are not touched at all
+            if(kx<1.f) aspect/=kx;
+            if(ky<1.f) {   // the vertical tangent grows by 1 / k_y; the horizontal one stays: cot' = cot * k_y, aspect' = aspect * k_y
+                const double tangent=std::tan(double(fov)*3.14159265358979323846/360.0);
+                fov=float(std::atan(tangent/ky)*360.0/3.14159265358979323846);
+                aspect*=ky;
+            }
+            c.f[1]=fov; c.f[2]=aspect;
+        }
+    }
+    uc::call_indirect(c,0x80265468);
 }
 
 void hle_MovieUpdate(ppc::Ctx& c) {

@@ -44,6 +44,7 @@ struct TexturePixels {
     // A replacement from `textures/*.dds`: levels[i].rgba holds BC7 blocks instead of RGBA8, and the extent is the upscaled one;
     // guest_width/height keep the game's size for code that recognises textures by it (late_aim.h).
     bool bc7=false; uint32_t guest_width=0, guest_height=0;
+    uint32_t desc_width=0, desc_height=0;   // the game's size, set when the texture is created (guest_* come from the decode, which may still run); 0 for EFB copies
     std::shared_ptr<TextureJob> job;   // set while a worker still fills `levels`
     uint32_t guest_address=0; // Identity of an immutable EFB copy version; ordinary textures leave this zero.
     // Blocks until the pixels are decoded (no-op for finished textures) and rethrows a decode error. Call before reading `levels`.

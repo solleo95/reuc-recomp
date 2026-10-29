@@ -2,6 +2,7 @@
 #include "block_pool.h"
 #include "frame_arena.h"
 #include "gx_vertices.h"
+#include "wide_view.h"
 #include <condition_variable>
 #include <chrono>
 #include <deque>
@@ -70,6 +71,7 @@ private:
     std::map<uint64_t, std::chrono::steady_clock::time_point> taken_at_;           // ... and when the renderer took them
     uint64_t next_serial_ = 1;
     bool canceled_ = false;
+    WideFrame wide_frame_;   // the frame being built, for the ultrawide narrowing (ultrawide.h); touched by the producer only
     std::unique_ptr<SceneCapture> scene_capture_;
     std::shared_ptr<const SceneFrame> latest_scene_;
 };

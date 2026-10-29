@@ -133,6 +133,7 @@ void NativeInput::install_bindings() {
     const auto merged=merge_bindings(keyboard_,pad_.bindings);
     auto game=merged,service=merged;
     for(size_t i=0;i<merged.size();++i) {
+        if(i==size_t(Action::menu)) { game[i].clear(); service[i].clear(); continue; }   // a host key (game/host_keys.h): neither the game nor the service table sees it
         const bool is_service=i==size_t(Action::release_cursor) || i==size_t(Action::screenshot);
         (is_service ? game : service)[i].clear();
     }
@@ -322,6 +323,7 @@ std::array<float,2> input_consumed_aim() { auto* source=aim_channel==1 ? second_
 std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? second_input : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
 void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; aim_exact=true; }
 bool input_aim_exact() { return aim_exact; }
+bool input_demo_playing() { return input && input->demo_playing(); }
 unsigned input_aim_channel() { return aim_channel; }
 InputSample NativeInput::consume() { return consume_at(motion_time()); }
 InputSample NativeInput::consume_at(uint64_t now_ns) {

@@ -1,4 +1,5 @@
 #include "write_trap.h"
+#include "trace.h"
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +25,8 @@ Trap& trap() { static Trap instance; return instance; }
 LONG CALLBACK handler(PEXCEPTION_POINTERS info) {
     auto& t = trap();
     const auto* record = info->ExceptionRecord;
-    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->ExceptionInformation[0] == 1) {
+    static const bool reads = std::getenv("UC_READ_TRAP") != nullptr;   // UC_READ_TRAP=1: the pages are made inaccessible and every access (read or write) of a watched word is logged
+    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && (record->ExceptionInformation[0] == 1 || (reads && record->ExceptionInformation[0] == 0))) {
         const uintptr_t address = record->ExceptionInformation[1], page = address & ~uintptr_t(4095);
         for (const auto watched : t.pages) if (watched == page) {
             const uintptr_t rip = uintptr_t(record->ExceptionAddress);
@@ -33,7 +35,7 @@ LONG CALLBACK handler(PEXCEPTION_POINTERS info) {
             static const bool all = std::getenv("UC_WRITE_TRAP_ALL") != nullptr;   // log every write, not only each new (rip, address)
             static unsigned logged = 0;
             if (inside && t.out && (all ? logged++ < 4000 : (t.seen.size() < 4000 && t.seen.insert({rip, address}).second))) {
-                std::fprintf(t.out, "step %u rva %llX write %llX thread %lu lr %08X chain", t.steps, (unsigned long long)(rip - uintptr_t(GetModuleHandleW(nullptr))), (unsigned long long)address, GetCurrentThreadId(), t.ctx ? t.ctx->lr : 0u);
+                std::fprintf(t.out, "step %u rva %llX %s %llX thread %lu lr %08X chain", t.steps, (unsigned long long)(rip - uintptr_t(GetModuleHandleW(nullptr))), record->ExceptionInformation[0] == 1 ? "write" : "read", (unsigned long long)address, GetCurrentThreadId(), t.ctx ? t.ctx->lr : 0u);
                 if (t.ctx) {   // guest back chain: *(sp) = caller's sp, *(sp + 4) = LR save slot of the caller
                     uint32_t sp = t.ctx->r[1];
                     const auto* mem = reinterpret_cast<const uint8_t*>(t.ctx->mem);
@@ -47,6 +49,7 @@ LONG CALLBACK handler(PEXCEPTION_POINTERS info) {
                     }
                 }
                 std::fputc('\n', t.out);
+                if (reads) trace_dump(t.out, 3);   // UC_TRACE builds: the guest functions the thread entered last (the reader is the newest)
             }
             DWORD old;
             VirtualProtect(reinterpret_cast<void*>(page), 4096, PAGE_READWRITE, &old);
@@ -56,7 +59,7 @@ LONG CALLBACK handler(PEXCEPTION_POINTERS info) {
         }
     } else if (record->ExceptionCode == EXCEPTION_SINGLE_STEP && InterlockedExchange(&t.pending, 0)) {
         DWORD old;
-        VirtualProtect(reinterpret_cast<void*>(t.pending_page), 4096, PAGE_READONLY, &old);
+        VirtualProtect(reinterpret_cast<void*>(t.pending_page), 4096, std::getenv("UC_READ_TRAP") ? PAGE_NOACCESS : PAGE_READONLY, &old);
         if (t.out) std::fflush(t.out);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
@@ -92,7 +95,7 @@ void write_trap_step(const ppc::Ctx& c) {
     AddVectoredExceptionHandler(1, handler);
     for (const auto page : t.pages) {
         DWORD old = 0;
-        const BOOL ok = VirtualProtect(reinterpret_cast<void*>(page), 4096, PAGE_READONLY, &old);
+        const BOOL ok = VirtualProtect(reinterpret_cast<void*>(page), 4096, std::getenv("UC_READ_TRAP") ? PAGE_NOACCESS : PAGE_READONLY, &old);
         if (t.out) std::fprintf(t.out, "protect %llX ok %d old %lX error %lu\n", (unsigned long long)page, ok, old, ok ? 0ul : GetLastError());
     }
     if (t.out) std::fflush(t.out);

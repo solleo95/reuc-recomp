@@ -1,7 +1,9 @@
 #include "options_config.h"
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
+#include <tuple>
 namespace uc {
 namespace {
 [[noreturn]] void invalid(const std::string& message) {throw std::invalid_argument("config: "+message);}
@@ -63,6 +65,23 @@ Options options_from_config(const ConfigDocument& document) {
             const auto& value=graphics["crosshair_scale"];
             if(!value.is_number_unsigned() || value.get<uint64_t>()>100)invalid("crosshair_scale must be 0..100");
             options.crosshair_scale=value.get<uint32_t>();
+        }
+        for(auto [key,field]:std::array<std::pair<const char*,bool ReticleOptions::*>,4>{{{"reticle_hide_tail",&ReticleOptions::hide_tail},{"reticle_hide_dot",&ReticleOptions::hide_dot},{"reticle_hide_marks",&ReticleOptions::hide_marks},{"reticle_hide_arc",&ReticleOptions::hide_arc}}})
+            if(graphics.contains(key))options.reticle.*field=boolean(graphics[key]);
+        for(auto [key,field]:std::array<std::pair<const char*,uint32_t ReticleOptions::*>,2>{{{"reticle_color_p1",&ReticleOptions::color_p1},{"reticle_color_p2",&ReticleOptions::color_p2}}}) {
+            if(!graphics.contains(key))continue;
+            const auto& value=graphics[key];   // "#RRGGBB"; absent or "" keeps the game's own
+            if(!value.is_string())invalid(std::string(key)+" must be a #RRGGBB string");
+            const auto text=value.get<std::string>();
+            if(text.empty())continue;
+            if(text.size()!=7 || text[0]!='#' || text.find_first_not_of("0123456789abcdefABCDEF",1)!=std::string::npos)invalid(std::string(key)+" must be #RRGGBB");
+            options.reticle.*field=std::max<uint32_t>(1,uint32_t(std::stoul(text.substr(1),nullptr,16)));   // black is #000001: 0 means the game's own
+        }
+        for(auto [key,field,low,high]:std::array<std::tuple<const char*,uint32_t ReticleOptions::*,uint32_t,uint32_t>,3>{{{"reticle_dot_size",&ReticleOptions::dot_size,kReticleDotMin,kReticleDotMax},{"reticle_tail_length",&ReticleOptions::tail_length,kReticleTailMin,kReticleTailMax},{"reticle_partner_opacity",&ReticleOptions::partner_opacity,0u,100u}}}) {
+            if(!graphics.contains(key))continue;
+            const auto& value=graphics[key];
+            if(!value.is_number_unsigned() || value.get<uint64_t>()<low || value.get<uint64_t>()>high)invalid(std::string(key)+" must be "+std::to_string(low)+".."+std::to_string(high));
+            options.reticle.*field=value.get<uint32_t>();
         }
         if(graphics.contains("dlss5"))options.dlss5_enabled=boolean(graphics["dlss5"]);
         if(graphics.contains("hdr"))options.hdr.enabled=boolean(graphics["hdr"]);
@@ -126,6 +145,15 @@ Options options_from_config(const ConfigDocument& document) {
             const auto level=graphics["rt_quality"].is_string() ? effect_level_from_name(graphics["rt_quality"].get<std::string>()) : std::nullopt;
             if(!level || *level==EffectLevel::off)invalid("graphics.rt_quality must be low, medium, high or ultra");
             options.effects.rt_quality=*level;
+        }
+        if(graphics.contains("ultrawide"))options.ultrawide=boolean(graphics["ultrawide"]);
+        if(graphics.contains("hud_position")) {
+            if(!graphics["hud_position"].is_string())invalid("hud_position must be a string");
+            const auto position=graphics["hud_position"].get<std::string>();
+            if(position=="auto")options.hud_position=HudPosition::automatic;
+            else if(position=="center")options.hud_position=HudPosition::center;
+            else if(position=="edges")options.hud_position=HudPosition::edges;
+            else invalid("unknown hud_position");
         }
         if(graphics.contains("window_mode")) {
             if(!graphics["window_mode"].is_string())invalid("window_mode must be a string");
@@ -191,6 +219,17 @@ void store_options(ConfigDocument& document,const Options& options) {
     graphics["bloom"]=options.bloom;
     graphics["bloom_strength"]=options.bloom_strength;
     graphics["crosshair_scale"]=options.crosshair_scale;
+    graphics["reticle_hide_tail"]=options.reticle.hide_tail;
+    graphics["reticle_hide_dot"]=options.reticle.hide_dot;
+    graphics["reticle_hide_marks"]=options.reticle.hide_marks;
+    graphics["reticle_hide_arc"]=options.reticle.hide_arc;
+    for(auto [key,rgb]:std::array<std::pair<const char*,uint32_t>,2>{{{"reticle_color_p1",options.reticle.color_p1},{"reticle_color_p2",options.reticle.color_p2}}}) {
+        if(!rgb){graphics.erase(key);continue;}
+        char text[8]; std::snprintf(text,sizeof text,"#%06X",rgb&0xFFFFFF); graphics[key]=text;
+    }
+    graphics["reticle_dot_size"]=options.reticle.dot_size;
+    graphics["reticle_tail_length"]=options.reticle.tail_length;
+    graphics["reticle_partner_opacity"]=options.reticle.partner_opacity;
     graphics["dlss5"]=options.dlss5_enabled;
     graphics["hdr"]=options.hdr.enabled;
     graphics["hdr_peak_nits"]=options.hdr.peak_nits;
@@ -199,6 +238,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     if(options.fps_limit)graphics["fps_limit"]=*options.fps_limit;
     else graphics.erase("fps_limit");
     graphics["prompt_style"]=options.prompt_style==PromptStyle::monochrome ? "monochrome" : "sculpted";
+    graphics["ultrawide"]=options.ultrawide;
+    graphics["hud_position"]=options.hud_position==HudPosition::automatic ? "auto" : options.hud_position==HudPosition::center ? "center" : "edges";
     graphics["window_mode"]=options.window_mode==WindowMode::windowed ? "windowed" : options.window_mode==WindowMode::borderless ? "borderless" : "exclusive";
     graphics["upscaler"]=std::string(upscaler_name(options.upscaler));
     graphics["upscale_mode"]=std::string(upscale_mode_name(options.upscale_mode));

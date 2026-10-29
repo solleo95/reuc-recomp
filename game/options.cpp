@@ -84,6 +84,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--profile") options.profile = true;
         else if (arg == "--capture-scene-passes") options.capture_scene_passes = true;
         else if (arg == "--unlock-60fps") options.unlock_60fps = true;
+        else if (arg == "--no-ultrawide") options.ultrawide = false;
         else if (arg == "--no-bloom") options.bloom = false;
         else if (arg == "--bloom-strength") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --bloom-strength";
@@ -157,7 +158,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 if (multiplier) options.frame_generation_multiplier = multiplier;
             }
         }
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--hud-position" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -165,6 +166,13 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 else if(value=="borderless") options.window_mode=WindowMode::borderless;
                 else if(value=="exclusive") options.window_mode=WindowMode::exclusive;
                 else return "invalid value for " + std::string(arg);
+                continue;
+            }
+            if(arg=="--hud-position") {
+                if(value=="auto") options.hud_position=HudPosition::automatic;
+                else if(value=="center") options.hud_position=HudPosition::center;
+                else if(value=="edges") options.hud_position=HudPosition::edges;
+                else return "invalid value for --hud-position (auto, center or edges)";
                 continue;
             }
             if(arg=="--test-server") {

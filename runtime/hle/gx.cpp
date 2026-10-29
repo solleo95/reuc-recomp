@@ -607,7 +607,8 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
         frame.black_output=black;
         frame.replay=replaying;
         frame.aim_consumed=uc::input_consumed_aim();
-        gx::mark_reticle_draws(frame.draws,{uc::input_consumed_aim_of(0),uc::input_consumed_aim_of(1)},uc::input_aim_channel(),uc::input_aim_exact());
+        gx::mark_reticle_draws(frame.draws,{uc::input_consumed_aim_of(0),uc::input_consumed_aim_of(1)},uc::input_aim_channel(),uc::input_aim_exact() || !uc::input_demo_playing());
+        gx::apply_reticle_style(frame.draws,gx::reticle_style(),uc::input_aim_channel(),uc::input_consumed_aim_of(1).has_value());   // the menu's Reticle tab
         for(auto& draw:frame.draws) {
             if(draw.late_aim) continue;
             if(profile_mesh && gx::reticle_callsite(draw.callsite) && draw.texture && !draw.texture->levels.empty()) {   // another weapon's reticle texture would show up here

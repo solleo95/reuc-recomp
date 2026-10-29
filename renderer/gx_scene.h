@@ -13,6 +13,7 @@ struct SceneFrame {
 };
 struct SceneSnapshot {
     std::shared_ptr<const SceneNode> state;
+    bool scene_frame=false;   // the producer's ultrawide memory (ultrawide.h): the unfinished frame already had a 3D scene
 };
 // Only the unfinished logical frame belongs to a checkpoint. Temporal GPU effects
 // use the last rendered texture version and never make simulation wait for rendering.

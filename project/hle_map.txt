@@ -193,6 +193,8 @@ GXLoadNrmMtxImm
 # RBUE08 startup logo update; original body continues at80245860 (game/intro.cpp).
 @8024585C IntroLogoUpdate
 @801426D4 MovieUpdate
+# Native ultrawide: C_MTXPerspective with a wider aspect on a wider output; the original body continues at 80265468 (game/intro.cpp).
+@80265464 MTXPerspective
 @801581E0 GameFrameWait
 @8003F670 GameLoop
 @800C790C ActorStepTime

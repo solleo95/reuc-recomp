@@ -166,7 +166,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity && a.hud_position==b.hud_position
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad;
 }
@@ -649,6 +649,15 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("fps"));
             if(limit_open) {
                 for(const uint32_t value:limits) {if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value))options.fps_limit=value;track("fps"+std::to_string(value));}
+                ImGui::EndCombo();
+            }
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            ImGui::TextUnformatted(tr("hud_position"));push_font(ui.sans,22);
+            const char* hud_keys[]={"hud_auto","hud_center","hud_edges"};
+            const bool hud_open=combo("##hud",tr(hud_keys[int(options.hud_position)]));track("hud");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("hud_hint"));
+            if(hud_open) {
+                for(int i=0;i<3;++i) {if(ImGui::Selectable(tr(hud_keys[i]),int(options.hud_position)==i))options.hud_position=uc::HudPosition(i);track("hud"+std::to_string(i));}
                 ImGui::EndCombo();
             }
             ImGui::PopFont();ImGui::PopItemWidth();ImGui::Unindent(-12*unit);ImGui::EndChild();

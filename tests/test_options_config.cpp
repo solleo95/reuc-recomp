@@ -62,6 +62,12 @@ int main() {
     options.crosshair_scale=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
     options.crosshair_scale=100;uc::store_options(document,options);
+    CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).reticle==uc::ReticleOptions{});   // absent: the game's own reticle
+    options.reticle={true,false,true,false,0x33CC66,0,150,250,30};uc::store_options(document,options);
+    CHECK(document.properties["graphics"]["reticle_color_p1"]=="#33CC66" && !document.properties["graphics"].contains("reticle_color_p2") && document.properties["graphics"]["reticle_hide_tail"]==true);
+    CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).reticle==options.reticle);
+    options.reticle={};uc::store_options(document,options);
+    CHECK(!document.properties["graphics"].contains("reticle_color_p1") && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).reticle==uc::ReticleOptions{});
     CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).bloom_strength==100);   // absent: the full glow
     options.bloom_strength=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["bloom_strength"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).bloom_strength==0);
@@ -211,6 +217,8 @@ int main() {
         R"({"graphics":{"bloom_strength":201}})",R"({"graphics":{"bloom_strength":-1}})",R"({"graphics":{"bloom_strength":50.5}})",R"({"graphics":{"bloom_strength":"x"}})",
         R"({"mouse_sensitivity":9})",R"({"mouse_sensitivity":301})",R"({"mouse_sensitivity":-5})",R"({"mouse_sensitivity":99.5})",R"({"mouse_sensitivity":"x"})",
         R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",
+        R"({"graphics":{"reticle_hide_dot":1}})",R"({"graphics":{"reticle_color_p1":"red"}})",R"({"graphics":{"reticle_color_p2":"#12345"}})",R"({"graphics":{"reticle_color_p1":255}})",
+        R"({"graphics":{"reticle_dot_size":24}})",R"({"graphics":{"reticle_dot_size":301}})",R"({"graphics":{"reticle_tail_length":401}})",R"({"graphics":{"reticle_partner_opacity":101}})",
         R"({"graphics":{"hdr":1}})",R"({"graphics":{"hdr_peak_nits":0}})",R"({"graphics":{"hdr_peak_nits":2001}})",R"({"graphics":{"hdr_paper_white_nits":79}})",
         R"({"graphics":{"hdr_paper_white_nits":"bright"}})",R"({"graphics":{"hdr_ui_nits":501}})",R"({"graphics":{"hdr_ui_nits":100.5}})"}) {
         bool caught=false;try {uc::options_from_config(uc::parse_config(text));}catch(const std::invalid_argument&){caught=true;}CHECK(caught);

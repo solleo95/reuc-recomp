@@ -222,6 +222,14 @@ static void pad_tables_validate_and_stay_separate() {
     CHECK(defaults[size_t(Action::weapon_previous)][0].input==pad(9) && defaults[size_t(Action::weapon_next)][0].input==pad(10));
     CHECK(defaults[size_t(Action::recenter)][0].input==pad(7) && defaults[size_t(Action::screenshot)][0].input==pad(4));
     CHECK(defaults[size_t(Action::release_cursor)].empty() && defaults[size_t(Action::camera_up)].empty());
+    CHECK(defaults[size_t(Action::menu)].empty());   // the menu is a key of the keyboard table
+    auto menu_table=default_bindings();
+    CHECK((menu_table[size_t(Action::menu)].size()==1 && menu_table[size_t(Action::menu)][0].input==PhysicalInput{PhysicalKind::key,uint16_t(73)} && !validate_bindings(menu_table)));   // Insert
+    menu_table[size_t(Action::menu)]={{BindingKind::physical,{PhysicalKind::key,67},{}}}; CHECK(!validate_bindings(menu_table));                                                    // F10
+    menu_table[size_t(Action::menu)]={{BindingKind::physical,{PhysicalKind::mouse,4},{}}}; CHECK(validate_bindings(menu_table));                                                    // a mouse button is no host key
+    menu_table[size_t(Action::menu)]={{BindingKind::physical,{PhysicalKind::key,67},{{PhysicalKind::key,224}}}}; CHECK(validate_bindings(menu_table));                              // nor a chord
+    menu_table[size_t(Action::menu)].clear(); CHECK(!validate_bindings(menu_table));                                                                                                // unbound: the game falls back to Insert
+    gamepad=default_pad_bindings(); gamepad[size_t(Action::menu)].push_back(physical(pad(5))); CHECK(validate_pad_bindings(gamepad));   // the gamepad table has no menu key
 }
 static void merge_appends_pad_entries_without_duplicates() {
     const auto merged=merge_bindings(default_bindings(),default_pad_bindings());

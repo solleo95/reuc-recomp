@@ -7,6 +7,10 @@
 #include <cstdio>
 namespace fs=std::filesystem;
 using namespace std::chrono_literals;
+// Waits that must succeed; they return as soon as the event happens, so a loaded machine only makes them longer.
+// The fixtures that must time out (never-ack, hold-parent, never-ready in update_test_child.cpp) outlast this value.
+constexpr auto ack_timeout=3000ms;
+constexpr int poll_limit=3000;
 template<class T> T take(std::variant<T,std::error_code> result) {
     if(auto* error=std::get_if<std::error_code>(&result)) std::fprintf(stderr,"%s\n",error->message().c_str());
     CHECK(std::holds_alternative<T>(result));return std::get<T>(std::move(result));
@@ -39,18 +43,18 @@ void process_tests(const fs::path& base) {
         ok(apply_install(ok(plan_install(root,package))));
         if(std::string_view(scenario)=="missing-child") fs::remove(root/"uc_launcher.exe");
         else if(std::string_view(scenario)!="success") std::ofstream(root/scenario)<<"fixture";
-        auto result=start_and_confirm(root,operation,guard,500ms);
+        auto result=start_and_confirm(root,operation,guard,ack_timeout);
         if(std::string_view(scenario)=="success") {
             ok(std::move(result));
-            for(int i=0;i<100 && !fs::exists(root/"child-committed");++i) Sleep(10);
+            for(int i=0;i<poll_limit &&!fs::exists(root/"child-committed");++i) Sleep(10);
             CHECK(fs::exists(root/"child-committed"));CHECK(!fs::exists(operation/"backup"));
         } else {
             CHECK(failed(result));CHECK(!fs::exists(root/"child-committed"));
-            CHECK(!guard.reacquire_for_rollback(500ms));ok(recover_install(root,operation));
+            CHECK(!guard.reacquire_for_rollback(ack_timeout));ok(recover_install(root,operation));
             CHECK(ok(read_text(root/"uc.exe",100))=="OLD");
         }
-        if(std::string_view(scenario)=="success") {auto next=take(uc::reserve_client_install(root));CHECK(!next.wait_until_unused(1000ms));}
-        else CHECK(!guard.reacquire_for_rollback(1000ms));
+        if(std::string_view(scenario)=="success") {auto next=take(uc::reserve_client_install(root));CHECK(!next.wait_until_unused(ack_timeout));}
+        else CHECK(!guard.reacquire_for_rollback(ack_timeout));
     }
 }
 void helper_tests(const fs::path& base) {
@@ -88,9 +92,9 @@ void helper_tests(const fs::path& base) {
             CHECK(!ok(resume_pending_update(root)));CHECK(!fs::exists(operation));continue;
         }
         if(std::string_view(scenario)=="kill-helper") {
-            for(int i=0;i<200 && !fs::exists(operation/"journal.json");++i) Sleep(10);
+            for(int i=0;i<poll_limit && !fs::exists(operation/"journal.json");++i) Sleep(10);
             bool stopped=false;
-            for(int i=0;i<200;++i) {
+            for(int i=0;i<poll_limit;++i) {
                 auto guard=uc::reserve_client_install(root);
                 if(!denied(guard)) {stopped=true;break;} Sleep(10);
             }
@@ -100,10 +104,10 @@ void helper_tests(const fs::path& base) {
             CHECK(GetExitCodeProcess(recovery.get(),&code));CHECK(code==0);
         }
         auto marker=root/(succeeds?"child-committed":"old-restarted");
-        for(int i=0;i<500 && !fs::exists(marker);++i) Sleep(10);
+        for(int i=0;i<poll_limit && !fs::exists(marker);++i) Sleep(10);
         CHECK(fs::exists(marker));CHECK(!ok(pending_install(root,operation)));
         CHECK(ok(read_text(root/"uc.exe",100))==(succeeds?"NEW":"OLD"));
-        auto guard=take(uc::reserve_client_install(root));CHECK(!guard.wait_until_unused(1000ms));
+        auto guard=take(uc::reserve_client_install(root));CHECK(!guard.wait_until_unused(ack_timeout));
     }
 }
 void cleanup_tests(const fs::path& base) {
@@ -135,7 +139,7 @@ void cleanup_tests(const fs::path& base) {
                 CHECK(failed(result));CHECK(!fs::exists(operation/"journal.json"));
                 CHECK(ok(read_text(root/"uc.exe",100))=="OLD");
             }
-            for(int i=0;i<100 && !fs::exists(root/"old-restarted");++i) Sleep(10);
+            for(int i=0;i<poll_limit && !fs::exists(root/"old-restarted");++i) Sleep(10);
             CHECK(!ok(resume_pending_update(root)));
             before_journal_cleaned=!fs::exists(operation);
         } else {

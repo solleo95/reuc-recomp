@@ -84,5 +84,22 @@ int main() {
         editor.event(key(21),true);
         CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)].back().input==key(21));
     }
+    {   // the menu key is rebindable; the keys the port itself takes (P, Tab, Escape for the menu) are not, and nothing else may use the key that opens the menu
+        editor.begin_capture(Action::menu,true);
+        for(uint16_t refused:{uint16_t(19),uint16_t(43),uint16_t(41)}) { editor.event(key(refused),true); CHECK(editor.capturing() && editor.error()); }
+        editor.event(key(67),true);   // F10
+        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::menu)]==std::vector<Binding>({{BindingKind::physical,key(67),{}}}));
+        editor.begin_capture(Action::reload,true); editor.event(key(67),true);
+        CHECK(editor.capturing() && editor.error());                                    // F10 now opens the menu
+        editor.event(key(73),true);
+        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)].back().input==key(73));   // Insert is an ordinary key again
+        editor.begin_capture(Action::menu,true); editor.event(key(73),true);
+        CHECK(editor.capturing() && editor.error());   // reload has it
+        editor.clear(Action::reload); editor.begin_capture(Action::menu,true); editor.event(key(73),true);
+        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::menu)][0].input==key(73));
+        editor.clear(Action::menu); editor.begin_capture(Action::knife,true); editor.event(key(73),true);
+        CHECK(editor.capturing() && editor.error());                                    // none bound: Insert still opens it
+        editor.cancel_capture();
+    }
     return 0;
 }

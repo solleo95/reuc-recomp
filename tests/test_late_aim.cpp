@@ -34,6 +34,8 @@ int main() {
         CHECK(mark(draws, {aim, std::nullopt}, 0) == 3);
         CHECK(draws[0].late_aim && draws[0].reticle && draws[1].late_aim && draws[2].late_aim);
         CHECK(!draws[3].reticle && !draws[4].reticle && !draws[5].reticle && !draws[6].reticle);
+        std::vector<gx::DrawPacket> flick{tinted(quad(0x80393B0C, nx, ny, 154), red), quad(0x8006D174, nx + 0.9f, ny, 100)};   // the dot trails far behind in a fast flick
+        CHECK(mark(flick, {aim, std::nullopt}, 0) == 2 && flick[1].late_aim);
         std::vector<gx::DrawPacket> blue_alone{tinted(quad(0x80393B0C, nx, ny, 154), blue)};
         CHECK(mark(blue_alone, {aim, std::nullopt}, 0) == 1 && blue_alone[0].late_aim);   // a lone pad's reticle is the first player's whatever its tint
     }
@@ -53,6 +55,12 @@ int main() {
             const float ax = (nx + 0.1f) / gx::kAimToNdcX, ay = (ny + 0.02f) / gx::kAimToNdcY;
             CHECK(!exact[0].aim_exact && exact[1].aim_exact && exact[2].aim_exact && exact[3].aim_exact && !exact[4].aim_exact);
             CHECK(std::abs(exact[1].aim_ref[0] - ax) < 1e-5f && std::abs(exact[2].aim_ref[1] - ay) < 1e-5f && std::abs(exact[3].aim_ref[0] - ax) < 1e-5f);
+            CHECK(std::abs(exact[2].aim_ref[0] - (nx + 0.15f) / gx::kAimToNdcX) < 1e-5f);   // the dot lands on the mouse itself, not at its offset from the ring
+        }
+        {   // A tinted dot drawn before the ring, inside its group: the anchor is still the ring's own centre (it flipped with the group's first member and the reticle shook).
+            std::vector<gx::DrawPacket> both{tinted(quad(0x8006D174, nx + 0.02f, ny, 100), red), tinted(quad(0x80393B0C, nx, ny, 154), red)};
+            CHECK(gx::mark_reticle_draws(both, Aims{aim, std::nullopt}, 0, true) == 2);
+            CHECK(std::abs(both[1].aim_ref[0] - nx / gx::kAimToNdcX) < 1e-5f && std::abs(both[0].aim_ref[0] - (nx + 0.02f) / gx::kAimToNdcX) < 1e-5f);
         }
         {   // Reticles exactly on top of each other: the tint and the draw order still keep the quads apart.
             std::vector<gx::DrawPacket> stacked{tinted(quad(0x80393B0C, nx, ny, 120), red), quad(0x80393B0C, nx, ny, 120), tinted(quad(0x80393B0C, nx + 0.01f, ny, 120), blue), quad(0x80393B0C, nx + 0.01f, ny, 120)};
@@ -68,8 +76,13 @@ int main() {
         CHECK(gx::mark_reticle_draws(draws, Aims{aim, other}, 1, true) == 1 && !draws[0].late_aim && draws[1].late_aim && !draws[2].late_aim && !draws[1].reticle);
         std::vector<gx::DrawPacket> single{tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue)};
         CHECK(gx::mark_reticle_draws(single, Aims{aim, std::nullopt}, 0, true) == 1 && single[0].late_aim);
-        std::vector<gx::DrawPacket> solo{tinted(quad(0x8006CED4, 0.f, 0.f, 100), red)};   // single-player: the game's own wake stays put
+        auto faded = tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue); faded.vertices[0].color[0] = {255, 255, 255, 0};   // the strip's head is faded: a later vertex names the owner
+        std::vector<gx::DrawPacket> two{faded};
+        CHECK(gx::mark_reticle_draws(two, Aims{aim, other}, 1, true) == 1 && two[0].late_aim && two[0].wake);
+        std::vector<gx::DrawPacket> solo{tinted(quad(0x8006CED4, 0.f, 0.f, 100), red)};   // not exact: the game's own wake stays put
         CHECK(mark(solo, {aim, std::nullopt}, 0) == 0 && !solo[0].late_aim && !solo[0].wake);
+        std::vector<gx::DrawPacket> plain{quad(0x8006CED4, 0.f, 0.f, 100)};               // single-player (exact): a wake without a tint is the lone pad's
+        CHECK(gx::mark_reticle_draws(plain, Aims{aim, std::nullopt}, 0, true) == 1 && plain[0].late_aim && plain[0].wake);
     }
     {   // The wake strip is laid along the mouse path: centres on it, half-width and side kept, pairs turned square to the path.
         std::vector<std::array<float,2>> strip;   // an old strip along +y (older pairs lower), 0.02 half-width on the right
@@ -93,5 +106,44 @@ int main() {
     CHECK(width == 640 && height == 360);
     CHECK(std::abs(x + (nx * .5f + .5f) * width - (10 + (nx * .5f + .5f) * 1280)) < 1e-3f);
     CHECK(std::abs(y + (ny * .5f + .5f) * height - (20 + (ny * .5f + .5f) * 720)) < 1e-3f);
+    {   // The reticle style (the menu's Reticle tab): parts the player hid are dropped, the circle takes the colour at the game's brightness, the dot grows about its own centre.
+        const auto circle = [&] {   // a 120 texture with ink on its diagonals: the circle (the marks' textures have none)
+            auto draw = tinted(quad(0x80393B0C, nx, ny, 120), red);
+            auto texture = std::make_shared<gx::TexturePixels>();
+            texture->levels.push_back({120, 120, std::vector<uint8_t>(120 * 120 * 4, 0)});
+            for (const auto [x, y] : {std::pair{87, 32}, std::pair{32, 32}, std::pair{32, 87}, std::pair{87, 87}}) texture->levels[0].rgba[(size_t(y) * 120 + size_t(x)) * 4 + 3] = 255;
+            draw.texture = texture;
+            return draw;
+        };
+        const auto reticle = [&] { return std::vector<gx::DrawPacket>{circle(), quad(0x80393B0C, nx, ny, 120), quad(0x80393B0C, nx, ny, 154), quad(0x8006D174, nx, ny, 100), tinted(quad(0x8006CED4, 0.f, 0.f, 100), red)}; };
+        const auto parts = [](const std::vector<gx::DrawPacket>& draws) { std::vector<gx::ReticlePart> out; for (const auto& d : draws) out.push_back(gx::reticle_part(d)); return out; };
+        auto draws = reticle();
+        CHECK(mark(draws, {aim, std::nullopt}, 0) == 4);
+        CHECK((parts(draws) == std::vector<gx::ReticlePart>{gx::ReticlePart::ring, gx::ReticlePart::marks, gx::ReticlePart::arc, gx::ReticlePart::dot, gx::ReticlePart::wake}));
+        gx::ReticleStyle plain;
+        auto untouched = draws; gx::apply_reticle_style(untouched, plain, 0, false);
+        CHECK(untouched.size() == 5 && plain.plain());
+        gx::ReticleStyle hide; hide.hide_tail = hide.hide_marks = true;
+        auto hidden = draws; gx::apply_reticle_style(hidden, hide, 0, false);
+        CHECK((parts(hidden) == std::vector<gx::ReticlePart>{gx::ReticlePart::ring, gx::ReticlePart::arc, gx::ReticlePart::dot}));
+        gx::ReticleStyle hide_rest; hide_rest.hide_dot = hide_rest.hide_arc = true;
+        auto hidden_rest = draws; gx::apply_reticle_style(hidden_rest, hide_rest, 0, false);
+        CHECK((parts(hidden_rest) == std::vector<gx::ReticlePart>{gx::ReticlePart::ring, gx::ReticlePart::marks, gx::ReticlePart::wake}));
+        gx::ReticleStyle look; look.color = {0x00FF00, 0}; look.dot_scale = 2;
+        auto styled = draws; gx::apply_reticle_style(styled, look, 0, false);
+        CHECK(styled[0].vertices[0].color[0][0] == 0 && styled[0].vertices[0].color[0][1] == 255 && styled[0].vertices[0].color[0][2] == 0 && styled[0].vertices[0].color[0][3] == 255);   // the circle: green
+        CHECK(styled[4].vertices[0].color[0][1] == 255 && styled[4].vertices[0].color[0][0] == 0);                                                                                           // the wake too
+        CHECK(styled[1].vertices[0].color[0] == draws[1].vertices[0].color[0] && styled[2].vertices[0].color[0] == draws[2].vertices[0].color[0]);                                             // marks and arc keep their own
+        CHECK(std::abs(styled[3].vertices[0].position[0] - (nx - 0.16f)) < 1e-5f && std::abs(styled[3].vertices[2].position[1] - (ny + 0.16f)) < 1e-5f);                                      // the dot: twice the size about its centre
+        gx::ReticleStyle dark; dark.color = {0x400000, 0};
+        auto darkened = draws; gx::apply_reticle_style(darkened, dark, 0, false);
+        CHECK(darkened[0].vertices[0].color[0][0] == 64 && darkened[0].vertices[0].color[0][1] == 0);   // a dark pick stays dark
+        auto dimmed = draws; dimmed[2].late_aim = false;   // a second pad exists and this arc is not the local player's
+        gx::ReticleStyle fade; fade.partner_alpha = 0.5f;
+        gx::apply_reticle_style(dimmed, fade, 0, true);
+        CHECK(dimmed[2].vertices[0].color[0][3] == 128 && dimmed[0].vertices[0].color[0][3] == 255);
+        auto lone = draws; lone[2].late_aim = false; gx::apply_reticle_style(lone, fade, 0, false);
+        CHECK(lone[2].vertices[0].color[0][3] == 255);   // one pad: nobody is a partner
+    }
     return 0;
 }

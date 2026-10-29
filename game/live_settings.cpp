@@ -14,8 +14,8 @@ void LiveSettings::apply(const Options& next) {
         || next.frame_generation!=was.frame_generation || next.frame_generation_multiplier!=was.frame_generation_multiplier;
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom_settings()!=was.bloom_settings(), style=next.prompt_style!=was.prompt_style;
     const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale, hdr=next.hdr!=was.hdr;
-    const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity, gamepad=next.gamepad!=was.gamepad;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad) return;
+    const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity, gamepad=next.gamepad!=was.gamepad, hud=next.hud_position!=was.hud_position, reticle=next.reticle!=was.reticle;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -24,7 +24,9 @@ void LiveSettings::apply(const Options& next) {
     if(limit) targets_.fps_limit(next.fps_limit);
     if(bloom) targets_.bloom(next.bloom_settings());
     if(crosshair) targets_.crosshair_scale(next.crosshair_scale);
+    if(reticle) targets_.reticle(next.reticle);
     if(sensitivity) targets_.mouse_sensitivity(next.mouse_sensitivity);
+    if(hud) targets_.hud_position(next.hud_position);
     if(style) targets_.prompt_style(next.prompt_style);
     if(hdr) targets_.hdr(next.hdr);
     if(gamepad) targets_.gamepad(next.gamepad);

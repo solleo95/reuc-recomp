@@ -71,6 +71,7 @@ public:
     // ordered file while recording and returned from that file while playing, so a deterministic run needs neither the harness nor a window.
     void demo_record(const std::filesystem::path&);
     void demo_play(const std::filesystem::path&);
+    bool demo_playing() const { return replaying_; }
     uint32_t demo_speed(uint32_t live);   // clock speed factor the game pacing uses in a deterministic run: recorded when it changes, replayed at the same pacing call
     ~NativeInput();
 private:
@@ -122,6 +123,7 @@ unsigned input_hle_channel(); // Guest baton owns the currently sampled channel.
 void input_hle_restore_channel(unsigned channel);
 std::array<float,2> input_consumed_aim();   // the pointer the guest read last for the aim channel's pad (zero without input)
 std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel);   // the same for one pad; nullopt where there is none (single-player has no second)
+bool input_demo_playing();   // a demo replays the recorded samples: the live pointer is not what the game consumed
 bool input_aim_exact();   // true once a network session set the aim channel
 unsigned input_aim_channel();   // the local player's pad (0 outside network play)
 void input_hle_set_aim_channel(unsigned channel);   // network play: the local player's pad (0 host, 1 client); reset to 0 by input_hle_init

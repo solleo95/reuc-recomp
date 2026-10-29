@@ -16,8 +16,19 @@
 #include <variant>
 namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
+enum class HudPosition { automatic,center,edges };   // where the in-game interface sits on a wider than 16:9 picture: automatic = edges up to about 21:9, the middle beyond
 std::filesystem::path default_game_folder();   // "game" next to the executable
 constexpr uint32_t kMouseSensitivityMin=10, kMouseSensitivityMax=300;
+constexpr uint32_t kReticleDotMin=25, kReticleDotMax=300, kReticleTailMin=25, kReticleTailMax=400;   // percent
+// How the aim reticle looks (the in-game menu's Reticle tab; graphics.reticle_* in config.json). The size slider stays graphics.crosshair_scale.
+struct ReticleOptions {
+    bool hide_tail=false, hide_dot=false, hide_marks=false, hide_arc=false;   // the wake, the laser dot, the four white marks in the circle, the green ammo arc
+    uint32_t color_p1=0, color_p2=0;   // 0xRRGGBB for the first / second player's circle, dot and wake; 0 keeps the game's red / blue
+    uint32_t dot_size=100;             // percent, kReticleDotMin..Max
+    uint32_t tail_length=100;          // percent, kReticleTailMin..Max
+    uint32_t partner_opacity=100;      // percent 0..100: the other player's reticle in cooperative play
+    bool operator==(const ReticleOptions&) const=default;
+};
 struct Options {
     RendererBackend renderer_backend=RendererBackend::vulkan;
     std::optional<net::Endpoint> netplay;
@@ -26,6 +37,8 @@ struct Options {
     uint32_t width = 0, height = 0, seconds = 0; //0 resolves to the monitor size at startup.
     double render_scale=0; //0 selects the monitor's720p multiplier once at startup.
     WindowMode window_mode=WindowMode::windowed;
+    bool ultrawide=true;   // graphics.ultrawide / --no-ultrawide: a picture of another shape than 16:9 shows more of the scene; off stretches the 16:9 picture over the window
+    HudPosition hud_position=HudPosition::automatic;   // graphics.hud_position / --hud-position auto|center|edges
     PromptStyle prompt_style=PromptStyle::sculpted;   // cyan highlight ("Style 1"); monochrome is "Style 2"
     bool bloom=true;   // the glow around lights (graphics.bloom); the renderer's own bloom replaces the game's, off means no bloom at all
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
@@ -33,6 +46,7 @@ struct Options {
     uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
     GamepadSettings gamepad;   // the "gamepad" object of config.json: control type, model, sticks, gyro and the gamepad's bindings
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
+    ReticleOptions reticle;         // hidden parts, colours, dot size, wake length, partner opacity
     HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off
     UpscalerKind upscaler=UpscalerKind::off;
     UpscaleMode upscale_mode=UpscaleMode::quality;

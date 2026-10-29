@@ -30,12 +30,14 @@ class ReleaseTests(unittest.TestCase):
         (self.root / "dist-release").mkdir()
         (self.root / "dist-release/previous").write_bytes(b"PREVIOUS")
         self.calls = []
+        self.envs = []
         self.failure = None
         self.extra = None
         self.native_verify = False
 
     def runner(self, args, **kwargs):
         self.calls.append(args)
+        self.envs.append(kwargs.get("env"))
         phase = "install" if "--install" in args else "verify" if "--verify-release" in args else "build"
         if self.failure == phase:
             raise subprocess.CalledProcessError(1, args)
@@ -67,6 +69,7 @@ class ReleaseTests(unittest.TestCase):
         archive = self.build()
         self.assertEqual(archive.name, "UC-Windows-0.0.1.zip")
         self.assertEqual(self.calls[0][-1], "--no-install")
+        self.assertEqual(self.envs[0]["UC_ALL_TESTS"], "1")  # a release runs every test
         with zipfile.ZipFile(archive) as zip_file:
             names = zip_file.namelist()
             self.assertIn("uc_launcher.exe", names)

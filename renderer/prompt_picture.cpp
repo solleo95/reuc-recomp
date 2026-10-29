@@ -1,6 +1,7 @@
 #include "prompt_picture.h"
 #include "prompt_icons.h"
 #include "pad_glyphs.h"
+#include "wide_view.h"
 #include <intrin.h>
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -65,8 +66,11 @@ std::vector<std::vector<Token>> tokens(const PromptDescription& description,bool
 }
 float length(ImVec2 a,ImVec2 b) {return std::hypot(a.x-b.x,a.y-b.y);}
 void picture(ImDrawList& list,const gx::PromptDraw& prompt,RenderExtent extent,const std::array<uint32_t,4>& source,PromptStyle style) {
+    const auto place_x=[&](float x){return (x-source[0])*extent.width/source[2];};
+    const auto place_y=[&](float y){return (y-source[1])*extent.height/source[3];};
     std::array<ImVec2,4> corners;
-    for(size_t i=0;i<4;++i)corners[i]={(prompt.efb_corners[i*2]-source[0])*extent.width/source[2],(prompt.efb_corners[i*2+1]-source[1])*extent.height/source[3]};
+    for(size_t i=0;i<4;++i)corners[i]={place_x(prompt.efb_corners[i*2]),place_y(prompt.efb_corners[i*2+1])};
+    // Native ultrawide: the prompts' corners were narrowed with the text line they stand in when the packet was sealed (renderer/ultrawide.h).
     const float width=length(corners[0],corners[1]),height=length(corners[0],corners[3]);
     if(width<1 || height<1)return;
     const auto rows=tokens(prompt.description,prompt.compact);
@@ -120,10 +124,10 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,RenderExtent extent,c
         if(ratio<=1)break;
         font_size/=ratio*1.02f;
     }
-    const float left=std::clamp((prompt.clip[0]-source[0])*extent.width/source[2],0.f,float(extent.width));
-    const float top=std::clamp((prompt.clip[1]-source[1])*extent.height/source[3],0.f,float(extent.height));
-    const float right=std::clamp((prompt.clip[2]-source[0])*extent.width/source[2],left,float(extent.width));
-    const float bottom=std::clamp((prompt.clip[3]-source[1])*extent.height/source[3],top,float(extent.height));
+    const float left=std::clamp(place_x(prompt.clip[0]),0.f,float(extent.width));
+    const float top=std::clamp(place_y(prompt.clip[1]),0.f,float(extent.height));
+    const float right=std::clamp(place_x(prompt.clip[2]),left,float(extent.width));
+    const float bottom=std::clamp(place_y(prompt.clip[3]),top,float(extent.height));
     // ImGui clips text on the CPU before its vertices receive the pane transform.
     list.PushClipRect({-1,-1},{width+1,height+1},false);
     const int first_command=list.CmdBuffer.Size-1;

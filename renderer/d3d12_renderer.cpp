@@ -1726,7 +1726,7 @@ void D3D12Renderer::draw(Slot& slot,const gx::DrawPacket& draw,const gx::FramePa
     if(draw.reticle && controls_.crosshair_percent!=100) if(const auto center=gx::draw_center_ndc(draw)) gx::scale_viewport_about(*center,controls_.crosshair_percent/100.f,viewport.TopLeftX,viewport.TopLeftY,viewport.Width,viewport.Height);
     if(draw.late_aim && controls_.aim && !retarget) {
         const auto latest=controls_.aim(); const auto& from=draw.aim_exact ? draw.aim_ref : packet.aim_consumed;
-        push.shift[0]=(latest[0]-from[0])*gx::kAimToNdcX*area.width/viewport.Width; push.shift[1]=(latest[1]-from[1])*gx::kAimToNdcY*area.height/viewport.Height;
+        push.shift[0]=(latest[0]-from[0])*gx::aim_to_ndc_x()*area.width/viewport.Width; push.shift[1]=(latest[1]-from[1])*gx::aim_to_ndc_y()*area.height/viewport.Height;
         if(push.shift[0]!=0 || push.shift[1]!=0) { scissor={0,0,LONG(target.width),LONG(target.height)}; ++stats_.late_aim_draws; }
     }
     const auto adjusted=native_viewport({viewport.TopLeftX,viewport.TopLeftY,viewport.Width,viewport.Height},push.projection,push.shift);

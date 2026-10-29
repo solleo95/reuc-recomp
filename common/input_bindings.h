@@ -14,7 +14,7 @@ constexpr uint64_t kKnifeWindowNs=60000000ull,kKnifeReportNs=8000000ull;
 // (a slow wave is aiming) and may pause at most kShakeGapNs between reports.
 constexpr double kShakeStroke=20,kShakeMinPath=24,kShakePathSeconds=.06;
 constexpr uint64_t kShakeGapNs=100000000ull;
-enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,recenter,count };   // recenter: gamepad aim reset, bound in the gamepad table
+enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,menu,recenter,count };   // menu: the in-game settings menu, a plain key (host key, never reaches the game); recenter: gamepad aim reset, bound in the gamepad table
 enum class InputContext:uint8_t { inactive,menu,gameplay,qte };
 // pad_button code: SDL_GamepadButton (0..31). pad_axis code: SDL_GamepadAxis*2 + (positive direction ? 1 : 0), a stick direction or a trigger pulled past half (0..15).
 enum class PhysicalKind:uint8_t { key,mouse,wheel,pad_button,pad_axis };

@@ -2,6 +2,7 @@
 #include "gx_packets.h"
 #include "scene_boundary.h"
 #include "scene_lights.h"
+#include "ultrawide.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -221,8 +222,13 @@ public:
         size_t index=0;
         for(const auto& draw:packet.draws) {
             std::fprintf(file_,"  draw %zu site %08X prim %02X verts %zu stages %u blend %u:%u:%u tex",index++,draw.callsite,draw.primitive,draw.vertex_view().size(),draw.material.stages,draw.blend.mode,draw.blend.source,draw.blend.destination);
-            for(const auto& map:draw.texture_maps) if(map && !map->levels.empty()) std::fprintf(file_," %ux%u@%p",map->levels[0].width,map->levels[0].height,(const void*)map.get());
+            for(size_t slot=0;slot<draw.texture_maps.size();++slot) { const auto& map=draw.texture_maps[slot]; if(map && !map->levels.empty()) std::fprintf(file_," map%zu=%ux%u%s@%p",slot,map->levels[0].width,map->levels[0].height,map->guest_address ? "(copy)" : "",(const void*)map.get()); }
+            for(uint32_t stage=0;stage<draw.material.stages && stage<16;++stage) std::fprintf(file_," s%u:%03X",stage,draw.material.stage[stage].order&0x7F);
             if(draw.texture && !draw.texture->levels.empty()) std::fprintf(file_," t0=%ux%u@%p",draw.texture->levels[0].width,draw.texture->levels[0].height,(const void*)draw.texture.get());
+            if(draw.texture && draw.texture->guest_address) std::fprintf(file_," copy@%X",draw.texture->guest_address);
+            if(draw.reticle||draw.late_aim||draw.wake||draw.layer) std::fprintf(file_," flags[%s%s%s%s]",draw.reticle?"R":"",draw.late_aim?"L":"",draw.wake?"W":"",draw.layer?"Y":"");
+            if(gx::is_perspective(draw.transforms->projection)) std::fprintf(file_," persp");
+            else if(const auto range=gx::ortho_range(draw,0)) { std::fprintf(file_," ortho x %.3f..%.3f",(*range)[0],(*range)[1]); if(const auto y=gx::ortho_range(draw,1)) std::fprintf(file_," y %.3f..%.3f",(*y)[0],(*y)[1]); }   // after the ultrawide narrowing
             std::fprintf(file_,"\n");
         }
         std::fflush(file_);

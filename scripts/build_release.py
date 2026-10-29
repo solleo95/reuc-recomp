@@ -159,7 +159,8 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
     archive = work / final.name
     retain = False
     try:
-        runner([str(repo / "build.bat"), "--no-install"], cwd=repo, check=True)
+        # UC_ALL_TESTS makes scripts/tests-run.ps1 run every test, not only the ones changed since their last pass.
+        runner([str(repo / "build.bat"), "--no-install"], cwd=repo, check=True, env={**os.environ, "UC_ALL_TESTS": "1"})
         runner(["cmake", "--install", str(repo / "build"), "--prefix", str(stage)], cwd=repo, check=True)
         actual = {path.resolve() for path in files_in(stage)}
         listed = {Path(line).resolve() for line in (repo / "build/install_manifest.txt").read_text(encoding="utf-8").splitlines() if line}

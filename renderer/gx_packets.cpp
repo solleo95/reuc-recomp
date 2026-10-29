@@ -1,5 +1,6 @@
 #include "gx_packets.h"
 #include "gx_scene.h"
+#include "ultrawide.h"
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -9,12 +10,14 @@ Packets::Packets(bool detached):scene_capture_(detached ? std::make_unique<Scene
 Packets::~Packets()=default;
 std::shared_ptr<const SceneSnapshot> Packets::checkpoint() {
     std::lock_guard lock(mutex_);
-    return scene_capture_ ? std::make_shared<const SceneSnapshot>(scene_capture_->checkpoint()) : nullptr;
+    if(!scene_capture_)return nullptr;
+    auto snapshot=scene_capture_->checkpoint(); snapshot.scene_frame=wide_frame_.scene;
+    return std::make_shared<const SceneSnapshot>(std::move(snapshot));
 }
 void Packets::restore(const SceneSnapshot& snapshot) {
     std::lock_guard lock(mutex_);
     if(!scene_capture_)throw std::logic_error("scene restore requires detached rendering");
-    scene_capture_->restore(snapshot); latest_scene_.reset();
+    scene_capture_->restore(snapshot); latest_scene_.reset(); wide_frame_.scene=snapshot.scene_frame; wide_frame_.boxes.clear(); wide_frame_.players.clear();
 }
 namespace { std::atomic<uint64_t> total_seal_wait_ns{0}, total_window_wait_ns{0}, total_seals{0}, latency_frames{0}, latency_total_ns{0}, latency_max_ns{0}; }
 uint64_t seal_wait_ns() { return total_seal_wait_ns.load(); }
@@ -24,6 +27,7 @@ std::atomic<uint64_t> window_sealed_max_ns{0}, window_taken_max_ns{0};
 LatencyWindow take_latency_window() { return {window_sealed_max_ns.exchange(0) / 1e6, window_taken_max_ns.exchange(0) / 1e6}; }
 FrameLatency frame_latency() { return {latency_frames.load(), latency_total_ns.load(), latency_max_ns.load()}; }
 uint64_t Packets::seal_batch(FramePacket packet) {
+    widen_packet(packet, view_factors(), wide_frame_);   // one producer at a time (the guest baton): wide_frame_ needs no lock
     std::unique_lock lock(mutex_);
     if(scene_capture_) {
         if(canceled_)throw Error(ErrorCode::canceled,0,0,0);

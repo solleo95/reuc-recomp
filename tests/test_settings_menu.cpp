@@ -16,12 +16,12 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     for(int i=0;i<120;++i) frame();
     CHECK(ImGui::GetStyle().ItemInnerSpacing.x==spacing);
     auto* window=ImGui::FindWindowByName("##settings"); CHECK(window);
-    CHECK(std::abs(window->Size.x-746)<2 && std::abs(window->Size.y-1200)<2);
+    CHECK(std::abs(window->Size.x-880)<2 && std::abs(window->Size.y-1200)<2);
     auto& context=*ImGui::GetCurrentContext();
     CHECK(context.TabBars.GetAliveCount()==1);
     auto* tabs=context.TabBars.GetByIndex(0);
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
-    CHECK(tabs->Tabs.Size==5);   // Main, Effects, DLSS 5, Controls, Controllers
+    CHECK(tabs->Tabs.Size==6);   // Main, Effects, DLSS 5, Controls, Controllers, Reticle
     CHECK((tabs->Flags&ImGuiTabBarFlags_FittingPolicyScroll)!=0);   // more tabs than the width (mods) scroll instead of shrinking
     CHECK(tabs->Tabs[3].Offset+tabs->Tabs[3].Width<=tabs->BarRect.GetWidth());
     // Open the first combo through ImGui input, then inspect the actual popup geometry.
@@ -44,7 +44,7 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     auto* popup=ImGui::FindWindowByName("##Combo_00"); CHECK(popup && popup->Active);
     std::printf("popup vertices %d, height %.0f\n",popup->DrawList->VtxBuffer.Size,popup->ContentSize.y);
     CHECK(popup->DrawList->VtxBuffer.Size>100 && popup->ContentSize.y<500);
-    CHECK(window->Size.x<=800);
+    CHECK(window->Size.x<=900);
     CHECK(!(window->Flags&ImGuiWindowFlags_NoMove));
     capture("combo");
     click({popup->DC.CursorStartPos.x+70,popup->DC.CursorStartPos.y+text+style.ItemSpacing.y+text*.5f});
@@ -270,7 +270,7 @@ int main(int argc,char** argv) {    const bool gpu=argc==4 && std::string_view(a
     uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
-    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.mouse_sensitivity=[](uint32_t){}; targets.effects=[](const uc::GraphicsEffects&){};
+    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.reticle=[](const uc::ReticleOptions&){}; targets.mouse_sensitivity=[](uint32_t){}; targets.hud_position=[](uc::HudPosition){}; targets.effects=[](const uc::GraphicsEffects&){};
     targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){}; targets.gamepad=[](const uc::GamepadSettings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;

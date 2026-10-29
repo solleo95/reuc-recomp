@@ -25,6 +25,36 @@ bool compact_checkbox(const char* id,const char* label,bool& value,float unit) {
     if(ImGui::IsItemClicked()) { value=!value; changed=true; }
     return changed;
 }
+constexpr uint32_t kDefaultReticleColor[2]={0xFF3030,0x3264FF};   // what the game draws the first / second player's reticle with, as the colour pickers show it
+ImU32 rgb_u32(uint32_t rgb,float alpha=1) { return IM_COL32((rgb>>16)&255,(rgb>>8)&255,rgb&255,int(std::clamp(alpha,0.f,1.f)*255+.5f)); }
+// One sample reticle for the Reticle tab: the green ammo arc, the circle with its four gaps, the four white marks, the laser dot and the wake, as the options draw them.
+void draw_reticle_sample(ImDrawList& draw,ImVec2 centre,float radius,const ReticleOptions& options,uint32_t rgb,float alpha,float scale,bool tail,float unit,ImVec2 box_min,ImVec2 box_max) {
+    if(scale<=0 || alpha<=0) return;
+    radius*=scale;
+    const float thick=std::max(1.5f,2.5f*unit*scale);
+    if(tail && !options.hide_tail) {   // the wake: a curve that ends in the centre, as long as the option says (shortened and flattened to stay inside the preview frame)
+        const float length=std::min(radius*2.6f*options.tail_length/100.f,(centre.x-box_min.x-4)/.95f); ImVec2 points[24]; float reach=1;
+        for(int i=0;i<24;++i) { const float t=float(i)/23, along=length*(1-t); points[i]={centre.x-along*.95f,centre.y+along*.55f*(1-t)*(1-t)+along*.25f*std::sin(t*3.1f)}; }
+        for(const auto& p:points) reach=std::max(reach,std::abs(p.y-centre.y)/std::max(1.f,std::min(centre.y-box_min.y,box_max.y-centre.y)-4));
+        for(auto& p:points) p.y=centre.y+(p.y-centre.y)/reach;
+        for(int i=0;i<23;++i) draw.AddLine(points[i],points[i+1],rgb_u32(rgb,alpha*(.15f+.65f*float(i)/22)),thick*(.5f+float(i)/22));
+    }
+    if(!options.hide_arc) {   // the green ammo gauge: short ticks around the left side of the circle, from its lower left over the left to the upper right, as in the game
+        for(int i=0;i<22;++i) {
+            const float a=1.92f+float(i)/21*3.32f, inner=radius*1.14f, outer=radius*1.32f;
+            draw.AddLine({centre.x+std::cos(a)*inner,centre.y+std::sin(a)*inner},{centre.x+std::cos(a)*outer,centre.y+std::sin(a)*outer},IM_COL32(40,190,140,int(255*alpha)),thick*.8f);
+        }
+    }
+    for(int quarter=0;quarter<4;++quarter) {   // the circle: four arcs with a gap at every compass point
+        const float gap=.10f, start=-3.14159f/2+quarter*3.14159f/2+gap, stop=-3.14159f/2+(quarter+1)*3.14159f/2-gap;
+        draw.PathArcTo(centre,radius,start,stop,12); draw.PathStroke(rgb_u32(rgb,alpha),0,thick);
+    }
+    if(!options.hide_marks) for(int quarter=0;quarter<4;++quarter) {
+        const float a=quarter*3.14159f/2, nx=std::cos(a), ny=std::sin(a);
+        draw.AddLine({centre.x+nx*radius*.25f,centre.y+ny*radius*.25f},{centre.x+nx*radius*.55f,centre.y+ny*radius*.55f},IM_COL32(245,245,245,int(230*alpha)),thick);
+    }
+    if(!options.hide_dot) draw.AddCircleFilled(centre,std::max(1.5f,radius*.09f*options.dot_size/100.f),rgb_u32(rgb,alpha),16);
+}
 }
 SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height,RendererBackend backend)
     : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad) {}
@@ -53,7 +83,7 @@ void SettingsMenu::build() {
     ImGui::GetStyle().FramePadding.y=(previous_frame_height*.75f-font_size)*.5f;
     ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;   // ScaleAllSizes floors thin borders to zero below 1x
     ImGui::GetStyle().WindowPadding={28*unit,22*unit};
-    const ImVec2 size{std::min(io.DisplaySize.x-40*font_scale,560*font_scale),std::min(io.DisplaySize.y-40*font_scale,900*font_scale)};
+    const ImVec2 size{std::min(io.DisplaySize.x-40*font_scale,660*font_scale),std::min(io.DisplaySize.y-40*font_scale,900*font_scale)};
     ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Once,{.5f,.5f});
     ImGui::SetNextWindowSize(size,ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(.94f);
@@ -68,6 +98,7 @@ void SettingsMenu::build() {
         if(backend_ui_.dlss5 && current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("controllers"))) { controllers_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("reticle"))) { reticle_tab(unit); ImGui::EndTabItem(); }
         if(mod_menu_) {   // mods: one manager tab; each mod's settings open in a window from there
             if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
         }
@@ -189,9 +220,14 @@ void SettingsMenu::main_tab(float unit) {
     }
     ImGui::Dummy({0,6*unit});
     }
-    ImGui::TextUnformatted(tr("crosshair_scale"));
-    int crosshair=int(options.crosshair_scale);
-    if(ImGui::SliderInt("##crosshair",&crosshair,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.crosshair_scale=uint32_t(std::clamp(crosshair,0,100));
+    ImGui::TextUnformatted(tr("hud_position"));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hud_hint"));
+    const char* hud_keys[]={"hud_auto","hud_center","hud_edges"};
+    if(ImGui::BeginCombo("##hud_position",tr(hud_keys[int(options.hud_position)]))) {
+        for(int i=0;i<3;++i) if(ImGui::Selectable(tr(hud_keys[i]),int(options.hud_position)==i)) options.hud_position=HudPosition(i);
+        ImGui::EndCombo();
+    }
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hud_hint"));
     ImGui::PopItemWidth();
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("hdr"));
     compact_checkbox("##hdr",tr("hdr"),options.hdr.enabled,unit);
@@ -320,6 +356,70 @@ void SettingsMenu::controllers_tab(float unit) {
     pad_panel_.heading=fonts_.serif; pad_panel_.heading_size=heading_size_; pad_panel_.control_width=.75f;   // the menu's own title font and control width
     const PadStatus status=pad_status_ ? pad_status_() : PadStatus{};
     if(gamepad_tab(pad_panel_,options.gamepad,pad_editor_,status,unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+}
+// The Reticle tab: a preview of the reticle with the chosen look (yours and a partner's), the size, what to hide, the players' colours, the dot's size, the wake's
+// length and how visible the partner's reticle is.
+void SettingsMenu::reticle_tab(float unit) {
+    auto options=current();
+    auto& reticle=options.reticle;
+    ImGui::Dummy({0,8*unit});
+    ImGui::BeginChild("reticle",{0,0});
+    {   // the preview
+        const float height=180*unit, width=ImGui::GetContentRegionAvail().x;
+        const auto origin=ImGui::GetCursorScreenPos(); auto* draw=ImGui::GetWindowDrawList();
+        draw->AddRectFilledMultiColor(origin,{origin.x+width,origin.y+height},IM_COL32(52,46,38,255),IM_COL32(30,36,34,255),IM_COL32(18,18,20,255),IM_COL32(40,34,30,255));
+        draw->AddRect(origin,{origin.x+width,origin.y+height},IM_COL32(255,255,255,40));
+        const float scale=options.crosshair_scale/100.f, radius=46*unit;
+        const ImVec2 box_max{origin.x+width,origin.y+height};
+        draw->PushClipRect(origin,box_max,true);
+        draw_reticle_sample(*draw,{origin.x+width*.30f,origin.y+height*.5f},radius,reticle,reticle.color_p1 ? reticle.color_p1 : kDefaultReticleColor[0],1,scale,true,unit,origin,box_max);
+        draw_reticle_sample(*draw,{origin.x+width*.72f,origin.y+height*.5f},radius,reticle,reticle.color_p2 ? reticle.color_p2 : kDefaultReticleColor[1],reticle.partner_opacity/100.f,scale,false,unit,origin,box_max);
+        draw->PopClipRect();
+        ImGui::Dummy({width,height});
+        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("reticle_preview"));
+    }
+    ImGui::Dummy({0,8*unit});
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    const auto slider=[&](const char* id,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
+        ImGui::TextUnformatted(tr(title));
+        int shown=int(value);
+        if(ImGui::SliderInt(id,&shown,int(low),int(high),"%d%%",ImGuiSliderFlags_AlwaysClamp)) value=uint32_t(std::clamp(shown,int(low),int(high)));
+        ImGui::Dummy({0,6*unit});
+    };
+    slider("##crosshair","crosshair_scale",options.crosshair_scale,0,100);
+    ImGui::PopItemWidth();
+    compact_checkbox("##hide_tail",tr("hide_tail"),reticle.hide_tail,unit);
+    compact_checkbox("##hide_dot",tr("hide_dot"),reticle.hide_dot,unit);
+    compact_checkbox("##hide_marks",tr("hide_marks"),reticle.hide_marks,unit);
+    compact_checkbox("##hide_arc",tr("hide_arc"),reticle.hide_arc,unit);
+    ImGui::Dummy({0,6*unit});
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    ImGui::BeginDisabled(reticle.hide_tail);
+    slider("##tail_length","tail_length",reticle.tail_length,kReticleTailMin,kReticleTailMax);
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(reticle.hide_dot);
+    slider("##dot_size","dot_size",reticle.dot_size,kReticleDotMin,kReticleDotMax);
+    ImGui::EndDisabled();
+    slider("##partner_opacity","partner_opacity",reticle.partner_opacity,0,100);
+    ImGui::PopItemWidth();
+    const auto colour=[&](const char* id,const char* title,uint32_t& value,uint32_t fallback) {
+        ImGui::TextUnformatted(tr(title));
+        float channels[3]={float((((value ? value : fallback)>>16)&255))/255,float((((value ? value : fallback)>>8)&255))/255,float(((value ? value : fallback)&255))/255};
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.5f);
+        if(ImGui::ColorEdit3(id,channels,ImGuiColorEditFlags_NoLabel|ImGuiColorEditFlags_DisplayHex|ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_PickerHueWheel)) {
+            const auto byte=[](float v) { return uint32_t(std::clamp(v,0.f,1.f)*255+.5f); };
+            value=std::max<uint32_t>(0x000001,byte(channels[0])<<16|byte(channels[1])<<8|byte(channels[2]));   // 0 is "the game's own"
+        }
+        ImGui::SameLine(0,10*unit);
+        ImGui::BeginDisabled(!value);
+        if(ImGui::Button((std::string(tr("reticle_default"))+"##"+id).c_str())) value=0;
+        ImGui::EndDisabled();
+        ImGui::Dummy({0,6*unit});
+    };
+    colour("##color_p1","reticle_color_p1",reticle.color_p1,kDefaultReticleColor[0]);
+    colour("##color_p2","reticle_color_p2",reticle.color_p2,kDefaultReticleColor[1]);
+    ImGui::EndChild();
+    pending_=options;
 }
 void SettingsMenu::controls_tab(float unit) {
     auto options=current();

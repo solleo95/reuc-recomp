@@ -20,7 +20,9 @@ int main() {
     uc::BloomSettings last_bloom;
     targets.bloom=[&](const uc::BloomSettings& settings){ calls.push_back("bloom"); last_bloom=settings; };
     targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
+    targets.reticle=[&](const uc::ReticleOptions&){ calls.push_back("reticle"); };
     targets.mouse_sensitivity=[&](uint32_t){ calls.push_back("mouse_sensitivity"); };
+    targets.hud_position=[&](uc::HudPosition){ calls.push_back("hud_position"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
     targets.prompt_style=[&](uc::PromptStyle){ calls.push_back("prompt_style"); };
@@ -45,9 +47,17 @@ int main() {
         calls.clear(); auto next=live.options(); next.crosshair_scale=40; live.apply(next);
         CHECK((calls==std::vector<std::string>{"crosshair_scale"}) && saved().crosshair_scale==40 && !live.error());
     }
+    {   // the reticle's look reaches only its target and is saved
+        calls.clear(); auto next=live.options(); next.reticle.hide_tail=true; next.reticle.color_p1=0x33CC66; next.reticle.partner_opacity=40; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"reticle"}) && saved().reticle==next.reticle && !live.error());
+    }
     {   // the mouse sensitivity alone reaches only its target
         calls.clear(); auto next=live.options(); next.mouse_sensitivity=180; live.apply(next);
         CHECK((calls==std::vector<std::string>{"mouse_sensitivity"}) && saved().mouse_sensitivity==180 && !live.error());
+    }
+    {   // the interface position alone reaches only its target and is saved
+        calls.clear(); auto next=live.options(); next.hud_position=uc::HudPosition::edges; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"hud_position"}) && saved().hud_position==uc::HudPosition::edges && !live.error());
     }
     {   // the gamepad settings reach only their target (once) and are saved in the "gamepad" object
         calls.clear(); auto next=live.options(); next.gamepad.model=uc::PadModel::nintendo; next.gamepad.gyro.mode=uc::GyroMode::always; live.apply(next);

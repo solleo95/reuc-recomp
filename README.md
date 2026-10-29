@@ -2,7 +2,7 @@
 
 # Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
 
-**The Wii game running natively on Windows: very fast loading, unlocked FPS, mouse aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+**The Wii game running natively on Windows: very fast loading, unlocked FPS, mouse and gamepad aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
 
 **English** · [Русский](README.ru.md)
 
@@ -71,9 +71,12 @@ When you report a problem, please say what GPU, driver and Windows version you u
 ### Controls built for PC
 
 - **Very comfortable, responsive mouse control.** Raw relative mouse input without acceleration or smoothing, with the aiming latency reduced so the crosshair follows your hand. The original Wii-remote gestures (knife, quick-time events, grenade) work with the mouse and the keyboard.
-- **On-screen hints and prompts use mouse and keyboard icons** (and update when you rebind a key) instead of Wii-remote buttons.
-- Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel and key combinations are supported.
-- Keyboard and mouse are the main way to play; the in-game menu opens with **Insert** (see [In-game menu](#in-game-menu-and-controls)).
+- **Mouse sensitivity slider** (10-300%, default 100%) at the top of the **Controls** page in the launcher and in the in-game menu. It changes the aim speed at once; shake and swipe gestures keep working the same way.
+- **Gamepad support.** Xbox, PlayStation (DualShock 4, DualSense), Nintendo Switch Pro and most other gamepads work as soon as they are plugged in. The left stick aims, the right stick is the analog stick of the Wii Nunchuk (it moves the camera), and the buttons follow the usual layout. A gamepad with a motion sensor can also aim by tilting it: swing it for the knife, shake it to break free. Motion aiming is off by default.
+- **Gamepad settings** are on the **Controllers** page (launcher and in-game menu): choose keyboard and mouse, gamepad or automatic, pick the gamepad model, and press **Gamepad** to change stick roles, dead zones, motion aiming and every button. The **Controls** page stays for keyboard and mouse.
+- **On-screen hints and prompts show the controller you play with:** mouse and keyboard icons, or Xbox, PlayStation and Nintendo button pictures for a gamepad (and they update when you rebind a key), instead of Wii-remote buttons.
+- Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel, gamepad buttons and key combinations are supported.
+- Keyboard and mouse or a gamepad: the choice is yours. The in-game menu opens with **Insert** (see [In-game menu](#in-game-menu-and-controls)); the gamepad cannot move around the menus yet, use the mouse there.
 
 <img src="assets/readme/prompts.png" alt="On-screen prompts with mouse icons: Pick Up, a tutorial text, OK and Back" width="100%">
 
@@ -96,7 +99,7 @@ Details: [Upscaling and frame generation](docs/upscaling.md) · [Graphics effect
 ### Launcher
 
 - Built-in **launcher in 13 languages**: English, Русский, Deutsch, Français, Español, Italiano, Português, Polski, Українська, Türkçe, 日本語, 한국어, 简体中文.
-- All settings in one place: resolution, window mode, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings. Features your GPU cannot run are greyed out with the reason.
+- All settings in one place: resolution, window mode, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings, mouse sensitivity, gamepad settings. Features your GPU cannot run are greyed out with the reason.
 - **Unpacks your game image for you:** choose the disc image in the launcher and it unpacks it itself with the built-in Wit, no manual steps ([details](#way-a-the-launcher-unpacks-the-image)).
 - **One-click updates:** the launcher checks the latest release, verifies the files (SHA-256) and replaces them, keeping your settings, saves and mods.
 - Multiplayer lobby with automatic router port opening (UPnP) and NAT punching ([details](#multiplayer-online-co-op)).
@@ -215,7 +218,7 @@ If you unpacked the game into another folder, you will select it in the launcher
    - **Frame generation:** leave it off until the game runs well, then try it. Choosing a generator also turns on the matching upscaler.
    - **Ray tracing, DLSS Ray Reconstruction, HDR:** only if your GPU supports them; entries that are not available are greyed out with an explanation.
    - **FPS limit:** the limit also sets how often the game simulation steps. With frame generation the displayed FPS is the limit multiplied by the generator multiplier.
-4. Open the **Controls** page if you want to change key bindings.
+4. Open the **Controls** page if you want to change key bindings or the mouse sensitivity. Playing with a gamepad? Plug it in and open the **Controllers** page: pick the gamepad model if it is not detected right and press **Gamepad** to change its settings.
 5. Press the red **Singleplayer** button to start the game (**Multiplayer** is next to it).
 
 On the **first start** the launcher runs a short CPU calibration and the game compiles its shaders and pipelines before it shows the picture. The first start takes longer; later starts are faster.
@@ -230,8 +233,10 @@ The launcher checks for a new release when it starts and offers **Update** or **
 
 ## In-game menu and controls
 
-- **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it.
-- Aiming is done with the mouse, the main actions are on the mouse buttons and the wheel; the full list and rebinding are in the launcher's **Controls** page and the in-game menu.
+- **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings, mouse sensitivity, gamepad settings and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it.
+- Aiming is done with the mouse, the main actions are on the mouse buttons and the wheel; the full list, rebinding and the mouse sensitivity slider are in the launcher's **Controls** page and the in-game menu.
+- With a gamepad: the left stick aims (or tilt the pad if it has motion controls and you switched them on), the right stick moves the camera, **right trigger** fires, **A** interacts, **X** reloads, **B** is the knife, **Y** is the grenade, **Start** pauses and clicking the **left stick** puts the aim back in the centre. Everything can be changed on the **Controllers** page (button names follow your gamepad: on PlayStation pads they are Cross, Circle, Square, Triangle).
+- A gamepad that works through the Xbox driver (for example the GameSir G7 Pro in Xbox mode) gives the game no motion sensor, so motion aiming is not available with it.
 - **Alt** releases the mouse cursor in windowed mode. **Esc** pauses.
 
 <img src="assets/readme/ingame-menu.png" alt="The in-game menu (Insert): the Main, Effects and Controls tabs" width="100%">
@@ -304,6 +309,7 @@ NAT punching works with most home routers. It will not work if either side has *
 - Only `RBUE08` (NTSC-U) is supported.
 - Not all graphics options work together on all GPUs; unsupported ones are greyed out with a reason.
 - Ray tracing currently covers shadows only; other ray-traced effects are not finished.
+- Gamepads: tested with virtual gamepads and automatic tests only, so tell us if your model misbehaves. There is no camera sensitivity slider yet. Gamepads that talk the Xbox protocol (for example the GameSir G7 Pro in Xbox mode) have no motion sensor in the game. The menus cannot be moved around with a gamepad yet.
 
 Found something else? Tell us: [Reporting problems](#reporting-problems).
 

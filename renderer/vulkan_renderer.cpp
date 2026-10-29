@@ -2245,7 +2245,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             if (draw.late_aim && aim_source_ && !(draw.wake && aim_history_ && wake_seconds_.load()>0)) {
                 const auto latest=aim_source_();
                 const auto& from=draw.aim_exact ? draw.aim_ref : packet.aim_consumed;
-                const float dx=(latest[0]-from[0])*gx::kAimToNdcX*0.5f*area.width, dy=(latest[1]-from[1])*gx::kAimToNdcY*0.5f*area.height;
+                const float dx=(latest[0]-from[0])*gx::aim_to_ndc_x()*0.5f*area.width, dy=(latest[1]-from[1])*gx::aim_to_ndc_y()*0.5f*area.height;
                 static const bool log_aim=std::getenv("UC_AIM_LOG")!=nullptr;   // diagnostics: one line per shifted reticle draw (consumed, latest, shift in aim units)
                 if (log_aim) std::fprintf(stderr,"[aim] t=%.4f consumed %.4f %.4f latest %.4f %.4f callsite %08X\n",std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),from[0],from[1],latest[0],latest[1],draw.callsite);
                 if (dx!=0 || dy!=0) { late_shift[0]=dx*2/draw_viewport.width; late_shift[1]=dy*2/draw_viewport.height; draw_scissor=scissor; ++late_aim_draws_; }

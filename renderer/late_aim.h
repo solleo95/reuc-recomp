@@ -1,5 +1,7 @@
 #pragma once
 #include "gx_vertices.h"
+#include "reticle_style.h"
+#include "wide_view.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,14 +15,22 @@ namespace gx {
 // in flight. The renderer re-aims it at record time: the draws below are shifted by (freshest pointer - pointer the game drew with), which also keeps
 // whatever the game adds itself (recoil, easing). Aim units: [-1,1] spans 1.25 screen widths and heights x 1.67 (aim = ndc * (0.8, 0.6)).
 constexpr float kAimToNdcX = 1.f / 0.8f, kAimToNdcY = 1.f / 0.6f;
+// Native ultrawide (ultrawide.h): the game builds a wide picture (game/intro.cpp), and its pointer spans all of it, so an aim unit is the same NDC at any shape.
+inline float aim_to_ndc_x() { return kAimToNdcX; }
+inline float aim_to_ndc_y() { return kAimToNdcY; }
 // Quads of the reticle ring and centre dot: (callsite, square texture edge). Found with the harness `draws` request at three aim points.
 inline bool reticle_callsite(uint32_t callsite) { return callsite == 0x80393B0C || callsite == 0x8006D174; }
-inline bool reticle_texture(const TexturePixels& texture) {
-    if (texture.job && !texture.job->done.load(std::memory_order_acquire)) return false;   // not decoded yet: decide on a later frame
-    if (texture.levels.empty()) return false;
+// The edge in guest pixels of a decoded square texture, 0 while it is not decoded yet or not square.
+inline uint32_t reticle_edge(const TexturePixels& texture) {
+    if (texture.job && !texture.job->done.load(std::memory_order_acquire)) return 0;   // not decoded yet: decide on a later frame
+    if (texture.levels.empty()) return 0;
     const auto& level = texture.levels[0];
     const uint32_t width = texture.guest_width ? texture.guest_width : level.width, height = texture.guest_height ? texture.guest_height : level.height;
-    return width == height && (width == 100 || width == 120 || width == 154 || width == 178 || width == 200);   // 178: the red halo of the empty-magazine / reload state; 200: the four red arrows of the held A+B / grab prompt
+    return width == height ? width : 0;
+}
+inline bool reticle_texture(const TexturePixels& texture) {
+    const uint32_t edge = reticle_edge(texture);
+    return edge == 100 || edge == 120 || edge == 154 || edge == 178 || edge == 200;   // 178: the red halo of the empty-magazine / reload state; 200: the four red arrows of the held A+B / grab prompt
 }
 // Centre of the draw's screen-space bounding box in Vulkan NDC (x right, y down, like aim units); the harness's draw summary negates y.
 inline std::optional<std::array<float,2>> draw_center_ndc(const DrawPacket& draw) {
@@ -93,7 +103,7 @@ template<class Path> bool retarget_wake(const DrawPacket& draw, GpuMeshVertex* t
     if (std::abs(det) < 1e-12f) return false;
     std::vector<std::array<float,2>> ndc(count);
     for (size_t i = 0; i < count; ++i) { const auto n = project_ndc(draw, row, source[i].position); if (!n) return false; ndc[i] = *n; }
-    const auto moved = wake_strip_ndc(ndc, duration, [&](double age) { const auto aim = path_aim(age); return std::array<float,2>{aim[0] * kAimToNdcX, aim[1] * kAimToNdcY}; });
+    const auto moved = wake_strip_ndc(ndc, duration, [&](double age) { const auto aim = path_aim(age); return std::array<float,2>{aim[0] * aim_to_ndc_x(), aim[1] * aim_to_ndc_y()}; });
     for (size_t i = 0; i < count; ++i) {
         const float dx = moved[i][0] - (*f0)[0], dy = moved[i][1] - (*f0)[1];
         target[i].position[0] = p0[0] + (d * dx - b * dy) / det;
@@ -154,12 +164,33 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
     }
     size_t marked = 0;
     std::optional<std::array<float,2>> anchor;   // the local ring's centre in aim units
-    for (auto& group : groups)
-        if (exact && group.tinted && group.owner >= 0 && unsigned(group.owner) == local && consumed[group.owner]) { anchor = std::array<float,2>{group.center[0] / kAimToNdcX, group.center[1] / kAimToNdcY}; break; }
+    // The anchor is the first ring quad's own centre, not the group's (the group's centre is its first member's, which flips between the dot and the ring
+    // as the dot comes in and out of the group's reach: the reticle then jumped by their gap from frame to frame).
+    const auto ring_centre = [&](const auto& group) -> std::optional<std::array<float,2>> {
+        for (const auto index : group.members)
+            if (draws[index].callsite == 0x80393B0C) if (const auto c = draw_center_ndc(draws[index])) return std::array<float,2>{(*c)[0] / kAimToNdcX, (*c)[1] / kAimToNdcY};
+        return std::nullopt;
+    };
+    for (auto& group : groups) {   // the ring names the anchor: the game's red dot is tinted too, and it trails the ring in a fast flick
+        if (!exact || !group.tinted || group.owner < 0 || unsigned(group.owner) != local || !consumed[group.owner]) continue;
+        if (const auto c = ring_centre(group)) { anchor = *c; break; }
+    }
+    if (exact && !anchor && local < 2 && consumed[local] && !consumed[1]) {   // one pad, no tinted ring (a flash can take the tint): the ring nearest to the pointer is the anchor
+        float best = 0.6f;
+        for (const auto& group : groups) {
+            const auto c = ring_centre(group);
+            if (!c) continue;
+            const float d = std::max(std::abs((*c)[0] - (*consumed[local])[0]) * kAimToNdcX, std::abs((*c)[1] - (*consumed[local])[1]) * kAimToNdcY);
+            if (d < best) { best = d; anchor = *c; }
+        }
+    }
     for (auto& group : groups) {
         int owner = group.owner;
+        bool dot_group = false;
+        for (const auto index : group.members) dot_group |= draws[index].callsite == 0x8006D174 && !group.tinted;
         if (owner < 0) {   // no tinted quad: the pointer nearest to the group decides, within the old window
             float best = 0.25f;
+            if (dot_group && !consumed[1]) best = 1.0f;   // the game's dot trails the pointer far behind in a fast flick (a lone pad owns it, within the screen)
             for (int pad = 0; pad < 2; ++pad) {
                 if (!consumed[pad]) continue;
                 const float d = std::max(std::abs(group.center[0] - (*consumed[pad])[0] * kAimToNdcX), std::abs(group.center[1] - (*consumed[pad])[1] * kAimToNdcY));
@@ -168,23 +199,98 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
         }
         if (owner < 0 || !consumed[owner]) continue;
         // A ring far from its player's pointer is something else (the HUD draws other square textures through the same callsite).
-        if (std::abs(group.center[0] - (*consumed[owner])[0] * kAimToNdcX) > 0.6f || std::abs(group.center[1] - (*consumed[owner])[1] * kAimToNdcY) > 0.6f) continue;
+        if (!(dot_group && !consumed[1]) && (std::abs(group.center[0] - (*consumed[owner])[0] * kAimToNdcX) > 0.6f || std::abs(group.center[1] - (*consumed[owner])[1] * kAimToNdcY) > 0.6f)) continue;
         for (const auto index : group.members) {
             draws[index].reticle = draws[index].layer = true; draws[index].late_aim = unsigned(owner) == local; ++marked;
-            if (draws[index].late_aim && anchor) { draws[index].aim_ref = *anchor; draws[index].aim_exact = true; }
+            if (draws[index].late_aim && anchor) {
+                draws[index].aim_ref = *anchor; draws[index].aim_exact = true;
+                // The game's dot (its laser point) trails the ring when the pointer moves fast: it lands on the mouse with the ring.
+                if (draws[index].callsite == 0x8006D174) if (const auto own = draw_center_ndc(draws[index])) draws[index].aim_ref = {(*own)[0] / kAimToNdcX, (*own)[1] / kAimToNdcY};
+            }
         }
     }
     for (size_t i = 0; i < draws.size(); ++i) {   // the wake of the local reticle moves with it (not scaled: it has no centre of its own)
         if (!reticle_tail_callsite(draws[i].callsite)) continue;
         draws[i].layer = true;   // every player's wake belongs to the reticle layer, only the local one is re-aimed
-        int owner = reticle_tint_owner(draws[i]);
-        if (owner == 1 && !consumed[1]) owner = 0;
-        if (exact && owner >= 0 && unsigned(owner) == local && consumed[owner]) {   // single-player: the wake stays as the game draws it (a rigid shift swung it and smeared under frame generation)
-            draws[i].late_aim = true; draws[i].wake = exact; ++marked;
+        int owner = -1;   // the strip's head may be faded: the first vertex with a tint names the owner
+        for (const auto& vertex : draws[i].vertex_view()) {
+            const auto& c = vertex.color[0];
+            if (std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]}) >= 40) { owner = c[0] >= c[2] ? 0 : 1; break; }
+        }
+        if (owner != 0 && !consumed[1]) owner = 0;   // a lone pad's wake is the first player's, whatever its tint (the strip's head may be faded)
+        if (exact && owner >= 0 && unsigned(owner) == local && consumed[owner]) {   // laid along the mouse's path when the renderer knows the wake's length (set_wake_seconds)
+            draws[i].late_aim = true; draws[i].wake = true; ++marked;
             if (anchor) { draws[i].aim_ref = *anchor; draws[i].aim_exact = true; }
         }
     }
     return marked;
+}
+// The parts of a reticle (found with the harness): the green ammo / reload arc (154), the player's circle (120, a ring with four gaps; 178 is its red halo),
+// the four white marks in the circle's gaps (more 120 textures, untinted, blinking), the laser dot and the wake. Texture 120 tells the circle from the marks by
+// ink on its diagonals; a replaced (BC7) texture falls back to the circle's tint.
+enum class ReticlePart { other, wake, dot, arc, ring, marks };
+inline bool reticle_ring_texture(const TexturePixels& texture) {
+    if (texture.levels.empty()) return false;
+    const auto& level = texture.levels[0];
+    if (level.width != 120 || level.height != 120 || level.rgba.size() < size_t(120) * 120 * 4) return false;
+    for (const auto [x, y] : {std::pair{87, 32}, std::pair{32, 32}, std::pair{32, 87}, std::pair{87, 87}}) {
+        uint8_t ink = 0;
+        for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) ink = std::max(ink, level.rgba[(size_t(y + dy) * 120 + size_t(x + dx)) * 4 + 3]);
+        if (ink > 64) return true;
+    }
+    return false;
+}
+inline ReticlePart reticle_part(const DrawPacket& draw) {
+    if (reticle_tail_callsite(draw.callsite)) return ReticlePart::wake;
+    if (draw.callsite == 0x8006D174) return ReticlePart::dot;
+    if (draw.callsite != 0x80393B0C || !draw.texture) return ReticlePart::other;
+    switch (reticle_edge(*draw.texture)) {
+        case 154: return ReticlePart::arc;
+        case 178: return ReticlePart::ring;
+        case 120:
+            if (draw.texture->bc7) return reticle_tint_owner(draw) >= 0 ? ReticlePart::ring : ReticlePart::marks;
+            return reticle_ring_texture(*draw.texture) ? ReticlePart::ring : ReticlePart::marks;
+        default: return ReticlePart::other;
+    }
+}
+// The menu's reticle style (reticle_style.h) applied to the packet's flagged reticle draws after mark_reticle_draws: parts the player hid are dropped; the
+// circle, halo, dot and wake take the player's colour (at the strength the game drew with, so its flashes stay); the dot is scaled
+// about its own centre; the other player's reticle (a draw that is not late-aimed, with a second pad) is faded. Draws whose geometry lives in a shared mesh are
+// only hidden.
+template<class Draws> void apply_reticle_style(Draws& draws, const ReticleStyle& style, unsigned local, bool two_pads) {
+    if (style.plain()) return;
+    std::erase_if(draws, [&](const DrawPacket& draw) {
+        if (!draw.layer) return false;
+        switch (reticle_part(draw)) {
+            case ReticlePart::wake: return style.hide_tail;
+            case ReticlePart::dot: return style.hide_dot;
+            case ReticlePart::arc: return style.hide_arc;
+            case ReticlePart::marks: return style.hide_marks;
+            default: return false;
+        }
+    });
+    for (auto& draw : draws) {
+        if (!draw.layer || draw.mesh || draw.vertices.empty()) continue;
+        const auto part = reticle_part(draw);
+        const bool partner = two_pads && !draw.late_aim;
+        const unsigned owner = partner ? 1 - (local & 1) : (local & 1);
+        const uint32_t rgb = style.color[owner];
+        if (rgb && (part == ReticlePart::ring || part == ReticlePart::dot || part == ReticlePart::wake)) {
+            const float chosen[3] = {float((rgb >> 16) & 255) / 255, float((rgb >> 8) & 255) / 255, float(rgb & 255) / 255};
+            for (auto& vertex : draw.vertices) {   // the chosen colour at the strength the game drew this vertex with (a pure red is the game's own look), so the picker's brightness is kept
+                auto& c = vertex.color[0];
+                const float level = float(std::max({c[0], c[1], c[2]}));
+                for (int i = 0; i < 3; ++i) c[i] = uint8_t(std::clamp(chosen[i] * level + .5f, 0.f, 255.f));
+            }
+        }
+        if (partner && style.partner_alpha < 1) for (auto& vertex : draw.vertices) vertex.color[0][3] = uint8_t(std::clamp(vertex.color[0][3] * style.partner_alpha + .5f, 0.f, 255.f));
+        if (part == ReticlePart::dot && style.dot_scale != 1) {
+            float cx = 0, cy = 0;
+            for (const auto& vertex : draw.vertices) { cx += vertex.position[0]; cy += vertex.position[1]; }
+            cx /= float(draw.vertices.size()); cy /= float(draw.vertices.size());
+            for (auto& vertex : draw.vertices) { vertex.position[0] = cx + (vertex.position[0] - cx) * style.dot_scale; vertex.position[1] = cy + (vertex.position[1] - cy) * style.dot_scale; }
+        }
+    }
 }
 // Crosshair scale (graphics.crosshair_scale): the draw's viewport is scaled about the reticle centre (draw NDC), so the quad keeps its place and changes size.
 inline void scale_viewport_about(const std::array<float,2>& center, float scale, float& x, float& y, float& width, float& height) {

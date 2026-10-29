@@ -2,6 +2,9 @@
 #include "intro.h"
 #include "dispatch.h"
 #include "ppc_fixture.h"
+#include "wide_view.h"
+#include <cmath>
+#include <cstring>
 #include <exception>
 
 static unsigned calls;
@@ -33,10 +36,18 @@ static void original_update(ppc::Ctx& c) {
     c.r[1]=ppc::rd32(c,c.r[1]);
     c.r[3]=1;
 }
+static double seen_fov, seen_aspect;
+static unsigned perspective_calls;
+static void perspective_body(ppc::Ctx& c) {   // the original C_MTXPerspective body from 80265468: the wrapper has lowered the stwu
+    ++perspective_calls;
+    CHECK(ppc::rd32(c,c.r[1])==0x817D0000 && c.r[1]==0x817D0000-64);
+    seen_fov=c.f[1]; seen_aspect=c.f[2];
+    c.r[1]=ppc::rd32(c,c.r[1]);
+}
 int main() {
     Fix fixture; auto& c=fixture.c;
-    const uc::FnEntry entries[]={{0x801426D8,movie_update},{0x80245860,original_update}};
-    uc::dispatch_init(entries,2,0x801426D8,0x80245864);
+    const uc::FnEntry entries[]={{0x801426D8,movie_update},{0x80245860,original_update},{0x80265468,perspective_body}};
+    uc::dispatch_init(entries,3,0x801426D8,0x80265470);
     c.r[1]=0x817D0000; c.lr=0x80100000;
     ppc::wr8(c,0x804D1E70,1); ppc::wr8(c,0x804D1E71,1);
     ppc::wr8(c,0x804D1E94,0); ppc::wr32(c,0x804D1EA4,3); ppc::wr32(c,0x804D1EA8,0x80002000);
@@ -63,4 +74,29 @@ int main() {
     CHECK(movie_calls==3 && ppc::rd16(c,0x80003006)==99 && c.r[1]==0x817D0000);
     c.r[3]=0x80003000; hle_MovieUpdate(c);
     CHECK(movie_calls==4 && ppc::rd16(c,0x80003006)==99);
+    {   // C_MTXPerspective: untouched at 16:9, a wider aspect on a wider output, a larger vertical tangent on a taller one, nothing on odd arguments
+        const double odd_fov=1.0/3, odd_aspect=1.0/7;   // not representable as floats: the original must see exactly these at 16:9
+        c.r[1]=0x817D0000; c.lr=0x80100000; c.f[1]=odd_fov; c.f[2]=odd_aspect;
+        gx::set_view_factors({});
+        hle_MTXPerspective(c);
+        CHECK(perspective_calls==1 && seen_fov==odd_fov && seen_aspect==odd_aspect && c.r[1]==0x817D0000);
+        gx::set_view_factors(gx::factors_for_aspect(21.0/9));
+        c.f[1]=60.0; c.f[2]=1.6;
+        hle_MTXPerspective(c);
+        CHECK(perspective_calls==2 && seen_fov==60.0 && std::abs(seen_aspect-1.6f/(16.0f/21.0f))<1e-5);
+        gx::set_view_factors(gx::factors_for_aspect(16.0/10));
+        c.f[1]=60.0; c.f[2]=1.6;
+        hle_MTXPerspective(c);
+        const double ky=(16.0/10)/(16.0/9);
+        CHECK(perspective_calls==3 && std::abs(1/std::tan(seen_fov*3.14159265358979323846/360.0)-1/std::tan(60.0*3.14159265358979323846/360.0)*ky)<1e-4);   // cot' = cot * ky
+        CHECK(std::abs(seen_aspect-1.6f*ky)<1e-4 && seen_fov>60.0 && seen_fov<180.0);
+        gx::set_view_factors(gx::factors_for_aspect(21.0/9));
+        for(const double bad:{0.0,-1.0,std::nan(""),180.0,400.0}) {   // an argument that is no field of view is left to the original
+            c.f[1]=bad; c.f[2]=1.6;
+            hle_MTXPerspective(c);
+            CHECK(std::isnan(bad) ? std::isnan(seen_fov) : seen_fov==bad);
+            CHECK(seen_aspect==1.6);
+        }
+        gx::set_view_factors({});
+    }
 }

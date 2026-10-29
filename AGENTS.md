@@ -2,7 +2,7 @@
 
 - Live testing of `uc.exe`: use the harness, never system input. Skill: `.claude/skills/uc-test/SKILL.md`; protocol: `docs/testing/test-server.md`.
 - Never run any test, bench, demo or smoke run fullscreen (no `--window-mode borderless|exclusive`, no desktop-sized windows): the harness forces a 1280x720 window (`docs/testing/test-server.md`); never lift that unless the owner asks in the same message. For a higher internal resolution use `--game-arg=--render-scale`.
-- Build: `build.bat --no-install` (translator, build, tests, stages `dist`). Tests only: `ctest --test-dir build --output-on-failure`.
+- Build: `build.bat --no-install` (translator, build, tests, stages `dist`). Tests only: `ctest --test-dir build --output-on-failure`. `build.bat` runs only the tests whose exe, command or data files (`tests` data and fixtures, `tools`, `modding`, `mods-examples`) changed since they last passed (per-test keys in `build/tests.state.json`, `scripts/tests-run.ps1`; delete the file to run all). Failed tests stay pending.
 - Run a scenario: `cd scripts && python -m uctest run train_gameplay --speed 8`.
 - Never run the game against the real saves; the harness copies them into `build/autotest/<run>/saves`.
 - Every test, bench and demo runs the game unlocked (`--fps-limit 0`, as a player does); a limit only by an explicit `--game-arg=--fps-limit --game-arg=N`. Deterministic runs (demo/bench) use a virtual clock, so the heavy fight then plays slower than real time on screen: that is wall time per fixed work, not a bug.

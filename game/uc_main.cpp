@@ -47,6 +47,8 @@
 #include "game_pacing.h"
 #include "render_scale.h"
 #include "window_mode.h"
+#include "wide_view.h"
+#include "reticle_style.h"
 #include "frame_limit.h"
 #include "cpu_sampler.h"
 #include "audio_output.h"
@@ -131,6 +133,13 @@ void map_hardware() {   // register blocks of the Wii/GameCube as seen at 0xCC00
 }
 
 std::atomic<uint64_t> g_fifo_snapshot{0};
+gx::ReticleStyle reticle_style_of(const uc::ReticleOptions& options) {   // the menu's choices as the packet producer reads them (late_aim.h)
+    gx::ReticleStyle style;
+    style.hide_tail=options.hide_tail; style.hide_dot=options.hide_dot; style.hide_marks=options.hide_marks; style.hide_arc=options.hide_arc;
+    style.color={options.color_p1,options.color_p2};
+    style.dot_scale=options.dot_size/100.f; style.partner_alpha=options.partner_opacity/100.f;   // the wake's length goes to the renderer (set_wake_seconds)
+    return style;
+}
 
 void print_stats() {
     auto vi = uc::vi_stats();
@@ -233,7 +242,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--no-ultrawide] [--hud-position auto|center|edges] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     startup_options=options;   // probe/harness failures remain noninteractive, including a bad config
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
@@ -403,6 +412,18 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::optional<uc::GameRenderer> renderer_storage; renderer_storage.emplace(options.renderer_backend);
     uc::GameRenderer& renderer=*renderer_storage;   // restart_renderer() replaces it in the same storage, so this reference stays valid
     double render_aspect=16.0/9;
+    // Native ultrawide (renderer/ultrawide.h): the packets are scaled for the shape of the output, whatever shape the EFB was created in.
+    int view_width=0,view_height=0;   // the last output size the factors were made for (a change of the interface position remakes them)
+    const auto view_for_output=[&options,&view_width,&view_height,&network,deterministic](int width,int height) {
+        if(width<=0 || height<=0) return;
+        view_width=width; view_height=height;
+        const double aspect=double(width)/height;
+        const bool edges=options.hud_position==uc::HudPosition::edges || (options.hud_position==uc::HudPosition::automatic && aspect<=2.45);   // automatic: up to about 21:9
+        // The wide picture changes what the game computes (its projection, the pointer's range, hit tests): never in a run that must be the same on every machine
+        // (network play, deterministic runs, demos), where the game keeps its 16:9 and the picture is stretched as before.
+        const bool shared_state=network || deterministic || !options.demo_record.empty() || !options.demo_play.empty();
+        gx::set_view_factors(options.ultrawide && !shared_state ? gx::factors_for_aspect(aspect,edges) : gx::ViewFactors{});
+    };
     const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();   // the launcher's language: menus and start screens
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
@@ -420,6 +441,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom_settings());
         renderer.set_crosshair_scale(options.crosshair_scale);
+        gx::set_reticle_style(reticle_style_of(options.reticle));
         renderer.set_effects(options.effects);
         renderer.set_dlss5(options.dlss5_enabled ? options.dlss5 : uc::Dlss5Settings{});
         if(compile_screen) {   // compile every known pipeline now, so no pipeline is built while the game runs
@@ -454,7 +476,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const auto display=SDL_GetPrimaryDisplay();
         const auto* mode=display ? SDL_GetDesktopDisplayMode(display) : nullptr;
         if(!mode || mode->w<=0 || mode->h<=0) throw std::runtime_error("monitor display mode unavailable: "+std::string(SDL_GetError()));
-        const double aspect=double(mode->w)/mode->h; render_aspect=aspect;
+        const double aspect=options.width && options.height ? double(options.width)/options.height : double(mode->w)/mode->h; render_aspect=aspect;   // an explicit window size sets the picture's shape, otherwise the monitor does
         const bool monitor_window=!options.width && !options.height;
         if(!options.width) options.width=uint32_t(mode->w);
         if(!options.height) options.height=uint32_t(mode->h);
@@ -487,6 +509,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         int output_width=0,output_height=0;
         if(!SDL_GetWindowSizeInPixels(window.get(),&output_width,&output_height))throw std::runtime_error(SDL_GetError());
         renderer.resize(uint32_t(std::max(0,output_width)),uint32_t(std::max(0,output_height)));
+        view_for_output(output_width,output_height);
         const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
         std::fprintf(stderr,"Window mode: %s\n[startup] window shown after shader warmup; output=%dx%d focused=%d\n",mode_name,output_width,output_height,int((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));
         if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
@@ -570,8 +593,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         renderer.set_reticle_layer(!std::getenv("UC_RETICLE_LAYER") || std::string_view(std::getenv("UC_RETICLE_LAYER"))!="0");
     }
     uc::FrameLimit frame_limit(options.fps_limit);
-    std::chrono::steady_clock::time_point last_present_at{};
-    // The session CSV is automatic; UC_FRAME_LOG retains its explicit override.
+    std::chrono::steady_clock::time_point last_present_at{};    // The session CSV is automatic; UC_FRAME_LOG retains its explicit override.
     std::unique_ptr<uc::FrameLog> frame_log;
     try {
         const char* path=std::getenv("UC_FRAME_LOG");
@@ -642,7 +664,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 const auto due=last_present_at+std::chrono::nanoseconds(1000000000/std::max<uint32_t>(1,network->tick()))-std::chrono::microseconds(300);
                 if (const auto now=std::chrono::steady_clock::now(); now<due) std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(due-now,std::chrono::milliseconds(4)));
             }
-            if (network) renderer.set_wake_seconds(4.0/std::max<uint32_t>(1,network->tick()));   // the game draws its wake through the last four simulated pointers
+            const double tail=options.reticle.tail_length/100.0;   // the menu's wake length
+            if (network) renderer.set_wake_seconds(tail*4.0/std::max<uint32_t>(1,network->tick()));   // the game draws its wake through the last four simulated pointers
+            else renderer.set_wake_seconds(tail*4.0/30);   // single-player: four of the game's own 30 Hz steps, whatever the frame rate (a per-frame length shrinks to nothing at 240 FPS)
             const auto render_start=std::chrono::steady_clock::now();
             const bool display=!pending->replay && frame_limit.ready(pending->present,render_start);
             const auto prior_presents=renderer.presentation_count();
@@ -812,6 +836,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
     uc::HostKeys host_keys;
+    std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert)
+    const auto set_menu_keys=[&](const uc::Bindings& bindings) {
+        menu_keys.clear();
+        for(const auto& binding:bindings[size_t(uc::Action::menu)]) if(binding.kind==uc::BindingKind::physical && binding.input.kind==uc::PhysicalKind::key) menu_keys.push_back(SDL_Scancode(binding.input.code));
+    };
+    set_menu_keys(input_config.input);
     uint64_t menu_click_presents=0;
     std::deque<SDL_Event> menu_click_events;   // harness menu clicks: press and release, one per main-loop iteration
     bool restart_pending=false;   // apply upscaling changes at the next frame boundary; replace the device only when required
@@ -837,12 +867,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         };
         targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
+        targets.reticle=[&](const uc::ReticleOptions& reticle) { options.reticle=reticle; gx::set_reticle_style(reticle_style_of(reticle)); };
         targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); };
+        targets.hud_position=[&](uc::HudPosition position) { options.hud_position=position; view_for_output(view_width,view_height); };
         targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
-        targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); };
+        targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_menu_keys(bindings); };
         targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
         live_settings.emplace(config_path,input_config,std::move(targets));
         if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has
@@ -879,7 +911,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     const auto host_key_pressed=[&](SDL_Scancode key) {   // true when the key belongs to the port (never to the game)
         if(network && key==SDL_SCANCODE_P)return true; // Escape sends the original synchronized pause action.
-        const auto result=uc::host_key(host_keys,key,settings_menu && settings_menu->capturing());
+        const auto result=uc::host_key(host_keys,key,settings_menu && settings_menu->capturing(),menu_keys);
         if (result==uc::HostKeyResult::none) return false;
         if (result!=uc::HostKeyResult::consumed) {
             if (result==uc::HostKeyResult::pause_toggled) std::fprintf(stderr,"Game %s\n",host_keys.paused ? "paused" : "resumed");
@@ -1000,7 +1032,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         } catch (...) { watch_error = std::current_exception(); }
         in_render = false;
     };
-    std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); } catch (...) { watch_error = std::current_exception(); } };
+    std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); view_for_output(int(w),int(h)); } catch (...) { watch_error = std::current_exception(); } };
     watch_state = {&render_step, &resize_step};
     const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the main thread, also inside the modal resize loop
         auto& state = *static_cast<Watch*>(user);
@@ -1018,7 +1050,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             while (SDL_PollEvent(&event)) {
                 ++frame_events;
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
-                if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2)));
+                if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
                 if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
@@ -1031,7 +1063,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     continue;
                 }
                 if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && host_key_pressed(event.key.scancode)) continue;
-                if(event.type==SDL_EVENT_KEY_UP && (event.key.scancode==SDL_SCANCODE_INSERT || event.key.scancode==SDL_SCANCODE_P) && !settings_menu->capturing()) continue;   // the releases of host keys
+                if(event.type==SDL_EVENT_KEY_UP && (uc::is_menu_key(event.key.scancode,menu_keys) || event.key.scancode==SDL_SCANCODE_P) && !settings_menu->capturing()) continue;   // the releases of host keys
                 if(host_keys.menu_open) {
                     if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) settings_menu->focus_lost();
                     if(settings_menu->capturing()) settings_menu->capture_event(event); else renderer.menu_event(event);
