@@ -1,6 +1,7 @@
 #include "native_input.h"
 #include "gx_vertices.h"
 #include "gx_audit.h"
+#include "wide_view.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -441,6 +442,11 @@ InputSample NativeInput::consume_at(uint64_t now_ns) {
     step_pointer(now_ns);
     ease_pointer(motion_time());
     auto result=state_;
+    if(!gx::view_scene()) {   // a menu on a wider (taller) output: its layout is narrowed to k of the window (renderer/ultrawide.h), so the pointer the game reads grows by 1 / k
+        const auto k=gx::view_factors();
+        if(k.x<1.f) result.x=std::clamp(result.x/k.x,-1.f,1.f);
+        if(k.y<1.f) result.y=std::clamp(result.y/k.y,-1.f,1.f);
+    }
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
     state_.pressed=state_.released=0;

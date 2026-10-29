@@ -240,6 +240,49 @@ int main() {
         gx::widen_packet(again, wide, fresh);
         CHECK(near(x_range(again.draws[2])[0], -0.1f) && near(x_range(again.draws[2])[1], 0.35f));
     }
+    {   // A full-screen image the game draws in tiles (the screen effects: four quarters that meet in the middle) stays stretched as a whole; a lone half stays narrowed.
+        const auto tiles = [&](bool with_scene) {
+            gx::FramePacket packet;
+            if (with_scene) packet.draws.push_back(scene_draw());
+            packet.draws.push_back(ortho_quad(-1, 0, nullptr, -1, 0)); packet.draws.push_back(ortho_quad(0, 1, nullptr, -1, 0));
+            packet.draws.push_back(ortho_quad(-1, 0, nullptr, 0, 1)); packet.draws.push_back(ortho_quad(0, 1, nullptr, 0, 1));
+            gx::WideFrame frame;
+            gx::widen_packet(packet, wide, frame);
+            return packet;
+        };
+        for (const bool with_scene : {false, true}) {
+            const auto packet = tiles(with_scene);
+            for (size_t i = with_scene ? 1 : 0; i < packet.draws.size(); ++i) CHECK(packet.draws[i].transforms->projection[0][0] == 1.f);
+        }
+        {   // The tiles of a screen effect lie over the whole screen: what the game draws over them (the health bar, a subtitle) is not part of the image.
+            gx::FramePacket packet;
+            packet.draws.push_back(scene_draw());
+            packet.draws.push_back(ortho_quad(-1, 0, nullptr, -1, 0)); packet.draws.push_back(ortho_quad(0, 1, nullptr, -1, 0));
+            packet.draws.push_back(ortho_quad(-1, 0, nullptr, 0, 1)); packet.draws.push_back(ortho_quad(0, 1, nullptr, 0, 1));
+            packet.draws.push_back(ortho_quad(-0.95f, -0.3f, nullptr, -0.8f, -0.75f));   // the bar of a player's block: 0.65 wide, inside the screen
+            packet.draws.push_back(ortho_quad(-0.5f, 0.5f, nullptr, -0.3f, -0.2f));      // a wide line of text in the middle
+            gx::WideFrame frame;
+            gx::widen_packet(packet, wide, frame);
+            for (size_t i = 1; i <= 4; ++i) CHECK(packet.draws[i].transforms->projection[0][0] == 1.f);
+            CHECK(packet.draws[5].transforms->projection[0][0] < 1.f && packet.draws[6].transforms->projection[0][0] < 1.f);
+        }
+        gx::FramePacket half; half.draws.push_back(ortho_quad(-1, 0, nullptr, -1, 0)); half.draws.push_back(ortho_quad(0.1f, 0.3f));
+        gx::WideFrame frame;
+        gx::widen_packet(half, wide, frame);
+        CHECK(near(half.draws[0].transforms->projection[0][0], 0.75f));
+        gx::FramePacket panels; panels.draws.push_back(ortho_quad(-1, -0.2f, nullptr, -1, 0)); panels.draws.push_back(ortho_quad(0.5f, 0.9f, nullptr, -1, 0));   // two panels with a gap: not one image
+        gx::widen_packet(panels, wide, frame);
+        CHECK(near(panels.draws[0].transforms->projection[0][0], 0.75f) && near(panels.draws[1].transforms->projection[0][0], 0.75f));
+    }
+    {   // A menu's reticle (no 3D scene in the frame) keeps its centre as well: the renderer moves it to the mouse, which may be anywhere in the window.
+        gx::FramePacket packet;
+        packet.draws.push_back(ortho_quad(0.28f, 0.47f, nullptr, -0.1f, 0.1f)); packet.draws[0].reticle = true;   // the ring, centred at 0.375
+        packet.draws.push_back(ortho_quad(0.2f, 0.4f));                                                            // a menu text: narrowed about the screen centre
+        gx::WideFrame frame;
+        gx::widen_packet(packet, wide, frame);
+        CHECK(near(centre(x_range(packet.draws[0])), 0.375f) && near(width(x_range(packet.draws[0])), 0.75f * 0.19f));
+        CHECK(near(centre(x_range(packet.draws[1])), 0.75f * 0.3f));
+    }
     {   // A button prompt takes the narrowing of the text line it stands in (the line came in an earlier packet of the frame), a menu's prompt the screen centre's.
         gx::FramePacket text; text.present = false; text.draws.push_back(scene_draw());
         text.draws.push_back(ortho_quad(0.1f, 0.3f, nullptr, 0.4f, 0.5f)); text.draws.push_back(ortho_quad(0.31f, 0.5f, nullptr, 0.4f, 0.5f));   // a line centred at 0.3

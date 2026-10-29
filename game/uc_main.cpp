@@ -49,6 +49,7 @@
 #include "render_scale.h"
 #include "window_mode.h"
 #include "wide_view.h"
+#include "late_aim.h"
 #include "reticle_style.h"
 #include "frame_limit.h"
 #include "cpu_sampler.h"
@@ -432,8 +433,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         std::fprintf(stderr,"[startup] renderer=%s initialization begin scale=%.3f upscaler=%s RT=%d HDR=%d\n",std::string(uc::renderer_backend_name(options.renderer_backend)).c_str(),options.render_scale,std::string(uc::upscaler_name(options.upscaler)).c_str(),int(options.effects.ray_tracing),int(options.hdr.enabled));
         std::optional<uc::CompileScreen> screen;
         if(compile_screen) { screen.emplace(menu_language); if(!controlled) screen->show(); }   // test runs keep it hidden until a slow compile
-        renderer.set_aim_source([&input] { return input.latest_aim(); });
-        renderer.set_aim_history([&input](double seconds) { return input.aim_ago(seconds); });
+        renderer.set_aim_source([&input] { return gx::clamp_aim(input.latest_aim()); });   // the reticle stays on the screen as the game's own does; the pointer runs on
+        renderer.set_aim_history([&input](double seconds) { return gx::clamp_aim(input.aim_ago(seconds)); });
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);

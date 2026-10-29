@@ -172,6 +172,39 @@ inline Anchor prompt_anchor(const WideFrame& frame, float x0, float x1, float y0
     return anchor;
 }
 
+// A full-screen image the game draws in tiles (the screen effects, backgrounds: quarters or strips that meet) reaches both edges only as a whole. Draws that touch (or
+// overlap, within 0.02 NDC) form one piece; a piece that spans the scaled axis stays stretched like a single draw that does.
+inline void keep_tiled_images(const FramePacket& packet, std::vector<bool>& movable, const std::vector<int>& picture, ViewFactors k) {
+    const size_t axis = k.x < 1.f ? 0 : 1;
+    struct Piece { size_t draw; float a0, a1, b0, b1; };
+    std::vector<Piece> pieces;
+    for (size_t i = 0; i < packet.draws.size() && pieces.size() <= 256; ++i) {
+        if (!movable[i] || picture[i]) continue;   // a movie or a still picture is scaled by its own shape, not stretched
+        const auto a = ortho_range(packet.draws[i], axis), b = ortho_range(packet.draws[i], 1 - axis);
+        if (!a || !b || (*a)[1] - (*a)[0] < 0.4f) continue;
+        const bool at_edge = (*a)[0] <= -0.99f || (*a)[1] >= 0.99f || (*b)[0] <= -0.99f || (*b)[1] >= 0.99f;   // a tile of a full-screen image lies on the screen's edge: what is drawn over it (the health bar, a subtitle) does not
+        if (at_edge) pieces.push_back({i, (*a)[0], (*a)[1], (*b)[0], (*b)[1]});
+    }
+    if (pieces.size() < 2 || pieces.size() > 256) return;
+    constexpr float kTouch = 0.02f;
+    std::vector<size_t> parent(pieces.size());
+    std::iota(parent.begin(), parent.end(), size_t(0));
+    const auto root = [&](size_t i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
+    for (size_t p = 0; p < pieces.size(); ++p) for (size_t q = p + 1; q < pieces.size(); ++q) {
+        const auto &u = pieces[p], &v = pieces[q];
+        if (u.a0 <= v.a1 + kTouch && v.a0 <= u.a1 + kTouch && u.b0 <= v.b1 + kTouch && v.b0 <= u.b1 + kTouch) parent[root(p)] = root(q);
+    }
+    std::map<size_t, std::array<float,2>> extent;
+    for (size_t p = 0; p < pieces.size(); ++p) {
+        auto [it, fresh] = extent.try_emplace(root(p), std::array<float,2>{pieces[p].a0, pieces[p].a1});
+        if (!fresh) { it->second[0] = std::min(it->second[0], pieces[p].a0); it->second[1] = std::max(it->second[1], pieces[p].a1); }
+    }
+    for (size_t p = 0; p < pieces.size(); ++p) {
+        const auto& e = extent[root(p)];
+        if (e[0] <= -0.99f && e[1] >= 0.99f) movable[pieces[p].draw] = false;
+    }
+}
+
 // Narrows the packet's orthographic draws and button prompts (see the top of this file). `frame` is the producer's memory of the frame being built: whether it
 // already had a perspective draw (the interface comes in a later packet) and the anchored draws so far; it clears at the present.
 inline void widen_packet(FramePacket& packet, ViewFactors k, WideFrame& frame) {
@@ -189,6 +222,7 @@ inline void widen_packet(FramePacket& packet, ViewFactors k, WideFrame& frame) {
         // The wake is a ribbon of the pointer's own positions (true NDC already): narrowing it would squeeze its path towards the ring.
         movable[at] = !(draw.wake || reticle_tail_callsite(draw.callsite)) && !(k.x < 1.f ? spans_axis(draw, 0) : spans_axis(draw, 1));
     }
+    keep_tiled_images(packet, movable, picture, k);
     std::vector<Anchor> anchors;
     if (frame.scene) {
         std::vector<AnchoredBox> found;
@@ -204,6 +238,10 @@ inline void widen_packet(FramePacket& packet, ViewFactors k, WideFrame& frame) {
         if (is_perspective(draw.transforms->projection) || !movable[at]) continue;   // the 3D scene is wide already: the guest built its projection so
         Anchor anchor;   // a menu: about the screen centre
         if (frame.scene && !picture[at]) { anchor = anchors.empty() ? Anchor{} : anchors[at]; if (!anchor.anchored) continue; }
+        else if (!frame.scene && follows_pointer(draw)) {   // a menu's reticle keeps its centre too: the renderer moves it to the mouse, anywhere in the window
+            const auto x = ortho_range(draw, 0), y = ortho_range(draw, 1);
+            if (x && y) { anchor.anchored = true; anchor.cx = anchor.tx = ((*x)[0] + (*x)[1]) / 2; anchor.cy = anchor.ty = ((*y)[0] + (*y)[1]) / 2; }
+        }
         const std::tuple<const Transforms*, float, float, float, float, int> key{draw.transforms.block().get(), anchor.cx, anchor.cy, anchor.tx, anchor.ty, picture[at]};
         auto found = scaled.find(key);
         if (found == scaled.end()) {
@@ -242,6 +280,6 @@ inline void widen_packet(FramePacket& packet, ViewFactors k, WideFrame& frame) {
         for (size_t i = 0; i < 4; ++i) { prompt.efb_corners[i * 2] = move_x(prompt.efb_corners[i * 2]); prompt.efb_corners[i * 2 + 1] = move_y(prompt.efb_corners[i * 2 + 1]); }
         prompt.clip = {move_x(prompt.clip[0]), move_y(prompt.clip[1]), move_x(prompt.clip[2]), move_y(prompt.clip[3])};   // the rectangle the text is clipped to moves with it
     }
-    if (packet.present) { frame.scene = false; frame.boxes.clear(); frame.players.clear(); }
+    if (packet.present) { set_view_scene(frame.scene); frame.scene = false; frame.boxes.clear(); frame.players.clear(); }
 }
 }

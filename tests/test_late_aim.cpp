@@ -62,6 +62,20 @@ int main() {
             CHECK(gx::mark_reticle_draws(both, Aims{aim, std::nullopt}, 0, true) == 2);
             CHECK(std::abs(both[1].aim_ref[0] - nx / gx::kAimToNdcX) < 1e-5f && std::abs(both[0].aim_ref[0] - (nx + 0.02f) / gx::kAimToNdcX) < 1e-5f);
         }
+        {   // The Game Over page: a leftover ring of the mission sits at another place and is drawn first; the pointer's ring is the one nearest the pointer the game read,
+            // so it is the anchor (the first ring as the anchor moved the real one twice: the reticle showed twice as far from the centre as the pointer was).
+            std::vector<gx::DrawPacket> page{tinted(quad(0x80393B0C, -0.3f, 0.2f, 154), red), tinted(quad(0x80393B0C, nx, ny, 154), red)};
+            CHECK(gx::mark_reticle_draws(page, Aims{aim, std::nullopt}, 0, true) == 2);
+            CHECK(std::abs(page[1].aim_ref[0] - nx / gx::kAimToNdcX) < 1e-5f && std::abs(page[1].aim_ref[1] - ny / gx::kAimToNdcY) < 1e-5f);
+        }
+        {   // The first-aid spray icon (bottom left) comes through the ring's callsite with a 100 x 100 texture: it is not part of the reticle, even with the pointer on it
+            // (it moved with the reticle). The laser dot has the same edge through its own callsite and stays one.
+            std::vector<gx::DrawPacket> hud{tinted(quad(0x80393B0C, nx, ny, 154), red), quad(0x80393B0C, nx + 0.02f, ny, 100), quad(0x8006D174, nx + 0.03f, ny, 100)};
+            CHECK(gx::mark_reticle_draws(hud, Aims{aim, std::nullopt}, 0, true) == 2);
+            CHECK(hud[0].late_aim && !hud[1].reticle && !hud[1].late_aim && hud[2].late_aim);
+            std::vector<gx::DrawPacket> icon_only{quad(0x80393B0C, nx, ny, 100)};
+            CHECK(gx::mark_reticle_draws(icon_only, Aims{aim, std::nullopt}, 0, true) == 0);
+        }
         {   // Reticles exactly on top of each other: the tint and the draw order still keep the quads apart.
             std::vector<gx::DrawPacket> stacked{tinted(quad(0x80393B0C, nx, ny, 120), red), quad(0x80393B0C, nx, ny, 120), tinted(quad(0x80393B0C, nx + 0.01f, ny, 120), blue), quad(0x80393B0C, nx + 0.01f, ny, 120)};
             CHECK(mark(stacked, {aim, aim}, 0) == 4);
@@ -69,6 +83,14 @@ int main() {
         }
         std::vector<gx::DrawPacket> far{tinted(quad(0x80393B0C, nx - 0.45f, ny, 120), red)};   // a fast flick: 0.45 from the pointer it was drawn from
         CHECK(mark(far, {aim, other}, 0) == 1 && far[0].late_aim);
+    }
+    {   // The pointer's range is wider than the screen (1.25 x 1.67), the game keeps its own ring on the screen edge (NDC +-1): the reticle follows the pointer only that far.
+        const auto edge = gx::clamp_aim({1.f, -1.f});
+        CHECK(std::abs(edge[0] - 0.8f) < 1e-5f && std::abs(edge[1] + 0.6f) < 1e-5f);
+        const auto inside = gx::clamp_aim({0.3f, -0.2f});
+        CHECK(inside[0] == 0.3f && inside[1] == -0.2f);
+        std::vector<gx::DrawPacket> corner{tinted(quad(0x80393B0C, 1.f, 1.f, 154), red)};   // the game's ring at the corner while the pointer is at the end of its range
+        CHECK(mark(corner, {std::array<float,2>{1.f, 1.f}, std::nullopt}, 0) == 1 && corner[0].late_aim);   // the vertical gap (1.67 - 1) must not read as "another ring"
     }
     {   // The wake (callsite 8006CED4, in the player's tint) follows only the local reticle and is not scaled.
         std::vector<gx::DrawPacket> draws{tinted(quad(0x8006CED4, 0.f, 0.f, 100), red), tinted(quad(0x8006CED4, 0.f, 0.f, 100), blue), quad(0x8006CED4, 0.f, 0.f, 100)};

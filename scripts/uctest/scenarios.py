@@ -1532,6 +1532,108 @@ def guest_api(g, args):
     return result
 
 
+def _wide_window(g):
+    """UC_WIDE_WIDTH=N: the window gets N pixels of width live (the shape changes after the menu route, which is measured at 16:9). Returns the client size and k, the
+    fraction of the width the game's 16:9 layout covers."""
+    import ctypes
+    import os
+    from ctypes import wintypes
+    width = int(os.environ.get("UC_WIDE_WIDTH", "0"))
+    hwnd = _window_of(g.process.pid)
+    user32 = ctypes.windll.user32
+    if width and hwnd:
+        user32.SetWindowPos(hwnd, 0, 0, 0, width + 16, 720 + 39, 0x0002 | 0x0004 | 0x0010)   # SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE; the frame is about 16 x 39
+        g.advance(120)
+    import struct
+    with open(g.capture(), "rb") as shot:   # the capture is in the game's own pixels (a scaled display makes them differ from the window's client rectangle)
+        w, h = struct.unpack(">II", shot.read(24)[16:24])
+    return w, h, min(1.0, (16 / 9) / (w / h))
+
+
+def game_over(g, args):
+    """The player never shoots and dies; on the Game Over page "Continue? Yes" is pressed through the host-input path (pointer + left click, as a mouse does) and
+    through the KPAD path of the bot. The report says which of them left the page."""
+    from .menus import TARGETS, screen_of
+    reach_gameplay(g, args.chapter)
+    with g.step("die"):
+        g.wait(lambda f: screen_of(f) == "game_over", seconds=args.max_minutes * 60 if args.max_minutes else 240, awaited="game over page")
+        g.advance(600)   # the prompt appears seconds after the page
+    width, height, k = _wide_window(g)
+    g.advance(60)
+    result = {"page": g.capture(), "window": [width, height, round(k, 3)]}
+    t = TARGETS["game_over_continue"]
+    hx, hy = (640 + 800 * t.x) / 640 - 1, (360 + 600 * t.y) / 360 - 1   # the same pixel in window coordinates (1280x720)
+    def relative():   # the mouse as the game gets it: the pointer centred, then counts of motion (2 * counts / window size); the layout is k of the width
+        g.aim(0, 0); g.advance(5)
+        g._input({"cmd": "input", "hold_frames": 1, "motion": {"x": t.x * k * width / 2, "y": t.y * height / 2}}, True)
+    for name, move in (("mouse_hover", relative), ("host_hover", lambda: g.host_aim(hx, hy)), ("kpad_hover", lambda: g.aim(t.x, t.y)), ("host_hover_exact", lambda: g.host_aim(t.x, t.y))):
+        move()
+        g.advance(60)
+        result[name] = g.capture()
+        result[name + "_draws"] = g.draws()
+    for name, press in (("mouse", lambda: (relative(), g.advance(10), g.mouse_button(1, 4))), ("host", lambda: (g.host_aim(hx, hy), g.advance(10), g.mouse_button(1, 4))),
+                        ("host_aim_kpad_press", lambda: (g.host_aim(hx, hy), g.advance(10), g.press("A", steps.PRESS_FRAMES))),
+                        ("kpad_aim_mouse_press", lambda: (g.aim(t.x, t.y), g.advance(10), g.mouse_button(1, 4))),
+                        ("kpad", lambda: (g.aim(t.x, t.y), g.press("A", steps.PRESS_FRAMES, t.x, t.y)))):
+        with g.step(f"continue_{name}"):
+            for _ in range(3):
+                press()
+                g.advance(120)
+                if screen_of(g.frame) != "game_over":
+                    break
+        result[name] = {"left_page": screen_of(g.frame) != "game_over", "capture": g.capture()}
+        if result[name]["left_page"]:
+            break
+    return result
+
+
+def damage_draws(g, args):
+    """The player stands still and is hurt: the draws wider than 0.8 NDC (the game's own values, before any narrowing) seen while the damage meter is up, with a
+    capture. Shows which quads make the blood at the screen edges."""
+    reach_gameplay(g, args.chapter)
+    width, height, k = _wide_window(g)
+    import os
+    from pathlib import Path
+    from .menus import screen_of
+    seen, shots = {}, []
+    go = os.environ.get("UC_PACKET_DUMP", "").split("|")[0] + ".go" if "|go" in os.environ.get("UC_PACKET_DUMP", "") else None   # UC_PACKET_DUMP=<file>|go|<frames>: the dump starts when the player is nearly dead
+    with g.step("hurt"):
+        g.wait(lambda f: (f.get("player") or {}).get("damage", 0) > 3, seconds=120, awaited="damage")
+        for i in range(400):   # on to the death: the screen fills with blood before the Game Over page
+            if screen_of(g.frame) == "game_over":
+                break
+            for d in g.draws():
+                b = d["bbox"]
+                if 1.0 < b[2] - b[0] < 3.0 and 1.0 < b[3] - b[1] < 3.0 and max(abs(v) for v in b) < 1.6:
+                    seen.setdefault((d["callsite"], tuple(d["tex"][:2]), tuple(round(v, 2) for v in b)), i)
+            if go and (g.frame.get("player") or {}).get("damage", 0) > 30:
+                Path(go).write_text("go")
+                g.advance(30)
+                break
+            if i % 12 == 0 and (g.frame.get("player") or {}).get("damage", 0) > 30:
+                shots.append(g.capture())
+            g.advance(3)
+    return {"window": [width, height, round(k, 3)], "draws": [list(map(str, key)) + [n] for key, n in seen.items()], "captures": shots}
+
+
+def pointer_range(g, args):
+    """The pointer is pushed to the edges and corners of its range on the Game Over page (a menu): the report holds the reticle quads the game drew (its own clamp)
+    and a capture of what is shown, for each point."""
+    from .menus import screen_of
+    reach_gameplay(g, args.chapter)
+    with g.step("die"):
+        g.wait(lambda f: screen_of(f) == "game_over", seconds=240, awaited="game over page")
+        g.advance(600)
+    result = {"window": _wide_window(g)}
+    g.advance(60)
+    for x, y in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (.9, .9), (-.9, -.9), (1, 1)):
+        g.aim(x, y)
+        g.advance(40)
+        rings = [d["bbox"] for d in g.draws() if d["callsite"] == 0x80393B0C and d["tex"][:2] in ([120, 120], [154, 154])]
+        result[f"{x},{y}"] = {"game_rings": rings, "capture": g.capture()}
+    return result
+
+
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "weapon_switch": weapon_switch, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
              "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent, "dol_names": dol_names}
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"], "dol_names": ["dol_names"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
@@ -1539,6 +1641,9 @@ SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a
 SCENARIOS["camera_stick"] = camera_stick
 SCENARIOS["gamepad"] = gamepad
 SCENARIOS["gamepad_prompts"] = gamepad_prompts
+SCENARIOS["game_over"] = game_over
+SCENARIOS["pointer_range"] = pointer_range
+SCENARIOS["damage_draws"] = damage_draws
 SCENARIOS["lightgun"] = lightgun
 SCENARIOS["wiimote"] = wiimote
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'

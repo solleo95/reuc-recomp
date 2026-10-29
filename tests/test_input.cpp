@@ -1,6 +1,7 @@
 #include "check.h"
 #include "native_input.h"
 #include "ppc_fixture.h"
+#include "wide_view.h"
 #include <cmath>
 #include <limits>
 #include <chrono>
@@ -120,6 +121,24 @@ static void absolute_aim_maps_pixels() {
     CHECK(input.aim_absolute(0,0,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{-1,-1}));
     CHECK(input.aim_absolute(1000,500,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,1}));
     CHECK(input.aim_absolute(2000,-10,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,-1}));
+}
+static void menu_pointer_follows_the_wide_layout() {
+    // On a wider output a menu's 2D layout is narrowed to k of the width, so the pointer the game reads grows by 1 / k: the mouse over a button is the game's pointer over it.
+    // A frame with a 3D scene has the wide projection already: the pointer stays as it is.
+    uc::NativeInput input; input.focus(true);
+    input.aim(0.3f,0.2f);
+    gx::set_view_factors({0.75f,1.f,false});
+    gx::set_view_scene(false);
+    auto menu=input.consume();
+    CHECK(std::abs(menu.x-0.4f)<1e-5f && std::abs(menu.y-0.2f)<1e-5f);
+    input.aim(0.9f,0.2f);
+    CHECK(input.consume().x==1.f);   // the game's range ends at 1
+    CHECK((input.latest_aim()==std::array<float,2>{0.9f,0.2f}));   // the renderer's reticle follows the mouse itself
+    gx::set_view_scene(true);
+    input.aim(0.3f,0.2f);
+    CHECK(std::abs(input.consume().x-0.3f)<1e-5f);
+    gx::set_view_factors({});
+    gx::set_view_scene(false);
 }
 static void absolute_aim_rejects_bad_input() {
     uc::NativeInput input; input.aim_absolute(500,250,1000,500);   // not focused
@@ -273,6 +292,7 @@ int main() {
     zone_is_off_by_default_and_in_menu_and_qte();
     demo_records_the_converted_frame();
     absolute_aim_maps_pixels();
+    menu_pointer_follows_the_wide_layout();
     aim_test_event_sets_pointer_and_feeds_gestures();
     absolute_aim_rejects_bad_input();
     absolute_aim_feeds_gestures();

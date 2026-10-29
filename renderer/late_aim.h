@@ -18,6 +18,11 @@ constexpr float kAimToNdcX = 1.f / 0.8f, kAimToNdcY = 1.f / 0.6f;
 // Native ultrawide (ultrawide.h): the game builds a wide picture (game/intro.cpp), and its pointer spans all of it, so an aim unit is the same NDC at any shape.
 inline float aim_to_ndc_x() { return kAimToNdcX; }
 inline float aim_to_ndc_y() { return kAimToNdcY; }
+// The game keeps its reticle on the screen (NDC +-1) while the pointer runs on to 1.25 x 1.67 screens: a re-aimed reticle goes only that far too.
+inline std::array<float,2> clamp_aim(std::array<float,2> aim) {
+    const float x = 1.f / kAimToNdcX, y = 1.f / kAimToNdcY;
+    return {std::clamp(aim[0], -x, x), std::clamp(aim[1], -y, y)};
+}
 // Quads of the reticle ring and centre dot: (callsite, square texture edge). Found with the harness `draws` request at three aim points.
 inline bool reticle_callsite(uint32_t callsite) { return callsite == 0x80393B0C || callsite == 0x8006D174; }
 // The edge in guest pixels of a decoded square texture, 0 while it is not decoded yet or not square.
@@ -112,7 +117,12 @@ template<class Path> bool retarget_wake(const DrawPacket& draw, GpuMeshVertex* t
     return true;
 }
 // A reticle quad candidate: the callsite and a decoded square texture of a known edge. Where it sits is judged by mark_reticle_draws.
-inline bool reticle_candidate(const DrawPacket& draw) { return reticle_callsite(draw.callsite) && draw.texture && reticle_texture(*draw.texture); }
+// The ring's callsite draws other HUD sprites too: a 100 x 100 texture there is the first-aid spray icon at the bottom left (it moved with the reticle when the pointer
+// came near; measured from a player's log 2026-10-29). Edge 100 is the laser dot's, drawn through the dot's own callsite.
+inline bool reticle_candidate(const DrawPacket& draw) {
+    if (!reticle_callsite(draw.callsite) || !draw.texture || !reticle_texture(*draw.texture)) return false;
+    return !(draw.callsite == 0x80393B0C && reticle_edge(*draw.texture) == 100);
+}
 // The ring's vertex colour is the player's: red for the first, blue for the second (the harness saw 255,0,0 / 100,0,0 / 255,64,64 and 0,0,255 / 0,0,100 / 50,100,255).
 // The white companion quads at the same place carry none. -1: no tint.
 inline int reticle_tint_owner(const DrawPacket& draw) {
@@ -129,7 +139,9 @@ inline int reticle_tint_owner(const DrawPacket& draw) {
 // Flags every reticle quad (`reticle`: the local crosshair size applies to both players' reticles) and the local player's (`late_aim`: it follows the mouse).
 // exact: the local reticle is re-aimed to the mouse itself (aim_ref = the tinted ring's own centre, so every quad of that player moves by the same amount and
 // keeps its offsets) instead of by (mouse - consumed pointer): the game's easing and recoil behind the pointer change at the tick rate and showed as jitter.
-template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<std::optional<std::array<float,2>>,2>& consumed, unsigned local, bool exact = false) {
+template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<std::optional<std::array<float,2>>,2>& consumed_pointers, unsigned local, bool exact = false) {
+    auto consumed = consumed_pointers;   // where the game's reticle can be: on the screen
+    for (auto& pointer : consumed) if (pointer) pointer = clamp_aim(*pointer);
     struct Group { std::array<float,2> center; int owner; std::vector<size_t> members; bool tinted = false; };
     std::vector<Group> groups;
     std::vector<std::pair<size_t, std::array<float,2>>> loose;   // untinted quads that did not directly follow a ring
@@ -171,9 +183,14 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
             if (draws[index].callsite == 0x80393B0C) if (const auto c = draw_center_ndc(draws[index])) return std::array<float,2>{(*c)[0] / kAimToNdcX, (*c)[1] / kAimToNdcY};
         return std::nullopt;
     };
+    float nearest = 1e9f;
     for (auto& group : groups) {   // the ring names the anchor: the game's red dot is tinted too, and it trails the ring in a fast flick
         if (!exact || !group.tinted || group.owner < 0 || unsigned(group.owner) != local || !consumed[group.owner]) continue;
-        if (const auto c = ring_centre(group)) { anchor = *c; break; }
+        // A frame can hold a second ring of the same player (the Game Over page keeps the mission's at its old place): the one nearest the pointer is the pointer's.
+        if (const auto c = ring_centre(group)) {
+            const float d = std::max(std::abs((*c)[0] - (*consumed[local])[0]) * kAimToNdcX, std::abs((*c)[1] - (*consumed[local])[1]) * kAimToNdcY);
+            if (d < nearest) { nearest = d; anchor = *c; }
+        }
     }
     if (exact && !anchor && local < 2 && consumed[local] && !consumed[1]) {   // one pad, no tinted ring (a flash can take the tint): the ring nearest to the pointer is the anchor
         float best = 0.6f;

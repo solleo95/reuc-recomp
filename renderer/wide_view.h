@@ -30,6 +30,11 @@ inline ViewFactors view_factors() {
     ViewFactors factors; std::memcpy(&factors.x, &x, 4); std::memcpy(&factors.y, &y, 4); factors.edges = view_edges_state().load();
     return factors;
 }
+// Whether the last presented frame had a 3D scene. Without one (a menu, a title) the 2D layout is narrowed to k of the output and the pointer the game reads is
+// scaled by 1 / k to match (runtime/native_input.cpp); with one the game's own projection is wide and the pointer is left alone.
+inline std::atomic<bool>& view_scene_state() { static std::atomic<bool> scene{false}; return scene; }
+inline void set_view_scene(bool scene) { view_scene_state().store(scene); }
+inline bool view_scene() { return view_scene_state().load(); }
 inline float view_factor_x() { return view_factors().x; }
 inline float view_factor_y() { return view_factors().y; }
 // Where an orthographic draw of a frame with a 3D scene is narrowed: about (cx, cy) in NDC, the point landing on (tx, ty). Anchored: false leaves the draw alone.
