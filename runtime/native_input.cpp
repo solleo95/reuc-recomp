@@ -179,7 +179,7 @@ void NativeInput::host_wii_pointer(float x,float y,uint64_t) {
 }
 void NativeInput::set_wii_pointer(float x,float y) {
     // Smoothed like any absolute pointer, but it never feeds the swing detectors: the camera losing and finding the sensor bar again is a jump, not a knife.
-    aim_toward(x,y,wii_.smoothing,!have_wii_pointer_);
+    aim_toward(x*kAimEdgeX,y*kAimEdgeY,wii_.smoothing,!have_wii_pointer_);   // x/y are -1..1 of the window: the game's pointer ends at .8 / .6 there
     have_wii_pointer_=true;
 }
 // The pointer goes to (x,y): at once, or with `smoothing` (0..0.9, the share of the distance that is left after one 60 Hz step) eased over time. The easing runs on the
@@ -234,8 +234,8 @@ void NativeInput::step_pointer(uint64_t now_ns) {
         vx+=v[0]; vy+=v[1];
     }
     if(vx==0 && vy==0)return;
-    state_.x=std::clamp(state_.x+float(2*vx*dt*height_/width_),-1.0f,1.0f);
-    state_.y=std::clamp(state_.y+float(2*vy*dt),-1.0f,1.0f);
+    state_.x=std::clamp(state_.x+float(2*vx*dt*height_/width_),-kAimEdgeX,kAimEdgeX);   // the pointer stops at the screen's edge: distance past it would have to be moved back
+    state_.y=std::clamp(state_.y+float(2*vy*dt),-kAimEdgeY,kAimEdgeY);
     note_aim();
 }
 void NativeInput::host_pad_gyro(float yaw,float pitch,uint64_t timestamp_ns) {
@@ -251,8 +251,8 @@ void NativeInput::gyro_motion(float yaw,float pitch,uint64_t timestamp_ns) {
     const auto counts=gyro_aim_counts(yaw,pitch,float(gap)/1e9f,pad_.gyro);
     if(counts[0]==0 && counts[1]==0)return;
     if(state_.valid) {
-        state_.x=std::clamp(state_.x+2*counts[0]/width_,-1.0f,1.0f);
-        state_.y=std::clamp(state_.y+2*counts[1]/height_,-1.0f,1.0f);
+        state_.x=std::clamp(state_.x+2*counts[0]/width_,-kAimEdgeX,kAimEdgeX);
+        state_.y=std::clamp(state_.y+2*counts[1]/height_,-kAimEdgeY,kAimEdgeY);
         note_aim();
     }
     actions_.motion(counts[0],counts[1],timestamp_ns);   // the same detectors as a mouse swing or shake
@@ -340,8 +340,8 @@ bool NativeInput::move_raw(float dx,float dy,uint32_t width,uint32_t height) {
     std::lock_guard lock(mutex_);
     if (!state_.valid) return false;
     target_on_=false;   // the mouse takes the pointer from any easing in progress
-    state_.x=std::clamp(state_.x+2*dx/width,-1.0f,1.0f);
-    state_.y=std::clamp(state_.y+2*dy/height,-1.0f,1.0f);
+    state_.x=std::clamp(state_.x+2*dx/width,-kAimEdgeX,kAimEdgeX);
+    state_.y=std::clamp(state_.y+2*dy/height,-kAimEdgeY,kAimEdgeY);
     note_aim();
     return true;
 }
@@ -364,7 +364,7 @@ bool NativeInput::aim_absolute(float px,float py,uint32_t width,uint32_t height,
 }
 bool NativeInput::absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale) {
     if(!state_.valid)return false;
-    const float x=std::clamp(2*px/width-1,-1.0f,1.0f),y=std::clamp(2*py/height-1,-1.0f,1.0f);
+    const float x=std::clamp(2*px/width-1,-1.0f,1.0f)*kAimEdgeX,y=std::clamp(2*py/height-1,-1.0f,1.0f)*kAimEdgeY;   // the window's edge, in the game's pointer units
     if(have_absolute_) {
         try { actions_.motion((px-absolute_px_)*gesture_scale,(py-absolute_py_)*gesture_scale,timestamp_ns ? timestamp_ns : motion_time()); }
         catch(const std::overflow_error&) { cancel_host(); throw; }
@@ -383,8 +383,9 @@ void NativeInput::reload_zone(ReloadZone zone,float size_fraction) {
 }
 void NativeInput::apply_reload_zone(ActionFrame& frame) {
     constexpr uint64_t fire=uint64_t(1)<<unsigned(Action::fire),reload=uint64_t(1)<<unsigned(Action::reload);
-    const float edge=1-2*zone_size_;   // the pointer runs -1..1 across the window
-    const bool inside=zone_==ReloadZone::corner ? std::abs(state_.x)>=edge && std::abs(state_.y)>=edge : zone_==ReloadZone::edge && (std::abs(state_.x)>=edge || std::abs(state_.y)>=edge);
+    const float edge=1-2*zone_size_;   // the window runs -1..1; the pointer is at .8 / .6 of its range at the window's edge
+    const float ax=std::abs(state_.x)/kAimEdgeX,ay=std::abs(state_.y)/kAimEdgeY;
+    const bool inside=zone_==ReloadZone::corner ? ax>=edge && ay>=edge : zone_==ReloadZone::edge && (ax>=edge || ay>=edge);
     const bool begin=!fire_hidden_ && inside && context_==InputContext::gameplay && (frame.pressed&fire);
     if(reload_pulse_ && !begin) {   // the reload of the previous frame ends (a new one in this frame simply stays held)
         reload_pulse_=false;
@@ -537,8 +538,8 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
         case HostEventKind::aim:
             absolute_point((event.x+1)/2*width,(event.y+1)/2*height,width,height,motion_time()); break;
         case HostEventKind::motion:
-            state_.x=std::clamp(state_.x+2*event.x/width,-1.f,1.f);
-            state_.y=std::clamp(state_.y+2*event.y/height,-1.f,1.f);
+            state_.x=std::clamp(state_.x+2*event.x/width,-kAimEdgeX,kAimEdgeX);
+            state_.y=std::clamp(state_.y+2*event.y/height,-kAimEdgeY,kAimEdgeY);
             actions_.motion(event.x,event.y,motion_time()); break;
         case HostEventKind::focus:
             state_.valid=event.value!=0;

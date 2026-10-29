@@ -498,7 +498,18 @@ void SettingsMenu::controls_tab(float unit) {
     };
     if(ImGui::Button(tr("defaults"))) editor_.restore_defaults();
     if(editor_.capturing()) { ImGui::SameLine(); ImGui::TextWrapped("%s",tr("capture")); }
-    if(editor_.error()) ImGui::TextWrapped("%s: %s",tr("rejected"),editor_.error()->c_str());
+    if(editor_.error()) { binding_error_=*editor_.error(); editor_.cancel_capture(); ImGui::OpenPopup("###binding-error"); }   // the capture ends: the next click goes to the dialog, not into a new binding
+    ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x/2,ImGui::GetIO().DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
+    if(ImGui::BeginPopupModal("###binding-error",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+520*unit);
+        ImGui::TextWrapped("%s",tr("rejected")); ImGui::Separator();
+        ImGui::TextWrapped("%s",binding_error_.c_str());
+        ImGui::PopTextWrapPos();
+        if(ImGui::Button(tr("close")) || ImGui::IsKeyPressed(ImGuiKey_Escape,false)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
     ImGui::BeginDisabled(editor_.capturing().has_value());
     if(ImGui::BeginChild("bindings",{0,0})) {
         for(size_t i=0;i<size_t(Action::recenter);++i) {   // recenter is a gamepad action: the controllers tab lists it, this page is keyboard and mouse only

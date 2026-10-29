@@ -224,7 +224,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         std::error_code saves_error;
         if(fs::is_directory(saves,saves_error))fs::copy(saves,diagnostic.save_root,fs::copy_options::recursive|fs::copy_options::skip_existing);
     }
-    uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;uc::GameProcess process;
+    uc::ConfigDocument document;uc::Options options,saved_options;uc::BindingEditor editor;std::string binding_error;uc::GameProcess process;
     uc::BindingEditor pad_editor{uc::default_pad_bindings(),uc::BindingTable::gamepad};uc::GamepadPanelState pad_panel;
     std::optional<uc::GamepadInput> pads;   // after `ui`: the gamepads close before SDL quits; none when SDL cannot start its gamepad subsystem
     try {
@@ -913,7 +913,18 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{4*unit,3*unit});
             if(button(tr("defaults"),"defaults"))editor.restore_defaults();
             if(editor.capturing())ImGui::TextWrapped("%s",tr("capture"));
-            if(editor.error()) {ImGui::TextWrapped("%s",tr("rejected"));if(ImGui::TreeNode(tr("details"))) {ImGui::TextWrapped("%s",editor.error()->c_str());ImGui::TreePop();}}
+            if(editor.error()) {binding_error=*editor.error();editor.cancel_capture();ImGui::OpenPopup("###binding-error");}   // the capture ends: the next click goes to the dialog, not into a new binding
+            ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x/2,ImGui::GetIO().DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
+            if(ImGui::BeginPopupModal("###binding-error",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar)) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+520*unit);
+                ImGui::TextWrapped("%s",tr("rejected"));ImGui::Separator();
+                ImGui::TextWrapped("%s",binding_error.c_str());
+                ImGui::PopTextWrapPos();
+                if(button(tr("close"),"binding-error-close") || ImGui::IsKeyPressed(ImGuiKey_Escape,false))ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+            ImGui::PopStyleVar();
             ImGui::BeginDisabled(editor.capturing().has_value());
             if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchProp)) {   // the whole page scrolls, not the table
                 ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);

@@ -227,8 +227,8 @@ def lightgun(g, args):
         for x, y in ((-.6, .4), (.7, -.5), (0, 0), (-.9, -.9)):
             g.host_aim(x, y); g.advance(3)
             seen = g.frame["aim"]
-            if abs(seen[0] - x) > .01 or abs(seen[1] - y) > .01:
-                g.fail(f"the gun pointed at {(x, y)} and the pointer is at {seen}", "absolute pointer")
+            if abs(seen[0] - x * .8) > .01 or abs(seen[1] - y * .6) > .01:   # the window's edge is the game's pointer at .8 across and .6 down
+                g.fail(f"the gun pointed at {(x, y)} and the pointer is at {seen}, expected {(x * .8, y * .6)}", "absolute pointer")
         g.host_aim(0, 0); g.advance(3)
     with g.step("shot_in_the_middle"):
         steps.wait_gameplay(g, stable_ticks=1)
@@ -293,8 +293,8 @@ def wiimote(g, args):
         for x, y in ((-.6, .4), (.7, -.5), (0, 0)):
             g.wii_pointer(x, y); g.advance(3)
             seen = g.frame["aim"]
-            if abs(seen[0] - x) > .01 or abs(seen[1] - y) > .01:
-                g.fail(f"the remote pointed at {(x, y)} and the pointer is at {seen}", "ir pointer")
+            if abs(seen[0] - x * .8) > .01 or abs(seen[1] - y * .6) > .01:
+                g.fail(f"the remote pointed at {(x, y)} and the pointer is at {seen}, expected {(x * .8, y * .6)}", "ir pointer")
     with g.step("fire"):
         steps.wait_gameplay(g, stable_ticks=1)
         before = g.frame["player"]["magazine"]

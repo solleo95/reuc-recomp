@@ -56,6 +56,7 @@ private:
     uint32_t monitor_width_, monitor_height_;
     BackendUi backend_ui_;   // what the chosen graphics API can offer; the rest is hidden
     BindingEditor editor_;
+    std::string binding_error_;   // the refusal the dialog shows (the editor's own error ends with the capture)
     BindingEditor pad_editor_;   // the gamepad table (the Controllers tab)
     Bindings pad_seen_;          // the saved gamepad table as the tab last saw it: a different one is a change from outside
     GamepadPanelState pad_panel_;

@@ -33,11 +33,11 @@ int main() {
         uc::HostInput absolute; absolute.extent(1000,500); absolute.pointer(uc::PointerMode::absolute);
         e={}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.x=500; e.motion.y=250; e.motion.xrel=7; e.motion.yrel=7;
         absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{0,0}));
-        e.motion.x=0; e.motion.y=0; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-1,-1}));
-        e.motion.xrel=100; e.motion.yrel=100; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-1,-1}));   // same place: the deltas are ignored
+        e.motion.x=0; e.motion.y=0; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-.8f,-.6f}));   // the window's corner is the game's (-.8,-.6)
+        e.motion.xrel=100; e.motion.yrel=100; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-.8f,-.6f}));   // same place: the deltas are ignored
         absolute.density(2); e.motion.x=125; e.motion.y=62.5f; absolute.event(e,gun,true);   // 150% desktops report points: the pixels are density times as many
-        CHECK(std::abs(gun.latest_aim()[0]+.5f)<1e-5f && std::abs(gun.latest_aim()[1]+.5f)<1e-5f);
-        e.motion.x=500; e.motion.y=250; absolute.event(e,gun,false); CHECK(std::abs(gun.latest_aim()[0]+.5f)<1e-5f);   // not captured: the pointer stays
+        CHECK(std::abs(gun.latest_aim()[0]+.4f)<1e-5f && std::abs(gun.latest_aim()[1]+.3f)<1e-5f);
+        e.motion.x=500; e.motion.y=250; absolute.event(e,gun,false); CHECK(std::abs(gun.latest_aim()[0]+.4f)<1e-5f);   // not captured: the pointer stays
         e={}; e.type=SDL_EVENT_MOUSE_BUTTON_DOWN; e.button.button=SDL_BUTTON_LEFT;
         CHECK(absolute.event(e,gun,false)); CHECK(gun.consume_actions().pressed==0);   // the first click only takes the window back
         CHECK(!absolute.event(e,gun,true)); CHECK(gun.consume_actions().held==bit(uc::Action::interact));

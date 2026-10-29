@@ -67,7 +67,7 @@ static void triggers_press_at_half_with_a_hysteresis() {
 static void sticks_move_the_pointer_and_the_camera() {
     Rig rig; Virtual pad; rig.pump();
     pad.axis(SDL_GAMEPAD_AXIS_LEFTX,32767); rig.pump();
-    CHECK(near(rig.run(1).x,1.f));                                                       // the left stick aims: past the edge, clamped
+    CHECK(near(rig.run(1).x,.8f));                                                       // the left stick aims: it stops at the screen's edge (aim .8), not past it
     pad.axis(SDL_GAMEPAD_AXIS_LEFTX,0); rig.pump(); rig.input.aim(0,0);
     pad.axis(SDL_GAMEPAD_AXIS_RIGHTX,32767); rig.pump();
     const auto after=rig.run(.5);

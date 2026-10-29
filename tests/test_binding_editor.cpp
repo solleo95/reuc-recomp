@@ -108,7 +108,7 @@ int main() {
     }
     {   // the menu key is rebindable; the keys the port itself takes (P, Escape for the menu, the speed key) are not, and nothing else may use the key that opens the menu
         editor.begin_capture(Action::menu,true);
-        for(uint16_t refused:{uint16_t(19),uint16_t(43),uint16_t(41)}) { editor.event(key(refused),true); CHECK(editor.capturing() && editor.error()); }
+        for(uint16_t refused:{uint16_t(19),uint16_t(53),uint16_t(41)}) { editor.event(key(refused),true); CHECK(editor.capturing() && editor.error()); }
         editor.event(key(67),true);   // F10
         CHECK(!editor.capturing() && editor.bindings()[size_t(Action::menu)]==std::vector<Binding>({{BindingKind::physical,key(67),{}}}));
         editor.begin_capture(Action::reload,true); editor.event(key(67),true);
@@ -123,9 +123,9 @@ int main() {
         CHECK(editor.capturing() && editor.error());                                    // none bound: Insert still opens it
         editor.cancel_capture();
     }
-    {   // the speed key is Tab until it is rebound; then Tab is an ordinary key and the new key belongs to the port
-        editor.begin_capture(Action::reload,true); editor.event(key(43),true);
-        CHECK(editor.capturing() && editor.error());                                    // Tab is the speed key
+    {   // the speed key is ` until it is rebound; then ` is an ordinary key and the new key belongs to the port
+        editor.begin_capture(Action::reload,true); editor.event(key(53),true);
+        CHECK(editor.capturing() && editor.error());                                    // ` is the speed key
         editor.cancel_capture();
         editor.begin_capture(Action::speed_up,true);
         for(uint16_t refused:{uint16_t(19),uint16_t(41),uint16_t(73),uint16_t(40)}) { editor.event(key(refused),true); CHECK(editor.capturing() && editor.error()); }   // P, Escape, the menu key, Enter (confirm)
@@ -133,9 +133,9 @@ int main() {
         CHECK(!editor.capturing() && editor.bindings()[size_t(Action::speed_up)]==std::vector<Binding>({{BindingKind::physical,key(20),{}}}));
         editor.begin_capture(Action::reload,true); editor.event(key(20),true);
         CHECK(editor.capturing() && editor.error());                                    // Q now speeds up the game
-        editor.event(key(43),true);
-        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)].back().input==key(43));   // Tab is free for another action
-        editor.begin_capture(Action::speed_up,true); editor.event(key(43),true);
+        editor.event(key(53),true);
+        CHECK(!editor.capturing() && editor.bindings()[size_t(Action::reload)].back().input==key(53));   // ` is free for another action
+        editor.begin_capture(Action::speed_up,true); editor.event(key(53),true);
         CHECK(editor.capturing() && editor.error());                                    // reload has it
         editor.cancel_capture();
     }

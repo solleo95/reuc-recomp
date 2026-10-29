@@ -37,12 +37,12 @@ static void the_nunchuk_stick_is_the_analog_camera() {
 static void the_pointer_follows_the_ir_camera() {
     Remote r;
     r.target.host_wii_pointer(.5f,-.25f,1);
-    CHECK(near(r.input.latest_aim()[0],.5f) && near(r.input.latest_aim()[1],-.25f));
+    CHECK(near(r.input.latest_aim()[0],.4f) && near(r.input.latest_aim()[1],-.15f));   // the reading is -1..1 of the window; the game's pointer ends at .8 / .6 there
     WiimoteSettings settings; settings.smoothing=.5f; r.input.wiimote_settings(settings);
     r.target.host_wii_pointer(-.5f,.75f,2);                                  // it eases toward the new reading ...
     CHECK(r.input.latest_aim()[0]>.3f);
     std::this_thread::sleep_for(std::chrono::milliseconds(400));            // ... and arrives although the remote sends nothing more
-    CHECK(near(r.input.latest_aim()[0],-.5f,.001f) && near(r.input.latest_aim()[1],.75f,.001f));
+    CHECK(near(r.input.latest_aim()[0],-.4f,.001f) && near(r.input.latest_aim()[1],.45f,.001f));
     Remote q; q.input.focus(false);
     q.target.host_wii_pointer(.5f,.5f,1);
     CHECK(near(q.input.latest_aim()[0],0) && near(q.input.latest_aim()[1],0));   // an unfocused window takes nothing
@@ -97,7 +97,7 @@ static void test_events_reach_the_same_places() {
     CHECK(input.apply_test_event(2,{HostEventKind::wii_button,7,0,0,0},1280,720));
     CHECK(input.consume_actions().released==bit(Action::fire));
     CHECK(input.apply_test_event(3,{HostEventKind::wii_pointer,0,0,.25f,-.5f},1280,720));
-    CHECK(near(input.latest_aim()[0],.25f) && near(input.latest_aim()[1],-.5f));
+    CHECK(near(input.latest_aim()[0],.2f) && near(input.latest_aim()[1],-.3f));
     CHECK(input.apply_test_event(4,{HostEventKind::wii_stick,0,0,1,0},1280,720));
     CHECK((input.consume_actions().camera==std::array<int8_t,2>{127,0}));
     input.host_button(wii(8),true);                                          // interact held for the swing

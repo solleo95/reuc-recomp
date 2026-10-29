@@ -327,4 +327,42 @@ int main() {
         CHECK(near(centre(y_range(tall.draws[1])), centre(y_range(tall.draws[3]))));                                                       // one row: the cap stays level with the rail
         CHECK(near(centre(y_range(tall.draws[5])) - centre(y_range(tall.draws[1])), 0.8f * (-0.8125f + 0.8085f)));                         // the label's offset shrinks with the row, it does not jump
     }
+    {   // The pickup tooltip near the top, where it overlaps the player's block: what is drawn over its panel (the name, the text) narrows about the panel's centre, not about
+        // the block's anchor; what was drawn before the panel (the block's ammo count) keeps the block's.
+        gx::FramePacket packet;
+        packet.draws.push_back(scene_draw());
+        packet.draws.push_back(plate(-0.95f, -0.30f, -0.80f, -0.46f));                    // 1: the block's plate
+        packet.draws.push_back(ortho_quad(-0.70f, -0.60f, nullptr, -0.70f, -0.60f));      // 2: the ammo count, before the panel
+        auto panel = ortho_quad(-0.81f, -0.39f, nullptr, -0.85f, -0.10f);                 // 3: the tooltip's panel
+        auto texture = std::make_shared<gx::TexturePixels>();
+        texture->desc_width = 32; texture->desc_height = 32;
+        panel.texture = texture; panel.callsite = 0x80393B0C;
+        packet.draws.push_back(panel);
+        packet.draws.push_back(ortho_quad(-0.72f, -0.62f, nullptr, -0.70f, -0.60f));      // 4: the tooltip's text, over the panel and inside the block
+        gx::WideFrame frame;
+        gx::widen_packet(packet, wide, frame);
+        const float c = (-0.81f + -0.39f) / 2;
+        CHECK(near(centre(x_range(packet.draws[4])), c + 0.75f * (-0.67f - c)));
+        CHECK(!near(centre(x_range(packet.draws[2])), c + 0.75f * (-0.65f - c)));
+    }
+    {   // The spray icon (100x100, generic sprite callsite) with the pickup tooltip beside it (a panel that follows the pointer): the tooltip's movement must not move
+    // the icon (measured: the icon sat in one cluster with the tooltip and jittered with the pointer).
+        const auto frame_with_tooltip = [](float tooltip_left) {
+            gx::FramePacket packet;
+            packet.draws.push_back(scene_draw());
+            auto icon = ortho_quad(-0.947f, -0.832f, nullptr, 0.615f, 0.819f);
+            auto texture = std::make_shared<gx::TexturePixels>();
+            texture->desc_width = 100; texture->desc_height = 100;
+            icon.texture = texture; icon.callsite = 0x80393B0C;
+            packet.draws.push_back(icon);
+            packet.draws.push_back(ortho_quad(tooltip_left, tooltip_left + 0.42f, nullptr, 0.34f, 1.09f));
+            return packet;
+        };
+        auto first = frame_with_tooltip(-1.26f), second = frame_with_tooltip(-1.12f);
+        gx::WideFrame a, b;
+        gx::widen_packet(first, wide, a); gx::widen_packet(second, wide, b);
+        CHECK(near(centre(x_range(first.draws[1])), centre(x_range(second.draws[1]))));
+        CHECK(near(centre(x_range(first.draws[1])), (-0.947f + -0.832f) / 2));   // narrowed about its own centre, where the game put it
+        CHECK(!near(centre(x_range(first.draws[2])), centre(x_range(second.draws[2]))));   // the tooltip itself still follows its pointer
+    }
 }

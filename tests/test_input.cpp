@@ -118,9 +118,20 @@ static void absolute_aim_maps_pixels() {
     uc::NativeInput input; input.focus(true);
     CHECK(input.aim_absolute(500,250,1000,500));
     auto center=input.latest_aim(); CHECK(center[0]==0 && center[1]==0);
-    CHECK(input.aim_absolute(0,0,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{-1,-1}));
-    CHECK(input.aim_absolute(1000,500,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,1}));
-    CHECK(input.aim_absolute(2000,-10,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,-1}));
+    // The game's pointer runs 1.25 screen widths and 1.67 heights across [-1,1] (aim = ndc * (0.8, 0.6)): the window's edge is the aim's .8 and .6, so the cursor and the reticle meet
+    CHECK(input.aim_absolute(0,0,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{-.8f,-.6f}));
+    CHECK(input.aim_absolute(1000,500,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{.8f,.6f}));
+    CHECK(input.aim_absolute(2000,-10,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{.8f,-.6f}));
+    CHECK(input.aim_absolute(750,125,1000,500)); CHECK(std::abs(input.latest_aim()[0]-.4f)<1e-5f && std::abs(input.latest_aim()[1]+.3f)<1e-5f);   // half way to the edge is half way
+}
+static void relative_aim_stops_at_the_screen_edge() {
+    // Pushing the mouse on past the edge must not bank distance the player has to move back: the pointer ends at the screen's edge (aim .8 across, .6 down)
+    uc::NativeInput input; input.focus(true);
+    CHECK(input.move_raw(5000,5000,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{.8f,.6f}));
+    CHECK(input.move_raw(-100,-50,1000,500));   // a small move back leaves the edge at once
+    CHECK(std::abs(input.latest_aim()[0]-.6f)<1e-5f && std::abs(input.latest_aim()[1]-.4f)<1e-5f);
+    CHECK(input.move_raw(-5000,-5000,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{-.8f,-.6f}));
+    CHECK(input.apply_test_event(1,{uc::HostEventKind::motion,0,0,5000,5000},1000,500)); CHECK((input.latest_aim()==std::array<float,2>{.8f,.6f}));
 }
 static void menu_pointer_follows_the_wide_layout() {
     // On a wider output a menu's 2D layout is narrowed to k of the width, so the pointer the game reads grows by 1 / k: the mouse over a button is the game's pointer over it.
@@ -165,11 +176,11 @@ static void absolute_aim_feeds_gestures() {
 static void aim_test_event_sets_pointer_and_feeds_gestures() {
     uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
     CHECK(input.apply_test_event(1,{uc::HostEventKind::aim,0,0,.5f,-.5f},1000,500));
-    CHECK((input.latest_aim()==std::array<float,2>{.5f,-.5f}));
+    CHECK((input.latest_aim()==std::array<float,2>{.4f,-.3f}));   // x/y are -1..1 of the window; the pointer is in the game's units
     CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,0,0,1.5f,0},1000,500));
     CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,1,0,0,0},1000,500));
     CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,0,0,0,0},0,500));
-    CHECK((input.latest_aim()==std::array<float,2>{.5f,-.5f}));
+    CHECK((input.latest_aim()==std::array<float,2>{.4f,-.3f}));
 }
 static void absolute_gestures_follow_the_scale() {
     // 40 px in 8 ms is a swing at 100% display scale; at 200% the same 40 px are 20 of the points a mouse counts in: not fast enough
@@ -185,14 +196,14 @@ static void absolute_gestures_follow_the_scale() {
 static void smoothing_moves_part_way() {
     uc::NativeInput input; input.focus(true); input.pointer_smoothing(.5f);
     CHECK(input.aim_absolute(0,0,1000,500));   // the first point is taken as it is
-    CHECK((input.latest_aim()==std::array<float,2>{-1,-1}));
+    CHECK((input.latest_aim()==std::array<float,2>{-.8f,-.6f}));
     CHECK(input.aim_absolute(1000,500,1000,500));
-    auto early=input.latest_aim(); CHECK(early[0]<-.5f && early[1]<-.5f);   // the pointer eases toward the new point: it has hardly left yet
+    auto early=input.latest_aim(); CHECK(early[0]<-.4f && early[1]<-.3f);   // the pointer eases toward the new point: it has hardly left yet
     std::this_thread::sleep_for(std::chrono::milliseconds(400));            // and arrives without any further event: a gun that stops sending must not leave it short
-    auto late=input.latest_aim(); CHECK(std::abs(late[0]-1)<.001f && std::abs(late[1]-1)<.001f);
+    auto late=input.latest_aim(); CHECK(std::abs(late[0]-.8f)<.001f && std::abs(late[1]-.6f)<.001f);
     input.focus(false); input.focus(true);
     CHECK(input.aim_absolute(250,125,1000,500));   // after a focus loss the first point is taken as it is again
-    CHECK((input.latest_aim()==std::array<float,2>{-.5f,-.5f}));
+    CHECK((input.latest_aim()==std::array<float,2>{-.4f,-.3f}));
 }
 
 static uc::NativeInput& zone_input(uc::NativeInput& input,uc::ReloadZone zone);
@@ -238,6 +249,15 @@ static void edge_zone_triggers_on_any_edge() {
     CHECK(input.consume_actions().pressed==action_bit(uc::Action::reload));
     input.consume_actions(); input.host_button({uc::PhysicalKind::mouse,3},false); input.consume_actions();
     input.aim(.2f,.5f); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
+}
+static void zone_follows_the_window_edge_with_an_absolute_pointer() {
+    // 5% zone: a gun 4% of the window from the corner is in it. The pointer's own range is wider than the window, so the zone is measured against the window edge (aim .8 / .6)
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.aim_absolute(40,20,1000,500); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::reload));
+    input.consume_actions(); input.host_button({uc::PhysicalKind::mouse,3},false); input.consume_actions();
+    input.aim_absolute(150,75,1000,500); input.host_button({uc::PhysicalKind::mouse,3},true);   // 15% in: a shot
     CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
 }
 static void fire_release_after_suppressed_press_is_hidden() {
@@ -287,11 +307,13 @@ int main() {
     corner_zone_turns_fire_into_reload();
     corner_zone_ignores_edge_middle_and_centre();
     edge_zone_triggers_on_any_edge();
+    zone_follows_the_window_edge_with_an_absolute_pointer();
     fire_release_after_suppressed_press_is_hidden();
     drifting_into_the_zone_while_firing_is_untouched();
     zone_is_off_by_default_and_in_menu_and_qte();
     demo_records_the_converted_frame();
     absolute_aim_maps_pixels();
+    relative_aim_stops_at_the_screen_edge();
     menu_pointer_follows_the_wide_layout();
     aim_test_event_sets_pointer_and_feeds_gestures();
     absolute_aim_rejects_bad_input();

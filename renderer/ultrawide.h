@@ -61,6 +61,21 @@ inline bool full_screen_picture(const DrawPacket& draw) {
 inline bool is_hud_plate(const DrawPacket& draw) { return draw.texture && draw.texture->desc_width == 220 && draw.texture->desc_height == 64; }
 // The aim reticle, its wake and anything else the renderer places by the pointer.
 inline bool follows_pointer(const DrawPacket& draw) { return draw.reticle || draw.layer || draw.wake || draw.late_aim; }
+// The first-aid spray icon at the HUD's bottom left (a 100x100 sprite of the generic sprite callsite) stands alone. The pickup tooltip (a panel and its text) and the
+// hover glow follow the pointer and touch it, so clustering them with it moved its cluster's centre, and the icon with it, at every pointer step (measured from a
+// player's log 2026-10-29).
+inline bool is_hud_item_icon(const DrawPacket& draw) { return draw.callsite == 0x80393B0C && draw.texture && draw.texture->desc_width == 100 && draw.texture->desc_height == 100; }
+// The glow the game draws on the pointer over a pickup (an 80x80 sprite of the same callsite, tinted, growing about the pointer): it is the pointer's, not a HUD
+// piece, so it never joins a cluster (its growth moved the centre of the tooltip's cluster, and the tooltip with it).
+inline bool is_pointer_glow(const DrawPacket& draw, const std::array<float,2>& pointer_ndc, float x0, float x1, float y0, float y1) {
+    if (draw.callsite != 0x80393B0C || !draw.texture || draw.texture->desc_width != 80 || draw.texture->desc_height != 80) return false;
+    return std::abs((x0 + x1) / 2 - pointer_ndc[0]) < 0.2f && std::abs((y0 + y1) / 2 - pointer_ndc[1]) < 0.2f;
+}
+
+// The pickup tooltip's panel (a 32x32 sprite of the generic sprite callsite stretched to a window, measured 0.42 x 0.75 NDC; the HUD's own 32x32 sprites are small).
+inline bool is_tooltip_panel(const DrawPacket& draw, float width, float height) {
+    return draw.callsite == 0x80393B0C && draw.texture && draw.texture->desc_width == 32 && draw.texture->desc_height == 32 && width >= 0.3f && height >= 0.4f;
+}
 
 // Clusters the movable draws of a packet: draws whose rectangles touch (closer than kGap in NDC) belong together, large ones (wider or taller than 0.9: a
 // panel behind a text, a bar across the screen) never bridge two clusters; a thin wide bar (a boss's gauge, at most 0.12 tall) is no panel: it clusters with its caps. A pointer-following draw is a cluster of its own. A player's block is what lies
@@ -71,13 +86,16 @@ inline std::vector<Anchor> cluster_anchors(const FramePacket& packet, const std:
     std::vector<Anchor> anchors(count);
     struct Box { size_t draw; float x0, x1, y0, y1; bool large, bar, loose; };
     std::vector<Box> boxes;
+    const auto aim = clamp_aim(packet.aim_consumed);
+    const std::array<float,2> pointer{aim[0] * kAimToNdcX, aim[1] * kAimToNdcY};
     for (size_t i = 0; i < count; ++i) {
         if (!movable[i]) continue;
         const auto x = ortho_range(packet.draws[i], 0), y = ortho_range(packet.draws[i], 1);
         if (!x || !y) continue;
         const bool bar = (*x)[1] - (*x)[0] > 0.9f && (*y)[1] - (*y)[0] <= 0.12f;   // a gauge's rail or fill (a boss's): part of the block it joins the caps and the label of
         const bool large = !bar && ((*x)[1] - (*x)[0] > 0.9f || (*y)[1] - (*y)[0] > 0.9f);
-        boxes.push_back({i, (*x)[0], (*x)[1], (*y)[0], (*y)[1], large, is_hud_plate(packet.draws[i]), follows_pointer(packet.draws[i])});
+        boxes.push_back({i, (*x)[0], (*x)[1], (*y)[0], (*y)[1], large, is_hud_plate(packet.draws[i]),
+                         follows_pointer(packet.draws[i]) || is_hud_item_icon(packet.draws[i]) || is_pointer_glow(packet.draws[i], pointer, (*x)[0], (*x)[1], (*y)[0], (*y)[1])});
     }
     if (boxes.empty() || boxes.size() > 3000) return anchors;
     constexpr float kGap = 0.08f;
@@ -121,20 +139,32 @@ inline std::vector<Anchor> cluster_anchors(const FramePacket& packet, const std:
             }
         }
     }
+    // A pickup tooltip: its panel and what is drawn over it in the same packet (the item's name, the button picture, the text) are one rigid piece that narrows about
+    // the panel's centre, wherever it lies: near the top it overlapped the player's block and the HUD's clusters, and its pieces took different anchors, one frame
+    // after another (the picture left the text's centre, the text jumped). What was drawn before the panel is the HUD under it and keeps its anchor.
+    std::vector<int> pinned(boxes.size(), -1);
+    for (size_t t = 0; t < boxes.size(); ++t) {
+        if (!is_tooltip_panel(packet.draws[boxes[t].draw], boxes[t].x1 - boxes[t].x0, boxes[t].y1 - boxes[t].y0) || pinned[t] >= 0) continue;
+        for (size_t i = 0; i < boxes.size(); ++i) {
+            if (pinned[i] >= 0 || boxes[i].large || boxes[i].loose) continue;
+            const float cx = (boxes[i].x0 + boxes[i].x1) / 2, cy = (boxes[i].y0 + boxes[i].y1) / 2;
+            if (i == t || (boxes[i].draw > boxes[t].draw && cx >= boxes[t].x0 && cx <= boxes[t].x1 && cy >= boxes[t].y0 && cy <= boxes[t].y1)) { pinned[i] = int(t); owner[i] = -1; }
+        }
+    }
     // The rest: clusters by touching.
     std::vector<size_t> parent(boxes.size());
     std::iota(parent.begin(), parent.end(), size_t(0));
     const auto root = [&](size_t i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
     for (size_t a = 0; a < boxes.size(); ++a) {
-        if (owner[a] >= 0 || boxes[a].large || boxes[a].loose) continue;
+        if (owner[a] >= 0 || pinned[a] >= 0 || boxes[a].large || boxes[a].loose) continue;
         for (size_t b = a + 1; b < boxes.size(); ++b) {
-            if (owner[b] >= 0 || boxes[b].large || boxes[b].loose) continue;
+            if (owner[b] >= 0 || pinned[b] >= 0 || boxes[b].large || boxes[b].loose) continue;
             if (touch(boxes[a], boxes[b])) parent[root(a)] = root(b);
         }
     }
     std::map<size_t, Extent> clusters;
     for (size_t i = 0; i < boxes.size(); ++i) {
-        if (owner[i] >= 0 || boxes[i].large || boxes[i].loose) continue;
+        if (owner[i] >= 0 || pinned[i] >= 0 || boxes[i].large || boxes[i].loose) continue;
         auto& cluster = clusters[root(i)];
         cluster.x0 = std::min(cluster.x0, boxes[i].x0); cluster.x1 = std::max(cluster.x1, boxes[i].x1);
         cluster.y0 = std::min(cluster.y0, boxes[i].y0); cluster.y1 = std::max(cluster.y1, boxes[i].y1);
@@ -143,7 +173,11 @@ inline std::vector<Anchor> cluster_anchors(const FramePacket& packet, const std:
     // (late_aim.h), so a centre that narrowing moved would land off the mouse (the game's dot trails the ring in a fast flick).
     for (size_t i = 0; i < boxes.size(); ++i) {
         Anchor& anchor = anchors[boxes[i].draw];
-        if (owner[i] >= 0) anchor = regions[owner[i]].anchor;   // a player's block
+        if (pinned[i] >= 0) {   // a tooltip: about its panel's centre
+            const auto& panel = boxes[pinned[i]];
+            anchor.anchored = true;
+            anchor.cx = anchor.tx = (panel.x0 + panel.x1) / 2; anchor.cy = anchor.ty = (panel.y0 + panel.y1) / 2;
+        } else if (owner[i] >= 0) anchor = regions[owner[i]].anchor;   // a player's block
         else {
             float x0 = boxes[i].x0, x1 = boxes[i].x1, y0 = boxes[i].y0, y1 = boxes[i].y1;   // a large or pointer-following draw: its own
             if (!boxes[i].large && !boxes[i].loose) { const auto& c = clusters[root(i)]; x0 = c.x0; x1 = c.x1; y0 = c.y0; y1 = c.y1; }

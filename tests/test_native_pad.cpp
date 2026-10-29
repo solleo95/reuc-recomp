@@ -24,11 +24,11 @@ struct Pad {
 static void apply(Pad& p,const GamepadSettings& settings) { p.input.pad_settings(settings); }
 static void left_stick_moves_the_pointer_per_second() {
     Pad p; p.input.host_pad_stick(0,PadSide::left,1,0);
-    CHECK(near(p.run(1).x,1.f));                                                   // a second at full deflection runs past the window edge: clamped
+    CHECK(near(p.run(1).x,.8f));                                                   // a second at full deflection reaches the screen edge (aim .8) and stops there
     Pad q; q.input.host_pad_stick(0,PadSide::left,0,1);
-    auto s=q.run(.25);                                                             // a quarter second: 0.3 screen heights, normalized 2*0.3
-    CHECK(near(s.y,.6f) && s.x==0);
-    CHECK(near(q.run(.25).y,1.f));
+    auto s=q.run(.2);                                                              // a fifth of a second: 0.24 screen heights, normalized 2*0.24 (aim .6 is the bottom edge)
+    CHECK(near(s.y,.48f) && s.x==0);
+    CHECK(near(q.run(.3).y,.6f));                                                  // on to the edge: it stops there
     Pad r; r.input.host_pad_stick(0,PadSide::left,.575f,0);                        // half way after the dead zone: a quarter of the speed, horizontal in the same pixels per second
     CHECK(near(r.run(.5).x,2*.3f*.5f*720/1280,2e-3f));
 }

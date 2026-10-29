@@ -969,7 +969,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             auto frame_json=uc::test_frame_json(state,uc::clock_speed(),last_render_ms,renderer.presentation_count(),uc::vi_stats().retraces,test_pipes->dropped());
             frame_json.pop_back(); frame_json+=std::string(",\"menu_open\":")+(host_keys.menu_open ? "true" : "false")+",\"paused\":"+(host_keys.paused ? "true" : "false")
                 +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")
-                +",\"aim\":["+std::to_string(input.latest_aim()[0])+","+std::to_string(input.latest_aim()[1])+"]"   // the pointer, -1..1 of the window (x right, y down)
+                +",\"aim\":["+std::to_string(input.latest_aim()[0])+","+std::to_string(input.latest_aim()[1])+"]"   // the game's pointer (x right, y down): the window's edge is at .8 across and .6 down
                 +",\"game_seconds\":"+std::to_string(uc::game_pacing_stats().timestep_ns/1e9)
                 +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
                 +",\"network_waiting\":"+(network_wait_screen ? "true" : "false")
@@ -1096,7 +1096,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
                 if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
                 else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) {pad_last_used=false;wii_last_used=false;}
-                // Hold the speed key (Tab by default): game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
+                // Hold the speed key (` by default): game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
                 if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && std::find(speed_keys.begin(),speed_keys.end(),event.key.scancode)!=speed_keys.end() && !settings_menu->capturing()) {
                     if(!network && !event.key.repeat) uc::set_clock_speed(event.type==SDL_EVENT_KEY_DOWN && !host_keys.menu_open ? 8 : 1);

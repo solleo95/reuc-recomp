@@ -266,7 +266,7 @@ static void pad_tables_validate_and_stay_separate() {
     menu_table[size_t(Action::menu)].clear(); CHECK(!validate_bindings(menu_table));                                                                                                // unbound: the game falls back to Insert
     gamepad=default_pad_bindings(); gamepad[size_t(Action::menu)].push_back(physical(pad(5))); CHECK(validate_pad_bindings(gamepad));   // the gamepad table has no menu key
     CHECK(defaults[size_t(Action::speed_up)].empty());   // nor a speed key
-    CHECK((menu_table=default_bindings(), menu_table[size_t(Action::speed_up)].size()==1 && menu_table[size_t(Action::speed_up)][0].input==PhysicalInput{PhysicalKind::key,uint16_t(43)} && !validate_bindings(menu_table)));   // Tab
+    CHECK((menu_table=default_bindings(), menu_table[size_t(Action::speed_up)].size()==1 && menu_table[size_t(Action::speed_up)][0].input==PhysicalInput{PhysicalKind::key,uint16_t(53)} && !validate_bindings(menu_table)));   // `
     menu_table[size_t(Action::speed_up)]={{BindingKind::physical,{PhysicalKind::key,20},{}}}; CHECK(!validate_bindings(menu_table));
     menu_table[size_t(Action::speed_up)]={{BindingKind::physical,{PhysicalKind::mouse,4},{}}}; CHECK(validate_bindings(menu_table));   // a host key is a single key
     menu_table[size_t(Action::speed_up)]={{BindingKind::physical,{PhysicalKind::key,20},{{PhysicalKind::key,224}}}}; CHECK(validate_bindings(menu_table));

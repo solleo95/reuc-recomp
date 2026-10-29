@@ -55,8 +55,8 @@ void BindingEditor::capture(PhysicalInput input) {
         const bool host_action=*capture_==Action::menu || *capture_==Action::speed_up;
         if(input.code==19) { error_="P (pause) is reserved"; return; }
         if(host_action && input.code==41) { error_="Escape closes the menu: it cannot be a host key"; return; }
-        if(*capture_!=Action::menu && menu_key) { error_="This key opens the in-game menu"; return; }
-        if(*capture_!=Action::speed_up && bound(Action::speed_up)) { error_="This key speeds up the game"; return; }
+        if(*capture_!=Action::menu && menu_key) { error_="This key opens the in-game menu. Bind the settings menu action to another key first."; return; }
+        if(*capture_!=Action::speed_up && bound(Action::speed_up)) { error_="This key speeds up the game. Bind the speed-up action to another key first."; return; }
         if(host_action) for(size_t a=0;a<bindings_.size();++a) if(a!=size_t(*capture_))
             for(const auto& b:bindings_[a]) if(b.kind==BindingKind::physical && b.input==input && b.modifiers.empty()) { error_="This key is bound to another action"; return; }   // it would never reach it
     }

@@ -213,6 +213,10 @@ template<class Draws> size_t mark_reticle_draws(Draws& draws, const std::array<s
                 const float d = std::max(std::abs(group.center[0] - (*consumed[pad])[0] * kAimToNdcX), std::abs(group.center[1] - (*consumed[pad])[1] * kAimToNdcY));
                 if (d < best) { best = d; owner = pad; }
             }
+            // The white companions of a ring sit on it (the join above reaches 0.15): an untinted group that is not on the player's ring is another HUD sprite, such as the
+            // 120 x 120 button picture of the pickup tooltip, which moved with the pointer when it came near. Without a tinted ring in the frame (a flash can take the tint)
+            // the pointer alone decides.
+            if (owner >= 0 && !dot_group) for (const auto& other : groups) if (other.tinted && other.owner == owner) { owner = -1; break; }
         }
         if (owner < 0 || !consumed[owner]) continue;
         // A ring far from its player's pointer is something else (the HUD draws other square textures through the same callsite).

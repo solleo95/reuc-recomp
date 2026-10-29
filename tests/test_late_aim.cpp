@@ -76,6 +76,14 @@ int main() {
             std::vector<gx::DrawPacket> icon_only{quad(0x80393B0C, nx, ny, 100)};
             CHECK(gx::mark_reticle_draws(icon_only, Aims{aim, std::nullopt}, 0, true) == 0);
         }
+        {   // The pickup tooltip's button picture (120 x 120, untinted, same callsite) lies away from the ring but within the pointer's window: it is no companion while a
+            // tinted ring is in the frame (it moved with the pointer). Without a ring the pointer decides, as for a flash.
+            std::vector<gx::DrawPacket> tooltip{tinted(quad(0x80393B0C, nx, ny, 154), red), quad(0x80393B0C, nx + 0.2f, ny, 120)};
+            CHECK(gx::mark_reticle_draws(tooltip, Aims{aim, std::nullopt}, 0, true) == 1);
+            CHECK(tooltip[0].late_aim && !tooltip[1].reticle && !tooltip[1].late_aim);
+            std::vector<gx::DrawPacket> flash{quad(0x80393B0C, nx + 0.1f, ny, 120)};
+            CHECK(gx::mark_reticle_draws(flash, Aims{aim, std::nullopt}, 0, true) == 1);
+        }
         {   // Reticles exactly on top of each other: the tint and the draw order still keep the quads apart.
             std::vector<gx::DrawPacket> stacked{tinted(quad(0x80393B0C, nx, ny, 120), red), quad(0x80393B0C, nx, ny, 120), tinted(quad(0x80393B0C, nx + 0.01f, ny, 120), blue), quad(0x80393B0C, nx + 0.01f, ny, 120)};
             CHECK(mark(stacked, {aim, aim}, 0) == 4);
