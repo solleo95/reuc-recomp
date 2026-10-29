@@ -54,7 +54,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_library(uc_game STATIC ${UC_GENERATED_SOURCES})
   target_include_directories(uc_game PUBLIC ${UC_GENERATED_INCLUDE_DIR})
   target_link_libraries(uc_game PUBLIC uc_runtime uc_intro uc_game_pacing uc_game_input uc_prompt_hooks uc_mods)
-  target_compile_options(uc_game PRIVATE /O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable)
+  target_compile_options(uc_game PRIVATE /O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses-equality)
   set(UC_GAME_EXTRA_FLAGS "" CACHE STRING "extra compile flags for the translated game code only (code-generation experiments)")
   if(UC_GAME_EXTRA_FLAGS)
     separate_arguments(uc_game_extra_flags NATIVE_COMMAND "${UC_GAME_EXTRA_FLAGS}")

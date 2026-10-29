@@ -14,7 +14,7 @@ namespace uc {
 static void (*g_hook)();
 void set_exit_hook(void (*fn)()) { g_hook = fn; }
 
-static void die(int code) {
+[[noreturn]] static void die(int code) {
     if (g_hook) g_hook();
     std::fflush(stderr);
     ExitProcess(UINT(code));   // kills the other host threads too

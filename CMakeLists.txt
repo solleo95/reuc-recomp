@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   add_compile_options(/clang:-march=x86-64-v3)
 endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  add_compile_options(-Wno-deprecated-declarations)   # "unsafe CRT function" (getenv, fopen), winsock and std::filesystem::u8path notes in the tools and third-party code are noise
+endif()
 # Profile-guided optimization: ~8% more frames in gameplay. `python scripts/pgo.py` records project/pgo/uc.profdata from a harness run of an
 # instrumented build; while that file exists every build uses it (stale parts are ignored silently, re-record after big changes).
 option(UC_PGO_GENERATE "build an instrumented uc.exe that records a profile (scripts/pgo.py)" OFF)

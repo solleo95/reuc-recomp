@@ -42,7 +42,7 @@ LONG CALLBACK handler(PEXCEPTION_POINTERS info) {
                     for (int depth = 0; depth < 10 && sp >= 0x80000000u && sp < 0x81800000u; ++depth) {
                         uint32_t back, ret;
                         std::memcpy(&back, mem + sp, 4); std::memcpy(&ret, mem + sp + 4, 4);
-                        std::fprintf(t.out, " %08X", _byteswap_ulong(ret));
+                        std::fprintf(t.out, " %08X", uint32_t(_byteswap_ulong(ret)));
                         back = _byteswap_ulong(back);
                         if (back <= sp) break;
                         sp = back;

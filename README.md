@@ -2,7 +2,7 @@
 
 # Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
 
-**The Wii game running natively on Windows: very fast loading, unlocked FPS, mouse and gamepad aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+**The Wii game running natively on Windows: very fast loading, unlocked FPS, native ultrawide, mouse and gamepad aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
 
 **English** · [Русский](README.ru.md)
 
@@ -49,6 +49,7 @@ When you report a problem, please say what GPU, driver and Windows version you u
   - [3. First launch and settings](#3-first-launch-and-settings)
   - [4. Updating](#4-updating)
 - [In-game menu and controls](#in-game-menu-and-controls)
+  - [Ultrawide and the HUD](#ultrawide-and-the-hud)
 - [Multiplayer (online co-op)](#multiplayer-online-co-op)
 - [Known issues](#known-issues)
 - [Reporting problems](#reporting-problems)
@@ -62,11 +63,12 @@ When you report a problem, please say what GPU, driver and Windows version you u
 
 ### Native execution and performance
 
-- **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own Windows runtime and a Vulkan renderer instead of the Wii's GPU.
+- **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own Windows runtime and a Vulkan, DirectX 11 or DirectX 12 renderer (your choice in the launcher) instead of the Wii's GPU.
 - **High performance and unlocked FPS.** Frame-rate limit presets up to 240 FPS or no limit at all, instead of the original 30. The build uses ThinLTO and profile-guided optimisation, and the hot paths of the Wii SDK are replaced by native code.
 - **Very fast loading.** Scenes, menus and chapter changes load far quicker than on the console: the game's files are read straight from your drive by native code.
 - Shaders and pipelines are warmed up before the game starts, so shader compilation does not cause stutters during play.
 - Windowed, borderless and exclusive fullscreen modes, any resolution and an adjustable internal render scale.
+- **Native ultrawide.** On 21:9, 32:9 and any other screen wider than 16:9 you see a real wide picture, with more of the world on the sides and no black bars, cropping or stretching. The aim, pickups and hit detection cover the whole screen. Menus, text and button prompts keep their normal shape; movies stay 16:9. Taller windows (4:3, 16:10) work too. Details: [Ultrawide and the HUD](#ultrawide-and-the-hud).
 
 ### Controls built for PC
 
@@ -75,8 +77,9 @@ When you report a problem, please say what GPU, driver and Windows version you u
 - **Gamepad support.** Xbox, PlayStation (DualShock 4, DualSense), Nintendo Switch Pro and most other gamepads work as soon as they are plugged in. The left stick aims, the right stick is the analog stick of the Wii Nunchuk (it moves the camera), and the buttons follow the usual layout. A gamepad with a motion sensor can also aim by tilting it: swing it for the knife, shake it to break free. Motion aiming is off by default.
 - **Gamepad settings** are on the **Controllers** page (launcher and in-game menu): choose keyboard and mouse, gamepad or automatic, pick the gamepad model, and press **Gamepad** to change stick roles, dead zones, motion aiming and every button. The **Controls** page stays for keyboard and mouse.
 - **On-screen hints and prompts show the controller you play with:** mouse and keyboard icons, or Xbox, PlayStation and Nintendo button pictures for a gamepad (and they update when you rebind a key), instead of Wii-remote buttons.
-- Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel, gamepad buttons and key combinations are supported.
-- Keyboard and mouse or a gamepad: the choice is yours. The in-game menu opens with **Insert** (see [In-game menu](#in-game-menu-and-controls)); the gamepad cannot move around the menus yet, use the mouse there.
+- **Aim reticle you can restyle.** The **Reticle** tab of the in-game menu hides the aim trail, the laser dot, the white marks and the green ammo arc, sets a colour for each player, the size of the laser dot and the length of the trail, and fades your partner's reticle in co-op. In single-player the laser dot sits right under the mouse and the trail follows the real path of your hand.
+- Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel, gamepad buttons and key combinations are supported. The key that opens the in-game menu can be changed too.
+- Keyboard and mouse or a gamepad: the choice is yours. The in-game menu opens with **Insert** by default (see [In-game menu](#in-game-menu-and-controls)); the gamepad cannot move around the menus yet, use the mouse there.
 
 <img src="assets/readme/prompts.png" alt="On-screen prompts with mouse icons: Pick Up, a tutorial text, OK and Back" width="100%">
 
@@ -99,7 +102,7 @@ Details: [Upscaling and frame generation](docs/upscaling.md) · [Graphics effect
 ### Launcher
 
 - Built-in **launcher in 13 languages**: English, Русский, Deutsch, Français, Español, Italiano, Português, Polski, Українська, Türkçe, 日本語, 한국어, 简体中文.
-- All settings in one place: resolution, window mode, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings, mouse sensitivity, gamepad settings. Features your GPU cannot run are greyed out with the reason.
+- All settings in one place: resolution, window mode, ultrawide HUD position, FPS limit, upscaler, frame generation, effects, ray tracing, HDR, DLSS 5, key bindings, mouse sensitivity, gamepad settings. Features your GPU cannot run are greyed out with the reason.
 - **Unpacks your game image for you:** choose the disc image in the launcher and it unpacks it itself with the built-in Wit, no manual steps ([details](#way-a-the-launcher-unpacks-the-image)).
 - **One-click updates:** the launcher checks the latest release, verifies the files (SHA-256) and replaces them, keeping your settings, saves and mods.
 - Multiplayer lobby with automatic router port opening (UPnP) and NAT punching ([details](#multiplayer-online-co-op)).
@@ -233,13 +236,19 @@ The launcher checks for a new release when it starts and offers **Update** or **
 
 ## In-game menu and controls
 
-- **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings, mouse sensitivity, gamepad settings and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it.
+- **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings, mouse sensitivity, gamepad settings, the **Reticle** tab and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it. You can bind another key to the menu on the **Controls** page ("Settings menu").
 - Aiming is done with the mouse, the main actions are on the mouse buttons and the wheel; the full list, rebinding and the mouse sensitivity slider are in the launcher's **Controls** page and the in-game menu.
 - With a gamepad: the left stick aims (or tilt the pad if it has motion controls and you switched them on), the right stick moves the camera, **right trigger** fires, **A** interacts, **X** reloads, **B** is the knife, **Y** is the grenade, **Start** pauses and clicking the **left stick** puts the aim back in the centre. Everything can be changed on the **Controllers** page (button names follow your gamepad: on PlayStation pads they are Cross, Circle, Square, Triangle).
 - A gamepad that works through the Xbox driver (for example the GameSir G7 Pro in Xbox mode) gives the game no motion sensor, so motion aiming is not available with it.
 - **Alt** releases the mouse cursor in windowed mode. **Esc** pauses.
 
 <img src="assets/readme/ingame-menu.png" alt="The in-game menu (Insert): the Main, Effects and Controls tabs" width="100%">
+
+### Ultrawide and the HUD
+
+- Ultrawide is on by default and follows the shape of the window, also while you resize it. Turn it off with `"ultrawide": false` in the `graphics` section of `config.json` or with `--no-ultrawide` (there is no switch in the launcher) to get the old 16:9 picture stretched over the window.
+- **HUD position** (launcher display page and the in-game menu's main tab, applied at once): **Automatic**, **Centre (16:9)** or **Screen edges**. Automatic keeps the health, ammo and weapon panel at the screen edges up to about 21:9 and in the middle on wider screens.
+- In online co-op, deterministic runs and recorded demos the game keeps its 16:9 picture, stretched over a wide window. This keeps all players in sync.
 
 ## Multiplayer (online co-op)
 
@@ -309,6 +318,7 @@ NAT punching works with most home routers. It will not work if either side has *
 - Only `RBUE08` (NTSC-U) is supported.
 - Not all graphics options work together on all GPUs; unsupported ones are greyed out with a reason.
 - Ray tracing currently covers shadows only; other ray-traced effects are not finished.
+- Ultrawide: backgrounds across the whole screen (menus, fades) and the glow of the title logo stay stretched, and far to the sides something may appear a little late. Taller windows were checked only in the train car. Online co-op keeps 16:9.
 - Gamepads: tested with virtual gamepads and automatic tests only, so tell us if your model misbehaves. There is no camera sensitivity slider yet. Gamepads that talk the Xbox protocol (for example the GameSir G7 Pro in Xbox mode) have no motion sensor in the game. The menus cannot be moved around with a gamepad yet.
 
 Found something else? Tell us: [Reporting problems](#reporting-problems).
