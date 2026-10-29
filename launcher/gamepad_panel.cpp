@@ -1,10 +1,12 @@
 #include "gamepad_panel.h"
+#include "panel_widgets.h"
 #include "input_prompts.h"
 #include "pad_glyphs.h"
 #include "imgui.h"
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 namespace uc {
@@ -13,6 +15,8 @@ constexpr std::array<Action,17> kActions{Action::interact,Action::fire,Action::w
     Action::confirm,Action::back,Action::screenshot,Action::qte_shake,Action::recenter,Action::camera_up,Action::camera_down,Action::camera_left,Action::camera_right};
 // Inputs that can hold the gyro on: a trigger or a shoulder or stick button.
 constexpr std::array<PhysicalInput,6> kHoldChoices{{{PhysicalKind::pad_axis,9},{PhysicalKind::pad_axis,11},{PhysicalKind::pad_button,9},{PhysicalKind::pad_button,10},{PhysicalKind::pad_button,7},{PhysicalKind::pad_button,8}}};
+}
+namespace panel_shared {   // the widgets the Wii Remote window uses as well (panel_widgets.h)
 // The same rhythm as the host's own pages: a small caption above each control, a gap after it.
 void gap(float unit) { ImGui::Dummy({0,8*unit}); }
 bool combo(const char* id,const std::string& shown,const std::vector<std::string>& items,int& index,float width) {
@@ -31,7 +35,7 @@ bool percent_slider(const char* id,float& fraction,float low_percent,float high_
     if(changed) fraction=value/100;
     return changed;
 }
-bool float_slider(const char* id,float& value,float low,float high,const char* format,float width,bool logarithmic=false) {
+bool float_slider(const char* id,float& value,float low,float high,const char* format,float width,bool logarithmic) {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*width);
     return ImGui::SliderFloat(id,&value,low,high,format,ImGuiSliderFlags_AlwaysClamp|(logarithmic ? ImGuiSliderFlags_Logarithmic : 0));
 }
@@ -114,10 +118,10 @@ void status_line(const PadStatus& status,const PanelText& tr) {
     ImGui::TextDisabled("%s (%s)",status.name.c_str(),tr(status.has_gyro ? "pad_gyro_yes" : "pad_gyro_no"));
 }
 // The buttons stay live while a capture waits: a click on another action switches the capture to it.
-void bindings_rows(BindingEditor& editor,PadFamily family,float unit,const PanelText& tr) {
+void bindings_rows(BindingEditor& editor,std::span<const Action> actions,PadFamily family,float unit,const PanelText& tr) {
     const float spacing=ImGui::GetStyle().ItemSpacing.x;
     const float plus=46*unit,clear=ImGui::CalcTextSize(tr("clear")).x+2*ImGui::GetStyle().FramePadding.x+16*unit;
-    for(Action action:kActions) {
+    for(Action action:actions) {
         const size_t i=size_t(action);
         ImGui::PushID(int(i));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{ImGui::GetStyle().FramePadding.x,ImGui::GetStyle().FramePadding.y+7*unit});   // taller rows: the pictures need the room
@@ -154,6 +158,9 @@ void bindings_rows(BindingEditor& editor,PadFamily family,float unit,const Panel
         ImGui::PopID();
     }
 }
+}
+namespace {
+using namespace panel_shared;
 bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,const PadStatus& status,float unit,const PanelText& tr) {
     bool changed=false;
     const auto& io=ImGui::GetIO();
@@ -208,7 +215,7 @@ bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,con
     }
     ImGui::Separator(); gap(unit);
     ImGui::TextUnformatted(tr("bindings")); gap(unit);
-    bindings_rows(editor,family,unit,tr);
+    bindings_rows(editor,kActions,family,unit,tr);
     ImGui::EndChild();
     ImGui::Separator();
     if(editor.capturing()) ImGui::TextWrapped("%s",tr("pad_capture"));

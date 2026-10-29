@@ -5,7 +5,9 @@
 #include "graphics_effects.h"
 #include "hdr_math.h"
 #include "input_prompts.h"
+#include "pointer_settings.h"
 #include "upscale_mode.h"
+#include "wiimote_config.h"
 #include "netplay.h"
 #include "renderer_backend.h"
 #include <filesystem>
@@ -44,6 +46,11 @@ struct Options {
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
     uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
+    PointerMode pointer=PointerMode::relative;   // config "pointer": relative = the mouse as motion, absolute = the cursor's window position (lightguns); --pointer
+    uint32_t pointer_smoothing=0;                // percent 0..kPointerSmoothingMax (config pointer_smoothing): steadies the pointer of jittery infrared guns
+    ReloadZone reload_zone=ReloadZone::off;      // config "reload_zone": a shot in the corner / at the edge reloads
+    uint32_t reload_zone_size=5;                 // percent kReloadZoneSizeMin..Max of the window (config reload_zone_size)
+    WiimoteSettings wiimote;   // the "wiimote" object of config.json: whether the remote is read, pointer smoothing, swing threshold, nunchuk dead zone, the remote's bindings
     GamepadSettings gamepad;   // the "gamepad" object of config.json: control type, model, sticks, gyro and the gamepad's bindings
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     ReticleOptions reticle;         // hidden parts, colours, dot size, wake length, partner opacity

@@ -49,6 +49,13 @@ int main() {
     }
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--window-mode","invalid"})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--window-mode"})));
+    CHECK(std::get<uc::Options>(defaults).pointer==uc::PointerMode::relative);
+    for(auto [name,mode]:{std::pair{"relative",uc::PointerMode::relative},{"absolute",uc::PointerMode::absolute}}) {
+        auto pointer=parse(std::array<std::string_view,2>{"--pointer",name});
+        CHECK(std::holds_alternative<uc::Options>(pointer) && std::get<uc::Options>(pointer).pointer==mode);
+    }
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--pointer","tablet"})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--pointer"})));
     auto native_scale=parse(std::array<std::string_view,2>{"--render-scale","6"});
     CHECK(std::get<uc::Options>(native_scale).render_scale==6);
     auto fractional_scale=parse(std::array<std::string_view,2>{"--render-scale","1.5"});

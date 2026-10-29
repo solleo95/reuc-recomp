@@ -9,13 +9,24 @@ size_t index(Action action) {
     return i;
 }
 bool modifier(PhysicalInput input) {return input.kind==PhysicalKind::key && input.code>=224 && input.code<=231;}
-bool pad_input(PhysicalInput input) {return input.kind==PhysicalKind::pad_button || input.kind==PhysicalKind::pad_axis;}
+BindingTable table_of(PhysicalInput input) {
+    switch(input.kind) {
+    case PhysicalKind::pad_button:
+    case PhysicalKind::pad_axis: return BindingTable::gamepad;
+    case PhysicalKind::wii_button: return BindingTable::wiimote;
+    default: return BindingTable::keyboard;
+    }
+}
 }
 BindingEditor::BindingEditor(Bindings bindings,BindingTable table):table_(table),bindings_(std::move(bindings)) {
     if(auto error=validate(bindings_))throw std::invalid_argument(*error);
 }
 std::optional<std::string> BindingEditor::validate(const Bindings& bindings) const {
-    return table_==BindingTable::gamepad ? validate_pad_bindings(bindings) : validate_bindings(bindings);
+    switch(table_) {
+    case BindingTable::gamepad: return validate_pad_bindings(bindings);
+    case BindingTable::wiimote: return validate_wii_bindings(bindings);
+    default: return validate_bindings(bindings);
+    }
 }
 std::optional<std::string> BindingEditor::add(Action action,const Binding& binding) {
     auto replacement=bindings_; replacement[index(action)].push_back(binding);
@@ -31,7 +42,10 @@ void BindingEditor::remove(Action action,size_t entry) {
 void BindingEditor::clear(Action action) {
     bindings_[index(action)].clear(); if(capture_==action)cancel_capture();
 }
-void BindingEditor::restore_defaults() {bindings_=table_==BindingTable::gamepad ? default_pad_bindings() : default_bindings();cancel_capture();}
+void BindingEditor::restore_defaults() {
+    bindings_=table_==BindingTable::gamepad ? default_pad_bindings() : table_==BindingTable::wiimote ? default_wii_bindings() : default_bindings();
+    cancel_capture();
+}
 void BindingEditor::begin_capture(Action action,bool replace) {index(action);cancel_capture();capture_=action;replace_=replace;}
 void BindingEditor::cancel_capture() {capture_.reset();replace_=false;modifiers_.clear();error_.reset();}
 void BindingEditor::capture(PhysicalInput input) {
@@ -52,7 +66,7 @@ void BindingEditor::capture(PhysicalInput input) {
     if(!error_) {bindings_=std::move(replacement);cancel_capture();}
 }
 void BindingEditor::event(PhysicalInput input,bool down) {
-    if(!capture_ || pad_input(input)!=(table_==BindingTable::gamepad))return;   // each table waits for its own device
+    if(!capture_ || table_of(input)!=table_)return;   // each table waits for its own device
     if(modifier(input)) {
         const auto held=std::find(modifiers_.begin(),modifiers_.end(),input);
         if(down && held==modifiers_.end())modifiers_.push_back(input);

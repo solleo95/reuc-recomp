@@ -19,7 +19,7 @@ class TestServer {
 public:
     TestServer(TestPipes&, TestInputSink&);
     // Called once per main-loop iteration with the latest published frame counter.
-    struct Pump { bool capture = false; bool draws = false; bool quit = false; std::vector<uint32_t> host_keys; std::vector<std::string> options, gamepad; std::vector<std::pair<float, float>> menu_clicks; };   // options: graphics JSON, gamepad: gamepad settings JSON
+    struct Pump { bool capture = false; bool draws = false; bool quit = false; std::vector<uint32_t> host_keys; std::vector<std::string> options, gamepad, settings; std::vector<std::pair<float, float>> menu_clicks; };   // options: graphics JSON, gamepad: gamepad settings JSON, settings: root config keys JSON
     Pump pump(uint64_t frame, const std::string& frame_json);
     void captured(const std::string& path);           // completes the oldest pending capture
     void capture_failed(const std::string& message);
@@ -37,7 +37,7 @@ private:
     std::deque<Waiting> waiting_;
     std::set<uint64_t> open_requests_;                 // scheduled and not yet replied
     std::deque<uint64_t> captures_, draw_requests_; bool capture_inflight_ = false;
-    std::set<uint32_t> held_keys_, held_mouse_, held_pad_buttons_, held_pad_axes_; bool sticks_used_ = false;
+    std::set<uint32_t> held_keys_, held_mouse_, held_pad_buttons_, held_pad_axes_, held_wii_buttons_; bool sticks_used_ = false, wii_stick_used_ = false;
     float aim_x_ = 0, aim_y_ = 0; uint32_t kpad_buttons_ = 0; uint64_t kpad_owner_ = 0;
     uint64_t next_sequence_ = 1, last_frame_sent_ = 0;
 };

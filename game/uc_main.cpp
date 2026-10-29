@@ -25,6 +25,7 @@
 #include "options_config.h"
 #include "host_input.h"
 #include "gamepad_input.h"
+#include "wiimote_input.h"
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -242,7 +243,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--no-ultrawide] [--hud-position auto|center|edges] [--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--no-ultrawide] [--hud-position auto|center|edges] [--pointer relative|absolute][--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     startup_options=options;   // probe/harness failures remain noninteractive, including a bad config
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
@@ -461,13 +462,29 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if (!options.demo_play.empty()) input.demo_play(options.demo_play);
     input.bindings(input_config.input);
     input.pad_settings(options.gamepad);
+    input.wiimote_settings(options.wiimote);
     uc::HostInput host_input;
     host_input.sensitivity(options.mouse_sensitivity);
+    host_input.pointer(options.pointer);
+    input.pointer_smoothing(options.pointer_smoothing/100.f);
+    input.reload_zone(options.reload_zone,options.reload_zone_size/100.f);
+    // Who owns the mouse while the game plays. relative: SDL's relative mode (hidden cursor, raw motion). absolute (lightguns, which move the Windows cursor): the cursor is
+    // hidden and locked to the window and its window position is the pointer. Not playing (menu): the cursor is free in both.
+    const auto capture_pointer=[&](bool playing) {
+        if(controlled) return;
+        const bool absolute=options.pointer==uc::PointerMode::absolute;
+        if(!SDL_SetWindowRelativeMouseMode(window.get(),playing && !absolute)) throw std::runtime_error(SDL_GetError());
+        if(!SDL_SetWindowMouseGrab(window.get(),playing && absolute)) throw std::runtime_error(SDL_GetError());
+        if(playing && absolute) SDL_HideCursor(); else SDL_ShowCursor();
+    };
+    const auto pointer_captured=[&] { return options.pointer==uc::PointerMode::absolute ? SDL_GetWindowMouseGrab(window.get()) : SDL_GetWindowRelativeMouseMode(window.get()); };
     std::optional<uc::GamepadInput> gamepad;   // real gamepads feed the game window only: not in headless or harness runs (those inject pad events through the test server)
     if(!options.headless && !controlled) {
         try { gamepad.emplace(); }
         catch(const std::exception& error) { std::fprintf(stderr,"[gamepad] gamepads unavailable, keyboard and mouse only: %s\n",error.what()); }   // a broken joystick backend must not stop the game
     }
+    std::optional<uc::WiimoteInput> wiimote;   // a real Wii Remote feeds the game window only, like the gamepads: the harness injects wii_* events through the test server
+    if(!options.headless && !controlled) wiimote.emplace();
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
@@ -512,7 +529,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         view_for_output(output_width,output_height);
         const char* mode_name=options.window_mode==uc::WindowMode::windowed ? "Windowed" : options.window_mode==uc::WindowMode::borderless ? "Borderless" : "Exclusive Fullscreen";
         std::fprintf(stderr,"Window mode: %s\n[startup] window shown after shader warmup; output=%dx%d focused=%d\n",mode_name,output_width,output_height,int((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));
-        if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),true)) throw std::runtime_error(SDL_GetError());
+        capture_pointer(true);
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
     }
     uc::input_hle_init(options.headless ? nullptr : &input);
@@ -534,9 +551,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::prompt_hooks_init(input_config.input,options.input_probe);
     bool pad_last_used=false,shown_pad_last=false;   // the last device used was a gamepad (control type "auto" shows that device's prompts); what the prompts were built for
     unsigned pad_changes=0;
-    const auto refresh_prompt_device=[&] {   // the gamepad's prompts: its table and the look of the connected pad or the chosen model
+    bool wii_last_used=false,shown_wii_last=false;   // the last device used was the Wii Remote (control type "auto" shows its prompts, in its look)
+    unsigned wii_changes=0,wii_activity=0;
+    const auto refresh_prompt_device=[&] {   // the gamepad's (or the Wii Remote's) prompts: its table and the look of the connected pad or the chosen model
         const auto status=gamepad ? gamepad->status() : uc::PadStatus{};
         const auto& pad=options.gamepad;
+        if(wiimote && wii_last_used && pad.type==uc::ControlType::automatic && options.wiimote.enabled && wiimote->status().connected) {
+            uc::prompt_hooks_set_gamepad(options.wiimote.bindings,uc::PromptDevice{false,uc::PadFamily::generic,false,true});
+            return;
+        }
         uc::prompt_hooks_set_gamepad(pad.bindings,uc::resolve_prompt_device(pad.type,pad.model,pad_last_used,status.connected,status.family,pad.gyro.mode!=uc::GyroMode::off,status.has_gyro));
     };
     refresh_prompt_device();
@@ -869,6 +892,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
         targets.reticle=[&](const uc::ReticleOptions& reticle) { options.reticle=reticle; gx::set_reticle_style(reticle_style_of(reticle)); };
         targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); };
+        targets.pointer=[&](uc::PointerMode mode,uint32_t smoothing) { options.pointer=mode; options.pointer_smoothing=smoothing; host_input.pointer(mode); input.pointer_smoothing(smoothing/100.f); capture_pointer(!host_keys.menu_open); };   // the in-game menu is open while it changes this, but the harness changes it during play: the cursor changes hands now
+        targets.reload_zone=[&](uc::ReloadZone zone,uint32_t size) { options.reload_zone=zone; options.reload_zone_size=size; input.reload_zone(zone,size/100.f); };
         targets.hud_position=[&](uc::HudPosition position) { options.hud_position=position; view_for_output(view_width,view_height); };
         targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
@@ -876,6 +901,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_menu_keys(bindings); };
         targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
+        targets.wiimote=[&](const uc::WiimoteSettings& settings) { options.wiimote=settings; input.wiimote_settings(settings); refresh_prompt_device(); };
         live_settings.emplace(config_path,input_config,std::move(targets));
         if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has
         else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
@@ -890,6 +916,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         settings_menu->set_mod_menu(&mod_menu);
         settings_menu->set_pad_status([&] { return gamepad ? gamepad->status() : uc::PadStatus{}; });
         if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
+        settings_menu->set_wii_status([&] { return wiimote ? wiimote->status() : uc::WiimoteStatus{}; });
+        if(wiimote) wiimote->capture_sink([&](uc::PhysicalInput remote_input,bool down) { settings_menu->wii_capture(remote_input,down); });   // the Wii Remote window waits for a button
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
         if(!kPublicRelease)settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
             const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
@@ -906,7 +934,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         static bool audio_paused=false;   // only a real change: resuming drops the queued audio (a click when the menu merely opens)
         if (audio && audio_paused!=host_keys.paused) { audio->pause(host_keys.paused); audio_paused=host_keys.paused; }
         const bool playing=!host_keys.menu_open && !host_keys.paused;
-        if (!controlled && !SDL_SetWindowRelativeMouseMode(window.get(),!host_keys.menu_open)) throw std::runtime_error(SDL_GetError());   // the menu needs the cursor
+        capture_pointer(!host_keys.menu_open);   // the menu needs the cursor
         input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
     };
     const auto host_key_pressed=[&](SDL_Scancode key) {   // true when the key belongs to the port (never to the game)
@@ -970,6 +998,14 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     if (live_settings->error()) std::fprintf(stderr,"[test-server] gamepad options rejected: %s\n",live_settings->error()->c_str());
                 } catch (const std::exception& error) { std::fprintf(stderr,"[test-server] gamepad options rejected: %s\n",error.what()); }
             }
+            for (const auto& settings : pumped.settings) if (live_settings) {   // root keys of config.json (pointer, reload_zone, ...), merged over the saved ones
+                try {
+                    uc::ConfigDocument document; uc::store_options(document,live_settings->options());
+                    document.properties.update(nlohmann::ordered_json::parse(settings));
+                    live_settings->apply(uc::options_from_config(document));
+                    if (live_settings->error()) std::fprintf(stderr,"[test-server] settings rejected: %s\n",live_settings->error()->c_str());
+                } catch (const std::exception& error) { std::fprintf(stderr,"[test-server] settings rejected: %s\n",error.what()); }
+            }
             close|=pumped.quit;
             if(test_pipes->disconnected() && !test_released) { test_released=true; test_server->release_all(); }
         }
@@ -1008,7 +1044,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         debug_capture_requested|=(services.pressed&(uint64_t(1)<<unsigned(uc::Action::screenshot)))!=0;
         if(!controlled && options.window_mode==uc::WindowMode::windowed &&
             (services.pressed&(uint64_t(1)<<unsigned(uc::Action::release_cursor)))) {
-            if(!SDL_SetWindowRelativeMouseMode(window.get(),false))throw std::runtime_error(SDL_GetError());
+            capture_pointer(false);
             input.focus(false);
         }
         render_pending();
@@ -1054,8 +1090,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
                 if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
-                if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) pad_last_used=true;
-                else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) pad_last_used=false;
+                if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
+                else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) {pad_last_used=false;wii_last_used=false;}
                 // Hold Tab: game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
                 if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && event.key.scancode==SDL_SCANCODE_TAB && !settings_menu->capturing()) {
@@ -1073,8 +1109,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 int width=0,height=0;
                 if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
                 host_input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
-                if(host_input.event(event,input,SDL_GetWindowRelativeMouseMode(window.get()))) {
-                    if(!SDL_SetWindowRelativeMouseMode(window.get(),true))throw std::runtime_error(SDL_GetError());
+                host_input.density(SDL_GetWindowPixelDensity(window.get()));
+                if(host_input.event(event,input,pointer_captured())) {
+                    capture_pointer(true);
                     input.focus(true);
                 }
             }
@@ -1083,6 +1120,11 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 int width=0,height=0;
                 if(SDL_GetWindowSizeInPixels(window.get(),&width,&height)) input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));   // stick speed and gyro counts are in pixels
                 if(gamepad) gamepad->update(input,!host_keys.menu_open && !host_keys.paused && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+                if(wiimote) {
+                    wiimote->update(&input,!host_keys.menu_open && !host_keys.paused && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0,options.wiimote);
+                    if(wiimote->activity()!=wii_activity) {wii_activity=wiimote->activity();wii_last_used=true;pad_last_used=false;}
+                    if(wiimote->changes()!=wii_changes || wii_last_used!=shown_wii_last) {wii_changes=wiimote->changes();shown_wii_last=wii_last_used;refresh_prompt_device();}   // the remote came or went, or the other device was used
+                }
                 if(gamepad && (gamepad->changes()!=pad_changes || pad_last_used!=shown_pad_last)) {pad_changes=gamepad->changes();shown_pad_last=pad_last_used;refresh_prompt_device();}   // a pad came or went, or the other device was used
             }
             if (watch_error) std::rethrow_exception(watch_error);

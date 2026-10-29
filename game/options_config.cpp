@@ -32,6 +32,27 @@ Options options_from_config(const ConfigDocument& document) {
         if(!value.is_number_unsigned() || value.get<uint64_t>()<kMouseSensitivityMin || value.get<uint64_t>()>kMouseSensitivityMax)invalid("mouse_sensitivity must be 10..300");
         options.mouse_sensitivity=value.get<uint32_t>();
     }
+    if(root.contains("pointer")) {
+        const auto& value=root["pointer"];
+        if(!value.is_string() || (value.get<std::string>()!="relative" && value.get<std::string>()!="absolute"))invalid("pointer must be relative or absolute");
+        options.pointer=value.get<std::string>()=="absolute" ? PointerMode::absolute : PointerMode::relative;
+    }
+    if(root.contains("pointer_smoothing")) {
+        const auto& value=root["pointer_smoothing"];
+        if(!value.is_number_unsigned() || value.get<uint64_t>()>kPointerSmoothingMax)invalid("pointer_smoothing must be 0..90");
+        options.pointer_smoothing=value.get<uint32_t>();
+    }
+    if(root.contains("reload_zone")) {
+        const auto& value=root["reload_zone"];
+        const std::string name=value.is_string() ? value.get<std::string>() : std::string();
+        if(name!="off" && name!="corner" && name!="edge")invalid("reload_zone must be off, corner or edge");
+        options.reload_zone=name=="corner" ? ReloadZone::corner : name=="edge" ? ReloadZone::edge : ReloadZone::off;
+    }
+    if(root.contains("reload_zone_size")) {
+        const auto& value=root["reload_zone_size"];
+        if(!value.is_number_unsigned() || value.get<uint64_t>()<kReloadZoneSizeMin || value.get<uint64_t>()>kReloadZoneSizeMax)invalid("reload_zone_size must be 1..20");
+        options.reload_zone_size=value.get<uint32_t>();
+    }
     if(root.contains("graphics")) {
         const auto& graphics=root["graphics"];if(!graphics.is_object())invalid("graphics must be an object");
         if(graphics.contains("renderer")) {
@@ -165,6 +186,7 @@ Options options_from_config(const ConfigDocument& document) {
         }
     }
     options.gamepad=gamepad_from_config(document);
+    options.wiimote=wiimote_from_config(document);
     // A section written by the first DLSS 5 build (an "enabled" switch and a "stage") has other keys and values than the table: it is dropped (defaults) and rewritten on the next save.
     const bool legacy_dlss5=root.contains("dlss5") && root["dlss5"].is_object() && (root["dlss5"].contains("enabled") || root["dlss5"].contains("stage"));
     if(root.contains("dlss5") && !legacy_dlss5) {
@@ -209,6 +231,10 @@ void store_options(ConfigDocument& document,const Options& options) {
     replacement.properties["skip_tutorials"]=options.skip_tutorials;
     replacement.properties["logs"]=options.logs;
     replacement.properties["mouse_sensitivity"]=options.mouse_sensitivity;
+    replacement.properties["pointer"]=options.pointer==PointerMode::absolute ? "absolute" : "relative";
+    replacement.properties["pointer_smoothing"]=options.pointer_smoothing;
+    replacement.properties["reload_zone"]=options.reload_zone==ReloadZone::corner ? "corner" : options.reload_zone==ReloadZone::edge ? "edge" : "off";
+    replacement.properties["reload_zone_size"]=options.reload_zone_size;
     auto& graphics=replacement.properties["graphics"];
     if(graphics.is_null())graphics=nlohmann::ordered_json::object();
     if(!graphics.is_object())invalid("graphics must be an object");
@@ -273,6 +299,7 @@ void store_options(ConfigDocument& document,const Options& options) {
         }
     }
     store_gamepad(replacement,options.gamepad);
+    store_wiimote(replacement,options.wiimote);
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

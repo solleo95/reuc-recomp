@@ -5,7 +5,8 @@
 namespace uc {
 void prompt_hooks_init(const Bindings&,bool trace=false);
 void prompt_hooks_set_bindings(const Bindings&);   // any thread (in-game menu); prompts built from the next hook on use them
-// Any thread: the gamepad table and which device the prompts show (keyboard and mouse until this is called); effective from the next hook on.
+// Any thread: the table of the gamepad (or, for a PromptDevice with wiimote set, of the Wii Remote) and which device the prompts show (keyboard and mouse until this is called);
+// effective from the next hook on.
 void prompt_hooks_set_gamepad(const Bindings& pad,const PromptDevice&);
 struct PromptSnapshot;
 std::shared_ptr<const PromptSnapshot> prompt_checkpoint();

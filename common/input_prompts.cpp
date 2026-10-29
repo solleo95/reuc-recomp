@@ -4,7 +4,8 @@
 namespace uc {
 PromptDescription describe_prompt(const Bindings& bindings,Action action,const PromptDevice& device) {
     if(size_t(action)>=size_t(Action::count))throw std::invalid_argument("invalid prompt action");
-    if(auto error=device.gamepad ? validate_pad_bindings(bindings) : validate_bindings(bindings))throw std::invalid_argument(*error);
+    if(device.gamepad && device.wiimote)throw std::invalid_argument("a prompt is for one device");
+    if(auto error=device.wiimote ? validate_wii_bindings(bindings) : device.gamepad ? validate_pad_bindings(bindings) : validate_bindings(bindings))throw std::invalid_argument(*error);
     PromptDescription result{action,{},device};
     const auto& interact=bindings[size_t(Action::interact)];
     const auto& fire=bindings[size_t(Action::fire)];
@@ -22,7 +23,7 @@ PromptDescription describe_prompt(const Bindings& bindings,Action action,const P
             result.alternatives.push_back({{},PromptGesture::shake});break;
         }
     }
-    if(device.gamepad && device.gyro) {   // the gamepad's own gestures: the shake first (it is what the game asks for), the swing after the button
+    if((device.gamepad && device.gyro) || device.wiimote) {   // the gamepad's (or the remote's) own gestures: the shake first (it is what the game asks for), the swing after the button
         if(action==Action::qte_shake)result.alternatives.insert(result.alternatives.begin(),{{},PromptGesture::shake});
         else if(action==Action::knife && !interact.empty() && result.alternatives.end()==std::find_if(result.alternatives.begin(),result.alternatives.end(),[](const auto& a){return a.gesture.has_value();}))
             result.alternatives.push_back({{{interact,true}},PromptGesture::directional_motion});
@@ -56,6 +57,10 @@ PromptDescription chord_prompt(const Bindings& bindings,Action first,Action seco
     return result;
 }
 std::string pad_glyph_label(PhysicalInput input,PadFamily family) {
+    if(input.kind==PhysicalKind::wii_button) {
+        static constexpr const char* names[kWiiButtonCount]={"D-pad Left","D-pad Right","D-pad Down","D-pad Up","+","2","1","B","A","-","Home","Z","C"};
+        return input.code<kWiiButtonCount ? names[input.code] : "Button "+std::to_string(input.code);
+    }
     const bool xbox=family==PadFamily::xbox,sony=family==PadFamily::playstation,nintendo=family==PadFamily::nintendo;
     const auto pick=[&](const char* x,const char* p,const char* n,const char* g) { return std::string(xbox ? x : sony ? p : nintendo ? n : g); };
     if(input.kind==PhysicalKind::pad_button) {

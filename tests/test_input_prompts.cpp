@@ -52,7 +52,29 @@ static void pad_prompts() {
     CHECK(forced.gamepad && forced.family==PadFamily::xbox && !forced.gyro);   // no pad to ask: the Xbox look, as for a pad of unknown make; "generic" is only picked by hand                         // a chosen gamepad shows even unplugged; without gyro hardware there is no gyro prompt
     CHECK(!pick(ControlType::gamepad,PadModel::playstation,false,true,PadFamily::xbox,false,true).gyro);   // gyro off in the settings
 }
+static PhysicalInput wii(uint16_t code) {return {PhysicalKind::wii_button,code};}
+static void wii_prompts() {
+    // The remote's buttons are named as printed on it; the family of a gamepad changes nothing.
+    const char* names[]={"D-pad Left","D-pad Right","D-pad Down","D-pad Up","+","2","1","B","A","-","Home","Z","C"};
+    for(uint16_t code=0;code<kWiiButtonCount;++code) CHECK(pad_glyph_label(wii(code),PadFamily::xbox)==names[code] && pad_glyph_label(wii(code),PadFamily::nintendo)==names[code]);
+    const auto table=default_wii_bindings(); const PromptDevice remote{false,PadFamily::generic,false,true};
+    auto fire=primary_prompt(table,{Action::fire},remote);
+    CHECK(fire.alternatives.size()==1 && fire.alternatives[0].choices[0].bindings[0].input==wii(7) && fire.device.wiimote && !fire.device.gamepad);
+    auto grenade=chord_prompt(table,Action::interact,Action::fire,remote);   // A+B
+    CHECK(grenade.alternatives.size()==1 && grenade.alternatives[0].choices.size()==2 && grenade.alternatives[0].choices[0].bindings[0].input==wii(8) && grenade.alternatives[0].choices[1].bindings[0].input==wii(7));
+    // The remote swings and shakes with its own motion, so the gestures show without any gyro switch.
+    auto shake=describe_prompt(table,Action::qte_shake,remote);
+    CHECK(!shake.alternatives.empty() && shake.alternatives[0].gesture==PromptGesture::shake);
+    auto knife=describe_prompt(table,Action::knife,remote);
+    CHECK(knife.alternatives.size()==2 && knife.alternatives[0].choices[0].bindings[0].input==wii(11) && knife.alternatives[1].gesture==PromptGesture::directional_motion && knife.alternatives[1].choices[0].held);
+    // A table of one device is not read for another.
+    bool refused=false;try {describe_prompt(table,Action::reload,PromptDevice{true,PadFamily::xbox,false});}catch(const std::invalid_argument&){refused=true;}CHECK(refused);
+    refused=false;try {describe_prompt(default_bindings(),Action::reload,remote);}catch(const std::invalid_argument&){refused=true;}CHECK(refused);
+    refused=false;try {describe_prompt(table,Action::reload);}catch(const std::invalid_argument&){refused=true;}CHECK(refused);
+    CHECK(!resolve_prompt_device(ControlType::automatic,PadModel::automatic,false,false,PadFamily::xbox,false,false).wiimote);
+}
 int main() {
+    wii_prompts();
     pad_prompts();
     auto bindings=default_bindings();
     auto weapon=describe_prompt(bindings,Action::weapon_previous);

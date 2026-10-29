@@ -57,7 +57,7 @@ void draw_reticle_sample(ImDrawList& draw,ImVec2 centre,float radius,const Retic
 }
 }
 SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height,RendererBackend backend)
-    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad) {}
+    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad),wii_editor_(live.options().wiimote.bindings,BindingTable::wiimote) {}
 const char* SettingsMenu::tr(std::string_view key) const { return launcher::text(language_,key).data(); }
 void SettingsMenu::setup() {
     fonts_=ui::load_fonts(*ImGui::GetIO().Fonts);   // the previous menu context (if any) is gone: its atlas no longer reads the old bytes
@@ -356,6 +356,11 @@ void SettingsMenu::controllers_tab(float unit) {
     pad_panel_.heading=fonts_.serif; pad_panel_.heading_size=heading_size_; pad_panel_.control_width=.75f;   // the menu's own title font and control width
     const PadStatus status=pad_status_ ? pad_status_() : PadStatus{};
     if(gamepad_tab(pad_panel_,options.gamepad,pad_editor_,status,unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+    if(!wii_editor_.capturing() && options.wiimote.bindings!=wii_editor_.bindings() && options.wiimote.bindings!=wii_seen_) wii_editor_=BindingEditor(options.wiimote.bindings,BindingTable::wiimote);
+    wii_seen_=options.wiimote.bindings;
+    wii_panel_.heading=fonts_.serif; wii_panel_.heading_size=heading_size_; wii_panel_.control_width=.75f;
+    options=current();   // the gamepad tab above may have queued a change: this one builds on it
+    if(wiimote_tab(wii_panel_,options.wiimote,wii_editor_,wii_status_ ? wii_status_() : WiimoteStatus{},unit,[this](std::string_view key) { return tr(key); })) pending_=options;
 }
 // The Reticle tab: a preview of the reticle with the chosen look (yours and a partner's), the size, what to hide, the players' colours, the dot's size, the wake's
 // length and how visible the partner's reticle is.
@@ -424,10 +429,42 @@ void SettingsMenu::reticle_tab(float unit) {
 void SettingsMenu::controls_tab(float unit) {
     auto options=current();
     ImGui::Dummy({0,8*unit});
+    ImGui::TextUnformatted(tr("pointer_device"));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    const char* devices[]={tr("pointer_mouse"),tr("pointer_lightgun")};
+    if(ImGui::BeginCombo("##pointer",devices[size_t(options.pointer)])) {
+        for(size_t i=0;i<2;++i) if(ImGui::Selectable(devices[i],size_t(options.pointer)==i)) options.pointer=PointerMode(i);
+        ImGui::EndCombo();
+    }
+    ImGui::Dummy({0,6*unit});
+    const bool absolute=options.pointer==PointerMode::absolute;   // the position of the cursor is the aim: the mouse speed means nothing, a jittery gun wants smoothing
+    ImGui::BeginDisabled(absolute);
     ImGui::TextUnformatted(tr("mouse_sensitivity"));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     int sensitivity=int(options.mouse_sensitivity);
     if(ImGui::SliderInt("##sensitivity",&sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax)));
+    ImGui::EndDisabled();
+    if(absolute) {
+        ImGui::Dummy({0,6*unit});
+        ImGui::TextUnformatted(tr("pointer_smoothing"));
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+        int smoothing=int(options.pointer_smoothing);
+        if(ImGui::SliderInt("##pointer-smoothing",&smoothing,0,int(kPointerSmoothingMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(kPointerSmoothingMax)));
+    }
+    ImGui::Dummy({0,6*unit});
+    ImGui::TextUnformatted(tr("reload_zone"));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+    const char* zones[]={tr("reload_zone_off"),tr("reload_zone_corner"),tr("reload_zone_edge")};
+    if(ImGui::BeginCombo("##reload-zone",zones[size_t(options.reload_zone)])) {
+        for(size_t i=0;i<3;++i) if(ImGui::Selectable(zones[i],size_t(options.reload_zone)==i)) options.reload_zone=ReloadZone(i);
+        ImGui::EndCombo();
+    }
+    if(options.reload_zone!=ReloadZone::off) {
+        ImGui::TextUnformatted(tr("reload_zone_size"));
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+        int size=int(options.reload_zone_size);
+        if(ImGui::SliderInt("##reload-zone-size",&size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.reload_zone_size=uint32_t(std::clamp(size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax)));
+    }
     ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("style"));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);

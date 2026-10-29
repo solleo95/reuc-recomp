@@ -158,7 +158,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 if (multiplier) options.frame_generation_multiplier = multiplier;
             }
         }
-        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--hud-position" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
+        else if (arg == "--game" || arg == "--width" || arg == "--height" || arg == "--seconds" || arg=="--test-control" || arg=="--test-server" || arg=="--speed" || arg=="--capture-dir" || arg=="--save-root" || arg=="--config" || arg=="--render-scale" || arg=="--window-mode" || arg=="--hud-position" || arg=="--pointer" || arg=="--game-hz" || arg=="--fps-limit" || arg=="--det-out" || arg=="--det-frames" || arg=="--demo-record" || arg=="--demo-play" || arg=="--stop-retrace") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for " + std::string(arg);
             auto value = arguments[i];
             if(arg=="--window-mode") {
@@ -166,6 +166,12 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
                 else if(value=="borderless") options.window_mode=WindowMode::borderless;
                 else if(value=="exclusive") options.window_mode=WindowMode::exclusive;
                 else return "invalid value for " + std::string(arg);
+                continue;
+            }
+            if(arg=="--pointer") {
+                if(value=="relative") options.pointer=PointerMode::relative;
+                else if(value=="absolute") options.pointer=PointerMode::absolute;
+                else return "invalid value for --pointer (relative or absolute)";
                 continue;
             }
             if(arg=="--hud-position") {

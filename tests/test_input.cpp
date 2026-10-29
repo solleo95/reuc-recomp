@@ -5,6 +5,7 @@
 #include <limits>
 #include <chrono>
 #include <fstream>
+#include <thread>
 #include "input_bindings.h"
 
 static uint64_t action_bit(uc::Action action) { return uint64_t(1)<<unsigned(action); }
@@ -112,7 +113,172 @@ static void demo_carries_the_analog_camera() {
     std::filesystem::remove(path);
 }
 
+static void absolute_aim_maps_pixels() {
+    uc::NativeInput input; input.focus(true);
+    CHECK(input.aim_absolute(500,250,1000,500));
+    auto center=input.latest_aim(); CHECK(center[0]==0 && center[1]==0);
+    CHECK(input.aim_absolute(0,0,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{-1,-1}));
+    CHECK(input.aim_absolute(1000,500,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,1}));
+    CHECK(input.aim_absolute(2000,-10,1000,500)); CHECK((input.latest_aim()==std::array<float,2>{1,-1}));
+}
+static void absolute_aim_rejects_bad_input() {
+    uc::NativeInput input; input.aim_absolute(500,250,1000,500);   // not focused
+    CHECK((input.latest_aim()==std::array<float,2>{0,0}));
+    CHECK(!input.aim_absolute(100,100,1000,500));
+    input.focus(true);
+    CHECK(!input.aim_absolute(std::numeric_limits<float>::quiet_NaN(),0,1000,500));
+    CHECK(!input.aim_absolute(0,0,0,500));
+    CHECK(!input.aim_absolute(0,0,1000,0));
+    CHECK((input.latest_aim()==std::array<float,2>{0,0}));
+}
+static void absolute_aim_feeds_gestures() {
+    uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
+    input.host_button({uc::PhysicalKind::mouse,1},true);   // the knife swing needs the interact button held
+    input.aim_absolute(500,600,1000,1000,1000000000);
+    input.aim_absolute(500,0,1000,1000,1030000000);   // 600 px up in 30 ms: the knife swing a mouse makes with host_motion(0,-600)
+    CHECK((input.consume_actions().pressed&action_bit(uc::Action::knife))!=0);
+    uc::NativeInput slow; slow.context(uc::InputContext::gameplay); slow.focus(true);
+    slow.host_button({uc::PhysicalKind::mouse,1},true);
+    slow.aim_absolute(500,500,1000,1000,1000000000);
+    slow.aim_absolute(500,490,1000,1000,1030000000);   // 10 px: aiming, not a swing
+    CHECK((slow.consume_actions().pressed&action_bit(uc::Action::knife))==0);
+}
+static void aim_test_event_sets_pointer_and_feeds_gestures() {
+    uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
+    CHECK(input.apply_test_event(1,{uc::HostEventKind::aim,0,0,.5f,-.5f},1000,500));
+    CHECK((input.latest_aim()==std::array<float,2>{.5f,-.5f}));
+    CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,0,0,1.5f,0},1000,500));
+    CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,1,0,0,0},1000,500));
+    CHECK(!input.apply_test_event(2,{uc::HostEventKind::aim,0,0,0,0},0,500));
+    CHECK((input.latest_aim()==std::array<float,2>{.5f,-.5f}));
+}
+static void absolute_gestures_follow_the_scale() {
+    // 40 px in 8 ms is a swing at 100% display scale; at 200% the same 40 px are 20 of the points a mouse counts in: not fast enough
+    for(const float scale:{1.f,.5f}) {
+        uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
+        input.host_button({uc::PhysicalKind::mouse,1},true);
+        input.aim_absolute(500,500,1000,1000,1000000000,scale);
+        input.aim_absolute(500,460,1000,1000,1008000000,scale);
+        const bool knife=(input.consume_actions().pressed&action_bit(uc::Action::knife))!=0;
+        CHECK(knife==(scale==1.f));
+    }
+}
+static void smoothing_moves_part_way() {
+    uc::NativeInput input; input.focus(true); input.pointer_smoothing(.5f);
+    CHECK(input.aim_absolute(0,0,1000,500));   // the first point is taken as it is
+    CHECK((input.latest_aim()==std::array<float,2>{-1,-1}));
+    CHECK(input.aim_absolute(1000,500,1000,500));
+    auto early=input.latest_aim(); CHECK(early[0]<-.5f && early[1]<-.5f);   // the pointer eases toward the new point: it has hardly left yet
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));            // and arrives without any further event: a gun that stops sending must not leave it short
+    auto late=input.latest_aim(); CHECK(std::abs(late[0]-1)<.001f && std::abs(late[1]-1)<.001f);
+    input.focus(false); input.focus(true);
+    CHECK(input.aim_absolute(250,125,1000,500));   // after a focus loss the first point is taken as it is again
+    CHECK((input.latest_aim()==std::array<float,2>{-.5f,-.5f}));
+}
+
+static uc::NativeInput& zone_input(uc::NativeInput& input,uc::ReloadZone zone);
+static void a_zone_pulse_leaves_a_held_reload_button_held() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.host_button({uc::PhysicalKind::key,21},true);                      // the reload key, held by the player
+    input.consume_actions();
+    input.aim(-.98f,-.98f); input.host_button({uc::PhysicalKind::mouse,3},true); input.consume_actions();
+    input.host_button({uc::PhysicalKind::mouse,3},false);
+    const auto frame=input.consume_actions();                                // the pulse ends; the key is still down
+    CHECK((frame.held&action_bit(uc::Action::reload))!=0 && (frame.released&action_bit(uc::Action::reload))==0);
+}
+static uc::NativeInput& zone_input(uc::NativeInput& input,uc::ReloadZone zone) {
+    input.context(uc::InputContext::gameplay); input.focus(true); input.reload_zone(zone,.05f); input.consume_actions();
+    return input;
+}
+static bool has_event(const uc::ActionFrame& frame,uc::Action action,bool down) {
+    for(size_t i=0;i<frame.count;++i) if(frame.events[i].action==action && frame.events[i].down==down) return true;
+    return false;
+}
+static void corner_zone_turns_fire_into_reload() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.aim(-.98f,-.98f);
+    input.host_button({uc::PhysicalKind::mouse,3},true);
+    auto frame=input.consume_actions();
+    CHECK(frame.pressed==action_bit(uc::Action::reload) && frame.held==action_bit(uc::Action::reload));
+    CHECK(has_event(frame,uc::Action::reload,true) && !has_event(frame,uc::Action::fire,true));
+    frame=input.consume_actions();   // the reload is one frame long
+    CHECK(frame.held==0 && frame.pressed==0 && frame.released==action_bit(uc::Action::reload) && has_event(frame,uc::Action::reload,false));
+    CHECK(input.consume_actions().released==0);
+}
+static void corner_zone_ignores_edge_middle_and_centre() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.aim(-.98f,0); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
+    input.host_button({uc::PhysicalKind::mouse,3},false); input.consume_actions();
+    input.aim(0,0); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
+}
+static void edge_zone_triggers_on_any_edge() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::edge);
+    input.aim(.2f,.95f); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::reload));
+    input.consume_actions(); input.host_button({uc::PhysicalKind::mouse,3},false); input.consume_actions();
+    input.aim(.2f,.5f); input.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
+}
+static void fire_release_after_suppressed_press_is_hidden() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.aim(.99f,.99f); input.host_button({uc::PhysicalKind::mouse,3},true); input.consume_actions();
+    input.aim(0,0); input.host_button({uc::PhysicalKind::mouse,3},false);
+    auto frame=input.consume_actions();   // the reload ends; the game never sees the fire release
+    CHECK(frame.held==0 && frame.released==action_bit(uc::Action::reload) && !has_event(frame,uc::Action::fire,false));
+    input.host_button({uc::PhysicalKind::mouse,3},true);   // a later press outside the zone is a normal shot
+    CHECK(input.consume_actions().pressed==action_bit(uc::Action::fire));
+}
+static void drifting_into_the_zone_while_firing_is_untouched() {
+    uc::NativeInput input; zone_input(input,uc::ReloadZone::corner);
+    input.aim(0,0); input.host_button({uc::PhysicalKind::mouse,3},true); input.consume_actions();
+    input.aim(-.99f,-.99f); input.host_button({uc::PhysicalKind::mouse,3},false);
+    auto frame=input.consume_actions();
+    CHECK(frame.released==action_bit(uc::Action::fire) && !(frame.pressed&action_bit(uc::Action::reload)));
+}
+static void zone_is_off_by_default_and_in_menu_and_qte() {
+    uc::NativeInput off; off.context(uc::InputContext::gameplay); off.focus(true); off.aim(-.99f,-.99f);
+    off.host_button({uc::PhysicalKind::mouse,3},true);
+    CHECK(off.consume_actions().pressed==action_bit(uc::Action::fire));
+    for(auto context:{uc::InputContext::menu,uc::InputContext::qte}) {
+        uc::NativeInput input; zone_input(input,uc::ReloadZone::edge); input.context(context); input.aim(-.99f,-.99f);
+        input.host_button({uc::PhysicalKind::mouse,3},true);
+        CHECK((input.consume_actions().pressed&action_bit(uc::Action::reload))==0);
+    }
+    uc::NativeInput bad;
+    for(float size:{0.f,-.1f,.9f,std::numeric_limits<float>::quiet_NaN()}) {
+        bool refused=false; try { bad.reload_zone(uc::ReloadZone::corner,size); } catch(const std::invalid_argument&) { refused=true; }
+        CHECK(refused);
+    }
+}
+static void demo_records_the_converted_frame() {
+    const auto path=std::filesystem::temp_directory_path()/"uc-reload-zone-demo.bin";
+    {
+        uc::NativeInput input; zone_input(input,uc::ReloadZone::corner); input.demo_record(path);
+        input.aim(-.99f,-.99f); input.host_button({uc::PhysicalKind::mouse,3},true); input.consume_actions(); input.consume_actions();
+    }
+    uc::NativeInput replay; replay.demo_play(path);
+    CHECK(replay.consume_actions().pressed==action_bit(uc::Action::reload));
+    CHECK(replay.consume_actions().released==action_bit(uc::Action::reload));
+    std::filesystem::remove(path);
+}
+
 int main() {
+    corner_zone_turns_fire_into_reload();
+    corner_zone_ignores_edge_middle_and_centre();
+    edge_zone_triggers_on_any_edge();
+    fire_release_after_suppressed_press_is_hidden();
+    drifting_into_the_zone_while_firing_is_untouched();
+    zone_is_off_by_default_and_in_menu_and_qte();
+    demo_records_the_converted_frame();
+    absolute_aim_maps_pixels();
+    aim_test_event_sets_pointer_and_feeds_gestures();
+    absolute_aim_rejects_bad_input();
+    absolute_aim_feeds_gestures();
+    smoothing_moves_part_way();
+    absolute_gestures_follow_the_scale();
+    a_zone_pulse_leaves_a_held_reload_button_held();
     demo_carries_the_analog_camera();
     raw_demo_sample_remains_compatible();
     host_actions_have_separate_consumers();

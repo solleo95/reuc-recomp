@@ -137,11 +137,12 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         const auto interact_button=pad_bindings->GetID("##bind");   // the binding is drawn as the controller's picture over this button
         pad_bindings->IDStack.pop_back();
         // The binding rows sit below the sticks and the gyro settings: scroll the window's body until the first row's button is under the pointer, then click it.
-        const auto click_binding=[&](ImGuiID id) {
-            io.AddMousePosEvent(pad_bindings->InnerClipRect.GetCenter().x,pad_bindings->InnerClipRect.GetCenter().y); frame();
+        const auto click_binding=[&](ImGuiID id,ImGuiWindow* in=nullptr) {
+            ImGuiWindow* body=in ? in : pad_bindings;
+            io.AddMousePosEvent(body->InnerClipRect.GetCenter().x,body->InnerClipRect.GetCenter().y); frame();
             for(int attempt=0;attempt<10;++attempt) {
-                for(float y=pad_bindings->InnerClipRect.Min.y+4;y<pad_bindings->InnerClipRect.Max.y;y+=3) {
-                    io.AddMousePosEvent(pad_bindings->InnerClipRect.Min.x+pad_bindings->InnerClipRect.GetWidth()*.6f,y); frame();
+                for(float y=body->InnerClipRect.Min.y+4;y<body->InnerClipRect.Max.y;y+=3) {
+                    io.AddMousePosEvent(body->InnerClipRect.Min.x+body->InnerClipRect.GetWidth()*.6f,y); frame();
                     if(context.HoveredId==id) {click(io.MousePos);return true;}
                 }
                 io.AddMouseWheelEvent(0,-3); frame(); frame();
@@ -173,6 +174,35 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
             CHECK(after.size()==1 && after[0].input==(uc::PhysicalInput{uc::PhysicalKind::pad_button,3}));
         }
         io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        {   // the Wii Remote button below it opens the remote's own window; a press on the remote captures one binding of its table and leaves the others alone
+            window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);
+            const auto wii_button=window->GetID(std::string(uc::launcher::text("ru","wiimote")).c_str());
+            window->IDStack.pop_back(); window->IDStack.pop_back();
+            bool wii_found=false;
+            for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
+                io.AddMousePosEvent(window->Pos.x+90,y); frame();
+                if(context.HoveredId==wii_button) {click(io.MousePos);wii_found=true;break;}
+            }
+            CHECK(wii_found);
+            frame(); frame();
+            ImGuiWindow* wii_modal=nullptr;
+            for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("wiimote-modal")!=std::string_view::npos) wii_modal=candidate;
+            CHECK(wii_modal);
+            capture("wiimote-window");
+            ImGuiWindow* wii_body=nullptr;
+            for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("wii-body")!=std::string_view::npos) wii_body=candidate;
+            CHECK(wii_body);
+            wii_body->IDStack.push_back(wii_body->GetID(int(uc::Action::fire)));
+            const auto fire_button=wii_body->GetID("##bind");
+            wii_body->IDStack.pop_back();
+            CHECK(click_binding(fire_button,wii_body));
+            menu.wii_capture({uc::PhysicalKind::wii_button,3},true); frame(); menu.commit(); frame();
+            const auto& fire=live.options().wiimote.bindings[size_t(uc::Action::fire)];
+            CHECK(fire.size()==1 && fire[0].input==(uc::PhysicalInput{uc::PhysicalKind::wii_button,3}) && !live.error());
+            CHECK(live.bindings()[size_t(uc::Action::fire)]==uc::default_bindings()[size_t(uc::Action::fire)]);   // the keyboard table is untouched
+            capture("wiimote-bindings");
+            io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        }
         tabs->NextSelectedTabId=tabs->Tabs[0].ID; for(int i=0;i<40;++i) frame();   // back to the first tab: the bar scrolls home for the clicks below
     }
     {   // the Effects tab: pick 4x anisotropic filtering through the combo
@@ -270,8 +300,8 @@ int main(int argc,char** argv) {    const bool gpu=argc==4 && std::string_view(a
     uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
-    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.reticle=[](const uc::ReticleOptions&){}; targets.mouse_sensitivity=[](uint32_t){}; targets.hud_position=[](uc::HudPosition){}; targets.effects=[](const uc::GraphicsEffects&){};
-    targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){}; targets.gamepad=[](const uc::GamepadSettings&){};
+    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.reticle=[](const uc::ReticleOptions&){}; targets.mouse_sensitivity=[](uint32_t){}; targets.pointer=[](uc::PointerMode,uint32_t){}; targets.reload_zone=[](uc::ReloadZone,uint32_t){}; targets.hud_position=[](uc::HudPosition){}; targets.effects=[](const uc::GraphicsEffects&){};
+    targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){}; targets.gamepad=[](const uc::GamepadSettings&){}; targets.wiimote=[](const uc::WiimoteSettings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;
     uc::SettingsMenu menu(live,"ru",[&]{return &features;},2560,1440);

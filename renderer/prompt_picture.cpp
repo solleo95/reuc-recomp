@@ -16,7 +16,7 @@
 namespace uc {
 namespace {
 struct Token {std::string label;std::optional<PhysicalInput> input;bool cap=false;bool both_directions=false;bool gyro=false;};   // gyro: the gamepad's motion icon (the gesture of a shake or swing)
-bool pad_token(const Token& token) {return token.input && (token.input->kind==PhysicalKind::pad_button || token.input->kind==PhysicalKind::pad_axis);}
+bool pad_token(const Token& token) {return token.input && (token.input->kind==PhysicalKind::pad_button || token.input->kind==PhysicalKind::pad_axis || token.input->kind==PhysicalKind::wii_button);}
 std::string physical_name(PhysicalInput input) {
     if(input.kind==PhysicalKind::mouse) {
         if(input.code==1)return "ЛКМ";
@@ -51,7 +51,7 @@ std::vector<std::vector<Token>> tokens(const PromptDescription& description,bool
         }
         if(alternative.gesture) {   // a mouse picture (a gamepad with turning arrows for a gamepad) stands in for the Wii Remote of the shake/swing prompts and moves with its pane
             if(!row.empty() && row.back().label!="/")row.push_back({"+",{},false});
-            if(description.device.gamepad)row.push_back({"",{},true,false,true});
+            if(description.device.gamepad || description.device.wiimote)row.push_back({"",{},true,false,true});
             else row.push_back({"",PhysicalInput{PhysicalKind::mouse,0},true});
         }
     }
@@ -97,7 +97,10 @@ void picture(ImDrawList& list,const gx::PromptDraw& prompt,RenderExtent extent,c
                 const float w=token_width(token),h=font_size*1.55f;
                 if(!prompt.compact && x>pad && x+w>width-pad) {x=pad;y+=h;}
                 if(draw && pad_token(token)) draw_pad_glyph(list,{x,y+font_size*.2f},{w,font_size*1.2f},*token.input,family);
-                else if(draw && token.gyro) draw_gyro_icon(list,{x,y+font_size*.2f},{w,font_size*1.2f},family);
+                else if(draw && token.gyro) {
+                    if(prompt.description.device.wiimote) draw_wii_motion_icon(list,{x,y+font_size*.2f},{w,font_size*1.2f});
+                    else draw_gyro_icon(list,{x,y+font_size*.2f},{w,font_size*1.2f},family);
+                }
                 else if(draw) {
                     if(token.cap && !mouse(token))draw_keycap(list,{x,y},{w,h},style);
                     float text_x=x+(token.cap && !mouse(token) ? font_size*.4f : 0);

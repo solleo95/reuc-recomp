@@ -3,6 +3,9 @@
 #include "input_bindings.h"
 #include "gamepad_config.h"
 #include "gamepad_target.h"
+#include "pointer_settings.h"
+#include "wiimote_config.h"
+#include "wiimote_target.h"
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -23,13 +26,15 @@ struct InputSample {
 struct InputFrame { InputSample sample; ActionFrame actions; uint64_t generation=0; bool host=true; };
 // pad_button/pad_axis: code is the PhysicalInput code, value 0/1 (an axis press is a stick direction or trigger past half). pad_stick: code 0 left / 1 right
 // stick of pad 0, x/y -1..1 (y down positive). pad_gyro: x yaw, y pitch in rad/s (yaw positive turning left, pitch positive tilting up).
-enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus,pad_button,pad_axis,pad_stick,pad_gyro };
+// aim: the pointer at x/y -1..1 of the window, as an absolute device (a lightgun) reports it. wii_button: code 0..kWiiButtonCount-1, value 0/1. wii_pointer: the IR pointer
+// x/y -1..1 (y down), smoothed like the real one. wii_stick: the nunchuk stick x/y -1..1 (y down). wii_motion: a swing as mouse counts x/y.
+enum class HostEventKind:uint8_t { key,mouse,wheel,motion,focus,pad_button,pad_axis,pad_stick,pad_gyro,aim,wii_button,wii_pointer,wii_stick,wii_motion };
 struct HostEvent { HostEventKind kind; uint32_t code; int value; float x=0,y=0; };
 using InputProbe=void(*)(const ppc::Ctx&,const InputSample&);
 void input_hle_set_probe(InputProbe probe);
 using InputMap=InputSample(*)(const ppc::Ctx&,const InputSample&);
 void input_hle_set_map(InputMap map);
-class NativeInput : public GamepadTarget {
+class NativeInput : public GamepadTarget, public WiimoteTarget {
 public:
     NativeInput();
     void focus(bool focused);
@@ -46,10 +51,24 @@ public:
     void host_pad_stick(unsigned pad,PadSide,float x,float y) override;
     void host_pad_gyro(float yaw_rate,float pitch_rate,uint64_t timestamp_ns) override;
     void pad_reset() override;   // the keyboard and mouse are untouched
+    // The Wii Remote: the IR pointer (smoothed, never a swing), the nunchuk stick as the analog camera, swings as knife and shake input, its buttons through host_button.
+    void wiimote_settings(const WiimoteSettings&);   // smoothing and the binding table; throws std::invalid_argument for an invalid set
+    void host_wii_pointer(float x,float y,uint64_t timestamp_ns) override;
+    void host_wii_stick(float x,float y) override;
+    void host_wii_motion(float dx,float dy,uint64_t timestamp_ns) override;
+    void wii_reset() override;
     ActionFrame consume_actions();
     ActionFrame consume_service_actions();
     bool move_raw(float dx,float dy,uint32_t width,uint32_t height);
     bool aim(float x,float y);
+    // The pointer from a position in the window (pixels, y down): a lightgun or another absolute device. The step from the previous position feeds the knife and
+    // shake detectors like a mouse motion; the first position after a focus change is taken as it is.
+    // gesture_scale turns the pixels of a step into the counts the detectors are tuned for (a mouse's): 1/density on a scaled display.
+    bool aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns=0,float gesture_scale=1);
+    void pointer_smoothing(float fraction);   // 0..0.9: the share of the pointer's old place that stays at each new absolute position
+    // A shot (`fire`) while the pointer is in the corner / at the edge of the window, `size_fraction` (0..0.5) of its width and height, reloads instead: the game sees
+    // `reload` for one frame and never sees that shot. Only in gameplay; throws std::invalid_argument for a size outside 0..0.5.
+    void reload_zone(ReloadZone,float size_fraction);
     bool apply_test_command(uint64_t sequence,float x,float y,uint32_t held);
     bool apply_test_event(uint64_t sequence,const HostEvent&,uint32_t width,uint32_t height);
     bool using_host_input();
@@ -100,6 +119,9 @@ private:
     void gyro_motion(float yaw,float pitch,uint64_t timestamp_ns);   // Requires mutex_.
     Bindings keyboard_=default_bindings();
     GamepadSettings pad_;
+    WiimoteSettings wii_;
+    std::array<float,2> wii_stick_{};   // the nunchuk stick, -1..1, y down positive
+    bool have_wii_pointer_=false;
     std::array<std::array<std::array<float,2>,2>,kPadSlots> sticks_{};   // [pad][side][x,y]
     uint64_t step_ns_=0,gyro_ns_=0;
     uint32_t width_=1280,height_=720;
@@ -111,6 +133,19 @@ private:
     size_t trail_head_=0;
     void note_aim();
     float previous_x_=0,previous_y_=0;
+    float smoothing_=0,absolute_px_=0,absolute_py_=0;
+    bool have_absolute_=false;
+    ReloadZone zone_=ReloadZone::off;
+    float zone_size_=.05f;
+    bool fire_hidden_=false,reload_pulse_=false;   // a shot taken as a reload (its release is hidden too); the reload's one frame is running
+    void apply_reload_zone(ActionFrame&);   // Requires mutex_.
+    void set_wii_pointer(float x,float y);  // Requires mutex_ and a valid state_.
+    void aim_toward(float x,float y,float smoothing,bool take_now);   // Requires mutex_ and a valid state_.
+    void ease_pointer(uint64_t now_ns);                               // Requires mutex_.
+    float target_x_=0,target_y_=0,target_smoothing_=0;
+    bool target_on_=false;   // the pointer is still on its way to the target
+    uint64_t eased_ns_=0;
+    bool absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale=1);   // Requires mutex_; finite px/py and a window were checked.
     uint64_t sequence_=0,host_sequence_=0,consumed_sequence_=0;
     bool legacy_test_input_=false;
     uint64_t generation_=0;

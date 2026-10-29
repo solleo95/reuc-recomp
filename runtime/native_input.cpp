@@ -130,7 +130,7 @@ void NativeInput::bindings(const Bindings& bindings) {
     try { install_bindings(); } catch(...) { keyboard_=std::move(previous); throw; }
 }
 void NativeInput::install_bindings() {
-    const auto merged=merge_bindings(keyboard_,pad_.bindings);
+    const auto merged=merge_bindings(keyboard_,pad_.bindings,wii_.bindings);
     auto game=merged,service=merged;
     for(size_t i=0;i<merged.size();++i) {
         if(i==size_t(Action::menu)) { game[i].clear(); service[i].clear(); continue; }   // a host key (game/host_keys.h): neither the game nor the service table sees it
@@ -160,7 +160,61 @@ void NativeInput::update_camera() {
         const auto axes=camera_axes(pad[side][0],-pad[side][1],pad_.camera_dead_zone);   // SDL y points down, the camera's y up
         x+=axes[0]; y+=axes[1];
     }
+    const auto nunchuk=camera_axes(wii_stick_[0],-wii_stick_[1],0);   // the Wii Remote's own stick: its dead zone was applied by the reader
+    x+=nunchuk[0]; y+=nunchuk[1];
     camera_={int8_t(std::clamp(x,-127,127)),int8_t(std::clamp(y,-127,127))};
+}
+void NativeInput::wiimote_settings(const WiimoteSettings& settings) {
+    if(auto error=validate_wiimote(settings))throw std::invalid_argument(*error);
+    std::lock_guard lock(mutex_);
+    auto previous=wii_; wii_=settings;
+    try { install_bindings(); } catch(...) { wii_=std::move(previous); throw; }
+}
+void NativeInput::host_wii_pointer(float x,float y,uint64_t) {
+    if(!std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1)throw std::invalid_argument("invalid Wii Remote pointer");
+    std::lock_guard lock(mutex_);
+    if(!state_.valid)return;
+    set_wii_pointer(x,y);
+}
+void NativeInput::set_wii_pointer(float x,float y) {
+    // Smoothed like any absolute pointer, but it never feeds the swing detectors: the camera losing and finding the sensor bar again is a jump, not a knife.
+    aim_toward(x,y,wii_.smoothing,!have_wii_pointer_);
+    have_wii_pointer_=true;
+}
+// The pointer goes to (x,y): at once, or with `smoothing` (0..0.9, the share of the distance that is left after one 60 Hz step) eased over time. The easing runs on the
+// clock, not on the arrival of events: a gun or a camera that stops sending still brings the pointer all the way.
+void NativeInput::aim_toward(float x,float y,float smoothing,bool take_now) {
+    target_x_=x; target_y_=y; target_smoothing_=smoothing;
+    if(take_now || smoothing<=0) { state_.x=x; state_.y=y; target_on_=false; note_aim(); return; }
+    if(!target_on_) { target_on_=true; eased_ns_=motion_time(); return; }   // the easing starts from the pointer's place now
+    ease_pointer(motion_time());
+}
+void NativeInput::ease_pointer(uint64_t now_ns) {
+    if(!target_on_ || !state_.valid) return;
+    const double seconds=eased_ns_ && now_ns>eased_ns_ ? std::min(1.0,double(now_ns-eased_ns_)/1e9) : 0.0;
+    eased_ns_=now_ns;
+    if(seconds==0) return;
+    const float keep=float(std::pow(double(target_smoothing_),seconds*60));   // the share of the distance that remains
+    state_.x=target_x_+(state_.x-target_x_)*keep; state_.y=target_y_+(state_.y-target_y_)*keep;
+    if(std::abs(state_.x-target_x_)<1e-4f && std::abs(state_.y-target_y_)<1e-4f) { state_.x=target_x_; state_.y=target_y_; target_on_=false; }
+    note_aim();
+}
+void NativeInput::host_wii_stick(float x,float y) {
+    if(!std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1)throw std::invalid_argument("invalid nunchuk stick");
+    std::lock_guard lock(mutex_);
+    wii_stick_={x,y};
+    update_camera();
+}
+void NativeInput::host_wii_motion(float dx,float dy,uint64_t timestamp_ns) {
+    if(!std::isfinite(dx) || !std::isfinite(dy))throw std::invalid_argument("invalid Wii Remote motion");
+    std::lock_guard lock(mutex_);
+    try { actions_.motion(dx,dy,timestamp_ns ? timestamp_ns : motion_time()); }
+    catch(const std::overflow_error&) { cancel_host(); throw; }
+}
+void NativeInput::wii_reset() {
+    std::lock_guard lock(mutex_);
+    wii_stick_={}; have_wii_pointer_=false; update_camera();
+    try { actions_.release_wii(); services_.release_wii(); } catch(const std::overflow_error&) { cancel_host(); throw; }
 }
 void NativeInput::host_pad_stick(unsigned pad,PadSide side,float x,float y) {
     if(pad>=kPadSlots || !std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1)throw std::invalid_argument("invalid gamepad stick");
@@ -232,7 +286,7 @@ void NativeInput::host_camera(std::array<int8_t,2> camera) {
     std::lock_guard lock(mutex_); camera_=camera;
 }
 void NativeInput::cancel_host() {
-    ++generation_; camera_={}; sticks_={}; gyro_ns_=0;
+    ++generation_; camera_={}; sticks_={}; wii_stick_={}; gyro_ns_=0; have_absolute_=have_wii_pointer_=target_on_=false;
     actions_.focus(false); services_.focus(false);
     state_.valid=false; state_.released|=state_.held; state_.held=state_.pressed=0;
 }
@@ -249,6 +303,7 @@ ActionFrame NativeInput::consume_actions() {
         return result;
     }
     if(host_sequence_==sequence_)consumed_sequence_=sequence_;
+    ease_pointer(motion_time());   // the reload zone looks at where the pointer is now
     auto result=actions_.consume(); result.generation=generation_; result.camera=camera_;
     if(result.pressed&(uint64_t(1)<<unsigned(Action::recenter))) {   // applied here and kept out of the frame: demos and the network carry the resulting pointer, not the action
         state_.x=state_.y=0; note_aim();
@@ -258,6 +313,7 @@ ActionFrame NativeInput::consume_actions() {
         result.held&=~recenter; result.pressed&=~recenter; result.released&=~recenter;
         result.count=size_t(std::remove_if(result.events.begin(),result.events.begin()+result.count,[](const ActionEvent& e){return e.action==Action::recenter;})-result.events.begin());
     }
+    apply_reload_zone(result);   // before the demo and the network see the frame: they carry the reload, not the shot
     if(demo_out_) {
         const uint64_t head[5]={result.held,result.pressed,result.released,result.generation,result.count};
         demo_put(Tag::actions,head,sizeof head);
@@ -272,7 +328,7 @@ ActionFrame NativeInput::consume_actions() {
 ActionFrame NativeInput::consume_service_actions() { std::lock_guard lock(mutex_); return services_.consume(); }
 void NativeInput::focus(bool focused) {
     std::lock_guard lock(mutex_);
-    state_.valid=focused;
+    state_.valid=focused; have_absolute_=have_wii_pointer_=target_on_=false;
     actions_.focus(focused); services_.focus(focused);
     if(!focused) {++generation_;gyro_ns_=0;}   // the sticks keep their state (GamepadInput releases them when the window loses focus): they act again when focus is back
     update_camera();
@@ -282,6 +338,7 @@ bool NativeInput::move_raw(float dx,float dy,uint32_t width,uint32_t height) {
     if (!width || !height || !std::isfinite(dx) || !std::isfinite(dy)) return false;
     std::lock_guard lock(mutex_);
     if (!state_.valid) return false;
+    target_on_=false;   // the mouse takes the pointer from any easing in progress
     state_.x=std::clamp(state_.x+2*dx/width,-1.0f,1.0f);
     state_.y=std::clamp(state_.y+2*dy/height,-1.0f,1.0f);
     note_aim();
@@ -296,7 +353,53 @@ bool NativeInput::aim(float x,float y) {
     if(!std::isfinite(x) || !std::isfinite(y) || std::abs(x)>1 || std::abs(y)>1) return false;
     std::lock_guard lock(mutex_);
     if(!state_.valid) return false;
+    target_on_=false;
     state_.x=x; state_.y=y; note_aim(); return true;
+}
+bool NativeInput::aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale) {
+    if(!width || !height || !std::isfinite(px) || !std::isfinite(py) || !std::isfinite(gesture_scale) || gesture_scale<=0)return false;
+    std::lock_guard lock(mutex_);
+    return absolute_point(px,py,width,height,timestamp_ns,gesture_scale);
+}
+bool NativeInput::absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale) {
+    if(!state_.valid)return false;
+    const float x=std::clamp(2*px/width-1,-1.0f,1.0f),y=std::clamp(2*py/height-1,-1.0f,1.0f);
+    if(have_absolute_) {
+        try { actions_.motion((px-absolute_px_)*gesture_scale,(py-absolute_py_)*gesture_scale,timestamp_ns ? timestamp_ns : motion_time()); }
+        catch(const std::overflow_error&) { cancel_host(); throw; }
+    }
+    aim_toward(x,y,smoothing_,!have_absolute_);
+    have_absolute_=true; absolute_px_=px; absolute_py_=py;
+    return true;
+}
+void NativeInput::pointer_smoothing(float fraction) {
+    if(!std::isfinite(fraction) || fraction<0 || fraction>.9f)throw std::invalid_argument("pointer smoothing must be 0..0.9");
+    std::lock_guard lock(mutex_); smoothing_=fraction;
+}
+void NativeInput::reload_zone(ReloadZone zone,float size_fraction) {
+    if(!std::isfinite(size_fraction) || size_fraction<=0 || size_fraction>.5f)throw std::invalid_argument("reload zone size must be above 0 and at most 0.5");
+    std::lock_guard lock(mutex_); zone_=zone; zone_size_=size_fraction;
+}
+void NativeInput::apply_reload_zone(ActionFrame& frame) {
+    constexpr uint64_t fire=uint64_t(1)<<unsigned(Action::fire),reload=uint64_t(1)<<unsigned(Action::reload);
+    const float edge=1-2*zone_size_;   // the pointer runs -1..1 across the window
+    const bool inside=zone_==ReloadZone::corner ? std::abs(state_.x)>=edge && std::abs(state_.y)>=edge : zone_==ReloadZone::edge && (std::abs(state_.x)>=edge || std::abs(state_.y)>=edge);
+    const bool begin=!fire_hidden_ && inside && context_==InputContext::gameplay && (frame.pressed&fire);
+    if(reload_pulse_ && !begin) {   // the reload of the previous frame ends (a new one in this frame simply stays held)
+        reload_pulse_=false;
+        if(!(frame.held&reload)) {   // unless the player really holds a reload button: that stays held
+            frame.released|=reload;
+            if(frame.count<frame.events.size()) frame.events[frame.count++]={Action::reload,false};
+        }
+    }
+    if(begin) {
+        fire_hidden_=reload_pulse_=true; frame.held|=reload; frame.pressed|=reload;
+        if(frame.count<frame.events.size()) frame.events[frame.count++]={Action::reload,true};
+    }
+    if(!fire_hidden_) return;
+    if(frame.released&fire) fire_hidden_=false;   // the shot ended in this frame (a quick click is pressed and released in one)
+    frame.held&=~fire; frame.pressed&=~fire; frame.released&=~fire;
+    frame.count=size_t(std::remove_if(frame.events.begin(),frame.events.begin()+frame.count,[](const ActionEvent& e){return e.action==Action::fire;})-frame.events.begin());
 }
 void NativeInput::note_aim() { trail_[trail_head_]={int64_t(motion_time()),state_.x,state_.y}; trail_head_=(trail_head_+1)%trail_.size(); }
 std::array<float,2> NativeInput::aim_ago(double seconds) {
@@ -317,7 +420,7 @@ std::array<float,2> NativeInput::aim_ago(double seconds) {
     }
     return after ? std::array<float,2>{after->x,after->y} : std::array<float,2>{state_.x,state_.y};
 }
-std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); return {state_.x,state_.y}; }
+std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); ease_pointer(motion_time()); return {state_.x,state_.y}; }
 std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
 std::array<float,2> input_consumed_aim() { auto* source=aim_channel==1 ? second_input : input; return source ? source->consumed_aim() : std::array<float,2>{}; }
 std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? second_input : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
@@ -336,6 +439,7 @@ InputSample NativeInput::consume_at(uint64_t now_ns) {
         return item.sample;
     }
     step_pointer(now_ns);
+    ease_pointer(motion_time());
     auto result=state_;
     result.dx=result.x-previous_x_; result.dy=result.y-previous_y_;
     previous_x_=result.x; previous_y_=result.y;
@@ -373,13 +477,19 @@ uint64_t NativeInput::generation() {
 }
 bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint32_t width,uint32_t height) {
     if(!sequence || !std::isfinite(event.x) || !std::isfinite(event.y))return false;
-    const bool analog=event.kind==HostEventKind::motion || event.kind==HostEventKind::pad_stick || event.kind==HostEventKind::pad_gyro;
+    const bool analog=event.kind==HostEventKind::motion || event.kind==HostEventKind::pad_stick || event.kind==HostEventKind::pad_gyro || event.kind==HostEventKind::aim
+        || event.kind==HostEventKind::wii_pointer || event.kind==HostEventKind::wii_stick || event.kind==HostEventKind::wii_motion;
     if(!analog && (event.x!=0 || event.y!=0))return false;
     switch(event.kind) {
     case HostEventKind::pad_button: if(event.code>=32 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::pad_axis: if(event.code>=16 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::pad_stick: if(event.code>1 || event.value || std::abs(event.x)>1 || std::abs(event.y)>1)return false; break;
     case HostEventKind::pad_gyro: if(event.code || event.value)return false; break;
+    case HostEventKind::aim: if(event.code || event.value || !width || !height || std::abs(event.x)>1 || std::abs(event.y)>1)return false; break;
+    case HostEventKind::wii_button: if(event.code>=kWiiButtonCount || event.value<0 || event.value>1)return false; break;
+    case HostEventKind::wii_pointer:
+    case HostEventKind::wii_stick: if(event.code || event.value || std::abs(event.x)>1 || std::abs(event.y)>1)return false; break;
+    case HostEventKind::wii_motion: if(event.code || event.value)return false; break;
     case HostEventKind::key: if(!event.code || event.code>=512 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::mouse: if(!event.code || event.code>=256 || event.value<0 || event.value>1)return false; break;
     case HostEventKind::wheel: if((event.code!=1 && event.code!=2) || event.value<=0 || event.value>256)return false; break;
@@ -388,7 +498,8 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
     default: return false;
     }
     std::lock_guard lock(mutex_);
-    const bool release=(event.kind==HostEventKind::key || event.kind==HostEventKind::mouse || event.kind==HostEventKind::pad_button || event.kind==HostEventKind::pad_axis) && event.value==0;
+    const bool release=(event.kind==HostEventKind::key || event.kind==HostEventKind::mouse || event.kind==HostEventKind::pad_button || event.kind==HostEventKind::pad_axis
+        || event.kind==HostEventKind::wii_button) && event.value==0;
     if(sequence<=sequence_ || (!state_.valid && event.kind!=HostEventKind::focus && !release))return false;
     try {
         switch(event.kind) {
@@ -410,6 +521,15 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
             sticks_[0][event.code]={event.x,event.y}; update_camera(); break;
         case HostEventKind::pad_gyro:
             gyro_motion(event.x,event.y,motion_time()); break;
+        case HostEventKind::wii_button: {
+            const PhysicalInput button{PhysicalKind::wii_button,uint16_t(event.code)};
+            actions_.button(button,event.value!=0); services_.button(button,event.value!=0); break;
+        }
+        case HostEventKind::wii_pointer: set_wii_pointer(event.x,event.y); break;
+        case HostEventKind::wii_stick: wii_stick_={event.x,event.y}; update_camera(); break;
+        case HostEventKind::wii_motion: actions_.motion(event.x,event.y,motion_time()); break;
+        case HostEventKind::aim:
+            absolute_point((event.x+1)/2*width,(event.y+1)/2*height,width,height,motion_time()); break;
         case HostEventKind::motion:
             state_.x=std::clamp(state_.x+2*event.x/width,-1.f,1.f);
             state_.y=std::clamp(state_.y+2*event.y/height,-1.f,1.f);

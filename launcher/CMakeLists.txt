@@ -8,9 +8,9 @@ target_include_directories(uc_launcher_locale PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(uc_launcher_locale PUBLIC uc_input_config)
 target_include_directories(uc_binding_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_binding_editor PUBLIC uc_input)
-add_library(uc_gamepad_panel STATIC gamepad_panel.cpp)   # the Controllers tab and its Gamepad window: shared by the launcher and the in-game menu
+add_library(uc_gamepad_panel STATIC gamepad_panel.cpp wiimote_panel.cpp)   # the Controllers tab with its Gamepad and Wii Remote windows: shared by the launcher and the in-game menu
 target_include_directories(uc_gamepad_panel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_gamepad_panel PUBLIC uc_binding_editor uc_gamepad_config uc_input_prompts uc_prompt_icons uc_imgui)
+target_link_libraries(uc_gamepad_panel PUBLIC uc_binding_editor uc_gamepad_config uc_wiimote_config uc_input_prompts uc_prompt_icons uc_imgui)
 # Wit (Wiimms ISO Tools, GPL-2.0+) unpacks the disc image selected in the launcher. It runs as a separate program; only the files it needs are installed.
 set(wit_archive "https://wit.wiimm.de/download/wit-v3.05a-r8638-cygwin64.zip")
 if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-cygwin64.zip")
@@ -111,7 +111,7 @@ target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale 
 target_compile_definitions(uc_update_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(uc_launcher WIN32 main.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_public_release)
-set(uc_launcher_libraries uc_binding_editor uc_gamepad_panel uc_gamepad_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
+set(uc_launcher_libraries uc_binding_editor uc_gamepad_panel uc_gamepad_input uc_wiimote_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
 target_link_libraries(uc_launcher PRIVATE ${uc_launcher_libraries})
 add_executable(test_launcher_update_bootstrap WIN32 ${CMAKE_SOURCE_DIR}/tests/test_launcher_update_bootstrap.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(test_launcher_update_bootstrap PRIVATE ${uc_launcher_libraries} uc_update_ui)

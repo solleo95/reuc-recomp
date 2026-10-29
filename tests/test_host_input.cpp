@@ -28,4 +28,29 @@ int main() {
     input.focus(true); const auto base=input.consume();
     host.sensitivity(50); host.event(e,input,true); const auto slow=input.consume();
     CHECK(std::abs(slow.x-base.x-.1f)<1e-5f && std::abs(slow.y-base.y-.1f)<1e-5f);   // half of the .2 / .2 that 100 / 50 px move at 100%
+    {   // absolute pointer (lightguns): the window position of the cursor is the pointer, relative deltas mean nothing
+        uc::NativeInput gun; gun.context(uc::InputContext::gameplay); gun.focus(true);
+        uc::HostInput absolute; absolute.extent(1000,500); absolute.pointer(uc::PointerMode::absolute);
+        e={}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.x=500; e.motion.y=250; e.motion.xrel=7; e.motion.yrel=7;
+        absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{0,0}));
+        e.motion.x=0; e.motion.y=0; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-1,-1}));
+        e.motion.xrel=100; e.motion.yrel=100; absolute.event(e,gun,true); CHECK((gun.latest_aim()==std::array<float,2>{-1,-1}));   // same place: the deltas are ignored
+        absolute.density(2); e.motion.x=125; e.motion.y=62.5f; absolute.event(e,gun,true);   // 150% desktops report points: the pixels are density times as many
+        CHECK(std::abs(gun.latest_aim()[0]+.5f)<1e-5f && std::abs(gun.latest_aim()[1]+.5f)<1e-5f);
+        e.motion.x=500; e.motion.y=250; absolute.event(e,gun,false); CHECK(std::abs(gun.latest_aim()[0]+.5f)<1e-5f);   // not captured: the pointer stays
+        e={}; e.type=SDL_EVENT_MOUSE_BUTTON_DOWN; e.button.button=SDL_BUTTON_LEFT;
+        CHECK(absolute.event(e,gun,false)); CHECK(gun.consume_actions().pressed==0);   // the first click only takes the window back
+        CHECK(!absolute.event(e,gun,true)); CHECK(gun.consume_actions().held==bit(uc::Action::interact));
+        {   // a 200% display: the swing detectors still see the points a mouse would, not the doubled pixels
+            uc::NativeInput hi; hi.context(uc::InputContext::gameplay); hi.focus(true); hi.host_button({uc::PhysicalKind::mouse,1},true);
+            uc::HostInput dpi; dpi.extent(1000,1000); dpi.pointer(uc::PointerMode::absolute); dpi.density(2);
+            e={}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.x=250; e.motion.y=250; e.motion.timestamp=1000000000; dpi.event(e,hi,true);
+            e.motion.y=230; e.motion.timestamp=1008000000; dpi.event(e,hi,true);   // 20 points = 40 pixels in 8 ms
+            CHECK((hi.consume_actions().pressed&bit(uc::Action::knife))==0);
+        }
+        uc::HostInput relative; relative.extent(1000,500);   // the default is still the relative mouse
+        e={}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.x=900; e.motion.y=400; e.motion.xrel=100; e.motion.yrel=50;
+        const auto before=gun.latest_aim(); relative.event(e,gun,true);
+        CHECK(std::abs(gun.latest_aim()[0]-before[0]-.2f)<1e-5f && std::abs(gun.latest_aim()[1]-before[1]-.2f)<1e-5f);
+    }
 }

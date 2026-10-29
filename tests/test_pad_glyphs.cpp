@@ -52,6 +52,17 @@ int main() {
     CHECK(any(nintendo,[](int r,int g,int b){return r>200 && g>200 && b>200;}));                     // light button faces
     // A held shoulder button or trigger is wider than tall; a face button is round.
     CHECK(pad_glyph_aspect(button(9))>1.3f && pad_glyph_aspect(axis(11))>1.3f && pad_glyph_aspect(button(0))==1.f);
+    // The Wii Remote's buttons: each draws, in the remote's white (the A, the D-pad, + - 1 2 Home) or the nunchuk's dark grey (Z, C and the B trigger); round ones are round.
+    for(uint16_t code=0;code<kWiiButtonCount;++code) {
+        const PhysicalInput wii{PhysicalKind::wii_button,code};
+        CHECK(pad_glyph_aspect(wii)>=.8f && pad_glyph_aspect(wii)<=2.5f);
+        CHECK(!colors(list,[&]{draw_pad_glyph(list,at,{size.y*pad_glyph_aspect(wii),size.y},wii,PadFamily::xbox);}).empty());
+    }
+    const PhysicalInput wii_a{PhysicalKind::wii_button,8},wii_z{PhysicalKind::wii_button,11},wii_b{PhysicalKind::wii_button,7};
+    CHECK(any(colors(list,[&]{draw_pad_glyph(list,at,size,wii_a,PadFamily::xbox);}),[](int r,int g,int b){return r>200 && g>200 && b>200;}));   // white plastic
+    CHECK(pad_glyph_aspect(wii_z)>1.2f && pad_glyph_aspect(wii_b)>1.2f && pad_glyph_aspect(wii_a)==1.f);
+    CHECK(colors(list,[&]{draw_pad_glyph(list,at,size,wii_a,PadFamily::nintendo);}).size()==colors(list,[&]{draw_pad_glyph(list,at,size,wii_a,PadFamily::playstation);}).size());   // the family of a gamepad does not change the remote
+    CHECK(!colors(list,[&]{draw_wii_motion_icon(list,at,{size.y*gyro_icon_aspect(),size.y});}).empty());
     // Nothing the prompt does not know is drawn: a key is not a gamepad input.
     CHECK(colors(list,[&]{draw_pad_glyph(list,at,size,{PhysicalKind::key,4},PadFamily::xbox);}).empty());
 }

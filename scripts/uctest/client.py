@@ -355,6 +355,35 @@ class Game:
         """A gyro rate in rad/s (x turning left, y tilting up); it stays until set again."""
         return self._input({"cmd": "input", "pad_gyro": {"x": x, "y": y}}, wait)
 
+    def host_aim(self, x, y, wait=True):
+        """The pointer put at x/y (-1..1 of the window, y down positive) as an absolute device (a lightgun) reports it; the jump feeds the swing detectors. Unlike aim() this is the host-input path."""
+        return self._input({"cmd": "input", "aim": {"x": x, "y": y}}, wait)
+
+    def mouse_button(self, button, frames=2, wait=True):
+        """A host mouse button (SDL numbering: left/interact 1, middle 2, right/fire 3) held for `frames`."""
+        return self._input({"cmd": "input", "hold_frames": frames, "mouse": {"button": button, "down": True}}, wait)
+
+    # Wii Remote (host events: buttons, the IR pointer, the nunchuk stick, swings) -------------------------------------------
+    def wii_button(self, code, frames=2, wait=True):
+        """A Wii Remote button (WiiButton: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, C 12) held for `frames`."""
+        return self._input({"cmd": "input", "hold_frames": frames, "wii_button": {"button": code, "down": True}}, wait)
+
+    def wii_pointer(self, x, y, wait=True):
+        """The IR pointer at x/y (-1..1 of the window, y down), smoothed like the real one; it stays until set again."""
+        return self._input({"cmd": "input", "wii_pointer": {"x": x, "y": y}}, wait)
+
+    def wii_stick(self, x, y, wait=True):
+        """The nunchuk stick (-1..1, y down positive); it stays until set again."""
+        return self._input({"cmd": "input", "wii_stick": {"x": x, "y": y}}, wait)
+
+    def wii_motion(self, x, y, wait=True):
+        """One swing of the remote as mouse counts (x right, y down)."""
+        return self._input({"cmd": "input", "wii_motion": {"x": x, "y": y}}, wait)
+
+    def set_settings(self, **settings):
+        """Change root config.json keys live, as the in-game menu does (pointer, pointer_smoothing, reload_zone, reload_zone_size, mouse_sensitivity)."""
+        self.request({"cmd": "options", "settings": settings})
+
     def set_gamepad(self, **settings):
         """Change gamepad settings live, as the in-game menu does (config.json "gamepad" keys: type, model, aim_stick, gyro, ...)."""
         self.request({"cmd": "options", "gamepad": settings})

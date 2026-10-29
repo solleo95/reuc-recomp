@@ -19,7 +19,7 @@ std::optional<Bindings> pending;
 std::optional<std::pair<Bindings,PromptDevice>> pending_pad;
 std::atomic<bool> has_pending{false};
 // The table the prompts are read from and the device they are drawn for.
-const Bindings& shown() { return device.gamepad ? pad_assignments : assignments; }
+const Bindings& shown() { return device.gamepad || device.wiimote ? pad_assignments : assignments; }   // pad_assignments holds the table of the other device: the gamepad's or the Wii Remote's
 bool initialized=false;
 bool trace_owners=false;
 std::set<std::string> owners_seen,decisions_seen;
@@ -46,7 +46,7 @@ void prompt_hooks_set_bindings(const Bindings& bindings) {
     std::lock_guard lock(pending_mutex);pending=bindings;has_pending=true;
 }
 void prompt_hooks_set_gamepad(const Bindings& pad,const PromptDevice& next) {
-    if(auto error=validate_pad_bindings(pad))throw std::invalid_argument(*error);
+    if(auto error=next.wiimote ? validate_wii_bindings(pad) : validate_pad_bindings(pad))throw std::invalid_argument(*error);
     std::lock_guard lock(pending_mutex);pending_pad=std::make_pair(pad,next);has_pending=true;
 }
 struct PromptSnapshot { PromptRegistry registry; Bindings assignments,pad_assignments; PromptDevice device; };

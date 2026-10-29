@@ -14,13 +14,16 @@ struct SettingsTargets {
     std::function<void(uint32_t)> crosshair_scale;             // percent 0..100
     std::function<void(const ReticleOptions&)> reticle;        // the reticle's hidden parts, colours, dot size, wake length and partner opacity
     std::function<void(uint32_t)> mouse_sensitivity;           // percent kMouseSensitivityMin..Max
-    std::function<void(HudPosition)> hud_position;             // where the interface sits on a picture wider than 16:9
+    std::function<void(PointerMode,uint32_t)> pointer;         // the pointing device and its smoothing percent
+    std::function<void(ReloadZone,uint32_t)> reload_zone;      // where a shot reloads, and its size in percent
+    std::function<void(HudPosition)> hud_position;            // where the interface sits on a picture wider than 16:9
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects
     std::function<void(const Dlss5Settings&)> dlss5;           // DLSS 5 Neural Rendering
     std::function<void(PromptStyle)> prompt_style;
     std::function<void(const HdrSettings&)> hdr;               // HDR output and its brightness sliders
     std::function<void(const Bindings&)> bindings;
     std::function<void(const GamepadSettings&)> gamepad;       // control type, sticks, gyro and the gamepad bindings
+    std::function<void(const WiimoteSettings&)> wiimote;       // the Wii Remote's switch, smoothing, swing threshold, stick dead zone and bindings
 };
 // The in-game settings: the options saved in config.json (not the command-line overrides of a run). Every change goes to the targets
 // whose fields changed and is saved at once; a refused save leaves the change applied and reports why.

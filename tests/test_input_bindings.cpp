@@ -15,6 +15,41 @@ static BindingResolver game() { BindingResolver r; r.context(InputContext::gamep
 template<class Exception,class F> static void fails(F run) {
     bool caught=false; try { run(); } catch(const Exception&) { caught=true; } CHECK(caught);
 }
+static PhysicalInput wii(uint16_t code) { return {PhysicalKind::wii_button,code}; }
+static void wii_table_holds_only_wii_buttons() {
+    CHECK(!validate_wii_bindings(default_wii_bindings()));
+    auto bad=default_wii_bindings(); bad[size_t(Action::fire)].push_back(physical(key(9)));
+    CHECK(validate_wii_bindings(bad));                                  // a key does not belong in the Wii Remote table
+    bad=default_wii_bindings(); bad[size_t(Action::fire)].push_back(physical({PhysicalKind::pad_button,0}));
+    CHECK(validate_wii_bindings(bad));
+    bad=default_wii_bindings(); bad[size_t(Action::fire)].push_back(physical(wii(kWiiButtonCount)));
+    CHECK(validate_wii_bindings(bad));                                  // there are kWiiButtonCount buttons
+    auto keyboard=default_bindings(); keyboard[size_t(Action::fire)].push_back(physical(wii(7)));
+    CHECK(validate_bindings(keyboard));                                 // and a Wii button does not belong in the keyboard one
+    auto pad=default_pad_bindings(); pad[size_t(Action::fire)].push_back(physical(wii(7)));
+    CHECK(validate_pad_bindings(pad));
+}
+static void merge_keeps_every_device() {
+    auto keyboard=default_bindings(),pad=default_pad_bindings(),wii_table=default_wii_bindings();
+    const auto merged=merge_bindings(keyboard,pad,wii_table);
+    for(auto input:{physical(mouse(3)),physical({PhysicalKind::pad_axis,11}),physical(wii(7))})
+        CHECK(std::find(merged[size_t(Action::fire)].begin(),merged[size_t(Action::fire)].end(),input)!=merged[size_t(Action::fire)].end());
+    CHECK(merge_bindings(keyboard,pad)==merge_bindings(keyboard,pad,Bindings{}));   // the Wii table is optional
+}
+static void wii_buttons_drive_actions_and_do_not_collide_with_pads() {
+    auto r=game(); auto binds=merge_bindings(default_bindings(),default_pad_bindings(),default_wii_bindings()); r.replace(binds);
+    r.button(wii(7),true); auto f=r.consume();                          // B: the trigger
+    CHECK(f.held==bit(Action::fire) && downs(f,Action::fire)==1);
+    r.button({PhysicalKind::pad_button,0},true); r.button(wii(0),true); r.consume();   // pad south (interact) and Wii "left"
+    r.release_wii();                                                    // the remote went away: only its inputs let go
+    f=r.consume();
+    CHECK(f.released&bit(Action::fire));                                 // B was released
+    CHECK(r.down({PhysicalKind::pad_button,0}) && !r.down(wii(0)) && !r.down(wii(7)));
+    r.release_pad(); CHECK(!r.down({PhysicalKind::pad_button,0}));
+    r.button(wii(12),true); r.button(wii(11),true);                     // the nunchuk's C and Z: the last two slots work
+    CHECK(r.down(wii(12)) && r.down(wii(11)));
+    fails<std::invalid_argument>([&]{ r.button(wii(kWiiButtonCount),true); });
+}
 static void defaults_and_context() {
     auto r=game(); r.button(mouse(1),true); auto f=r.consume();
     CHECK(f.held==bit(Action::interact) && f.pressed==bit(Action::interact));
@@ -273,6 +308,7 @@ static void pad_chord_and_cancel() {
     auto keyboard_only=game(); keyboard_only.button(pad(0),true); CHECK(keyboard_only.consume().pressed==0);   // default resolver has no pad table
 }
 int main() {
+    wii_table_holds_only_wii_buttons(); merge_keeps_every_device(); wii_buttons_drive_actions_and_do_not_collide_with_pads();
     pad_tables_validate_and_stay_separate(); merge_appends_pad_entries_without_duplicates(); pad_buttons_drive_actions_by_context(); pad_chord_and_cancel();
     defaults_and_context(); multiple_sources_and_short_click(); ordered_chord_and_dedup(); clear_special_and_remap();
     wheel_keyboard_repeat_and_chords(); replace_focus_and_context_cancel(); knife_direction_bursts_and_overflow(); knife_key_direction_and_mouse_threshold();

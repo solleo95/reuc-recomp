@@ -92,8 +92,43 @@ void small_button(ImDrawList& list,ImVec2 p,ImVec2 size,PhysicalInput input,PadF
         list.AddRect({c.x-h*.12f,c.y-h*.12f},{c.x+h*.3f,c.y+h*.26f},ink,h*.05f,0,h*.07f);
     }
 }
+// The Wii Remote's buttons as they look on it: white plastic with grey print for the A, + - 1 2, Home and the D-pad; the B trigger and the nunchuk's Z and C are dark.
+// WiiButton codes: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, C 12.
+void draw_wii_glyph(ImDrawList& list,ImVec2 p,ImVec2 size,unsigned code) {
+    const ImU32 white=rgb(238,240,242),edge=rgb(120,124,130),ink=rgb(78,82,90),dark=rgb(52,55,60);
+    const ImVec2 c{p.x+size.x/2,p.y+size.y/2};
+    const float r=std::min(size.x,size.y)/2*.96f;
+    const auto disc=[&](ImU32 fill) { list.AddCircleFilled(c,r,fill,24); list.AddCircle(c,r,edge,24,r*.08f); };
+    const auto pill=[&](ImU32 fill,const char* text,ImU32 color) {
+        list.AddRectFilled(p,{p.x+size.x,p.y+size.y},fill,size.y*.35f); list.AddRect(p,{p.x+size.x,p.y+size.y},edge,size.y*.35f,0,size.y*.05f);
+        text_centered(list,c,size.y*.55f,color,text);
+    };
+    if(code<4) {   // D-pad: the cross, the pressed arm dark
+        const float arm=std::min(size.x,size.y)*.34f,half=arm/2,reach=std::min(size.x,size.y)*.48f;
+        struct Arm {ImVec2 a,b;} arms[4]={{{c.x-reach,c.y-half},{c.x-half,c.y+half}},{{c.x+half,c.y-half},{c.x+reach,c.y+half}},{{c.x-half,c.y+half},{c.x+half,c.y+reach}},{{c.x-half,c.y-reach},{c.x+half,c.y-half}}};   // left, right, down, up
+        list.AddRectFilled({c.x-half,c.y-half},{c.x+half,c.y+half},white);
+        for(unsigned i=0;i<4;++i) {list.AddRectFilled(arms[i].a,arms[i].b,i==code ? ink : white,arm*.2f);list.AddRect(arms[i].a,arms[i].b,edge,arm*.2f,0,arm*.06f);}
+    } else if(code==4 || code==9) {   // + and -
+        disc(white);
+        list.AddLine({c.x-r*.45f,c.y},{c.x+r*.45f,c.y},ink,r*.2f);
+        if(code==4) list.AddLine({c.x,c.y-r*.45f},{c.x,c.y+r*.45f},ink,r*.2f);
+    } else if(code==5 || code==6) {   // 2 and 1: small rounded squares
+        const float h=r*1.7f; const ImVec2 a{c.x-h/2,c.y-h/2},b{c.x+h/2,c.y+h/2};
+        list.AddRectFilled(a,b,white,h*.25f); list.AddRect(a,b,edge,h*.25f,0,h*.06f);
+        text_centered(list,c,h*.7f,ink,code==5 ? "2" : "1");
+    } else if(code==7) pill(dark,"B",IM_COL32_WHITE);   // the trigger under the remote
+    else if(code==8) {disc(white);text_centered(list,c,r*1.3f,ink,"A");}
+    else if(code==10) {   // Home: a house
+        disc(white);
+        const ImVec2 roof{c.x,c.y-r*.5f},left{c.x-r*.55f,c.y-r*.02f},right{c.x+r*.55f,c.y-r*.02f};
+        list.AddTriangleFilled(roof,left,right,ink);
+        list.AddRectFilled({c.x-r*.36f,c.y-r*.02f},{c.x+r*.36f,c.y+r*.46f},ink);
+    } else if(code==11) pill(dark,"Z",IM_COL32_WHITE);   // the nunchuk
+    else {disc(dark);text_centered(list,c,r*1.2f,IM_COL32_WHITE,"C");}
+}
 }
 float pad_glyph_aspect(PhysicalInput input) {
+    if(input.kind==PhysicalKind::wii_button) return input.code==7 || input.code==11 ? 1.4f : 1.f;
     if(is_shoulder(input) || is_trigger(input)) return 1.8f;
     if(is_button(input) && (input.code==4 || input.code==6)) return 1.5f;
     if(is_button(input) && input.code>=15) return 2.f;
@@ -102,6 +137,7 @@ float pad_glyph_aspect(PhysicalInput input) {
 }
 float gyro_icon_aspect() { return 1.5f; }
 void draw_pad_glyph(ImDrawList& list,ImVec2 position,ImVec2 size,PhysicalInput input,PadFamily family) {
+    if(input.kind==PhysicalKind::wii_button) {draw_wii_glyph(list,position,size,input.code);return;}
     if(!is_button(input) && !is_axis(input)) return;
     const ImVec2 center{position.x+size.x/2,position.y+size.y/2};
     const float r=std::min(size.x,size.y)/2*.96f;
@@ -112,6 +148,22 @@ void draw_pad_glyph(ImDrawList& list,ImVec2 position,ImVec2 size,PhysicalInput i
     else if(is_dpad(input)) dpad(list,position,size,input.code,family);
     else if(is_button(input) && (input.code==4 || input.code==6)) small_button(list,position,size,input,family);
     else label_pill(list,position,size,input,family,ImDrawFlags_RoundCornersAll,rgb(60,64,70),rgb(40,44,56));
+}
+void draw_wii_motion_icon(ImDrawList& list,ImVec2 position,ImVec2 size) {
+    const ImVec2 c{position.x+size.x/2,position.y+size.y/2};
+    const float h=size.y,w=h*.34f;   // the remote, upright, with turning arrows on both sides
+    const ImVec2 a{c.x-w/2,c.y-h*.46f},b{c.x+w/2,c.y+h*.46f};
+    list.AddRectFilled(a,b,rgb(238,240,242),w*.35f); list.AddRect(a,b,rgb(120,124,130),w*.35f,0,h*.04f);
+    list.AddCircleFilled({c.x,c.y-h*.12f},w*.26f,rgb(200,204,208),12);   // the A button
+    list.AddRectFilled({c.x-w*.16f,c.y+h*.12f},{c.x+w*.16f,c.y+h*.3f},rgb(200,204,208),w*.08f);
+    const ImU32 arrow=rgb(90,190,255); const float rr=h*.5f,pi=3.14159265f;
+    for(int side:{-1,1}) {
+        const float cx=c.x+side*(w*.5f+h*.2f);
+        list.PathArcTo({cx-side*h*.25f,c.y},rr*.7f,side<0 ? pi*.62f : -pi*.38f,side<0 ? pi*1.38f : pi*.38f);
+        list.PathStroke(arrow,0,h*.07f);
+        const ImVec2 tip{cx+side*h*.1f,c.y-rr*.62f};
+        list.AddTriangleFilled(tip,{tip.x-side*h*.18f,tip.y-h*.02f},{tip.x-side*h*.02f,tip.y+h*.16f},arrow);
+    }
 }
 void draw_gyro_icon(ImDrawList& list,ImVec2 position,ImVec2 size,PadFamily family) {
     const ImVec2 c{position.x+size.x/2,position.y+size.y/2};

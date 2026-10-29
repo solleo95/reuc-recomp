@@ -5,14 +5,16 @@
 namespace uc {
 namespace {
 constexpr uint64_t bit(Action a) { return uint64_t(1)<<unsigned(a); }
-enum class Device { keyboard,pad,both };   // which inputs a table may hold
+enum class Device { keyboard,pad,wii,both };   // which inputs a table may hold
 bool valid(PhysicalInput input,Device device,bool wheel=true) {
+    const bool desk=device==Device::keyboard || device==Device::both,gamepad=device==Device::pad || device==Device::both,remote=device==Device::wii || device==Device::both;
     switch(input.kind) {
-    case PhysicalKind::key: return device!=Device::pad && input.code>0 && input.code<512;
-    case PhysicalKind::mouse: return device!=Device::pad && input.code>0 && input.code<256;
-    case PhysicalKind::wheel: return device!=Device::pad && wheel && (input.code==1 || input.code==2);
-    case PhysicalKind::pad_button: return device!=Device::keyboard && input.code<32;
-    case PhysicalKind::pad_axis: return device!=Device::keyboard && input.code<16;
+    case PhysicalKind::key: return desk && input.code>0 && input.code<512;
+    case PhysicalKind::mouse: return desk && input.code>0 && input.code<256;
+    case PhysicalKind::wheel: return desk && wheel && (input.code==1 || input.code==2);
+    case PhysicalKind::pad_button: return gamepad && input.code<32;
+    case PhysicalKind::pad_axis: return gamepad && input.code<16;
+    case PhysicalKind::wii_button: return remote && input.code<kWiiButtonCount;
     }
     return false;
 }
@@ -23,6 +25,7 @@ size_t slot_of(PhysicalInput input) {
     case PhysicalKind::mouse: return 512+input.code;
     case PhysicalKind::pad_button: return 768+input.code;
     case PhysicalKind::pad_axis: return 800+input.code;
+    case PhysicalKind::wii_button: return 816+input.code;
     case PhysicalKind::wheel: break;
     }
     return SIZE_MAX;
@@ -31,6 +34,7 @@ Binding key(uint16_t code) { return {BindingKind::physical,{PhysicalKind::key,co
 Binding mouse(uint16_t code) { return {BindingKind::physical,{PhysicalKind::mouse,code},{}}; }
 Binding pad_button(uint16_t code) { return {BindingKind::physical,{PhysicalKind::pad_button,code},{}}; }
 Binding pad_axis(uint16_t code) { return {BindingKind::physical,{PhysicalKind::pad_axis,code},{}}; }
+Binding wii_button(uint16_t code) { return {BindingKind::physical,{PhysicalKind::wii_button,code},{}}; }
 std::optional<std::string> validate(const Bindings& bindings,Device device) {
     for(size_t a=0;a<bindings.size();++a) {
         const auto& entries=bindings[a];
@@ -102,11 +106,28 @@ Bindings default_pad_bindings() {
     result[size_t(Action::recenter)]={pad_button(7)};
     return result;
 }
+Bindings default_wii_bindings() {
+    // WiiButton codes: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, nunchuk C 12. B is the trigger; the swing, the shake and
+    // the interact+fire throw come from the keyboard table's special entries (the remote swings and shakes like a mouse).
+    Bindings result;
+    result[size_t(Action::interact)]={wii_button(8)};
+    result[size_t(Action::fire)]={wii_button(7)};
+    result[size_t(Action::weapon_previous)]={wii_button(9),wii_button(0)};
+    result[size_t(Action::weapon_next)]={wii_button(4),wii_button(1)};
+    result[size_t(Action::reload)]={wii_button(6),wii_button(12)};
+    result[size_t(Action::grenade)]={wii_button(5)};
+    result[size_t(Action::knife)]={wii_button(11)};
+    result[size_t(Action::pause)]={wii_button(10)};
+    result[size_t(Action::confirm)]={wii_button(8)};
+    result[size_t(Action::back)]={wii_button(7)};
+    return result;
+}
 std::optional<std::string> validate_bindings(const Bindings& bindings) { return validate(bindings,Device::keyboard); }
 std::optional<std::string> validate_pad_bindings(const Bindings& bindings) { return validate(bindings,Device::pad); }
-Bindings merge_bindings(const Bindings& keyboard,const Bindings& pad) {
+std::optional<std::string> validate_wii_bindings(const Bindings& bindings) { return validate(bindings,Device::wii); }
+Bindings merge_bindings(const Bindings& keyboard,const Bindings& pad,const Bindings& wii) {
     Bindings result=keyboard;
-    for(size_t a=0;a<result.size();++a) for(const auto& binding:pad[a])
+    for(const Bindings* table:{&pad,&wii}) for(size_t a=0;a<result.size();++a) for(const auto& binding:(*table)[a])
         if(std::find(result[a].begin(),result[a].end(),binding)==result[a].end()) result[a].push_back(binding);
     return result;
 }
@@ -219,6 +240,12 @@ void BindingResolver::release_pad() {
         blocked_[slot]=false;
         if(!down_[slot]) continue;
         button(slot<800 ? PhysicalInput{PhysicalKind::pad_button,uint16_t(slot-768)} : PhysicalInput{PhysicalKind::pad_axis,uint16_t(slot-800)},false);
+    }
+}
+void BindingResolver::release_wii() {
+    for(unsigned code=0;code<kWiiButtonCount;++code) {
+        blocked_[816+code]=false;
+        if(down_[816+code]) button({PhysicalKind::wii_button,uint16_t(code)},false);
     }
 }
 void BindingResolver::wheel(int steps) {

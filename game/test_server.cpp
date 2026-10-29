@@ -18,13 +18,14 @@ void TestServer::fail_request(uint64_t request, const std::string& message) {
 void TestServer::schedule(const TestRequest& r, uint64_t frame) {
     const auto& in = r.input;
     const uint64_t due = std::max(in.at_frame, frame + 1);
-    const bool held_input = in.device == TestDevice::key || in.device == TestDevice::mouse || in.device == TestDevice::pad_button || in.device == TestDevice::pad_axis;
+    const bool held_input = in.device == TestDevice::key || in.device == TestDevice::mouse || in.device == TestDevice::pad_button || in.device == TestDevice::pad_axis || in.device == TestDevice::wii_button;
     const bool holds = in.device == TestDevice::kpad || (held_input && in.down);
     const auto insert = [&](Item item) {
         items_.insert(std::upper_bound(items_.begin(), items_.end(), item.due, [](uint64_t d, const Item& i) { return d < i.due; }), item);
     };
     insert({due, r.id, in.device, in.device == TestDevice::kpad || in.down || in.device == TestDevice::wheel || in.device == TestDevice::motion
-                                  || in.device == TestDevice::pad_stick || in.device == TestDevice::pad_gyro, !holds, in});
+                                  || in.device == TestDevice::pad_stick || in.device == TestDevice::pad_gyro || in.device == TestDevice::aim
+                                  || in.device == TestDevice::wii_pointer || in.device == TestDevice::wii_stick || in.device == TestDevice::wii_motion, !holds, in});
     if (holds) insert({due + in.hold_frames, r.id, in.device, false, true, in});
     open_requests_.insert(r.id);
 }
@@ -63,6 +64,16 @@ bool TestServer::apply(const Item& item, uint64_t) {
         if (!sink_.host(sequence, {HostEventKind::pad_stick, in.code, 0, in.x, in.y})) return false;
         sticks_used_ = true; return true;
     case TestDevice::pad_gyro: return sink_.host(sequence, {HostEventKind::pad_gyro, 0, 0, in.x, in.y});
+    case TestDevice::aim: return sink_.host(sequence, {HostEventKind::aim, 0, 0, in.x, in.y});
+    case TestDevice::wii_button:
+        if (!sink_.host(sequence, {HostEventKind::wii_button, in.code, item.press ? 1 : 0})) return false;
+        if (item.press) held_wii_buttons_.insert(in.code); else held_wii_buttons_.erase(in.code);
+        return true;
+    case TestDevice::wii_pointer: return sink_.host(sequence, {HostEventKind::wii_pointer, 0, 0, in.x, in.y});
+    case TestDevice::wii_stick:
+        if (!sink_.host(sequence, {HostEventKind::wii_stick, 0, 0, in.x, in.y})) return false;
+        wii_stick_used_ = true; return true;
+    case TestDevice::wii_motion: return sink_.host(sequence, {HostEventKind::wii_motion, 0, 0, in.x, in.y});
     }
     return false;
 }
@@ -96,6 +107,7 @@ void TestServer::handle(const std::string& line, uint64_t frame, const std::stri
     case TestRequestKind::options:
         if (!r.text.empty()) out.options.push_back(r.text);
         if (!r.gamepad.empty()) out.gamepad.push_back(r.gamepad);
+        if (!r.settings.empty()) out.settings.push_back(r.settings);
         pipes_.send(test_reply_ok(r.id), false); break;
     case TestRequestKind::input:
         if (open_requests_.size() >= kMaxOpenRequests) pipes_.send(test_reply_error(r.id, "too many queued commands"), false);
@@ -149,6 +161,9 @@ void TestServer::release_all() {
         sink_.host(next_sequence_++, {HostEventKind::pad_stick, 0, 0, 0, 0}); sink_.host(next_sequence_++, {HostEventKind::pad_stick, 1, 0, 0, 0});
         sink_.host(next_sequence_++, {HostEventKind::pad_gyro, 0, 0, 0, 0});
     }
+    for (auto code : held_wii_buttons_) sink_.host(next_sequence_++, {HostEventKind::wii_button, code, 0});
+    if (wii_stick_used_) sink_.host(next_sequence_++, {HostEventKind::wii_stick, 0, 0, 0, 0});
+    held_wii_buttons_.clear(); wii_stick_used_ = false;
     if (kpad_buttons_) sink_.kpad(next_sequence_++, aim_x_, aim_y_, 0);
     held_keys_.clear(); held_mouse_.clear(); held_pad_buttons_.clear(); held_pad_axes_.clear(); sticks_used_ = false; kpad_buttons_ = 0;
     items_.clear(); waiting_.clear(); open_requests_.clear();

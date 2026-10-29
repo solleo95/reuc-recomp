@@ -15,7 +15,12 @@ void LiveSettings::apply(const Options& next) {
     const bool limit=next.fps_limit!=was.fps_limit, bloom=next.bloom_settings()!=was.bloom_settings(), style=next.prompt_style!=was.prompt_style;
     const bool effects=next.effects!=was.effects, dlss5=next.dlss5!=was.dlss5, crosshair=next.crosshair_scale!=was.crosshair_scale, hdr=next.hdr!=was.hdr;
     const bool sensitivity=next.mouse_sensitivity!=was.mouse_sensitivity, gamepad=next.gamepad!=was.gamepad, hud=next.hud_position!=was.hud_position, reticle=next.reticle!=was.reticle;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle) return;
+    if(next.wiimote!=was.wiimote) {
+        if(auto problem=validate_wiimote(next.wiimote)) { error_=*problem; return; }
+    }
+    const bool wiimote=next.wiimote!=was.wiimote;
+    const bool pointer=next.pointer!=was.pointer || next.pointer_smoothing!=was.pointer_smoothing, zone=next.reload_zone!=was.reload_zone || next.reload_zone_size!=was.reload_zone_size;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle && !pointer && !zone && !wiimote) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -26,10 +31,13 @@ void LiveSettings::apply(const Options& next) {
     if(crosshair) targets_.crosshair_scale(next.crosshair_scale);
     if(reticle) targets_.reticle(next.reticle);
     if(sensitivity) targets_.mouse_sensitivity(next.mouse_sensitivity);
+    if(pointer) targets_.pointer(next.pointer,next.pointer_smoothing);
+    if(zone) targets_.reload_zone(next.reload_zone,next.reload_zone_size);
     if(hud) targets_.hud_position(next.hud_position);
     if(style) targets_.prompt_style(next.prompt_style);
     if(hdr) targets_.hdr(next.hdr);
     if(gamepad) targets_.gamepad(next.gamepad);
+    if(wiimote) targets_.wiimote(next.wiimote);
     save();
 }
 void LiveSettings::apply(const Bindings& next) {

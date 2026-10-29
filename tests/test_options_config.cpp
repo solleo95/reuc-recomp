@@ -58,6 +58,17 @@ int main() {
     options.mouse_sensitivity=250;uc::store_options(document,options);
     CHECK(document.properties["mouse_sensitivity"]==250 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).mouse_sensitivity==250);
     options.mouse_sensitivity=100;uc::store_options(document,options);
+    {   // the pointing device and the reload zone: absent means the relative mouse and no zone
+        const auto defaults=uc::options_from_config(uc::parse_config(R"({})"));
+        CHECK(defaults.pointer==uc::PointerMode::relative && defaults.pointer_smoothing==0);
+        CHECK(defaults.reload_zone==uc::ReloadZone::off && defaults.reload_zone_size==5);
+        options.pointer=uc::PointerMode::absolute;options.pointer_smoothing=30;options.reload_zone=uc::ReloadZone::corner;options.reload_zone_size=8;
+        uc::store_options(document,options);
+        CHECK(document.properties["pointer"]=="absolute" && document.properties["pointer_smoothing"]==30 && document.properties["reload_zone"]=="corner" && document.properties["reload_zone_size"]==8);
+        const auto back=uc::options_from_config(uc::parse_config(uc::serialize_config(document)));
+        CHECK(back.pointer==uc::PointerMode::absolute && back.pointer_smoothing==30 && back.reload_zone==uc::ReloadZone::corner && back.reload_zone_size==8);
+        options.pointer=uc::PointerMode::relative;options.pointer_smoothing=0;options.reload_zone=uc::ReloadZone::off;options.reload_zone_size=5;uc::store_options(document,options);
+    }
     CHECK(uc::options_from_config(uc::parse_config(R"({"graphics":{}})")).crosshair_scale==100);   // absent: the game's size
     options.crosshair_scale=0;uc::store_options(document,options);
     CHECK(document.properties["graphics"]["crosshair_scale"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).crosshair_scale==0);
@@ -178,7 +189,8 @@ int main() {
             CHECK(loaded.dlss5==uc::Dlss5Settings{});
             uc::store_options(old,loaded);
             const auto text=uc::serialize_config(old);
-            CHECK(text.find("\"enabled\"")==std::string::npos && text.find("\"stage\"")==std::string::npos && text.find("\"hook\": \"off\"")!=std::string::npos);
+            const auto section=old.properties["dlss5"].dump(2);   // the section itself: other objects (the Wii Remote's) have an "enabled" of their own
+            CHECK(section.find("\"enabled\"")==std::string::npos && section.find("\"stage\"")==std::string::npos && section.find("\"hook\": \"off\"")!=std::string::npos);
             CHECK(uc::options_from_config(uc::parse_config(text)).dlss5==uc::Dlss5Settings{});
         }
         bool not_object=false;try {uc::options_from_config(uc::parse_config(R"({"game":"C:/Games/Test/game","dlss5":true})"));}catch(const std::invalid_argument&){not_object=true;}
@@ -207,6 +219,20 @@ int main() {
         bool malformed=false;try {uc::options_from_config(uc::parse_config(R"({"gamepad":{"model":"sega"}})"));}catch(const std::invalid_argument&){malformed=true;}
         CHECK(malformed);
     }
+    {   // the wiimote object: defaults without it, a round trip, and a refusal that leaves the file alone
+        CHECK(uc::options_from_config(uc::parse_config("{}")).wiimote==uc::WiimoteSettings{});
+        auto document=uc::parse_config(R"({"game":"C:/Games/Test/game"})");
+        auto options=uc::options_from_config(document);
+        options.wiimote.enabled=false; options.wiimote.smoothing=.5f; options.wiimote.swing_threshold=2.f;
+        uc::store_options(document,options);
+        CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).wiimote==options.wiimote);
+        auto bad=options; bad.wiimote.smoothing=3;
+        const auto before=uc::serialize_config(document); bool refused=false;
+        try {uc::store_options(document,bad);}catch(const std::invalid_argument&){refused=true;}
+        CHECK(refused && uc::serialize_config(document)==before);
+        bool malformed=false;try {uc::options_from_config(uc::parse_config(R"({"wiimote":{"enabled":2}})"));}catch(const std::invalid_argument&){malformed=true;}
+        CHECK(malformed);
+    }
     for(auto text:{R"({"skip_intro":1})",R"({"game":null})",R"({"game":"a\u0000b"})",R"({"graphics":{"render_scale":8}})",
         R"({"graphics":{"render_scale":-1}})",R"({"graphics":{"width":-1}})",R"({"graphics":{"window_mode":"bad"}})",
         R"({"graphics":{"bloom":"off"}})",R"({"graphics":{"bloom":0}})",R"({"graphics":{"bloom":null}})",R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})",R"({"graphics":{"fps_limit":-1}})",R"({"graphics":{"fps_limit":10}})",
@@ -216,6 +242,8 @@ int main() {
         R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
         R"({"graphics":{"bloom_strength":201}})",R"({"graphics":{"bloom_strength":-1}})",R"({"graphics":{"bloom_strength":50.5}})",R"({"graphics":{"bloom_strength":"x"}})",
         R"({"mouse_sensitivity":9})",R"({"mouse_sensitivity":301})",R"({"mouse_sensitivity":-5})",R"({"mouse_sensitivity":99.5})",R"({"mouse_sensitivity":"x"})",
+        R"({"pointer":"tablet"})",R"({"pointer":1})",R"({"pointer_smoothing":91})",R"({"pointer_smoothing":-1})",R"({"pointer_smoothing":"x"})",
+        R"({"reload_zone":"middle"})",R"({"reload_zone":true})",R"({"reload_zone_size":0})",R"({"reload_zone_size":21})",R"({"reload_zone_size":2.5})",
         R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",
         R"({"graphics":{"reticle_hide_dot":1}})",R"({"graphics":{"reticle_color_p1":"red"}})",R"({"graphics":{"reticle_color_p2":"#12345"}})",R"({"graphics":{"reticle_color_p1":255}})",
         R"({"graphics":{"reticle_dot_size":24}})",R"({"graphics":{"reticle_dot_size":301}})",R"({"graphics":{"reticle_tail_length":401}})",R"({"graphics":{"reticle_partner_opacity":101}})",

@@ -34,6 +34,7 @@ PhysicalInput physical(const Json& value) {
     else if(name=="wheel")type=PhysicalKind::wheel;
     else if(name=="pad_button")type=PhysicalKind::pad_button;
     else if(name=="pad_axis")type=PhysicalKind::pad_axis;
+    else if(name=="wii_button")type=PhysicalKind::wii_button;
     else invalid("unknown physical kind "+name);
     return {type,uint16_t(code)};
 }
@@ -44,6 +45,7 @@ Json physical_json(PhysicalInput input) {
     case PhysicalKind::mouse: name="mouse"; break;
     case PhysicalKind::pad_button: name="pad_button"; break;
     case PhysicalKind::pad_axis: name="pad_axis"; break;
+    case PhysicalKind::wii_button: name="wii_button"; break;
     case PhysicalKind::wheel: break;
     }
     return {{"kind",name},{"code",input.code}};

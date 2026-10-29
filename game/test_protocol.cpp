@@ -107,22 +107,23 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
             only(root, {"id", "cmd", "x", "y"}); r.kind = TestRequestKind::menu_click;
             r.mx = float(number(root, "x", 0, 16384, false)); r.my = float(number(root, "y", 0, 16384, false));
         } else if (name == "options") {    // graphics settings to apply live, as the in-game menu does (config.json "graphics" keys)
-            only(root, {"id", "cmd", "graphics", "gamepad"}); r.kind = TestRequestKind::options;
-            for (auto [key, target] : {std::pair<const char*, std::string*>{"graphics", &r.text}, {"gamepad", &r.gamepad}}) {
+            only(root, {"id", "cmd", "graphics", "gamepad", "settings"}); r.kind = TestRequestKind::options;
+            for (auto [key, target] : {std::pair<const char*, std::string*>{"graphics", &r.text}, {"gamepad", &r.gamepad}, {"settings", &r.settings}}) {
                 auto it = root.find(key);
                 if (it == root.end()) continue;
                 if (it->second.type != Value::Type::object) throw std::runtime_error(std::string(key) + " must be an object");
                 *target = it->second.text;
             }
-            if (r.text.empty() && r.gamepad.empty()) throw std::runtime_error("options needs graphics or gamepad");
+            if (r.text.empty() && r.gamepad.empty() && r.settings.empty()) throw std::runtime_error("options needs graphics, gamepad or settings");
         } else if (name == "input") {
-            only(root, {"id", "cmd", "at_frame", "hold_frames", "kpad", "key", "mouse", "wheel", "motion", "pad_button", "pad_axis", "pad_stick", "pad_gyro"});
+            only(root, {"id", "cmd", "at_frame", "hold_frames", "kpad", "key", "mouse", "wheel", "motion", "pad_button", "pad_axis", "pad_stick", "pad_gyro", "aim", "wii_button", "wii_pointer", "wii_stick", "wii_motion"});
             r.kind = TestRequestKind::input; auto& in = r.input;
             if (root.contains("at_frame")) in.at_frame = uint64_t(number(root, "at_frame", 0, 9007199254740991.0, true));
             if (root.contains("hold_frames")) in.hold_frames = uint32_t(number(root, "hold_frames", 1, 600, true));
             int devices = 0; const Object* body = nullptr;
             for (auto [key, device] : {std::pair{"kpad", TestDevice::kpad}, {"key", TestDevice::key}, {"mouse", TestDevice::mouse}, {"wheel", TestDevice::wheel}, {"motion", TestDevice::motion},
-                                          {"pad_button", TestDevice::pad_button}, {"pad_axis", TestDevice::pad_axis}, {"pad_stick", TestDevice::pad_stick}, {"pad_gyro", TestDevice::pad_gyro}}) {
+                                          {"pad_button", TestDevice::pad_button}, {"pad_axis", TestDevice::pad_axis}, {"pad_stick", TestDevice::pad_stick}, {"pad_gyro", TestDevice::pad_gyro}, {"aim", TestDevice::aim},
+                                          {"wii_button", TestDevice::wii_button}, {"wii_pointer", TestDevice::wii_pointer}, {"wii_stick", TestDevice::wii_stick}, {"wii_motion", TestDevice::wii_motion}}) {
                 auto it = root.find(key);
                 if (it == root.end()) continue;
                 if (it->second.type != Value::Type::object) throw std::runtime_error(std::string(key) + " must be an object");
@@ -151,9 +152,15 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
                 break;
             }
             case TestDevice::pad_gyro: only(*body, {"x", "y"}); in.x = float(number(*body, "x", -50, 50, false)); in.y = float(number(*body, "y", -50, 50, false)); break;
+            case TestDevice::aim: only(*body, {"x", "y"}); in.x = float(number(*body, "x", -1, 1, false)); in.y = float(number(*body, "y", -1, 1, false)); break;
+            case TestDevice::wii_button: only(*body, {"button", "down"}); in.code = uint32_t(number(*body, "button", 0, 12, true)); in.down = boolean(*body, "down"); break;
+            case TestDevice::wii_pointer:
+            case TestDevice::wii_stick: only(*body, {"x", "y"}); in.x = float(number(*body, "x", -1, 1, false)); in.y = float(number(*body, "y", -1, 1, false)); break;
+            case TestDevice::wii_motion: only(*body, {"x", "y"}); in.x = float(number(*body, "x", -4096, 4096, false)); in.y = float(number(*body, "y", -4096, 4096, false)); break;
             }
-            if ((in.device == TestDevice::wheel || in.device == TestDevice::motion || in.device == TestDevice::pad_stick || in.device == TestDevice::pad_gyro) && in.hold_frames != 1)
-                throw std::runtime_error("hold_frames applies to kpad/key/mouse/pad_button/pad_axis only");
+            if ((in.device == TestDevice::wheel || in.device == TestDevice::motion || in.device == TestDevice::pad_stick || in.device == TestDevice::pad_gyro || in.device == TestDevice::aim
+                 || in.device == TestDevice::wii_pointer || in.device == TestDevice::wii_stick || in.device == TestDevice::wii_motion) && in.hold_frames != 1)
+                throw std::runtime_error("hold_frames applies to kpad/key/mouse/pad_button/pad_axis/wii_button only");
         } else throw std::runtime_error("unknown cmd " + name);
         return r;
     } catch (const std::exception& e) { return TestParseError{id, e.what()}; }

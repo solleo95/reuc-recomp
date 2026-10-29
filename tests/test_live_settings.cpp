@@ -22,6 +22,8 @@ int main() {
     targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
     targets.reticle=[&](const uc::ReticleOptions&){ calls.push_back("reticle"); };
     targets.mouse_sensitivity=[&](uint32_t){ calls.push_back("mouse_sensitivity"); };
+    targets.pointer=[&](uc::PointerMode,uint32_t){ calls.push_back("pointer"); };
+    targets.reload_zone=[&](uc::ReloadZone,uint32_t){ calls.push_back("reload_zone"); };
     targets.hud_position=[&](uc::HudPosition){ calls.push_back("hud_position"); };
     targets.effects=[&](const uc::GraphicsEffects&){ calls.push_back("effects"); };
     targets.dlss5=[&](const uc::Dlss5Settings&){ calls.push_back("dlss5"); };
@@ -29,6 +31,7 @@ int main() {
     targets.hdr=[&](const uc::HdrSettings&){ calls.push_back("hdr"); };
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     targets.gamepad=[&](const uc::GamepadSettings&){ calls.push_back("gamepad"); };
+    targets.wiimote=[&](const uc::WiimoteSettings&){ calls.push_back("wiimote"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
     const auto saved=[&]{ return uc::options_from_config(uc::load_config(path)); };
     CHECK(live.options().upscaler==uc::UpscalerKind::dlss && live.options().render_scale==0);
@@ -55,6 +58,13 @@ int main() {
         calls.clear(); auto next=live.options(); next.mouse_sensitivity=180; live.apply(next);
         CHECK((calls==std::vector<std::string>{"mouse_sensitivity"}) && saved().mouse_sensitivity==180 && !live.error());
     }
+    {   // the pointing device and its smoothing reach only the pointer target, once; the reload zone only its own
+        calls.clear(); auto next=live.options(); next.pointer=uc::PointerMode::absolute; next.pointer_smoothing=20; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"pointer"}) && saved().pointer==uc::PointerMode::absolute && saved().pointer_smoothing==20 && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        calls.clear(); next.reload_zone=uc::ReloadZone::edge; next.reload_zone_size=10; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"reload_zone"}) && saved().reload_zone==uc::ReloadZone::edge && saved().reload_zone_size==10 && !live.error());
+    }
     {   // the interface position alone reaches only its target and is saved
         calls.clear(); auto next=live.options(); next.hud_position=uc::HudPosition::edges; live.apply(next);
         CHECK((calls==std::vector<std::string>{"hud_position"}) && saved().hud_position==uc::HudPosition::edges && !live.error());
@@ -67,6 +77,15 @@ int main() {
         live.apply(next);
         CHECK(calls.empty() && live.error() && live.options().gamepad.aim_stick==uc::StickRole::left && live.options().gamepad.camera_stick==uc::StickRole::right);
         next=live.options(); next.gamepad.gyro.mode=uc::GyroMode::hold; live.apply(next); CHECK(!live.error());   // the next valid change clears the error
+        calls.clear();
+    }
+    {   // the Wii Remote settings reach only their target (once), are saved in the "wiimote" object, and an invalid set is reported without being applied
+        calls.clear(); auto next=live.options(); next.wiimote.smoothing=.6f; next.wiimote.enabled=false; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"wiimote"}) && saved().wiimote.smoothing==.6f && !saved().wiimote.enabled && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        calls.clear(); next.wiimote.swing_threshold=9; live.apply(next);
+        CHECK(calls.empty() && live.error() && live.options().wiimote.swing_threshold==1.5f);
+        next=live.options(); next.wiimote.swing_threshold=2.f; live.apply(next); CHECK(!live.error());
         calls.clear();
     }
     {   // HDR and its sliders reach only the HDR target

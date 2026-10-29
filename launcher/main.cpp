@@ -1,6 +1,8 @@
 #include "binding_editor.h"
 #include "gamepad_panel.h"
 #include "gamepad_input.h"
+#include "wiimote_input.h"
+#include "wiimote_panel.h"
 #include "public_release.h"
 #include "launch.h"
 #include "cpu_calibration.h"
@@ -127,7 +129,12 @@ struct Ui {
             if(!SDL_GetWindowSizeInPixels(window,&pixel_width,&pixel_height))throw std::runtime_error(SDL_GetError());
             std::fprintf(stderr,"launcher DPI=%u content-scale=%.2f framebuffer=%dx%d\n",GetDpiForWindow(hwnd),SDL_GetWindowDisplayScale(window),pixel_width,pixel_height);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
-        } else if(!SDL_ShowWindow(window))throw std::runtime_error(SDL_GetError());
+        } else {
+            if(!SDL_ShowWindow(window))throw std::runtime_error(SDL_GetError());
+            // The window appears before the rest of the start-up (settings, game folder, gamepads: up to a second) is done and the first frame can be drawn: until then it
+            // shows the colour of the interface instead of black.
+            if(!SDL_SetRenderDrawColor(renderer,18,19,22,255) || !SDL_RenderClear(renderer) || !SDL_RenderPresent(renderer))throw std::runtime_error(SDL_GetError());
+        }
     }
     void capture(const fs::path& path) {
         auto* surface=SDL_RenderReadPixels(renderer,nullptr);
@@ -166,9 +173,9 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity && a.hud_position==b.hud_position
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity && a.pointer==b.pointer && a.pointer_smoothing==b.pointer_smoothing && a.reload_zone==b.reload_zone && a.reload_zone_size==b.reload_zone_size && a.hud_position==b.hud_position
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
-        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad;
+        && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad && a.wiimote==b.wiimote;
 }
 bool update_handoff=false;   // set when the update helper waits for this process to end (see wWinMain)
 int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
@@ -224,6 +231,12 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         pads.emplace();
         pads->capture_sink([&](uc::PhysicalInput input,bool down) {pad_editor.event(input,down);});   // the Gamepad window waits for a pad press
     } catch(const std::exception&) {pads.reset();}   // the launcher works without gamepads
+    uc::BindingEditor wii_editor{uc::default_wii_bindings(),uc::BindingTable::wiimote};uc::WiimotePanelState wii_panel;
+    std::optional<uc::WiimoteInput> wii;   // reads the Wii Remote only while the Controllers page is shown (it must be free for the game): its status and the Wii Remote window's capture
+    if(smoke.empty()) {
+        wii.emplace();
+        wii->capture_sink([&](uc::PhysicalInput input,bool down) {wii_editor.event(input,down);});
+    }
     std::string error;bool blocked=false;
     std::unique_ptr<uc::net::NetworkSession> network;
     std::unique_ptr<uc::net::NatMapping> nat;
@@ -251,7 +264,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
             }
             network_address=std::move(last_peer);
-            editor=uc::BindingEditor(loaded.input);pad_editor=uc::BindingEditor(settings.gamepad.bindings,uc::BindingTable::gamepad);document=std::move(loaded);options=saved_options=settings;
+            editor=uc::BindingEditor(loaded.input);pad_editor=uc::BindingEditor(settings.gamepad.bindings,uc::BindingTable::gamepad);wii_editor=uc::BindingEditor(settings.wiimote.bindings,uc::BindingTable::wiimote);document=std::move(loaded);options=saved_options=settings;
             language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
@@ -315,7 +328,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
             if(event.type==SDL_EVENT_QUIT || (event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID==SDL_GetWindowID(ui.window)))done=true;
-            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) {editor.focus(false);pad_editor.focus(false);}
+            if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) {editor.focus(false);pad_editor.focus(false);wii_editor.focus(false);}
             if(pads)pads->event(event,nullptr);   // the connected gamepad and the presses of the Gamepad window's capture
             if(smoke.empty()) {
                 if(editor.capturing()) {
@@ -325,6 +338,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 } else ImGui_ImplSDL3_ProcessEvent(&event);
             }
         }
+        if(wii) {auto remote=options.wiimote;remote.enabled=remote.enabled && page==3 && !launch_requested && !uc::game_running(process);wii->update(nullptr,false,remote);}   // closed on the other pages and once the game starts: it must find the remote free
         if(calibration && calibration->ready()) {cpu_choice=calibration->get();calibration.reset();cpu_ready=true;}
         if(features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
             try {
@@ -485,6 +499,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         uc::launcher::graphite_style();ImGui::GetStyle().ScaleAllSizes(unit);
         // ScaleAllSizes floors thin borders to zero below 1×.
         ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;
+        // ScaleAllSizes truncates MouseCursorScale to 0 below 1×, which zeroes the tooltip offset and puts the tooltip under the cursor.
+        ImGui::GetStyle().MouseCursorScale=std::max(1.f,unit);
         auto push_font=[&](ImFont* font,float size){ImGui::PushFont(font,std::round(size*unit));};
         push_font(ui.sans,22);
         ImGui::Begin("Launcher",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
@@ -849,10 +865,44 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {
             push_font(ui.sans,22);
+            ImGui::TextUnformatted(tr("pointer_device"));
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+            const char* devices[]={tr("pointer_mouse"),tr("pointer_lightgun")};
+            const bool pointer_combo=combo("##pointer",devices[size_t(options.pointer)]);track("pointer");
+            if(pointer_combo) {
+                for(size_t i=0;i<2;++i) {if(ImGui::Selectable(devices[i],size_t(options.pointer)==i))options.pointer=uc::PointerMode(i);track(i ? "pointer-lightgun" : "pointer-mouse");}
+                ImGui::EndCombo();
+            }
+            ImGui::Dummy({0,8*unit});
+            const bool absolute=options.pointer==uc::PointerMode::absolute;   // the cursor's position is the aim: the mouse speed means nothing, a jittery gun wants smoothing
+            ImGui::BeginDisabled(absolute);
             ImGui::TextUnformatted(tr("mouse_sensitivity"));
             int sensitivity=int(options.mouse_sensitivity);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
             if(ImGui::SliderInt("##mouse_sensitivity",&sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax)));
             track("mouse-sensitivity");
+            ImGui::EndDisabled();
+            if(absolute) {
+                ImGui::Dummy({0,8*unit});
+                ImGui::TextUnformatted(tr("pointer_smoothing"));
+                int smoothing=int(options.pointer_smoothing);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+                if(ImGui::SliderInt("##pointer_smoothing",&smoothing,0,int(uc::kPointerSmoothingMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(uc::kPointerSmoothingMax)));
+                track("pointer-smoothing");
+            }
+            ImGui::Dummy({0,8*unit});
+            ImGui::TextUnformatted(tr("reload_zone"));
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+            const char* zones[]={tr("reload_zone_off"),tr("reload_zone_corner"),tr("reload_zone_edge")};
+            const bool zone_combo=combo("##reload_zone",zones[size_t(options.reload_zone)]);track("reload-zone");
+            if(zone_combo) {
+                for(size_t i=0;i<3;++i) {if(ImGui::Selectable(zones[i],size_t(options.reload_zone)==i))options.reload_zone=uc::ReloadZone(i);track(i==0 ? "reload-zone-off" : i==1 ? "reload-zone-corner" : "reload-zone-edge");}
+                ImGui::EndCombo();
+            }
+            if(options.reload_zone!=uc::ReloadZone::off) {
+                ImGui::TextUnformatted(tr("reload_zone_size"));
+                int zone_size=int(options.reload_zone_size);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
+                if(ImGui::SliderInt("##reload_zone_size",&zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.reload_zone_size=uint32_t(std::clamp(zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax)));
+                track("reload-zone-size");
+            }
             ImGui::Dummy({0,8*unit});
             ImGui::TextUnformatted(tr("style"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
@@ -923,6 +973,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{8*unit,8*unit});
             pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;
             uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
+            wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
+            uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
             ImGui::PopStyleVar(2);ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});

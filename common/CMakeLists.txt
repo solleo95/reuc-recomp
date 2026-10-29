@@ -16,6 +16,10 @@ target_include_directories(uc_cpu_topology PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(uc_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_gamepad_math STATIC gamepad_math.cpp)
 target_include_directories(uc_gamepad_math PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_wiimote_protocol STATIC wiimote_protocol.cpp)   # the Wii Remote's HID reports as pure bytes
+target_include_directories(uc_wiimote_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_wiimote_math STATIC wiimote_math.cpp)   # the IR pointer, the nunchuk stick and the swing detector
+target_link_libraries(uc_wiimote_math PUBLIC uc_wiimote_protocol)
 add_library(uc_input_prompts STATIC input_prompts.cpp)
 target_include_directories(uc_input_prompts PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_input_prompts PUBLIC uc_input uc_gamepad_config)
@@ -37,4 +41,7 @@ target_link_libraries(uc_input_config PUBLIC uc_input nlohmann_json::nlohmann_js
 add_library(uc_gamepad_config STATIC gamepad_config.cpp)   # the gamepad object of config.json
 target_include_directories(uc_gamepad_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_config PUBLIC uc_input_config uc_gamepad_math)
+add_library(uc_wiimote_config STATIC wiimote_config.cpp)   # the wiimote object of config.json
+target_include_directories(uc_wiimote_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_wiimote_config PUBLIC uc_input_config)
 install(FILES ${nlohmann_json_SOURCE_DIR}/LICENSE.MIT DESTINATION licenses/nlohmann_json)

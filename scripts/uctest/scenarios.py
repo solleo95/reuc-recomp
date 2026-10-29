@@ -216,6 +216,108 @@ def gamepad(g, args):
     return result
 
 
+def lightgun(g, args):
+    """An absolute device (a lightgun) puts the pointer at a place in the window and a shot there is a shot; with the reload zone on, a shot in the corner is a reload
+    and a shot in the middle stays a shot. The window is the harness's own 1280x720: the pointer is checked in its -1..1 coordinates."""
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    result = {}
+    with g.step("pointer_follows_the_gun"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        for x, y in ((-.6, .4), (.7, -.5), (0, 0), (-.9, -.9)):
+            g.host_aim(x, y); g.advance(3)
+            seen = g.frame["aim"]
+            if abs(seen[0] - x) > .01 or abs(seen[1] - y) > .01:
+                g.fail(f"the gun pointed at {(x, y)} and the pointer is at {seen}", "absolute pointer")
+        g.host_aim(0, 0); g.advance(3)
+    with g.step("shot_in_the_middle"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.set_settings(reload_zone="corner", reload_zone_size=8)
+        before = g.frame["player"]["magazine"]
+        for _ in range(3):
+            g.mouse_button(3, frames=3); g.advance(20)
+        after = g.frame["player"]["magazine"]
+        if after >= before:
+            g.fail(f"a shot in the middle did not fire with the reload zone on: magazine {before} -> {after}", "zone leaves shots alone")
+    with g.step("shot_in_the_corner"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.actions()   # drop stale events
+        spent = g.frame["player"]["magazine"]
+        g.host_aim(-.97, -.97); g.advance(3)
+        g.mouse_button(3, frames=3)
+        found = []
+        g.wait(lambda _f: found.extend(a for a in g.actions() if a["name"] == "Reload" and a["accepted"]) or bool(found), seconds=10, awaited="Reload accepted")
+        g.advance(20)
+        refilled = g.frame["player"]["magazine"]
+        if refilled <= spent:
+            g.fail(f"a shot in the corner did not reload: magazine {spent} -> {refilled}", "corner reload")
+        result["magazine"] = [spent, refilled]
+    result["capture"] = g.capture()
+    return result
+
+
+def wiimote(g, args):
+    """The Wii Remote reaches the guest through the host-event path of a real remote (the reader's output, not its Bluetooth): the nunchuk stick is the analog camera, the
+    IR pointer puts the aim where it points, B fires, 1 reloads, the nunchuk's Z is the knife, and a swing with A held swings the knife."""
+    import struct
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    g.set_settings(wiimote={"smoothing": 0})   # exact positions for the check; the default smooths the IR camera's shake
+    manager = 0x8043A82C   # fn80068DBC channel 0; fn8003B558 copies Nunchuk samples to +4228.
+
+    def axes():
+        return struct.unpack(">ff", bytes.fromhex(g.request({"cmd": "peek", "addr": manager + 4228, "size": 8})["hex"]))
+
+    def act(name, press):
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.actions()   # drop stale events
+        press()
+        found = []
+        g.wait(lambda _f: found.extend(a for a in g.actions() if a["name"] == name and a["accepted"]) or bool(found), seconds=10, awaited=f"{name} accepted")
+
+    result = {}
+    with g.step("nunchuk_stick"):
+        steps.wait_gameplay(g)
+        g.wii_stick(1, 0); g.advance(20)
+        observed = axes()
+        if abs(observed[0] - 1) > .03 or abs(observed[1]) > .03:
+            g.fail(f"stick pushed right: Nunchuk stick {observed}, expected about (1, 0)", "nunchuk stick")
+        g.wii_stick(0, -1); g.advance(20)   # pushed up: y is down-positive like a gamepad stick
+        observed = axes()
+        if abs(observed[0]) > .03 or abs(observed[1] - 1) > .03:
+            g.fail(f"stick pushed up: Nunchuk stick {observed}, expected about (0, 1)", "nunchuk stick up")
+        g.wii_stick(0, 0); g.advance(8)
+        if axes() != (0., 0.):
+            g.fail(f"stick at rest: Nunchuk stick {axes()}, expected (0, 0)", "neutral stick")
+    with g.step("ir_pointer"):
+        for x, y in ((-.6, .4), (.7, -.5), (0, 0)):
+            g.wii_pointer(x, y); g.advance(3)
+            seen = g.frame["aim"]
+            if abs(seen[0] - x) > .01 or abs(seen[1] - y) > .01:
+                g.fail(f"the remote pointed at {(x, y)} and the pointer is at {seen}", "ir pointer")
+    with g.step("fire"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        before = g.frame["player"]["magazine"]
+        for _ in range(3):
+            g.wii_button(7, frames=3); g.advance(20)
+        if g.frame["player"]["magazine"] >= before:
+            g.fail(f"B did not fire: magazine {before} -> {g.frame['player']['magazine']}", "wii fire")
+    with g.step("reload"):
+        act("Reload", lambda: g.wii_button(6))
+    with g.step("knife_button"):
+        act("Knife", lambda: g.wii_button(11))
+    with g.step("swing"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        g.actions()
+        g.wii_button(8, frames=30, wait=False)   # A (interact) held
+        g.advance(6)
+        g.wii_motion(300, 0); g.advance(2)
+        if not any(a["name"] == "Knife" and a["accepted"] for a in g.actions()):
+            g.fail("a swing with A held did not swing the knife", "wii swing")
+    result["capture"] = g.capture()
+    return result
+
+
 def gamepad_prompts(g, args):
     """The in-game prompts (tutorial pages) in the look of a gamepad: Xbox, PlayStation, Nintendo or generic (--model), captured for a look."""
     model = getattr(args, "model", None) or "xbox"
@@ -1437,5 +1539,7 @@ SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a
 SCENARIOS["camera_stick"] = camera_stick
 SCENARIOS["gamepad"] = gamepad
 SCENARIOS["gamepad_prompts"] = gamepad_prompts
+SCENARIOS["lightgun"] = lightgun
+SCENARIOS["wiimote"] = wiimote
 SCENARIO_PREPARE = {"arc_member": prepare_arc_member, "movie_replace": prepare_movie_replace}   # run before the game starts: writes what the scenario needs; a returned text means 'skip'
 SCENARIO_MOD_SETTINGS = {"inspector_live": {"inspector": {"log_every": 1}}, "randomizer_live": {"randomizer": {"seed": 1, "strength": 100, "start_weapon": True}}}   # stored settings of the mods a scenario installs

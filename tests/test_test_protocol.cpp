@@ -43,6 +43,25 @@ int main() {
     CHECK(ok(parse_test_request(R"({"id":19,"cmd":"input","pad_stick":{"side":"left","x":0,"y":0}})")).input.code==0);
     const auto gyro=ok(parse_test_request(R"({"id":20,"cmd":"input","pad_gyro":{"x":1.5,"y":-2}})"));
     CHECK(gyro.input.device==TestDevice::pad_gyro && gyro.input.x==1.5f && gyro.input.y==-2.f);
+    const auto aim_request=ok(parse_test_request(R"({"id":30,"cmd":"input","aim":{"x":0.5,"y":-0.25}})"));
+    CHECK(aim_request.input.device==TestDevice::aim && aim_request.input.x==.5f && aim_request.input.y==-.25f);
+    for(auto text:{R"({"id":1,"cmd":"input","aim":{"x":2,"y":0}})",R"({"id":1,"cmd":"input","aim":{"x":0}})",R"({"id":1,"cmd":"input","hold_frames":2,"aim":{"x":0,"y":0}})"})
+        CHECK(!err(parse_test_request(text)).empty());
+    const auto wii_button=ok(parse_test_request(R"({"id":33,"cmd":"input","hold_frames":3,"wii_button":{"button":7,"down":true}})"));
+    CHECK(wii_button.input.device==TestDevice::wii_button && wii_button.input.code==7 && wii_button.input.down && wii_button.input.hold_frames==3);
+    const auto wii_pointer=ok(parse_test_request(R"({"id":34,"cmd":"input","wii_pointer":{"x":0.5,"y":-0.5}})"));
+    CHECK(wii_pointer.input.device==TestDevice::wii_pointer && wii_pointer.input.x==.5f && wii_pointer.input.y==-.5f);
+    const auto wii_stick=ok(parse_test_request(R"({"id":35,"cmd":"input","wii_stick":{"x":1,"y":0}})"));
+    CHECK(wii_stick.input.device==TestDevice::wii_stick && wii_stick.input.x==1.f);
+    const auto wii_motion=ok(parse_test_request(R"({"id":36,"cmd":"input","wii_motion":{"x":300,"y":-20}})"));
+    CHECK(wii_motion.input.device==TestDevice::wii_motion && wii_motion.input.x==300.f && wii_motion.input.y==-20.f);
+    for(auto text:{R"({"id":1,"cmd":"input","wii_button":{"button":13,"down":true}})",R"({"id":1,"cmd":"input","wii_button":{"button":3}})",
+        R"({"id":1,"cmd":"input","wii_pointer":{"x":2,"y":0}})",R"({"id":1,"cmd":"input","wii_stick":{"x":0,"y":-1.5}})",R"({"id":1,"cmd":"input","wii_motion":{"x":5000,"y":0}})",
+        R"({"id":1,"cmd":"input","hold_frames":2,"wii_pointer":{"x":0,"y":0}})",R"({"id":1,"cmd":"input","hold_frames":2,"wii_stick":{"x":0,"y":0}})",
+        R"({"id":1,"cmd":"input","hold_frames":2,"wii_motion":{"x":0,"y":0}})"}) CHECK(!err(parse_test_request(text)).empty());
+    const auto root_options=ok(parse_test_request(R"({"id":31,"cmd":"options","settings":{"reload_zone":"corner","pointer":"absolute"}})"));
+    CHECK(root_options.kind==TestRequestKind::options && root_options.settings.find("reload_zone")!=std::string::npos);
+    CHECK(!err(parse_test_request(R"({"id":32,"cmd":"options","settings":1})")).empty());
     for(auto text:{R"({"id":1,"cmd":"input","pad_button":{"button":32,"down":true}})",R"({"id":1,"cmd":"input","pad_button":{"button":-1,"down":true}})",
         R"({"id":1,"cmd":"input","pad_button":{"button":3}})",R"({"id":1,"cmd":"input","pad_axis":{"code":16,"down":true}})",
         R"({"id":1,"cmd":"input","pad_stick":{"side":"up","x":0,"y":0}})",R"({"id":1,"cmd":"input","pad_stick":{"side":"left","x":1.5,"y":0}})",

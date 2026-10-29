@@ -4,6 +4,27 @@ using namespace uc;
 static PhysicalInput key(uint16_t code) {return {PhysicalKind::key,code};}
 static PhysicalInput button(uint16_t code) {return {PhysicalKind::pad_button,code};}
 static PhysicalInput axis(uint16_t code) {return {PhysicalKind::pad_axis,code};}
+static PhysicalInput wii(uint16_t code) {return {PhysicalKind::wii_button,code};}
+// The Wii Remote table: its own defaults, only the remote's buttons are captured, no modifiers, and the other tables do not hear the remote.
+static void wiimote_editor() {
+    BindingEditor editor(default_wii_bindings(),BindingTable::wiimote);
+    CHECK(editor.bindings()==default_wii_bindings());
+    editor.begin_capture(Action::reload,true);
+    editor.event(key(4),true); editor.event(button(0),true); editor.event({PhysicalKind::mouse,1},true); editor.wheel(1);
+    CHECK(editor.capturing()==Action::reload);                                                  // nothing but a Wii Remote button counts
+    editor.event(wii(3),true);                                                                  // the D-pad up
+    const std::vector<Binding> only_up{{BindingKind::physical,wii(3),{}}};
+    CHECK(!editor.capturing() && !editor.error() && editor.bindings()[size_t(Action::reload)]==only_up);
+    editor.begin_capture(Action::knife);                                                        // add: the first binding stays
+    editor.event(wii(12),true);
+    CHECK(editor.bindings()[size_t(Action::knife)].size()==2);
+    editor.restore_defaults(); CHECK(editor.bindings()==default_wii_bindings());
+    BindingEditor keyboard; keyboard.begin_capture(Action::reload,true);
+    keyboard.event(wii(3),true); CHECK(keyboard.capturing()==Action::reload);                   // the keyboard table does not hear the remote
+    BindingEditor pad(default_pad_bindings(),BindingTable::gamepad); pad.begin_capture(Action::reload,true);
+    pad.event(wii(3),true); CHECK(pad.capturing()==Action::reload);
+    editor.begin_capture(Action::reload,true); editor.focus(false); CHECK(!editor.capturing());   // focus lost: the capture ends
+}
 // The gamepad table: its own defaults and rule, only gamepad inputs are captured, and no modifier keys.
 static void gamepad_editor() {
     BindingEditor editor(default_pad_bindings(),BindingTable::gamepad);
@@ -36,6 +57,7 @@ static void gamepad_editor() {
     CHECK(keyboard.add(Action::fire,{BindingKind::physical,button(3),{}}));
 }
 int main() {
+    wiimote_editor();
     gamepad_editor();
     BindingEditor editor;
     editor.clear(Action::grenade); CHECK(editor.bindings()[size_t(Action::grenade)].empty());
