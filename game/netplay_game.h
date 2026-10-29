@@ -24,6 +24,10 @@ NetFrame predict_net_frame(const NetFrame& previous,uint64_t number);
 // rollback work and history, and a correction never replays more than this many steps of its own prediction.
 constexpr uint64_t net_prediction_limit=6;
 bool net_must_wait(uint64_t cursor,uint64_t remote_next); // The step at cursor would be the limit+1-th predicted one.
+// A state hash that differs ends the session only when the hash of a later frame differs too: a scratch buffer of the game's matrix code (guest
+// 80703FA0..80703FE7 in the mansion) held a different last value on one PC for a single hash frame while all else was equal, and healed at the next.
+// `suspect` is the first differing frame, cleared by a later frame that agrees.
+bool net_desync_confirmed(std::optional<uint64_t>& suspect,uint64_t frame,bool mismatch);
 bool same_net_input(const NetFrame&,const NetFrame&);
 // Shared simulation ticks, steps per second: 30 is the original game's rate, 60 its doubling, the rest timed steps.
 constexpr std::array<uint32_t,5> net_ticks{30,60,120,144,240};

@@ -3,6 +3,7 @@
 One `step()` = one decision from the latest frame. All timing uses game time (retraces), so it works at speed 1..32 (no faster than 8 in practice, see docs/testing/test-server.md).
 """
 import json
+import math
 import time
 
 from . import vision
@@ -33,8 +34,8 @@ def pick_target(frame, crosshair, ignore=(), aim_only=(), aim_min_id=0):
 
 
 class Autoplay:
-    def __init__(self, game, log_path, *, stuck_seconds=300, max_failures=5, projection=None, god=False, speed=1, aim_only=()):
-        self.g, self.stuck_seconds, self.max_failures, self.god, self.speed = game, stuck_seconds, max_failures, god, speed
+    def __init__(self, game, log_path, *, stuck_seconds=300, max_failures=5, projection=None, god=False, speed=1, aim_only=(), sweep=False):
+        self.g, self.stuck_seconds, self.max_failures, self.god, self.speed, self.sweep = game, stuck_seconds, max_failures, god, speed, sweep
         self.aim_min_id = 0   # actors below this id of an aim-only class are shot as usual
         self.aim_only = frozenset(aim_only)   # classes the crosshair follows without firing (behaviour probes: the enemy reacts to being aimed at)
         self.log_path = log_path
@@ -171,10 +172,10 @@ class Autoplay:
                 self.g.aim(x, y, wait=False)
         elif self.aim_only and any(e.get("cls") in self.aim_only and e["id"] >= self.aim_min_id and e.get("alive", True) for e in f.get("enemies") or []):
             self.g.aim(0.0, 0.0, wait=False)   # an aim-only enemy exists but is off screen: no blind centre fire that would kill it
-        elif f["n"] - self.last_shot_n >= cycle:   # no target we can see: keep firing at the screen centre (enemies the memory scan misses are usually there)
+        elif f["n"] - self.last_shot_n >= cycle:   # no target we can see: keep firing at the screen centre (enemies the memory scan misses are usually there); sweep: over the whole screen, for chapters whose enemy classes are not located
             self.last_shot_n = f["n"]
-            self.aim = (0.0, 0.0)
-            self.g.press("B", hold, 0.0, 0.0, wait=False)
+            self.aim = (0.85 * math.sin(self.centres * 0.9), 0.45 * math.sin(self.centres * 1.7 + 1.0)) if self.sweep else (0.0, 0.0)
+            self.g.press("B", hold, *self.aim, wait=False)
             self.shots += 1
             self.centres += 1
             if self.centres % 20 == 1:   # logged sparsely: one line per ~2 game seconds of centre fire

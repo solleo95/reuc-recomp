@@ -16,12 +16,16 @@ std::deque<TestAction> actions;
 }
 void test_state_enable(bool on) { enabled = on; }
 void test_state_set_god(bool on) { god = on; }
-// Addresses of RBUE08 (docs/spikes/G22-autoplay-memory.md): damage float at scene+6C00 (0 = unhurt, 50 = dead), magazine at
+// Addresses of RBUE08 (docs/spikes/G22-autoplay-memory.md): damage float at scene+6C00 (player 2: +6C14; 0 = unhurt, 50 = dead), magazine at
 // player+4D4, grenade count at 8056F338. Dolphin Gecko codes (memory_cheat_codes.txt) write the same words.
 void test_state_apply_god(ppc::Ctx& c, const InputProbeSnapshot& s) {
     if (!god.load(std::memory_order_relaxed)) return;
-    if (s.scene_valid && s.scene_address) ppc::wr32(c, s.scene_address + 0x6C00, 0);
-    if (s.players[0].valid) { if (ppc::rd32(c, s.players[0].address + 0x4D4) < 99) ppc::wr32(c, s.players[0].address + 0x4D4, 99); }
+    if (s.scene_valid && s.scene_address) {
+        ppc::wr32(c, s.scene_address + 0x6C00, 0);
+        if (s.players[1].valid) ppc::wr32(c, s.scene_address + 0x6C14, 0);   // player 2 (co-op)
+    }
+    for (const auto& player : s.players)
+        if (player.valid && ppc::rd32(c, player.address + 0x4D4) < 99) ppc::wr32(c, player.address + 0x4D4, 99);
     ppc::wr32(c, 0x8056F338, 9);
 }
 void test_state_set_skip_tutorials(bool on) { skip_tutorials = on; }

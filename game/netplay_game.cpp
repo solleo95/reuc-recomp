@@ -139,6 +139,14 @@ uint32_t NetTickPolicy::update(uint32_t tick,double step_cost_us) {
 bool net_must_wait(uint64_t cursor,uint64_t remote_next) {
     return cursor+1>remote_next && cursor+1-remote_next>net_prediction_limit;
 }
+bool net_desync_confirmed(std::optional<uint64_t>& suspect,uint64_t frame,bool mismatch) {
+    if(!mismatch) {
+        if(suspect && frame>*suspect)suspect.reset();   // a later hash agrees again; a late repeat of an older one says nothing
+        return false;
+    }
+    if(!suspect) {suspect=frame;return false;}
+    return frame>*suspect;   // the peer's hash of one frame arrives several times (stream and acknowledgements)
+}
 uint32_t net_input_delay(uint64_t max_rtt_ns,uint32_t tick_hz) {
     if(max_rtt_ns>433333333)throw std::invalid_argument("Network RTT exceeds the input buffer budget");
     // Cover normal one-way transit; rollback handles exceptional late arrivals.
@@ -281,6 +289,7 @@ struct NetGame::Impl {
     uint64_t rollback_count=0,replayed_frames=0,max_rollback=0,start_tick=0;
     std::optional<uint64_t> correction;
     bool started=false,logged_initial=false;
+    std::optional<uint64_t> hash_suspect;
     std::atomic<uint64_t> consumed_sequence{0};
     std::atomic<bool> cancelled{false};
     mutable std::mutex mutex;
@@ -460,7 +469,16 @@ struct NetGame::Impl {
             auto state=history.find(number);
             if(state==history.end() || !state->second.checkpoint)throw std::runtime_error("confirmed state fell outside rollback history");
             const auto hash=state->second.state_hash;
-            if(hash!=it->second)throw std::runtime_error("Network desync at confirmed frame "+std::to_string(number));
+            const bool mismatch=hash!=it->second;
+            const auto suspect_before=hash_suspect;
+            if(net_desync_confirmed(hash_suspect,number,mismatch)) {
+                if(const char* directory=std::getenv("UC_NET_DESYNC_DIR"))   // test harness: the RAM of the diverging frame and of the one before, to diff the two peers offline
+                    for(const uint64_t dumped:{number,number-hash_interval})
+                        if(const auto saved=history.find(dumped);saved!=history.end() && saved->second.checkpoint)
+                            game_checkpoint_dump(*saved->second.checkpoint,(std::filesystem::path(directory)/("desync-"+std::to_string(dumped)+".ram")).string());
+                throw std::runtime_error("Network desync at confirmed frame "+std::to_string(number));
+            }
+            if(mismatch && hash_suspect!=suspect_before)std::fprintf(stderr,"[netplay] frame %llu hash differs once (local %016llX, remote %016llX); the next hash decides\n",(unsigned long long)number,(unsigned long long)hash,(unsigned long long)it->second);
             if(number>verified || !logged_initial) {
                 game_checkpoint_commit_saves(*state->second.checkpoint,*files);
                 verified=number;logged_initial=true;
@@ -579,7 +597,11 @@ struct NetGame::Impl {
                 scheduler->drain_async();
                 now.checkpoint.reset();
             }
-            if(cursor%hash_interval==0)now.state_hash=game_checkpoint_hash(*now.checkpoint);
+            if(cursor%hash_interval==0) {
+                now.state_hash=game_checkpoint_hash(*now.checkpoint);
+                static const bool hash_detail=std::getenv("UC_NET_HASH_DETAIL")!=nullptr;   // a replay logs its frame again: the last line of a frame counts
+                if(hash_detail)std::fprintf(stderr,"[netplay] detail %llu %s\n",(unsigned long long)cursor,game_checkpoint_detail(*now.checkpoint).c_str());
+            }
             std::copy(std::begin(qte),std::end(qte),now.qte.begin());
             const auto state=input_probe_snapshot(c); const unsigned index=options.netplay->host ? 0 : 1;
             for(unsigned i=0;i<2;++i) {

@@ -2,8 +2,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace uc {
 // Guest baton owns this tracker, including native HLE writes. Independent of GX cache epochs.
@@ -31,6 +33,10 @@ public:
     void restore(const Snapshot&);
     static std::string difference(const Snapshot&,const Snapshot&);
     static uint64_t hash(const Snapshot&);
+    // Desync diagnostic: one 32-bit hash per 16 pages (64 KiB) in capture order (0..24 MiB, 0x10000000..+64 MiB, 0x20000000..+64 KiB).
+    static std::vector<uint32_t> chunk_hashes(const Snapshot&);
+    // Desync diagnostic: the captured RAM in capture order (24 MiB, 64 MiB, 64 KiB), raw.
+    static void dump(const Snapshot&,std::FILE*);
 private:
     uint8_t* memory_;
     std::shared_ptr<const Snapshot> current_;

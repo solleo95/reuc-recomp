@@ -89,6 +89,20 @@ std::string RollbackMemory::difference(const Snapshot& a,const Snapshot& b) {
     }
     return {};
 }
+void RollbackMemory::dump(const Snapshot& saved,std::FILE* out) {
+    size_t index=0;
+    for(const auto [base,size]:regions) for(size_t offset=0;offset<size;offset+=page_size,++index) std::fwrite(saved.page(index)->bytes.data(),1,page_size,out);
+}
+std::vector<uint32_t> RollbackMemory::chunk_hashes(const Snapshot& saved) {
+    constexpr size_t chunk_pages=16;
+    std::vector<uint32_t> chunks;
+    uint64_t hash=0xCBF29CE484222325ull; size_t index=0;
+    for(const auto& block:saved.blocks) for(const auto& page:block->pages) {
+        if(page) hash=(hash^page_hash(*page))*0x9E3779B97F4A7C15ull;
+        if(++index%chunk_pages==0) { chunks.push_back(uint32_t(hash>>32)); hash=0xCBF29CE484222325ull; }
+    }
+    return chunks;
+}
 uint64_t RollbackMemory::hash(const Snapshot& saved) {
     uint64_t hash=0xCBF29CE484222325ull;
     // Only confirmed snapshots hash their new pages; shared pages retain their atomic cache.

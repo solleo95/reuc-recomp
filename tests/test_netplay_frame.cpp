@@ -112,6 +112,17 @@ int main() {
     // At most six steps run on predicted remote input; the seventh waits for the peer.
     CHECK(!uc::net_must_wait(3,10) && !uc::net_must_wait(10,11) && !uc::net_must_wait(10,5));
     CHECK(uc::net_must_wait(10,4) && uc::net_must_wait(1000,100));
+    {   // a frame whose hash differs is forgiven when a later frame agrees; a later one that differs too ends the session
+        std::optional<uint64_t> suspect;
+        CHECK(!uc::net_desync_confirmed(suspect,60,false));
+        CHECK(!uc::net_desync_confirmed(suspect,120,true));
+        CHECK(!uc::net_desync_confirmed(suspect,120,true));    // the same hash arrives again (stream and acknowledgement)
+        CHECK(!uc::net_desync_confirmed(suspect,60,false));    // a late repeat of an older frame says nothing
+        CHECK(!uc::net_desync_confirmed(suspect,180,false));   // healed
+        CHECK(!uc::net_desync_confirmed(suspect,240,true));
+        CHECK(uc::net_desync_confirmed(suspect,300,true));
+        CHECK(uc::net_desync_confirmed(suspect,360,true));
+    }
     // A stalled replay must not manufacture seconds of immutable future input.
     uc::NetInputClock stalled(3);
     CHECK(stalled.sample(0,0)==3);

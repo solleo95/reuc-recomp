@@ -85,6 +85,19 @@ std::string game_checkpoint_difference(const GameCheckpoint& expected,const Game
 uint64_t game_checkpoint_hash(const GameCheckpoint& saved) {
     return (RollbackMemory::hash(*saved.ram)^Sched::checkpoint_hash(*saved.scheduler))*0x9E3779B97F4A7C15ull;
 }
+std::string game_checkpoint_detail(const GameCheckpoint& saved) {
+    char head[96];
+    std::snprintf(head,sizeof head,"sched %016llx tick %llu chunks",(unsigned long long)Sched::checkpoint_hash(*saved.scheduler),(unsigned long long)saved.tick);
+    std::string out=head;
+    for(const auto chunk:RollbackMemory::chunk_hashes(*saved.ram)) { char word[12]; std::snprintf(word,sizeof word," %08x",chunk); out+=word; }
+    return out;
+}
+bool game_checkpoint_dump(const GameCheckpoint& saved,const std::string& path) {
+    std::FILE* out=std::fopen(path.c_str(),"wb");
+    if(!out) return false;
+    RollbackMemory::dump(*saved.ram,out);
+    return std::fclose(out)==0;
+}
 void game_checkpoint_commit_saves(const GameCheckpoint& saved,SaveFs& saves) { saves.commit(*saved.saves); }
 void install_rollback_probe(Sched& scheduler,SaveFs& saves,NativeInput& input,uint64_t first_retrace,unsigned iterations) {
     if(!iterations || iterations>120) throw std::invalid_argument("rollback probe iterations must be 1..120");

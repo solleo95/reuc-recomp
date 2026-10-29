@@ -15,7 +15,7 @@ import math
 import os
 
 from .client import Game, ROOT, StepFailed, GUEST_CPU, NETPLAY_CLIENT_CPU
-from .menus import screen_of
+from .menus import TARGETS, screen_of
 from . import steps
 from .netem import DelayRelay
 
@@ -378,9 +378,24 @@ def unstable_network(host, client, relay, report, profile, rtt, packet_loss=None
     result["completed"] = True
 
 
-def coop_menu(host, client):
+def coop_menu(host, client, chapter="chapter_1"):
     steps.skip_movies(host, seconds=60)
-    for target in ("title_start", "save_slot_1", "scenario_train", "chapter_1"):
+    for target in ("title_start", "save_slot_1", "scenario_train", chapter):
+        if target == "scenario_train" and chapter != "chapter_1":
+            # The chapter page opens under the scenario button's position, which is over its first card, and the page sometimes takes the press
+            # that opened it as a click on the card under the pointer: the pointer moves to the wanted card at once. Whether the page then needs
+            # its own click depends on that race (the log's script=sNNcN tells which chapter started, see netplay_chapter).
+            host.wait(lambda f: screen_of(f) == "scenario", frames=3000, seconds=60, awaited="scenario")
+            button, card = TARGETS[target], TARGETS[chapter]
+            host.aim(button.x, button.y, settle_frames=3)
+            host.press("A", 3, button.x, button.y)
+            host.aim(card.x, card.y, settle_frames=3)
+            host.wait(lambda f: screen_of(f) in ("chapter", "character"), frames=3000, seconds=60, awaited="chapter or character page")
+            if screen_of(host.frame) == "chapter":
+                steps.select(host, chapter)
+            continue
+        if target == chapter and chapter != "chapter_1":
+            continue
         steps.select(host, target)
     # Coop character selection waits for both players; the equipment page is P1 then P2.
     # The page object appears during its entrance animation, before it accepts selections.

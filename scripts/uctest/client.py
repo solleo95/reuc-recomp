@@ -162,7 +162,7 @@ class Game:
         env = dict(os.environ)
         if "--net-host" in self.game_args or "--net-join" in self.game_args:
             env["UC_FRAME_LOG"] = str(self.run_dir / "frames.csv")
-        if "--frame-generation" in self.game_args:
+            env["UC_NET_DESYNC_DIR"] = str(self.run_dir)   # a desync leaves the RAM of the diverging frame here (desync-<frame>.ram)        if "--frame-generation" in self.game_args:
             env["UC_FG_UNFOCUSED"] = "1"   # Streamline's frame generation only runs for a focused window: tell it the game's window is, without focusing it
         self.process = subprocess.Popen(args, stdout=log, stderr=log, cwd=self.exe.parent, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         log.close()
