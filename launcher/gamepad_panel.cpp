@@ -2,6 +2,7 @@
 #include "panel_widgets.h"
 #include "input_prompts.h"
 #include "pad_glyphs.h"
+#include "graphite.h"
 #include "imgui.h"
 #include <algorithm>
 #include <array>
@@ -19,10 +20,10 @@ constexpr std::array<PhysicalInput,6> kHoldChoices{{{PhysicalKind::pad_axis,9},{
 namespace panel_shared {   // the widgets the Wii Remote window uses as well (panel_widgets.h)
 // The same rhythm as the host's own pages: a small caption above each control, a gap after it.
 void gap(float unit) { ImGui::Dummy({0,8*unit}); }
-bool combo(const char* id,const std::string& shown,const std::vector<std::string>& items,int& index,float width) {
+bool combo(const char* id,const std::string& shown,const std::vector<std::string>& items,int& index,float width,float look_unit) {
     bool changed=false;
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*width);
-    if(ImGui::BeginCombo(id,shown.c_str())) {
+    if(look_unit>0 ? launcher::combo(id,shown.c_str(),look_unit) : ImGui::BeginCombo(id,shown.c_str())) {
         for(int i=0;i<int(items.size());++i) if(ImGui::Selectable(items[size_t(i)].c_str(),i==index)) {index=i;changed=true;}
         ImGui::EndCombo();
     }
@@ -107,10 +108,10 @@ bool pick_role(StickRole& changed,StickRole& other,StickRole picked) {
     changed=picked;
     return true;
 }
-bool role_combo(const char* id,StickRole& role,StickRole& other,const PanelText& tr,float width) {
+bool role_combo(const char* id,StickRole& role,StickRole& other,const PanelText& tr,float width,float look_unit) {
     const std::vector<std::string> items{tr("stick_none"),tr("stick_left"),tr("stick_right")};
     int index=int(role);
-    if(!combo(id,items[size_t(index)],items,index,width)) return false;
+    if(!combo(id,items[size_t(index)],items,index,width,look_unit)) return false;
     return pick_role(role,other,StickRole(index));
 }
 void status_line(const PadStatus& status,const PanelText& tr) {
@@ -139,7 +140,7 @@ void bindings_rows(BindingEditor& editor,std::span<const Action> actions,PadFami
         draw_pieces(*ImGui::GetWindowDrawList(),low,high,waiting ? std::vector<Piece>{} : pieces(entries,tr),family,waiting ? "…" : tr("unbound"));
         if(ImGui::IsItemHovered()) {
             std::string names; for(const auto& entry:entries) {if(!names.empty())names+=", ";names+=binding_name(entry,family,tr);}
-            ImGui::SetTooltip("%s",names.empty() ? tr("unbound") : names.c_str());
+            launcher::tooltip(names.empty() ? tr("unbound") : names.c_str());
         }
         if(ImGui::BeginPopupContextItem("binding-menu")) {
             for(size_t j=0;j<entries.size();++j) {
@@ -151,7 +152,7 @@ void bindings_rows(BindingEditor& editor,std::span<const Action> actions,PadFami
         }
         ImGui::SameLine();
         if(ImGui::Button("+",{plus,0})) editor.begin_capture(action);
-        if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("add"));
+        if(ImGui::IsItemHovered()) launcher::tooltip(tr("add"));
         ImGui::SameLine();
         if(ImGui::Button(tr("clear"),{clear,0})) editor.clear(action);
         ImGui::PopStyleVar();
@@ -187,8 +188,8 @@ bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,con
     // Everything scrolls together in one body; the capture hint, the error and the buttons stay below it.
     const float footer=(ImGui::GetFrameHeightWithSpacing()*(1+(editor.capturing() ? 1 : 0)+(editor.error() ? 1 : 0)))+24*unit;
     ImGui::BeginChild("pad-body",{0,std::max(120*unit,ImGui::GetContentRegionAvail().y-footer)});
-    ImGui::TextUnformatted(tr("stick_aim")); changed|=role_combo("##aim-stick",s.aim_stick,s.camera_stick,tr,width); gap(unit);
-    ImGui::TextUnformatted(tr("stick_camera")); changed|=role_combo("##camera-stick",s.camera_stick,s.aim_stick,tr,width); gap(unit);
+    ImGui::TextUnformatted(tr("stick_aim")); changed|=role_combo("##aim-stick",s.aim_stick,s.camera_stick,tr,width,state.combo_unit); gap(unit);
+    ImGui::TextUnformatted(tr("stick_camera")); changed|=role_combo("##camera-stick",s.camera_stick,s.aim_stick,tr,width,state.combo_unit); gap(unit);
     ImGui::TextUnformatted(tr("dead_zone")); changed|=percent_slider("##dead-zone",s.aim.dead_zone,0,50,width); gap(unit);
     ImGui::TextUnformatted(tr("aim_speed")); changed|=float_slider("##aim-speed",s.aim.speed,.2f,4,"%.2f",width); gap(unit);
     ImGui::TextUnformatted(tr("camera_dead_zone")); changed|=percent_slider("##camera-dead-zone",s.camera_dead_zone,0,50,width); gap(unit);
@@ -197,14 +198,14 @@ bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,con
     {
         const std::vector<std::string> modes{tr("off"),tr("gyro_always"),tr("gyro_hold")};
         int index=int(s.gyro.mode);
-        if(combo("##gyro-mode",modes[size_t(index)],modes,index,width)) {s.gyro.mode=GyroMode(index);changed=true;}
+        if(combo("##gyro-mode",modes[size_t(index)],modes,index,width,state.combo_unit)) {s.gyro.mode=GyroMode(index);changed=true;}
     }
     gap(unit);
     if(s.gyro.mode==GyroMode::hold) {
         ImGui::TextUnformatted(tr("gyro_hold_button"));
         std::vector<std::string> names; int index=0;
         for(size_t i=0;i<kHoldChoices.size();++i) {names.push_back(input_name(kHoldChoices[i],family)); if(kHoldChoices[i]==s.gyro_hold) index=int(i);}
-        if(combo("##gyro-hold",names[size_t(index)],names,index,width)) {s.gyro_hold=kHoldChoices[size_t(index)];changed=true;}
+        if(combo("##gyro-hold",names[size_t(index)],names,index,width,state.combo_unit)) {s.gyro_hold=kHoldChoices[size_t(index)];changed=true;}
         gap(unit);
     }
     if(s.gyro.mode!=GyroMode::off) {
@@ -248,14 +249,14 @@ bool gamepad_tab(GamepadPanelState& state,GamepadSettings& s,BindingEditor& edit
     {
         const std::vector<std::string> types{tr("control_auto"),tr("control_keyboard_mouse"),tr("gamepad")};
         int index=int(s.type);
-        if(combo("##control-type",types[size_t(index)],types,index,width)) {s.type=ControlType(index);changed=true;}
+        if(combo("##control-type",types[size_t(index)],types,index,width,state.combo_unit)) {s.type=ControlType(index);changed=true;}
     }
     gap(unit);
     if(s.type!=ControlType::keyboard_mouse) {
         ImGui::TextUnformatted(tr("pad_model"));
         const std::vector<std::string> models{tr("model_auto"),"Xbox","PlayStation","Nintendo",tr("model_generic")};
         int index=int(s.model);
-        if(combo("##pad-model",models[size_t(index)],models,index,width)) {s.model=PadModel(index);changed=true;}
+        if(combo("##pad-model",models[size_t(index)],models,index,width,state.combo_unit)) {s.model=PadModel(index);changed=true;}
         gap(unit);
     }
     status_line(status,tr);

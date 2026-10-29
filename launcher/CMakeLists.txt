@@ -10,7 +10,7 @@ target_include_directories(uc_binding_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_binding_editor PUBLIC uc_input)
 add_library(uc_gamepad_panel STATIC gamepad_panel.cpp wiimote_panel.cpp)   # the Controllers tab with its Gamepad and Wii Remote windows: shared by the launcher and the in-game menu
 target_include_directories(uc_gamepad_panel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_gamepad_panel PUBLIC uc_binding_editor uc_gamepad_config uc_wiimote_config uc_input_prompts uc_prompt_icons uc_imgui)
+target_link_libraries(uc_gamepad_panel PUBLIC uc_binding_editor uc_gamepad_config uc_wiimote_config uc_input_prompts uc_prompt_icons uc_imgui uc_ui_style)
 # Wit (Wiimms ISO Tools, GPL-2.0+) unpacks the disc image selected in the launcher. It runs as a separate program; only the files it needs are installed.
 set(wit_archive "https://wit.wiimm.de/download/wit-v3.05a-r8638-cygwin64.zip")
 if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-cygwin64.zip")

@@ -1,4 +1,5 @@
 #include "dlss5_panel.h"
+#include "graphite.h"
 #include "public_release.h"
 #include <imgui.h>
 #include <algorithm>
@@ -27,7 +28,7 @@ bool reset_button(const std::string& id, bool at_default, const char* tooltip) {
     draw->PathArcTo(center,radius,-1.2f,3.6f,18); draw->PathStroke(color,0,thickness);   // almost a full circle, open at the top right
     const ImVec2 tip{center.x+radius*std::cos(-1.2f),center.y+radius*std::sin(-1.2f)};
     draw->AddTriangleFilled(tip,{tip.x+radius*.7f,tip.y-radius*.1f},{tip.x+radius*.05f,tip.y-radius*.75f},color);   // the arrow head
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && tooltip) ImGui::SetTooltip("%s",tooltip);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && tooltip) launcher::tooltip(tooltip);
     return clicked;
 }
 }
@@ -81,7 +82,7 @@ bool dlss5_panel(Dlss5Settings& settings, const Dlss5Ui& ui, const Dlss5PanelHoo
             ImGui::SetNextItemWidth(control);
             if(field.kind==Dlss5Kind::integer) {
                 int value=int(before);
-                if(ImGui::SliderInt(id.c_str(),&value,int(field.min),int(field.max))) field.set(settings,double(value));
+                if(launcher::slider_int(id.c_str(),value,int(field.min),int(field.max))) field.set(settings,double(value));
             } else {
                 const double scale=field.format==Dlss5Format::percent ? 100.0 : 1.0;
                 float value=float(before*scale);

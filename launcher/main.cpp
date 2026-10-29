@@ -499,33 +499,14 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         uc::launcher::graphite_style();ImGui::GetStyle().ScaleAllSizes(unit);
         // ScaleAllSizes floors thin borders to zero below 1×.
         ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;
-        // ScaleAllSizes truncates MouseCursorScale to 0 below 1×, which zeroes the tooltip offset and puts the tooltip under the cursor.
-        ImGui::GetStyle().MouseCursorScale=std::max(1.f,unit);
+        // ScaleAllSizes scales MouseCursorScale with the window; the OS cursor does not grow, so a fixed 1 keeps the tooltip's (16,10) offset next to it.
+        ImGui::GetStyle().MouseCursorScale=1;
         auto push_font=[&](ImFont* font,float size){ImGui::PushFont(font,std::round(size*unit));};
         push_font(ui.sans,22);
         ImGui::Begin("Launcher",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
         const auto available=ImGui::GetContentRegionAvail();
         const float sidebar=std::round(344*unit);
-        auto combo=[&](const char* id,const char* preview,ImGuiComboFlags flags=0) {
-            const auto expected_origin=ImGui::GetCursorScreenPos();
-            auto* list=ImGui::GetWindowDrawList();auto* font=ImGui::GetFont();const float size=ImGui::GetFontSize();
-            const auto color=ImGui::GetColorU32(ImGuiCol_Text);
-            // BeginCombo switches to the popup window; retain the parent frame geometry.
-            const auto a=expected_origin;
-            const ImVec2 b{a.x+ImGui::CalcItemWidth(),a.y+ImGui::GetFrameHeight()};
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,8*unit});
-            const bool opened=ImGui::BeginCombo(id,"",flags|ImGuiComboFlags_NoArrowButton);
-            ImGui::PopStyleVar();
-            if(!smoke.empty() && opened && (a.x!=expected_origin.x || a.y!=expected_origin.y))
-                throw std::runtime_error(std::string("combo anchor changed while opening: ")+id);
-            const ImVec4 clip{a.x+14*unit,a.y,b.x-36*unit,b.y};
-            list->AddRectFilledMultiColor({a.x+2,a.y+2},{b.x-2,b.y-2},IM_COL32(255,255,255,5),IM_COL32(255,255,255,5),0,0);
-            list->AddText(font,size,{std::round(a.x+16*unit),std::round(a.y+(b.y-a.y-size)/2)},color,preview,nullptr,0,&clip);
-            const float x=b.x-25*unit,y=(a.y+b.y)/2;
-            list->AddLine({x-6*unit,y-3*unit},{x,y+3*unit},color,unit);
-            list->AddLine({x,y+3*unit},{x+6*unit,y-3*unit},color,unit);
-            return opened;
-        };
+        auto combo=[&](const char* id,const char* preview,ImGuiComboFlags flags=0) {return uc::launcher::combo(id,preview,unit,flags);};
         auto* background=ImGui::GetWindowDrawList();
         background->AddRectFilledMultiColor({0,0},{sidebar,available.y},IM_COL32(12,16,17,255),IM_COL32(15,19,20,255),IM_COL32(12,16,17,255),IM_COL32(9,13,14,255));
         background->AddRectFilledMultiColor({sidebar,0},available,IM_COL32(25,29,30,255),IM_COL32(19,23,24,255),IM_COL32(15,19,20,255),IM_COL32(22,26,27,255));
@@ -600,11 +581,21 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 ImGui::BeginGroup();ImGui::TextWrapped("%s",label);ImGui::EndGroup();
                 if(ImGui::IsItemClicked())value=!value;
             }
-            if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",why ? why : tr("unavailable"));
+            if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))uc::launcher::tooltip(why ? why : tr("unavailable"));
             ImGui::PopStyleVar(3);ImGui::PopID();ImGui::EndDisabled();
         };
-        const float footer=((page==2 ? 140.f : 212.f)+(error.empty() ? 0.f : 100.f))*unit;
-        ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},ImGuiChildFlags_None);
+        const bool controls_page=page==2 || page==3;   // no game folder row under them: only the Multiplayer and Play buttons
+        const float footer=((controls_page ? 140.f : 212.f)+(error.empty() ? 0.f : 100.f))*unit;
+        // The page scrolls as a whole with the same slim scrollbar as the Graphics columns (the Graphics page has its own scrolling columns); the negative indent
+        // keeps the controls flush with the page and leaves a gap before the bar.
+        const bool page_scrolls=page!=1;
+        if(page_scrolls) {
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,0});
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        }
+        ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},page_scrolls ? ImGuiChildFlags_AlwaysUseWindowPadding : ImGuiChildFlags_None);
+        if(page_scrolls) {ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::Indent(-12*unit);}
         if(page==0) {
             toggle("##skip-game",tr("skip"),options.skip_intro);
             ImGui::Dummy({0,8*unit});toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
@@ -662,7 +653,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             const auto limit_label=[&](uint32_t value) {return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited"));};
             const auto current_label=limit_label(current_limit);
             const bool limit_open=combo("##fps",current_label.c_str(),ImGuiComboFlags_HeightLarge);track("fps");
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("fps"));
+            if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("fps"));
             if(limit_open) {
                 for(const uint32_t value:limits) {if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value))options.fps_limit=value;track("fps"+std::to_string(value));}
                 ImGui::EndCombo();
@@ -671,7 +662,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::TextUnformatted(tr("hud_position"));push_font(ui.sans,22);
             const char* hud_keys[]={"hud_auto","hud_center","hud_edges"};
             const bool hud_open=combo("##hud",tr(hud_keys[int(options.hud_position)]));track("hud");
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("hud_hint"));
+            if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("hud_hint"));
             if(hud_open) {
                 for(int i=0;i<3;++i) {if(ImGui::Selectable(tr(hud_keys[i]),int(options.hud_position)==i))options.hud_position=uc::HudPosition(i);track("hud"+std::to_string(i));}
                 ImGui::EndCombo();
@@ -699,7 +690,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     if(ImGui::Selectable(kind_label(kind),options.upscaler==kind)) {options.upscaler=kind;if(kind==uc::UpscalerKind::smaa)options.frame_generation=false;}   // SMAA has no generator
                     track(std::string("upscaler-")+std::string(uc::upscaler_name(kind)));
                     ImGui::EndDisabled();
-                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
+                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))uc::launcher::tooltip(checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
                 }
                 ImGui::EndCombo();
             }
@@ -752,7 +743,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     }
                     track(std::string("framegen-")+std::string(uc::upscaler_name(kind)));
                     ImGui::EndDisabled();
-                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
+                    if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))uc::launcher::tooltip(checking ? tr("checking") : reason.empty() ? tr("unsupported") : reason.c_str());
                 }
                 ImGui::EndCombo();
             }
@@ -788,7 +779,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                         if(ImGui::Selectable(level_label(level).c_str(),options.effects.anisotropy==level))options.effects.anisotropy=level;
                         track("anisotropy-"+std::to_string(level));
                         ImGui::EndDisabled();
-                        if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",tr("unsupported"));
+                        if(!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))uc::launcher::tooltip(tr("unsupported"));
                     }
                     ImGui::EndCombo();
                 }
@@ -811,7 +802,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                         ImGui::EndCombo();
                     }
                     ImGui::EndDisabled();
-                    if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)ImGui::SetTooltip("%s",hint);}
+                    if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)uc::launcher::tooltip(hint);}
                     ImGui::PopFont();
                 };
                 level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,rt_for().raster_replaced,tr("replaced_by_rt"));   // path tracing replaces it
@@ -837,7 +828,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::BeginDisabled(!options.bloom);
             ImGui::Dummy({0,8*unit});ImGui::TextUnformatted(tr("bloom_strength"));
             int bloom_strength=int(options.bloom_strength);ImGui::SetNextItemWidth(-1);
-            if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(uc::kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(uc::kBloomStrengthMax)));
+            if(uc::launcher::slider_int("##bloom_strength",bloom_strength,0,int(uc::kBloomStrengthMax),"%d%%"))options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(uc::kBloomStrengthMax)));
             track("bloom-strength");
             ImGui::EndDisabled();
             std::error_code dlss5_ignored;const bool dlss5_runtime=fs::exists(directory/L"nvngx_dlssnr.dll",dlss5_ignored);   // the player puts it next to the exe
@@ -854,7 +845,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             const auto nits_slider=[&](const std::string& name,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
                 ImGui::Dummy({0,8*unit});ImGui::TextUnformatted(tr(title));
                 int nits=int(value);ImGui::SetNextItemWidth(-1);
-                if(ImGui::SliderInt(("##"+name).c_str(),&nits,int(low),int(high),"%d nits",ImGuiSliderFlags_AlwaysClamp))value=uint32_t(std::clamp(nits,int(low),int(high)));
+                if(uc::launcher::slider_int(("##"+name).c_str(),nits,int(low),int(high),"%d nits"))value=uint32_t(std::clamp(nits,int(low),int(high)));
                 track(name);
             };
             nits_slider("hdr-peak","hdr_peak",options.hdr.peak_nits,uc::kHdrPeakMin,uc::kHdrPeakMax);
@@ -878,14 +869,14 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::BeginDisabled(absolute);
             ImGui::TextUnformatted(tr("mouse_sensitivity"));
             int sensitivity=int(options.mouse_sensitivity);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
-            if(ImGui::SliderInt("##mouse_sensitivity",&sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax)));
+            if(uc::launcher::slider_int("##mouse_sensitivity",sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax),"%d%%"))options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax)));
             track("mouse-sensitivity");
             ImGui::EndDisabled();
             if(absolute) {
                 ImGui::Dummy({0,8*unit});
                 ImGui::TextUnformatted(tr("pointer_smoothing"));
                 int smoothing=int(options.pointer_smoothing);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
-                if(ImGui::SliderInt("##pointer_smoothing",&smoothing,0,int(uc::kPointerSmoothingMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(uc::kPointerSmoothingMax)));
+                if(uc::launcher::slider_int("##pointer_smoothing",smoothing,0,int(uc::kPointerSmoothingMax),"%d%%"))options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(uc::kPointerSmoothingMax)));
                 track("pointer-smoothing");
             }
             ImGui::Dummy({0,8*unit});
@@ -898,9 +889,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 ImGui::EndCombo();
             }
             if(options.reload_zone!=uc::ReloadZone::off) {
+                ImGui::Dummy({0,8*unit});
                 ImGui::TextUnformatted(tr("reload_zone_size"));
                 int zone_size=int(options.reload_zone_size);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
-                if(ImGui::SliderInt("##reload_zone_size",&zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax),"%d%%",ImGuiSliderFlags_AlwaysClamp))options.reload_zone_size=uint32_t(std::clamp(zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax)));
+                if(uc::launcher::slider_int("##reload_zone_size",zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax),"%d%%"))options.reload_zone_size=uint32_t(std::clamp(zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax)));
                 track("reload-zone-size");
             }
             ImGui::Dummy({0,8*unit});
@@ -923,9 +915,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(editor.capturing())ImGui::TextWrapped("%s",tr("capture"));
             if(editor.error()) {ImGui::TextWrapped("%s",tr("rejected"));if(ImGui::TreeNode(tr("details"))) {ImGui::TextWrapped("%s",editor.error()->c_str());ImGui::TreePop();}}
             ImGui::BeginDisabled(editor.capturing().has_value());
-            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
-            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_PadOuterX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,{0,std::max(100*unit,ImGui::GetContentRegionAvail().y)})) {
+            if(ImGui::BeginTable("bindings",4,ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchProp)) {   // the whole page scrolls, not the table
                 ImGui::TableSetupColumn(tr("action"),ImGuiTableColumnFlags_WidthStretch,.40f);
                 ImGui::TableSetupColumn(tr("bindings"),ImGuiTableColumnFlags_WidthStretch,.60f);
                 ImGui::TableSetupColumn("+",ImGuiTableColumnFlags_WidthFixed,46*unit);
@@ -937,7 +927,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     for(const auto& entry:entries) {if(!names.empty())names+=", ";names+=binding_name(entry);}
                     if(names.empty())names=tr("unbound");
                     if(button(names.c_str(),"replace"+std::to_string(i),{-1,0}))editor.begin_capture(action,true);
-                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",names.c_str());
+                    if(ImGui::IsItemHovered())uc::launcher::tooltip(names.c_str());
                     if(ImGui::BeginPopupContextItem("binding-menu")) {
                     for(size_t j=0;j<entries.size();++j) {
                         ImGui::PushID(int(j));const auto label=std::string(tr("remove"))+": "+binding_name(entries[j]);
@@ -951,7 +941,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     if(button("+","add"+std::to_string(i),{-1,0})) {
                         if(special)ImGui::OpenPopup("add-binding");else editor.begin_capture(action);
                     }
-                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("add"));
+                    if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("add"));
                     if(ImGui::BeginPopup("add-binding")) {
                         if(ImGui::MenuItem(tr("add")))editor.begin_capture(action);
                         if(action==uc::Action::grenade && ImGui::MenuItem(tr("chord")))editor.add(action,{uc::BindingKind::interact_fire,{},{}});
@@ -965,29 +955,26 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
                 ImGui::EndTable();
             }
-            ImGui::PopStyleColor();ImGui::PopStyleVar();
-            ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::PopFont();
+            ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::Dummy({0,20*unit});ImGui::PopFont();
         } else if(page==3) {
             push_font(ui.sans,22);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*unit,10*unit});   // the Controls page's own spacing, so the tab and its window match the other pages
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{8*unit,8*unit});
-            pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;
+            pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;pad_panel.combo_unit=unit;
             uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
             wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
             uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
-            ImGui::PopStyleVar(2);ImGui::PopFont();
+            ImGui::Dummy({0,20*unit});ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
         if(!error.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1});ImGui::TextWrapped("%s",tr(error.find("changed since loading")!=std::string::npos ? "stale" : "error"));ImGui::PopStyleColor();
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",error.c_str());
+            if(ImGui::IsItemHovered())uc::launcher::tooltip(error.c_str());
             if(button(tr("reload_config"),"reload")) {reload();game_path=utf8(options.game);}
         }
         const auto foot=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
         const float path_width=width*.55f,launch_x=foot.x+width*.605f;
         std::error_code path_error;const bool game_found=fs::is_regular_file(options.game/L"DATA"/L"sys"/L"main.dol",path_error);
         const bool image_selected=!game_found && fs::is_regular_file(options.game,path_error);   // a disc image in the game folder field is unpacked by Play
-        if(page!=2) {
+        if(!controls_page) {
         ImGui::BeginGroup();ImGui::TextUnformatted(tr("folder"));
         ImGui::PushFont(ui.sans,std::round(22*unit));ImGui::SetNextItemWidth(path_width-140*unit);
         if(ImGui::InputText("##game",&game_path))options.game=fs::path(std::u8string(game_path.begin(),game_path.end()));
@@ -1000,7 +987,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const ImVec2 c{std::round((a.x+b.x)/2),std::round((a.y+b.y)/2)};
         ImVec2 folder_points[]={{c.x-13*unit,c.y-9*unit},{c.x-3*unit,c.y-9*unit},{c.x+1*unit,c.y-5*unit},{c.x+13*unit,c.y-5*unit},{c.x+13*unit,c.y+9*unit},{c.x-13*unit,c.y+9*unit}};
         folder_draw->AddConvexPolyFilled(folder_points,6,IM_COL32(192,196,196,255));
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("browse"));
+        if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("browse"));
         ImGui::SameLine(0,12*unit);
         if(button("##browse-image","browse-image",{58*unit,ImGui::GetFrameHeight()})) {
             try {auto selected=options.game;if(uc::launcher::choose_image_file(ui.window,selected)) {options.game=selected;game_path=utf8(selected);}}
@@ -1010,7 +997,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const ImVec2 disc{std::round((a.x+b.x)/2),std::round((a.y+b.y)/2)};
         folder_draw->AddCircleFilled(disc,12*unit,IM_COL32(192,196,196,255),24);
         folder_draw->AddCircleFilled(disc,4*unit,ImGui::GetColorU32(ImGuiCol_Button),16);
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr("image_browse"));ImGui::PopFont();
+        if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("image_browse"));ImGui::PopFont();
         ImGui::Dummy({0,20*unit});
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+path_width);ImGui::PushStyleColor(ImGuiCol_Text,game_found ? ImVec4{.47f,.74f,.52f,1} : ImVec4{.85f,.68f,.42f,1});
         if(game_found) {
@@ -1023,7 +1010,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         ImGui::TextWrapped("%s",tr(game_found ? "found" : image_selected ? "image_selected" : "missing"));ImGui::PopStyleColor();ImGui::PopTextWrapPos();
         ImGui::EndGroup();
         }
-        const float button_y=foot.y+(page==2 ? 0.f : 32*unit);
+        const float button_y=foot.y+(controls_page ? 0.f : 32*unit);
         ImGui::SetCursorScreenPos({launch_x,button_y});
         ImGui::BeginDisabled(blocked || editor.capturing().has_value());
         const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !(game_found || image_selected) || unpack || network_modal || network || pending_network || updates.blocks_game_launch());
@@ -1088,7 +1075,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                         network_local_address=std::min(network_local_address,state.local_addresses.size()-1);
                         const auto address=state.local_addresses[network_local_address]+":"+std::to_string(state.port);
                         ImGui::SetNextItemWidth(320*unit);
-                        if(ImGui::BeginCombo("##network-lan",address.c_str())) {
+                        if(combo("##network-lan",address.c_str())) {
                             for(size_t i=0;i<state.local_addresses.size();++i)if(ImGui::Selectable((state.local_addresses[i]+":"+std::to_string(state.port)).c_str(),i==network_local_address))network_local_address=i;
                             ImGui::EndCombo();
                         }

@@ -8,7 +8,8 @@ struct ImFont;
 namespace uc {
 using PanelText=std::function<const char*(std::string_view)>;   // a translated launcher string
 // What the host sets so the window looks like the rest of its UI: the serif font and size of its page titles, and how wide a combo or slider is (a fraction of the column).
-struct GamepadPanelState { bool modal_open=false; ImFont* heading=nullptr; float heading_size=0; float control_width=.75f; };
+// combo_unit above zero draws the combos in the launcher's look (launcher::combo, the host's UI scale); zero leaves ImGui's own combo.
+struct GamepadPanelState { bool modal_open=false; ImFont* heading=nullptr; float heading_size=0; float control_width=.75f; float combo_unit=0; };
 // The Controllers tab (the same code in the launcher and in the in-game menu): control type and gamepad model, the connected pad, and the "Gamepad" button that
 // opens a window with the sticks, dead zones, gyro and the gamepad bindings (shown as the controller's own button pictures). `editor` is the gamepad table's
 // editor (BindingTable::gamepad); the settings' bindings follow it. A pad press for a pending capture comes from outside, through editor.event().

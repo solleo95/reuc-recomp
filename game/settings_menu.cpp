@@ -237,7 +237,7 @@ void SettingsMenu::main_tab(float unit) {
     const auto nits_slider=[&](const char* id,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
         ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr(title));
         int nits=int(value);
-        if(ImGui::SliderInt(id,&nits,int(low),int(high),"%d nits",ImGuiSliderFlags_AlwaysClamp)) value=uint32_t(std::clamp(nits,int(low),int(high)));
+        if(launcher::slider_int(id,nits,int(low),int(high),"%d nits")) value=uint32_t(std::clamp(nits,int(low),int(high)));
     };
     nits_slider("##hdr_peak","hdr_peak",options.hdr.peak_nits,kHdrPeakMin,kHdrPeakMax);
     nits_slider("##hdr_paper","hdr_paper_white",options.hdr.paper_white_nits,kHdrWhiteMin,kHdrWhiteMax);
@@ -317,7 +317,7 @@ void SettingsMenu::effects_tab(float unit) {
     ImGui::BeginDisabled(!options.bloom);
     ImGui::Dummy({0,6*unit}); ImGui::TextUnformatted(tr("bloom_strength"));
     int bloom_strength=int(options.bloom_strength);
-    if(ImGui::SliderInt("##bloom_strength",&bloom_strength,0,int(kBloomStrengthMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(kBloomStrengthMax)));
+    if(launcher::slider_int("##bloom_strength",bloom_strength,0,int(kBloomStrengthMax),"%d%%")) options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(kBloomStrengthMax)));
     ImGui::EndDisabled();
     ImGui::PopItemWidth();
     ImGui::EndChild();
@@ -388,7 +388,7 @@ void SettingsMenu::reticle_tab(float unit) {
     const auto slider=[&](const char* id,const char* title,uint32_t& value,uint32_t low,uint32_t high) {
         ImGui::TextUnformatted(tr(title));
         int shown=int(value);
-        if(ImGui::SliderInt(id,&shown,int(low),int(high),"%d%%",ImGuiSliderFlags_AlwaysClamp)) value=uint32_t(std::clamp(shown,int(low),int(high)));
+        if(launcher::slider_int(id,shown,int(low),int(high),"%d%%")) value=uint32_t(std::clamp(shown,int(low),int(high)));
         ImGui::Dummy({0,6*unit});
     };
     slider("##crosshair","crosshair_scale",options.crosshair_scale,0,100);
@@ -442,14 +442,14 @@ void SettingsMenu::controls_tab(float unit) {
     ImGui::TextUnformatted(tr("mouse_sensitivity"));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
     int sensitivity=int(options.mouse_sensitivity);
-    if(ImGui::SliderInt("##sensitivity",&sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax)));
+    if(launcher::slider_int("##sensitivity",sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax),"%d%%")) options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(kMouseSensitivityMin),int(kMouseSensitivityMax)));
     ImGui::EndDisabled();
     if(absolute) {
         ImGui::Dummy({0,6*unit});
         ImGui::TextUnformatted(tr("pointer_smoothing"));
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
         int smoothing=int(options.pointer_smoothing);
-        if(ImGui::SliderInt("##pointer-smoothing",&smoothing,0,int(kPointerSmoothingMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(kPointerSmoothingMax)));
+        if(launcher::slider_int("##pointer-smoothing",smoothing,0,int(kPointerSmoothingMax),"%d%%")) options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(kPointerSmoothingMax)));
     }
     ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("reload_zone"));
@@ -463,7 +463,7 @@ void SettingsMenu::controls_tab(float unit) {
         ImGui::TextUnformatted(tr("reload_zone_size"));
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
         int size=int(options.reload_zone_size);
-        if(ImGui::SliderInt("##reload-zone-size",&size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax),"%d%%",ImGuiSliderFlags_AlwaysClamp)) options.reload_zone_size=uint32_t(std::clamp(size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax)));
+        if(launcher::slider_int("##reload-zone-size",size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax),"%d%%")) options.reload_zone_size=uint32_t(std::clamp(size,int(kReloadZoneSizeMin),int(kReloadZoneSizeMax)));
     }
     ImGui::Dummy({0,6*unit});
     ImGui::TextUnformatted(tr("style"));

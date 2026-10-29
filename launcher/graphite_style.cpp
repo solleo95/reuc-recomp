@@ -1,5 +1,8 @@
 #include "graphite.h"
 #include <imgui.h>
+#include <algorithm>
+#include <cmath>
+#include <string>
 
 namespace uc::launcher {
 namespace {
@@ -84,5 +87,39 @@ void graphite_style() {
     c[ImGuiCol_NavWindowingHighlight] = color(0xeee9dc, 0.70f);
     c[ImGuiCol_NavWindowingDimBg] = color(0x101415, 0.65f);
     c[ImGuiCol_ModalWindowDimBg] = color(0x101415, 0.75f);
+}
+
+bool combo(const char* id,const char* preview,float unit,int flags) {
+    // BeginCombo switches to the popup window: take the parent's geometry and draw list first.
+    const auto a=ImGui::GetCursorScreenPos();
+    auto* list=ImGui::GetWindowDrawList();auto* font=ImGui::GetFont();const float size=ImGui::GetFontSize();
+    const auto text=ImGui::GetColorU32(ImGuiCol_Text);
+    const ImVec2 b{a.x+ImGui::CalcItemWidth(),a.y+ImGui::GetFrameHeight()};
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,8*unit});
+    const bool opened=ImGui::BeginCombo(id,"",flags|ImGuiComboFlags_NoArrowButton);
+    ImGui::PopStyleVar();
+    const ImVec4 clip{a.x+14*unit,a.y,b.x-36*unit,b.y};
+    list->AddRectFilledMultiColor({a.x+2,a.y+2},{b.x-2,b.y-2},IM_COL32(255,255,255,5),IM_COL32(255,255,255,5),0,0);
+    list->AddText(font,size,{std::round(a.x+16*unit),std::round(a.y+(b.y-a.y-size)/2)},text,preview,nullptr,0,&clip);
+    const float x=b.x-25*unit,y=(a.y+b.y)/2;
+    list->AddLine({x-6*unit,y-3*unit},{x,y+3*unit},text,unit);
+    list->AddLine({x,y+3*unit},{x+6*unit,y-3*unit},text,unit);
+    return opened;
+}
+
+void tooltip(const char* text) {
+    const float size=ImGui::GetFontSize();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{.55f*size,.4f*size});
+    if(ImGui::BeginTooltip()) {ImGui::TextUnformatted(text);ImGui::EndTooltip();}
+    ImGui::PopStyleVar();
+}
+
+bool slider_int(const char* id,int& value,int low,int high,const char* format) {
+    std::string shown_format(format);
+    if(const auto at=shown_format.find("%d");at!=std::string::npos) shown_format.replace(at,2,"%.0f");
+    float shown=float(value);
+    if(!ImGui::SliderFloat(id,&shown,float(low),float(high),shown_format.c_str(),ImGuiSliderFlags_AlwaysClamp)) return false;
+    value=std::clamp(int(std::lround(shown)),low,high);
+    return true;
 }
 }
