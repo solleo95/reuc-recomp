@@ -1,14 +1,25 @@
 #include "check.h"
 #include "savefs.h"
+#include "test_pid.h"
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <chrono>
+#ifndef _WIN32
+#include <climits>
+#include <unistd.h>
+#endif
 
 int main() {
-    const auto suffix=std::to_string(GetCurrentProcessId())+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    auto root=std::filesystem::temp_directory_path()/ ("uc-native-save-test-"+suffix);
+    const auto suffix=std::to_string(test_process_id())+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    std::filesystem::path folder(u8"uc native save тест "); folder+=suffix;   // spaces and non-ASCII letters in the save folder's host path
+    auto root=std::filesystem::temp_directory_path()/folder;
+    const auto outside=root.parent_path()/("uc-save-outside-"+suffix);
+    struct Cleanup {   // declared before `fs`, so it runs after fs released its directory handles
+        std::filesystem::path a,b;
+        ~Cleanup() { std::error_code ec; std::filesystem::remove_all(a,ec); std::filesystem::remove_all(b,ec); }
+    } cleanup{root,outside};
     uc::SaveFs fs(root);
     CHECK(fs.initialize()==0);
     CHECK(fs.create_dir("/title")==0);
@@ -19,11 +30,13 @@ int main() {
     CHECK(fs.create_file("/title/data/save.bin")==0);
     CHECK(fs.create_file("/title/data/save.bin")==-105);
     int fd=fs.open("/title/data/save.bin",3); CHECK(fd>=0);
+#ifdef _WIN32   // Windows holds the open directories against rename and writes; POSIX cannot pin a directory
     CHECK(!MoveFileExW((root/"title").c_str(),(root/"moved").c_str(),0));
     CHECK(GetLastError()==ERROR_SHARING_VIOLATION || GetLastError()==ERROR_ACCESS_DENIED);
     HANDLE writer=CreateFileW((root/"title/data").c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr);
     CHECK(writer==INVALID_HANDLE_VALUE);
     CHECK(GetLastError()==ERROR_SHARING_VIOLATION || GetLastError()==ERROR_ACCESS_DENIED);
+#endif
     const std::array<uint8_t,4> original{1,2,3,4};
     CHECK(fs.write(fd,original)==4);
     auto stats=fs.stats(fd); CHECK(stats.result==0 && stats.length==4 && stats.position==4);
@@ -76,13 +89,22 @@ int main() {
     CHECK(archived_replacement);
     CHECK(fs.rename("/title/data/replace.bin","/title/data/a")==0);
     CHECK(fs.create_dir("/title/empty")==0 && fs.remove("/title/empty")==0);
+#ifdef _WIN32
     CHECK(CreateHardLinkW((root/"title/data/alias.bin").c_str(),(root/"title/data/new.bin").c_str(),nullptr));
+#else
+    CHECK(link((root/"title/data/new.bin").c_str(),(root/"title/data/alias.bin").c_str())==0);
+#endif
     CHECK(fs.open("/title/data/alias.bin",3)==-102);
     CHECK(fs.create_file("/.BACKUPS/escape")==-102);
     CHECK(fs.remove("/title/data")==-115);
-    const auto outside=root.parent_path()/("uc-save-outside-"+suffix);
     std::filesystem::create_directories(outside);
+#ifdef _WIN32
     if (CreateSymbolicLinkW((root/"link").c_str(),outside.c_str(),SYMBOLIC_LINK_FLAG_DIRECTORY|SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
         CHECK(fs.create_file("/link/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));
     else CHECK(GetLastError()==ERROR_PRIVILEGE_NOT_HELD); // platform cannot create this fixture
+#else
+    CHECK(symlink(outside.c_str(),(root/"link").c_str())==0);
+    CHECK(fs.create_file("/link/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));
+#endif
+    CHECK(fs.create_dir("/title/слот")==-101);   // the guest's own names are ASCII-only (resolve() rejects other bytes)
 }

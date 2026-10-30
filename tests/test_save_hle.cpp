@@ -3,6 +3,7 @@
 #include "hle/os.h"
 #include "dispatch.h"
 #include "ppc_fixture.h"
+#include "test_pid.h"
 #include <cstring>
 
 static int callbacks;
@@ -10,7 +11,7 @@ static int32_t completion;
 static void done(ppc::Ctx& c) { CHECK(!uc::os_sched().interrupts_enabled()); CHECK(c.r[4]==0xBEEF); completion=int32_t(c.r[3]); ++callbacks; }
 int main() {
     Fix fixture; auto& c=fixture.c; c.r[13]=0x80400000;
-    const auto root=std::filesystem::temp_directory_path()/("uc-save-hle-"+std::to_string(GetCurrentProcessId()));
+    const auto root=std::filesystem::temp_directory_path()/("uc-save-hle-"+std::to_string(test_process_id()));
     std::error_code ignored; std::filesystem::remove_all(root,ignored);   // an earlier run's folder under a reused process id would make "test.bin" exist already (ISFS_Open -106 below)
     uc::SaveFs fs(root);
     uc::save_hle_init(fs);

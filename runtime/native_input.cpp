@@ -2,6 +2,7 @@
 #include "gx_vertices.h"
 #include "gx_audit.h"
 #include "wide_view.h"
+#include "path_io.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -65,12 +66,12 @@ void NativeInput::restore(const Snapshot& saved) {
 NativeInput::~NativeInput() { if(demo_out_)std::fclose(demo_out_); }
 void NativeInput::demo_record(const std::filesystem::path& path) {
     std::lock_guard lock(mutex_);
-    demo_out_=_wfopen(path.c_str(),L"wb");
+    demo_out_=uc::fopen_path(path,"wb");
     if(!demo_out_)throw std::runtime_error("cannot create the input demo");
 }
 void NativeInput::demo_play(const std::filesystem::path& path) {
     std::lock_guard lock(mutex_);
-    std::FILE* file=_wfopen(path.c_str(),L"rb");
+    std::FILE* file=uc::fopen_path(path,"rb");
     if(!file)throw std::runtime_error("cannot open the input demo");
     std::vector<uint8_t> data; uint8_t chunk[65536]; size_t got;
     while((got=std::fread(chunk,1,sizeof chunk,file))>0)data.insert(data.end(),chunk,chunk+got);

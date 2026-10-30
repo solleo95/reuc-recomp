@@ -1,4 +1,8 @@
 #include "write_trap.h"
+#ifndef _WIN32
+// A Windows-only debugging tool (VirtualProtect + a vectored exception handler); on Linux the hook does nothing.
+namespace uc { void write_trap_step(const ppc::Ctx&) {} }
+#else
 #include "trace.h"
 #include <windows.h>
 #include <cstdio>
@@ -101,3 +105,4 @@ void write_trap_step(const ppc::Ctx& c) {
     if (t.out) std::fflush(t.out);
 }
 }
+#endif

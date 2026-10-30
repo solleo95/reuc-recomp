@@ -61,9 +61,4 @@ CpuTopology cpu_topology() {
     for(const auto& [index,core]:cores)if(core.cpu>=0)result.cores.push_back(core);
     return result;
 }
-uint64_t cpu_worker_mask(const std::vector<CpuCore>& cores,int cpu,uint64_t allowed) {
-    if(cpu<0 || cpu>=63 || !(allowed&(uint64_t(1)<<cpu)))return allowed;
-    for(const auto& core:cores)if(core.mask&(uint64_t(1)<<cpu))return allowed&~(core.mask&~(uint64_t(1)<<cpu));
-    return allowed;
-}
 }

@@ -1,8 +1,10 @@
 #include "dispatch.h"
 #include <algorithm>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,16 @@ void dispatch_init(const FnEntry* table, size_t count, uint32_t text_begin, uint
     for (size_t i = 0; i < count; ++i) g_by_host.push_back({reinterpret_cast<uintptr_t>(table[i].fn), table[i].addr});
     std::sort(g_by_host.begin(), g_by_host.end());
 }
+#ifndef _WIN32
+// shortcut: the translated function with the highest host entry at or below pc, if pc is within 256 KB of it (Windows reads exact unwind data); good enough for crash reports
+uint32_t guest_function_for_host(const void* pc) {
+    const uintptr_t address = reinterpret_cast<uintptr_t>(pc);
+    auto it = std::upper_bound(g_by_host.begin(), g_by_host.end(), std::pair<uintptr_t, uint32_t>{address, 0xFFFFFFFFu});
+    if (it == g_by_host.begin()) return 0;
+    --it;
+    return address - it->first < 256 * 1024 ? it->second : 0;
+}
+#else
 uint32_t guest_function_for_host(const void* pc) {
     // x64 unwind data names the function containing pc exactly; chained (split hot/cold) entries lead to the primary.
     DWORD64 image = 0;
@@ -34,6 +46,7 @@ uint32_t guest_function_for_host(const void* pc) {
     auto it = std::lower_bound(g_by_host.begin(), g_by_host.end(), std::pair<uintptr_t, uint32_t>{begin, 0});
     return it != g_by_host.end() && it->first == begin ? it->second : 0;
 }
+#endif
 std::vector<uint32_t> function_addresses() {
     std::vector<uint32_t> result;
     for (size_t i = 0; i < g_dense.size(); ++i) if (g_dense[i]) result.push_back(g_begin + uint32_t(i) * 4);

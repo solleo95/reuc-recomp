@@ -3,7 +3,8 @@
 #include <cstdint>
 #include <array>
 #include <cstring>
-#include <intrin.h>
+#include <bit>
+#include "compat.h"
 #include "gx_write_watch.h"
 
 #define PPC_INLINE __attribute__((always_inline)) inline
@@ -206,7 +207,7 @@ PPC_INLINE void sra_common(Ctx& c, int s, int a, uint32_t n, bool rc) {
 }
 PPC_INLINE void op_sraw(Ctx& c, int s, int a, int b, bool rc) { sra_common(c, s, a, c.r[b] & 0x3F, rc); }
 PPC_INLINE void op_srawi(Ctx& c, int s, int a, int sh, bool rc) { sra_common(c, s, a, uint32_t(sh), rc); }
-PPC_INLINE uint32_t rotl32(uint32_t v, uint32_t n) { return _rotl(v, int(n & 31)); }
+PPC_INLINE uint32_t rotl32(uint32_t v, uint32_t n) { return std::rotl(v, int(n & 31)); }
 PPC_INLINE uint32_t mask32(uint32_t mb, uint32_t me) {
     uint32_t m = (0xFFFFFFFFu >> mb) & (0xFFFFFFFFu << (31 - me));
     return mb <= me ? m : ((0xFFFFFFFFu >> mb) | (0xFFFFFFFFu << (31 - me)));

@@ -1,9 +1,11 @@
 #pragma once
+#ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -46,15 +48,20 @@ private:
     Snapshot& writable();
     struct Pin { std::filesystem::path path; std::shared_ptr<void> handle; };
     using Pins=std::vector<Pin>;
-    struct File { HANDLE handle; uint32_t mode; Pins parents; };
+#ifdef _WIN32
+    using NativeFile=HANDLE; using NativeName=wchar_t;   // a file handle; the character type of a backup directory name
+#else
+    using NativeFile=int; using NativeName=char;         // a file descriptor
+#endif
+    struct File { NativeFile handle; uint32_t mode; Pins parents; };
     std::filesystem::path root_;
     std::map<int,File> files_;
     int next_fd_=100;
     uint64_t revision_=0;
     static int pin(const std::filesystem::path& directory,Pins& pins);
     int resolve(const std::string& path,std::filesystem::path& host,Pins& pins) const;
-    int backup(HANDLE source);
+    int backup(NativeFile source);
     int backup(const std::filesystem::path& path);
-    std::filesystem::path revision(const wchar_t* directory,Pins& pins);
+    std::filesystem::path revision(const NativeName* directory,Pins& pins);
 };
 }

@@ -1,18 +1,29 @@
 #include "clock.h"
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <atomic>
 #include <mutex>
 #include <stdexcept>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 namespace uc {
 namespace {
+#ifdef _WIN32
 uint64_t real_ticks() {
     static const uint64_t freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return uint64_t(f.QuadPart); }();
     LARGE_INTEGER q; QueryPerformanceCounter(&q);
     uint64_t c = uint64_t(q.QuadPart);
     return (c / freq) * kTimebaseHz + (c % freq) * kTimebaseHz / freq;   // (c % freq) * hz < 2^64 for any real counter frequency
 }
+#else
+uint64_t real_ticks() {
+    timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return uint64_t(t.tv_sec) * kTimebaseHz + uint64_t(t.tv_nsec) * kTimebaseHz / 1000000000ull;   // tv_nsec * hz < 2^64
+}
+#endif
 // Seqlock: speed changes are rare, now_ticks is hot.
 std::atomic<uint32_t> version{0}, speed{1};
 std::atomic<uint64_t> real_base{0}, virtual_base{0};

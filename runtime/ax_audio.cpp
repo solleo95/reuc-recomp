@@ -39,7 +39,7 @@ int16_t next_sample(ppc::Ctx& c,uint32_t pb) {
         const uint8_t byte=std::to_integer<uint8_t>(data[0]);
         int32_t nibble=(pos&1) ? byte&15 : byte>>4;
         if (nibble>=8) nibble-=16;
-        const int32_t first=int16_t(ppc::rd16(c,pb+0x7E+(pred>>4)*4));
+        const int32_t first=int16_t(ppc::rd16(c,pb+0x7E + (pred>>4)*4));
         const int32_t second=int16_t(ppc::rd16(c,pb+0x80+(pred>>4)*4));
         const int64_t prediction=int64_t(first)*int16_t(ppc::rd16(c,pb+0xA2))+int64_t(second)*int16_t(ppc::rd16(c,pb+0xA4));
         value=int32_t(std::clamp<int64_t>((int64_t(nibble)*(1<<(pred&15))*2048+prediction+1024)>>11,-32768,32767));

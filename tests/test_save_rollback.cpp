@@ -1,11 +1,12 @@
 #include "check.h"
 #include "savefs.h"
+#include "test_pid.h"
 #include <array>
 #include <chrono>
 #include <fstream>
 
 int main() {
-    const auto root=std::filesystem::temp_directory_path()/ ("uc-save-rollback-"+std::to_string(GetCurrentProcessId())+"-"+
+    const auto root=std::filesystem::temp_directory_path()/ ("uc-save-rollback-"+std::to_string(test_process_id())+"-"+
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
         uc::SaveFs files(root);

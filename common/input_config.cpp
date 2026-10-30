@@ -5,10 +5,17 @@
 #include <set>
 #include <stdexcept>
 #include <system_error>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include "file_rename.h"
+#else
+#include <cerrno>
+#include <chrono>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 namespace uc {
 namespace {
 using Json=nlohmann::ordered_json;
@@ -64,6 +71,7 @@ std::optional<std::string> read_file(const std::filesystem::path& path) {
     if(!file.read(bytes.data(),std::streamsize(bytes.size())))throw std::runtime_error("config: cannot read file");
     return bytes;
 }
+#ifdef _WIN32
 struct Handle {
     HANDLE value=INVALID_HANDLE_VALUE;
     ~Handle() {if(value!=INVALID_HANDLE_VALUE)CloseHandle(value);}
@@ -74,6 +82,11 @@ struct Handle {
 [[noreturn]] void io_error(const char* message) {
     throw std::runtime_error(std::string("config: ")+message+": "+std::system_category().message(int(GetLastError())));
 }
+#else
+[[noreturn]] void io_error(const char* message) {
+    throw std::runtime_error(std::string("config: ")+message+": "+std::generic_category().message(errno));
+}
+#endif
 }
 Bindings bindings_from_json(const nlohmann::ordered_json& bindings,Bindings result) {
     try {
@@ -162,6 +175,42 @@ std::string serialize_config(const ConfigDocument& document) {
     if(bytes.size()>kMaxBytes)invalid("serialized file exceeds 1 MiB");
     return bytes;
 }
+#ifndef _WIN32
+void save_config(const std::filesystem::path& path,ConfigDocument& document) {
+    const auto bytes=serialize_config(document);
+    auto lock_path=path; lock_path+=".write-lock";
+    struct Lock {   // the lock file exists while a writer runs; only the writer that created it removes it
+        std::filesystem::path path; int fd;
+        ~Lock() {if(fd>=0) {::close(fd);std::error_code ignored;std::filesystem::remove(path,ignored);}}
+    } lock{lock_path,::open(lock_path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600)};
+    if(lock.fd<0)io_error("writer lock unavailable; another writer may be active");
+    if(read_file(path)!=document.original_bytes)throw std::runtime_error("config: file changed since loading; reload before saving");
+    static std::atomic<uint64_t> serial=0;
+    const auto ticks=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto temporary=path; temporary+=".tmp-"+std::to_string(getpid())+"-"+std::to_string(ticks)+"-"+std::to_string(serial.fetch_add(1));
+    int file=::open(temporary.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0644);
+    if(file<0)io_error("cannot create temporary file");
+    try {
+        // The new bytes are written and flushed beside the file and renamed over it: a crash leaves the old or the new config, never half of one.
+        for(size_t done=0;done<bytes.size();) {
+            const ssize_t count=::write(file,bytes.data()+done,bytes.size()-done);
+            if(count<0) {if(errno==EINTR)continue;io_error("cannot write temporary file");}
+            done+=size_t(count);
+        }
+        if(fsync(file))io_error("cannot flush temporary file");
+        const int closed=::close(file);
+        file=-1;   // closed (even when close reports an error): never close this number again
+        if(closed)io_error("cannot close temporary file");
+        if(::rename(temporary.c_str(),path.c_str()))io_error("cannot replace file");
+    } catch(...) {
+        if(file>=0)::close(file);
+        std::error_code ignored;
+        std::filesystem::remove(temporary,ignored);   // only this writer's unique temporary file
+        throw;
+    }
+    document.original_bytes=bytes;
+}
+#else
 void save_config(const std::filesystem::path& path,ConfigDocument& document) {
     const auto bytes=serialize_config(document);
     auto lock_path=path; lock_path+=L".write-lock";
@@ -190,4 +239,5 @@ void save_config(const std::filesystem::path& path,ConfigDocument& document) {
     }
     document.original_bytes=bytes;
 }
+#endif
 }

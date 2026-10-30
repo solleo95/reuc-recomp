@@ -9,14 +9,25 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <pthread.h>
+#include <time.h>
+#include <cerrno>
+#include <cstring>
+#endif
 
 namespace uc {
 
 namespace {
 struct Tramp { Sched* s; Thread* t; };
+#ifdef _WIN32
 DWORD WINAPI tramp(LPVOID p) {
+#else
+void* tramp(void* p) {
+#endif
     std::unique_ptr<Tramp> tp(static_cast<Tramp*>(p));
     uc::crash_guard_thread();
     uc::mark_guest_thread();
@@ -204,9 +215,15 @@ void Sched::join_hosts() {
     std::vector<void*> handles;
     { std::lock_guard lock(baton_m_); handles.swap(handles_); }
     for (void* handle : handles) {
+#ifdef _WIN32
         DWORD result = WaitForSingleObject(static_cast<HANDLE>(handle), 5000);
         if (result != WAIT_OBJECT_0) fatal("guest host thread failed to stop: wait result %lu", result);
         if (!CloseHandle(static_cast<HANDLE>(handle))) fatal("cannot close joined guest thread: Windows error %lu", GetLastError());
+#else
+        timespec limit; clock_gettime(CLOCK_REALTIME, &limit); limit.tv_sec += 5;
+        const int result = pthread_timedjoin_np(reinterpret_cast<pthread_t>(handle), nullptr, &limit);
+        if (result) fatal("guest host thread failed to stop: %s", std::strerror(result));
+#endif
     }
     for (auto& thread : threads_) if (thread->started) thread->state = Thread::State::Dead;
     running_ = nullptr;
@@ -531,7 +548,12 @@ void Sched::reschedule(Thread* self) {
     }
 }
 
+#ifdef _WIN32
 uint64_t Sched::thread_cycles() { ULONG64 cycles = 0; QueryThreadCycleTime(GetCurrentThread(), &cycles); return cycles; }
+#else
+// shortcut: thread CPU time in nanoseconds stands in for cycles (the only consumers are the frame log's per-thread shares); use the perf counter if cycles are ever needed
+uint64_t Sched::thread_cycles() { timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return uint64_t(t.tv_sec) * 1000000000ull + uint64_t(t.tv_nsec); }
+#endif
 
 uint64_t Sched::steady_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 
@@ -562,10 +584,25 @@ void Sched::handoff(Thread* self, Thread* next) {
 void Sched::start_host(Thread* t) {
     t->started = true;
     t->host_alive = true;
+#ifdef _WIN32
     HANDLE h = CreateThread(nullptr, host_stack_, tramp, new Tramp{this, t}, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
     if (!h) fatal("cannot create a host thread for guest thread %d", t->id);
     if (pin_cpu_ >= 0) SetThreadAffinityMask(h, DWORD_PTR(1) << pin_cpu_);
     handles_.push_back(h);
+#else
+    pthread_attr_t attributes; pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, host_stack_);
+    pthread_t thread;
+    auto* start = new Tramp{this, t};
+    const int created = pthread_create(&thread, &attributes, tramp, start);
+    pthread_attr_destroy(&attributes);
+    if (created) { delete start; fatal("cannot create a host thread for guest thread %d: %s", t->id, std::strerror(created)); }
+    if (pin_cpu_ >= 0) {
+        cpu_set_t set; CPU_ZERO(&set); CPU_SET(pin_cpu_, &set);
+        pthread_setaffinity_np(thread, sizeof set, &set);
+    }
+    handles_.push_back(reinterpret_cast<void*>(thread));
+#endif
 }
 
 void Sched::thread_main(Thread* t) {

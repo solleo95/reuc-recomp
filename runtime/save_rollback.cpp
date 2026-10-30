@@ -1,5 +1,6 @@
 #include "save_rollback.h"
 #include <algorithm>
+#include <climits>
 #include <functional>
 #include <stdexcept>
 
