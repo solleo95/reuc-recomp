@@ -34,7 +34,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifdef _WIN32
 #include <intrin.h> // Load Clang's intrinsic guards before SDL 3.2.0's compatibility definitions.
+#endif
 #endif
 #include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>

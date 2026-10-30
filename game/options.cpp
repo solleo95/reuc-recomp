@@ -1,22 +1,17 @@
 #include "options.h"
+#include "frame_limit_cap.h"
 #include <charconv>
 #include <array>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "path_io.h"
 namespace uc {
 namespace {
 constexpr std::array<std::string_view,5> kUpscalerNames{"off","dlss","fsr","blit","smaa"};
 constexpr std::array<std::string_view,5> kUpscaleModeNames{"native","quality","balanced","performance","ultra_performance"};
 }
-std::filesystem::path default_game_folder() {
-    std::wstring value(32768,L'\0');
-    value.resize(GetModuleFileNameW(nullptr,value.data(),DWORD(value.size())));
-    return std::filesystem::path(value).parent_path()/"game";
-}
+std::filesystem::path default_game_folder() { return exe_path().parent_path()/"game"; }
 std::optional<UpscalerKind> upscaler_from_name(std::string_view name, bool allow_test) {
     for (size_t i = 0; i < kUpscalerNames.size(); ++i)
         if (name == kUpscalerNames[i] && (allow_test || UpscalerKind(i) != UpscalerKind::blit)) return UpscalerKind(i);
@@ -210,7 +205,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (arg == "--speed") { if (number > 32) return "invalid value for --speed"; options.speed = number; }
             else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
-            else if (arg == "--fps-limit") { if (number != 0 && (number < 20 || number > 1000)) return "invalid value for --fps-limit"; options.fps_limit = number; }
+            else if (arg == "--fps-limit") { if (number != 0 && (number < 20 || number > 1000)) return "invalid value for --fps-limit"; options.fps_limit = clamp_frame_limit(number); }
             else if (arg == "--det-frames") options.det_frames = number;
             else if (arg == "--stop-retrace") options.stop_retrace = number;
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }

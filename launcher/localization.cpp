@@ -3,9 +3,13 @@
 #include <array>
 #include <cctype>
 #include <stdexcept>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <cstdlib>
+#endif
 namespace uc::launcher {
 namespace {
 constexpr Language supported[]={
@@ -30,6 +34,19 @@ std::string resolve_language(std::string_view locale) {
     for(auto language:supported)if(language.code==primary)return std::string(language.code);
     return "en";
 }
+#ifndef _WIN32
+std::string system_language() {   // LANGUAGE (first entry), LC_ALL, LC_MESSAGES or LANG: "ru_RU.UTF-8" -> ru
+    for(const char* name:{"LANGUAGE","LC_ALL","LC_MESSAGES","LANG"}) {
+        const char* value=std::getenv(name);
+        if(!value || !*value)continue;
+        std::string text(value);
+        text=text.substr(0,text.find_first_of(":.@"));
+        if(text.empty() || text=="C" || text=="POSIX")continue;
+        return resolve_language(text);
+    }
+    return "en";
+}
+#else
 std::string system_language() {
     ULONG count=0,size=0;
     if(!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME,&count,nullptr,&size) || !size)return "en";
@@ -38,6 +55,7 @@ std::string system_language() {
     const std::wstring_view first(buffer.c_str());
     return resolve_language(std::string(first.begin(),first.end()));
 }
+#endif
 std::string config_language(const ConfigDocument& document) {
     const auto& root=document.properties;
     if(!root.contains("launcher"))return "system";

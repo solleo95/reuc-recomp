@@ -26,9 +26,7 @@
 #include <random>
 #include <map>
 #include <cstdlib>
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "path_io.h"
 namespace uc {
 namespace {
 using Json=nlohmann::json;
@@ -507,7 +505,7 @@ struct NetGame::Impl {
         try {
             const auto boundary_started=std::chrono::steady_clock::now();
             if(profile && step_started!=std::chrono::steady_clock::time_point{}) {
-                ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles);
+                const uint64_t cycles=thread_cpu_cycles();
                 const auto elapsed=std::chrono::duration<double,std::milli>(boundary_started-step_started).count();
                 const auto switches=scheduler->switch_stats();
                 if(step_replay || elapsed>20)
@@ -662,7 +660,7 @@ struct NetGame::Impl {
             }
             if(extra_step_us)std::this_thread::sleep_for(std::chrono::microseconds(extra_step_us));   // Diagnostic: stands in for a slower CPU.
             if(profile) {
-                ULONG64 cycles=0; QueryThreadCycleTime(GetCurrentThread(),&cycles); step_cycles=cycles;
+                step_cycles=thread_cpu_cycles();
                 step_wait=game_pacing_stats().wait_ns;
                 const auto switches=scheduler->switch_stats(); step_wake=switches.wake_ns; step_switches=switches.switches;
                 step_replay=replay; step_started=std::chrono::steady_clock::now();

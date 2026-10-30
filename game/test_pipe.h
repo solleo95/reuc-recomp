@@ -23,7 +23,12 @@ public:
     uint64_t dropped() const;
 private:
     void read_loop(); void write_loop();
-    void* cmd_ = nullptr; void* evt_ = nullptr;
+    void* cmd_ = nullptr; void* evt_ = nullptr;   // Windows: the pipe handles; Linux: the listening sockets (descriptor + 1)
+#ifndef _WIN32
+    std::atomic<int> cmd_client_{-1}, evt_client_{-1};   // the accepted connections, shut down to wake the threads
+    std::string cmd_path_, evt_path_;
+    int cmd_lock_ = -1, evt_lock_ = -1;   // flock'ed <socket path>.lock files: held while the game owns the name
+#endif
     std::atomic<bool> stop_{false}, cmd_connected_{false}, evt_connected_{false}, disconnected_{false};
     std::atomic<uint64_t> dropped_{0};
     std::atomic<bool> reader_done_{false}, writer_done_{false};

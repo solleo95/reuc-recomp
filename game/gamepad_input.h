@@ -2,7 +2,9 @@
 #include "gamepad_math.h"
 #include "gamepad_target.h"
 #ifdef _WIN32
+#ifdef _WIN32
 #include <intrin.h>   // before SDL: SDL's endian header redefines a builtin otherwise
+#endif
 #endif
 #include <SDL3/SDL.h>
 #include <array>

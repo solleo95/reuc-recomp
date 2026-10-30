@@ -5,6 +5,42 @@
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
+#ifndef _WIN32
+namespace uc::ui {
+// Linux (SteamOS): the fonts the system ships. DejaVu Sans for Latin and Cyrillic, Noto Sans CJK merged in for Japanese, Korean and Chinese, DejaVu Serif for headings.
+Fonts load_fonts(ImFontAtlas& atlas) {
+    Fonts fonts;
+    const auto read=[](const char* path) {
+        std::ifstream source(path,std::ios::binary);
+        std::vector<char> data(std::istreambuf_iterator<char>(source),{});
+        std::fprintf(stderr,"[ui-font] %s bytes=%zu%s\n",path,data.size(),data.empty() ? " (missing)" : "");
+        return data;
+    };
+    fonts.bytes.reserve(5);   // the atlas keeps pointers into these buffers
+    for(const char* path:{"/usr/share/fonts/TTF/DejaVuSans.ttf","/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"}) {
+        auto data=read(path);
+        if(data.empty())continue;
+        ImFontConfig config;config.FontDataOwnedByAtlas=false;config.MergeMode=!fonts.bytes.empty();
+        fonts.bytes.push_back(std::move(data));auto& bytes=fonts.bytes.back();
+        if(!atlas.AddFontFromMemoryTTF(bytes.data(),int(bytes.size()),16,&config))throw std::runtime_error("cannot load UI font");
+    }
+    if(fonts.bytes.empty())throw std::runtime_error("no UI font found (install DejaVu Sans)");
+    fonts.sans=atlas.Fonts[0];
+    auto serif_data=read("/usr/share/fonts/TTF/DejaVuSerif.ttf");
+    if(serif_data.empty())serif_data=read("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf");
+    if(serif_data.empty()) {fonts.serif=fonts.sans;return fonts;}   // headings in the sans font
+    const size_t fallback_count=fonts.bytes.size();fonts.bytes.push_back(std::move(serif_data));
+    ImFontConfig serif_config;serif_config.FontDataOwnedByAtlas=false;
+    fonts.serif=atlas.AddFontFromMemoryTTF(fonts.bytes.back().data(),int(fonts.bytes.back().size()),22,&serif_config);
+    if(!fonts.serif)throw std::runtime_error("cannot load UI serif font");
+    for(size_t i=1;i<fallback_count;++i) {
+        ImFontConfig fallback;fallback.FontDataOwnedByAtlas=false;fallback.MergeMode=true;
+        if(!atlas.AddFontFromMemoryTTF(fonts.bytes[i].data(),int(fonts.bytes[i].size()),22,&fallback))throw std::runtime_error("cannot merge serif fallback");
+    }
+    return fonts;
+}
+}
+#else
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -42,3 +78,4 @@ Fonts load_fonts(ImFontAtlas& atlas) {
     return fonts;
 }
 }
+#endif

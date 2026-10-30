@@ -8,6 +8,7 @@
 #include <shellapi.h>
 #else
 #include <spawn.h>
+#include <time.h>
 #include <unistd.h>
 extern char** environ;
 #endif
@@ -24,6 +25,8 @@ std::filesystem::path exe_path() {
     return buffer;
 }
 std::filesystem::path user_data_dir() { return exe_path().parent_path(); }
+unsigned long current_process_id() { return GetCurrentProcessId(); }
+unsigned long long thread_cpu_cycles() { ULONG64 cycles = 0; QueryThreadCycleTime(GetCurrentThread(), &cycles); return cycles; }
 bool open_folder(const std::filesystem::path& folder) {
     return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
 }
@@ -39,6 +42,8 @@ std::filesystem::path user_data_dir() {
     const char* home = std::getenv("HOME");
     return std::filesystem::path(home && *home ? home : "/tmp") / ".local/share/umbrella-chronicles";
 }
+unsigned long current_process_id() { return static_cast<unsigned long>(getpid()); }
+unsigned long long thread_cpu_cycles() { timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return (unsigned long long)(t.tv_sec) * 1000000000ull + (unsigned long long)(t.tv_nsec); }
 bool open_folder(const std::filesystem::path& folder) {
     const std::string argument = folder.string();
     char* const arguments[] = {const_cast<char*>("xdg-open"), const_cast<char*>(argument.c_str()), nullptr};

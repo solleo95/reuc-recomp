@@ -1,6 +1,8 @@
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 #include "late_aim.h"
 #include "texture_replacement.h"
 #include "post_effects.h"
@@ -10,7 +12,9 @@
 #include "buffer_memory.h"
 #include "upscale_math.h"
 #include "upscaler_probe.h"
+#ifdef _WIN32
 #include <vulkan/vulkan_win32.h>
+#endif
 #include <tuple>
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
@@ -137,7 +141,11 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         vk_check(create(instance_, &debug_info, nullptr, &messenger_), "debug messenger");
     }
     if (streamline_) {   // the surface is one of the calls Streamline intercepts
+#ifdef _WIN32
         void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#else
+        void* hwnd = nullptr;   // Streamline (the only user of the native handle) does not exist on Linux
+#endif
         if (!hwnd) throw std::runtime_error("window has no native handle");
         vk_check(streamline_->create_surface(instance_, hwnd, surface_), "Streamline surface");
     } else if (!SDL_Vulkan_CreateSurface(window, instance_, nullptr, &surface_)) throw std::runtime_error(SDL_GetError());
@@ -230,8 +238,12 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     {   // FidelityFX resolves these entry points by their extension names, including after a live switch.
         uint32_t n = 0; vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, nullptr);
         std::vector<VkExtensionProperties> supported(n); vkEnumerateDeviceExtensionProperties(physical_, nullptr, &n, supported.data());
+#ifdef _WIN32   // exclusive full screen is a Windows concept
         disallow_exclusive_=!exclusive_fullscreen && capabilities2 && std::any_of(supported.begin(),supported.end(),[](const auto& extension){return std::strcmp(extension.extensionName,VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME)==0;});
         if(disallow_exclusive_)device_extensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
+#else
+        disallow_exclusive_=false;
+#endif
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
         if (through_streamline && std::any_of(supported.begin(),supported.end(),[](const auto& extension) { return std::strcmp(extension.extensionName,VK_KHR_PRESENT_ID_EXTENSION_NAME)==0; }))
@@ -1604,9 +1616,11 @@ void VulkanRenderer::rebuild() {
     if (capabilities.maxImageCount) images = std::min(images, capabilities.maxImageCount);
     VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR}; create.surface = surface_; create.minImageCount = images;
     // Borderless must not silently become driver-managed exclusive fullscreen.
+#ifdef _WIN32
     VkSurfaceFullScreenExclusiveInfoEXT fullscreen{VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT};
     fullscreen.fullScreenExclusive=VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
     if(disallow_exclusive_)create.pNext=&fullscreen;
+#endif
     create.imageFormat = chosen.format; create.imageColorSpace = chosen.colorSpace; create.imageExtent = extent_; create.imageArrayLayers = 1;
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));

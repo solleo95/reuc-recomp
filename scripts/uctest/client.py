@@ -11,7 +11,8 @@ import threading
 import time
 from pathlib import Path
 
-from .transport import PipeTransport
+from .deck import DeckRun, enabled as deck_enabled
+from .transport import PipeTransport, SocketTransport
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import localenv  # noqa: E402  (reads local.env into the environment)
@@ -68,6 +69,8 @@ class Game:
         self.skip_tutorials, self.mods, self.mod_settings = skip_tutorials, mods, mod_settings   # mod_settings: {mod id: {setting key: value}} stored in this run's config
         self.transport_factory, self.saves, self.game_args = transport_factory, saves, list(game_args)
         self.process = None
+        self.deck = deck_enabled()   # --deck / UC_DECK=1: the game runs on the Steam Deck (uctest/deck.py), the harness stays here
+        self.remote = None
         self.transport = None
         self.frame = {}
         self.history = collections.deque(maxlen=600)
@@ -100,7 +103,10 @@ class Game:
         try:
             if self.launch:
                 self._launch()
-            factory = self.transport_factory or (lambda: PipeTransport(self.name, alive=lambda: self.process.poll() is None))
+            if self.deck and self.launch:
+                factory = self.transport_factory or (lambda: SocketTransport(self.remote.cmd_port, self.remote.evt_port, alive=lambda: self.process.poll() is None))
+            else:
+                factory = self.transport_factory or (lambda: PipeTransport(self.name, alive=lambda: self.process.poll() is None))
             self.transport = factory()
         except Exception as error:
             self._cleanup()
@@ -130,16 +136,28 @@ class Game:
             except Exception:
                 self._cleanup()   # __exit__ does not run when __enter__ fails: take back the folders already copied
                 raise
-        args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),
-                "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
+        if self.deck:   # paths relative to the staged game folder on the Deck (~/uc-run): the run folder is autotest/<name>
+            self.remote = DeckRun(self.name)
+            base = f"autotest/{self.name}"
+            args = ["--test-server", self.name, "--save-root", f"{base}/saves", "--capture-dir", base,
+                    "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]
+            pin = ["2" if part == str(GUEST_CPU) else part for part in pin]   # the Deck has 8 logical CPUs
+            config_argument = f"{base}/config.json"
+        else:
+            args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),
+                    "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
+            config_argument = str(config)
         if "--config" not in self.game_args:   # no dist config: the game starts from defaults and saves its first change here
-            args.extend(["--config", str(config)])
+            args.extend(["--config", config_argument])
         if "--game" not in self.game_args:   # the game's own default is "game" next to the exe, which a dev build folder lacks
-            beside = Path(self.exe).parent / "game"
-            game = os.environ.get("UC_GAME_DIR") or (beside if beside.is_dir() else localenv.game_dir())
-            if game is None:
-                raise SystemExit(localenv.NOT_SET)
-            args.extend(["--game", str(game)])
+            if self.deck:
+                args.extend(["--game", "game"])
+            else:
+                beside = Path(self.exe).parent / "game"
+                game = os.environ.get("UC_GAME_DIR") or (beside if beside.is_dir() else localenv.game_dir())
+                if game is None:
+                    raise SystemExit(localenv.NOT_SET)
+                args.extend(["--game", str(game)])
         if "--window-mode" not in self.game_args:
             args.extend(["--window-mode", "windowed"])   # saved borderless settings must not cover the owner's desktop during tests
         if self.skip_intro:
@@ -158,6 +176,13 @@ class Game:
             args.append("--god")
         if self.skip_tutorials:
             args.append("--skip-tutorials")
+        if self.deck:
+            self.remote.send_folder(saves, "saves")
+            if config.exists():
+                self.remote.send_file(config, "config.json")
+            self.process = self.remote.start(args)
+            self.remote.wait_listening()
+            return
         log = open(self.run_dir / "run.log", "wb")
         env = dict(os.environ)
         if "--net-host" in self.game_args or "--net-join" in self.game_args:
@@ -176,7 +201,7 @@ class Game:
                     pass
             if self.process:
                 try:
-                    self.process.wait(3)
+                    self.process.wait(30 if self.deck else 3)   # the quit travels over ssh and the game joins its workers first
                 except subprocess.TimeoutExpired:
                     self.process.terminate()
                     try:
@@ -188,6 +213,12 @@ class Game:
                 self.transport.close()
         except Exception:
             pass   # cleanup must never mask the step failure
+        if self.remote:   # bring the artifacts home, then leave nothing on the Deck
+            try:
+                self.remote.fetch(self.run_dir)
+            finally:
+                self.remote.close()
+                self.remote = None
         for folder in getattr(self, "_installed_mods", []):   # the example mods this run copied next to the exe
             shutil.rmtree(folder, ignore_errors=True)
         for cache in getattr(self, "_installed_caches", []):   # what the game converted from them (audio), named by mod id
@@ -206,6 +237,8 @@ class Game:
             self.process.wait(seconds)
         except subprocess.TimeoutExpired:
             self.fail(f"the game did not quit within {seconds} s", "quit", capture=False)
+        if self.remote:
+            self.remote.fetch(self.run_dir)   # run.log is on the Deck until now
         return (self.run_dir / "run.log").read_text(errors="replace")
 
     def _install_mods(self, config):

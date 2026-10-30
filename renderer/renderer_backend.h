@@ -14,8 +14,10 @@ constexpr std::string_view renderer_backend_name(RendererBackend backend) {
 }
 constexpr std::optional<RendererBackend> renderer_backend_from_name(std::string_view name) {
     if (name == "vulkan") return RendererBackend::vulkan;
+#ifdef _WIN32   // the DirectX backends do not exist on Linux (Steam Deck): "dx11"/"dx12" are unknown renderer names there
     if (name == "dx11") return RendererBackend::directx11;
     if (name == "dx12") return RendererBackend::directx12;
+#endif
     return std::nullopt;
 }
 }

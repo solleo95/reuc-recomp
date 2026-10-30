@@ -98,7 +98,10 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
         for (fs::recursive_directory_iterator it(files, error), last; !error && it != last; it.increment(error)) {
             std::error_code entry_error;
             const auto type = it->symlink_status(entry_error).type();
-            if (type == fs::file_type::symlink || type == fs::file_type::junction) { it.disable_recursion_pending(); continue; }
+#ifdef _WIN32
+            if (type == fs::file_type::junction) { it.disable_recursion_pending(); continue; }
+#endif
+            if (type == fs::file_type::symlink) { it.disable_recursion_pending(); continue; }
             if (type != fs::file_type::regular) continue;
             std::vector<std::string> parts;
             for (const auto& part : it->path().lexically_relative(files)) parts.push_back(utf8(part));

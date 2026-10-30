@@ -1,4 +1,8 @@
 #include "cpu_sampler.h"
+#ifndef _WIN32
+// A Windows-only dev profiler (SuspendThread + stack unwinding); on Linux it does nothing.
+namespace uc { void cpu_sampler_start_once(const char*) {} void cpu_sampler_set_replaying(bool) {} }
+#else
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -87,3 +91,4 @@ void cpu_sampler_start_once(const char* thread) {
     }).detach();
 }
 }  // namespace uc
+#endif

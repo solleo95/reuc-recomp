@@ -99,6 +99,7 @@
 #include <shellapi.h>
 #include <timeapi.h>
 #else
+#include <execinfo.h>
 #include <sched.h>
 #include <time.h>
 #include <unistd.h>
@@ -113,8 +114,13 @@ namespace fs = std::filesystem;
 namespace {
 uint32_t guest_writer() { // first translated function on the stack: the guest code storing to the FIFO
     void* frames[32];
+#ifdef _WIN32
     const auto count = RtlCaptureStackBackTrace(1, 32, frames, nullptr);
     for (USHORT i = 0; i < count; ++i) if (const auto guest = uc::guest_function_for_host(frames[i])) return guest;
+#else
+    const int count = backtrace(frames, 32);
+    for (int i = 1; i < count; ++i) if (const auto guest = uc::guest_function_for_host(frames[i])) return guest;
+#endif
     return 0;
 }
 struct FifoSink : uc::MmioDevice {   // native resource/vertex ingestion; unowned state bytes remain TD-014

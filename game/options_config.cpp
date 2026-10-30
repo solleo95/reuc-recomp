@@ -1,4 +1,5 @@
 #include "options_config.h"
+#include "frame_limit_cap.h"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -73,7 +74,7 @@ Options options_from_config(const ConfigDocument& document) {
             if(!graphics["fps_limit"].is_number_unsigned())invalid("fps_limit must be a non-negative integer");
             const auto limit=graphics["fps_limit"].get<uint64_t>();
             if(limit!=0 && (limit<20 || limit>1000))invalid("fps_limit must be 0 (unlimited) or 20..1000");
-            options.fps_limit=uint32_t(limit);
+            options.fps_limit=clamp_frame_limit(uint32_t(limit));
         }
         if(graphics.contains("unlock_60fps"))options.unlock_60fps=boolean(graphics["unlock_60fps"]);
         if(graphics.contains("bloom"))options.bloom=boolean(graphics["bloom"]);

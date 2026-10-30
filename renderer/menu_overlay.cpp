@@ -1,5 +1,7 @@
 #include "menu_overlay.h"
-#include <intrin.h>
+#ifdef _WIN32
+#include <intrin.h> // Load Clang's intrinsic guards before SDL 3.2.0's compatibility definitions.
+#endif
 #include <SDL3/SDL.h>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"

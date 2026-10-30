@@ -3,8 +3,14 @@ target_include_directories(uc_gx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gx PUBLIC uc_input_prompts)
 
 enable_language(C)
+if(UC_LINUX AND DEFINED ENV{VULKAN_SDK})   # the sysroot's Vulkan headers (1.4.309) predate the ones the renderer uses (swapchain maintenance KHR); headers are platform-neutral
+  file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}/Include" uc_vulkan_headers)
+  set(Vulkan_INCLUDE_DIR "${uc_vulkan_headers}" CACHE PATH "Vulkan headers (the SDK's, not the Linux sysroot's)" FORCE)
+endif()
 find_package(Vulkan 1.3 REQUIRED)
-include(${CMAKE_SOURCE_DIR}/cmake/upscaler_sdks.cmake)
+if(WIN32)   # Streamline, NGX and FidelityFX are Windows runtimes
+  include(${CMAKE_SOURCE_DIR}/cmake/upscaler_sdks.cmake)
+endif()
 find_program(UC_SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 include(FetchContent)
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
@@ -171,20 +177,33 @@ target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
 add_library(uc_prompt_picture STATIC prompt_picture.cpp)
 target_link_libraries(uc_prompt_picture PUBLIC uc_gx uc_prompt_icons)
-add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp bloom_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp hdr_pass.cpp dlss5_pass.cpp pass_timer.cpp streamline.cpp upscaler_probe.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp ffx_dx12.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
+add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp bloom_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp hdr_pass.cpp dlss5_pass.cpp pass_timer.cpp upscaler_probe.cpp)
+if(WIN32)
+  target_sources(uc_vulkan PRIVATE streamline.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp ffx_dx12.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
+else()   # Linux: no DLSS/FSR runtimes; one file defines them as unavailable
+  target_sources(uc_vulkan PRIVATE upscalers_unavailable.cpp)
+endif()
 target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
-target_sources(uc_vulkan PRIVATE native_frame_generation.cpp native_dlss5.cpp)
-target_link_libraries(uc_vulkan PRIVATE d3d12 dxgi)
-target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan windowscodecs uc_imgui_vulkan uc_prompt_picture uc_dlss5 PRIVATE uc_streamline_sdk uc_fidelityfx_sdk uc_ngx_sdk uc_public_release)
+target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan uc_imgui_vulkan uc_prompt_picture uc_dlss5 PRIVATE uc_public_release)
+if(WIN32)
+  target_sources(uc_vulkan PRIVATE native_frame_generation.cpp native_dlss5.cpp)
+  target_link_libraries(uc_vulkan PUBLIC windowscodecs PRIVATE d3d12 dxgi uc_streamline_sdk uc_fidelityfx_sdk uc_ngx_sdk)
+else()
+  target_link_libraries(uc_vulkan PRIVATE uc_miniz)   # the PNG encoder of screenshots
+endif()
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
 target_include_directories(renderer_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_link_libraries(renderer_smoke PRIVATE uc_vulkan windowscodecs)
+target_link_libraries(renderer_smoke PRIVATE uc_vulkan)
+if(WIN32)
+  target_link_libraries(renderer_smoke PRIVATE windowscodecs)
+endif()
 add_custom_command(TARGET renderer_smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:renderer_smoke> VERBATIM)
+if(WIN32)   # the DLSS, DirectX and rollback smoke programs
 add_executable(renderer_rollback_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_rollback_smoke.cpp)
 target_include_directories(renderer_rollback_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_rollback_smoke PRIVATE uc_vulkan)
@@ -203,11 +222,13 @@ add_executable(renderer_effects_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_effects
 target_include_directories(renderer_effects_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_effects_smoke PRIVATE uc_vulkan)
 add_dependencies(renderer_effects_smoke renderer_smoke)   # shares its data/shaders and SDL copy
+endif()
 install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
 install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION tools)
 install(FILES ${UC_SHADER_FILES} DESTINATION tools/data/shaders)
 install(FILES ${sdl3_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/SDL3)
 
+if(WIN32)   # the DirectX 11/12 backends and their smoke programs
 add_library(uc_directx STATIC d3d11_renderer.cpp d3d12_renderer.cpp native_tev.cpp native_probe.cpp native_rt_scene.cpp native_rt_effects.cpp)
 include(${CMAKE_SOURCE_DIR}/cmake/directx_shaders.cmake)
 set(UC_DIRECTX_SHADER_FILES ${UC_DIRECTX_SHADER_FILES} PARENT_SCOPE)
@@ -249,3 +270,4 @@ add_dependencies(native_dlss5_smoke native_renderer_smoke)
 add_executable(native_dlss5_renderer_smoke ${CMAKE_SOURCE_DIR}/tests/native_dlss5_renderer_smoke.cpp)
 target_link_libraries(native_dlss5_renderer_smoke PRIVATE uc_directx uc_vulkan)
 add_dependencies(native_dlss5_renderer_smoke native_upscale_smoke)
+endif()

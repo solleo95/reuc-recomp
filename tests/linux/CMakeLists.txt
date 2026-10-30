@@ -32,6 +32,10 @@ foreach(t test_savefs test_save_rollback test_savefs_atomic)
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h, test_pid.h
 endforeach()
 
+add_library(uc_test_pipe_only STATIC ${CMAKE_SOURCE_DIR}/game/test_pipe_posix.cpp)   # the transport alone, without the rest of the test server
+target_include_directories(uc_test_pipe_only PUBLIC ${CMAKE_SOURCE_DIR}/game)
+uc_linux_test(test_pipe_posix uc_test_pipe_only)
+target_include_directories(test_pipe_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h, test_pid.h
 uc_linux_test(test_path_io uc_path_io)
 target_include_directories(test_path_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
 uc_linux_test(test_config_save_posix uc_input_config)
@@ -50,6 +54,9 @@ foreach(t test_ppc_int test_ppc_mem test_ppc_float test_mmio test_lowmem test_sc
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
   endif()
 endforeach()
+
+uc_linux_test(test_frame_limit_cap uc_game_pacing test_support)
+target_include_directories(test_frame_limit_cap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/game)   # check.h, frame_limit_cap.h
 
 foreach(t test_clock test_clock_sleep)
   uc_linux_test(${t} uc_clock_only)

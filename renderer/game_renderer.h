@@ -10,8 +10,12 @@ public:
     explicit GameRenderer(RendererBackend backend=RendererBackend::vulkan) : backend_(backend) {
         switch(backend) {
         case RendererBackend::vulkan: vulkan_=std::make_unique<VulkanRenderer>(); break;
+#ifdef _WIN32
         case RendererBackend::directx11: native_=make_d3d11_renderer(); break;
         case RendererBackend::directx12: native_=make_d3d12_renderer(); break;
+#else
+        case RendererBackend::directx11: case RendererBackend::directx12: throw std::invalid_argument("DirectX renderers exist only on Windows");
+#endif
         default: throw std::invalid_argument("unknown renderer backend");
         }
     }

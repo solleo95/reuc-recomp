@@ -44,6 +44,7 @@ def main(argv=None):
     run.add_argument("--measure", type=float, default=0, help="seconds of FPS measurement (perf)")
     run.add_argument("--exe", help="game executable to launch instead of dist/uc.exe (e.g. an instrumented build staged next to dist/data)")
     run.add_argument("--repeat", type=int, default=1)
+    run.add_argument("--deck", action="store_true", help="run the game on the Steam Deck over ssh (ssh deck; stage the build with scripts/linux/deck.py stage)")
     run.add_argument("--god", action="store_true", help="cheat: health and ammo stay at their maxima (marked in the report)")
     run.add_argument("--skip-tutorials", action="store_true", help="tutorial pages never open (the game's own tutorial opener is turned into a no-op)")
     run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
@@ -79,6 +80,9 @@ def main(argv=None):
     inspect.add_argument("what", choices=["threads", "stack", "mem", "f32", "nan", "posmtx", "gx"])
     inspect.add_argument("arguments", nargs="*")
     args = parser.parse_args(argv)
+    if getattr(args, "deck", False):
+        import os
+        os.environ["UC_DECK"] = "1"   # read by uctest/deck.py: the game runs on the Steam Deck (stage it first: python scripts/linux/deck.py stage)
     if args.command == "inspect":
         from . import dumpview
         return dumpview.command(dumpview.Bundle(args.bundle), args.what, args.arguments)

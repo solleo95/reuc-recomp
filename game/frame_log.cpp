@@ -1,14 +1,21 @@
 #include "frame_log.h"
 #include <stdexcept>
 #include <chrono>
+#include "path_io.h"
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace uc {
 FrameLog::FrameLog(const std::filesystem::path& path) {
     std::error_code ignored;
     std::filesystem::create_directories(path.parent_path(), ignored);
-    file_ = _wfopen(path.c_str(), L"wb");
+    file_ = fopen_path(path, "wb");
     if (!file_) throw std::runtime_error("cannot create frame CSV");
     std::fprintf(file_, "t_ms,interval_ms,busy_ms,acquire_ms,submit_ms,present_ms,idle_ms,t1_ms,t2_ms,t3_ms,t4_ms,t5_ms,t6_ms,t7_ms,t8_ms,events_ms,events,cpu_mcycles,retraces,textures,decodes,dvd_reads,audio_blocks,seal_wait_ns,switches,queued,outstanding,sealed_to_done_ms,taken_to_done_ms,gpu_ms,gpu_upscale_ms,gpu_smaa_ms,gpu_occlusion_ms,gpu_rt_as_ms,rt_blas,rt_triangles,gpu_rt_shadows_ms,gpu_rt_reflections_ms,gpu_rt_lighting_ms,gpu_rt_path_ms,gpu_sum_ms\n");
     try {rows_.reserve(4096);writer_ = std::thread([this] { run(); });}
@@ -26,7 +33,11 @@ void FrameLog::add(const FrameRow& row) {
     if(rows_.size()<8192)rows_.push_back(row);else ++dropped_;
 }
 void FrameLog::run() {
+#ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#else
+    setpriority(PRIO_PROCESS, id_t(syscall(SYS_gettid)), 5);   // this thread only: a nicer value is lower priority
+#endif
     std::vector<FrameRow> rows; rows.reserve(4096);
     for (;;) {
         bool stopping;

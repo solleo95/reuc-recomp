@@ -1,5 +1,6 @@
 #include "mod_zip.h"
 #include "mod_paths.h"
+#include "path_io.h"
 #include <miniz.h>
 #include <cstdio>
 #include <fstream>
@@ -57,7 +58,7 @@ bool extract_zip_mod(const fs::path& zip_path, const fs::path& cache_dir, fs::pa
     if (fs::exists(marker, ec)) { locate_root(root_out); return true; }
 
     Archive archive;
-    _wfopen_s(&archive.file, zip_path.c_str(), L"rb");
+    archive.file = uc::fopen_path(zip_path, "rb");
     if (!archive.file || !mz_zip_reader_init_cfile(&archive.zip, archive.file, 0, 0)) return fail(error, "not a readable zip file");
     archive.open = true;
     const mz_uint count = mz_zip_reader_get_num_files(&archive.zip);

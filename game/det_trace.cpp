@@ -1,5 +1,6 @@
 #include "det_trace.h"
 #include "fatal.h"
+#include "path_io.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,9 +20,9 @@ uint64_t hash_chunk(const uint8_t* data, size_t size) {
 }  // namespace
 
 DetTrace::DetTrace(const std::filesystem::path& out, const uint8_t* mem, uint32_t frames) : mem_(mem), frames_(frames) {
-    dump_path_ = out.wstring();
-    file_ = _wfopen(out.c_str(), L"wb");
-    if (!file_) fatal("cannot create the determinism trace %ls", out.c_str());
+    dump_path_ = out;
+    file_ = fopen_path(out, "wb");
+    if (!file_) fatal("cannot create the determinism trace %s", out.string().c_str());
 }
 
 DetTrace::~DetTrace() { if (file_) std::fclose(file_); }
@@ -36,7 +37,7 @@ void DetTrace::on_retrace(uint64_t retrace) {
         unsigned long at = 0, address = 0;
         if (std::sscanf(dump, "%lu:%lx", &at, &address) == 2 && at == retrace) {
             const size_t offset = (address >> 28) == 9 ? 0x10000000u + (address & 0x0FFFFFFFu) : address & 0x01FFFFFFu;
-            if (std::FILE* f = _wfopen((dump_path_ + L".dump").c_str(), L"wb")) { std::fwrite(mem_ + (offset & ~size_t(kChunk - 1)), 1, kChunk, f); std::fclose(f); }
+            if (std::FILE* f = fopen_path(std::filesystem::path(dump_path_).concat(".dump"), "wb")) { std::fwrite(mem_ + (offset & ~size_t(kChunk - 1)), 1, kChunk, f); std::fclose(f); }
         }
     }
     const uint32_t number = uint32_t(retrace);

@@ -1,5 +1,6 @@
 set(UC_GENERATED_DIR ${CMAKE_SOURCE_DIR}/generated CACHE PATH "translator output")
 add_library(uc_options STATIC options.cpp window_mode.cpp)
+target_link_libraries(uc_options PUBLIC uc_path_io)
 target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
 target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts uc_netplay uc_gamepad_config uc_wiimote_config)
 add_library(uc_options_config STATIC options_config.cpp)
@@ -29,9 +30,12 @@ target_link_libraries(uc_host_input PUBLIC uc_runtime SDL3::SDL3)
 add_library(uc_gamepad_input STATIC gamepad_input.cpp)   # SDL gamepads: events in, NativeInput sticks, buttons and gyro out
 target_include_directories(uc_gamepad_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_input PUBLIC uc_input uc_gamepad_math SDL3::SDL3)   # no runtime: the launcher reads gamepads too
-add_library(uc_wiimote_input STATIC wiimote_input.cpp wiimote_hid.cpp)   # the Wii Remote over Windows HID: a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
+add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiimote_hid.cpp,wiimote_hid_stub.cpp>)   # the Wii Remote over Windows HID: a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
 target_include_directories(uc_wiimote_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_wiimote_input PUBLIC uc_wiimote_protocol uc_wiimote_math uc_wiimote_config uc_input setupapi hid)   # no runtime: the launcher reads the remote too
+target_link_libraries(uc_wiimote_input PUBLIC uc_wiimote_protocol uc_wiimote_math uc_wiimote_config uc_input)
+if(WIN32)
+  target_link_libraries(uc_wiimote_input PUBLIC setupapi hid)
+endif()   # no runtime: the launcher reads the remote too
 add_library(uc_game_mods STATIC game_mods.cpp)   # the port's side of the mod platform (modding/)
 target_include_directories(uc_game_mods PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_mods PUBLIC uc_mods uc_diagnostics PRIVATE uc_public_release)
@@ -41,7 +45,7 @@ target_include_directories(uc_netplay_game PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_netplay_game PUBLIC uc_game_input uc_game_pacing uc_options uc_gx nlohmann_json::nlohmann_json)
 target_include_directories(uc_game_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_input PUBLIC uc_input_probe uc_runtime uc_mods)
-add_library(uc_test_server STATIC test_protocol.cpp test_pipe.cpp test_server.cpp test_draws.cpp)
+add_library(uc_test_server STATIC test_protocol.cpp $<IF:$<BOOL:${WIN32}>,test_pipe_win.cpp,test_pipe_posix.cpp> test_server.cpp test_draws.cpp)
 target_include_directories(uc_test_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(uc_test_server PUBLIC ${CMAKE_SOURCE_DIR}/renderer)
 target_link_libraries(uc_test_server PUBLIC uc_game_input uc_runtime)
@@ -57,13 +61,22 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_library(uc_game STATIC ${UC_GENERATED_SOURCES})
   target_include_directories(uc_game PUBLIC ${UC_GENERATED_INCLUDE_DIR})
   target_link_libraries(uc_game PUBLIC uc_runtime uc_intro uc_game_pacing uc_game_input uc_prompt_hooks uc_mods)
-  target_compile_options(uc_game PRIVATE /O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses-equality)
+  if(WIN32)
+    target_compile_options(uc_game PRIVATE /O2)
+  else()
+    target_compile_options(uc_game PRIVATE -O2)
+  endif()
+  target_compile_options(uc_game PRIVATE -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable -Wno-parentheses-equality)
   set(UC_GAME_EXTRA_FLAGS "" CACHE STRING "extra compile flags for the translated game code only (code-generation experiments)")
   if(UC_GAME_EXTRA_FLAGS)
     separate_arguments(uc_game_extra_flags NATIVE_COMMAND "${UC_GAME_EXTRA_FLAGS}")
     target_compile_options(uc_game PRIVATE ${uc_game_extra_flags})
   endif()
-  target_compile_options(uc_game PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/entry_probe.h")
+  if(WIN32)
+    target_compile_options(uc_game PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/entry_probe.h")
+  else()
+    target_compile_options(uc_game PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/entry_probe.h")
+  endif()
   option(UC_FN_COUNT "count the entries of every translated function (UC_FN_COUNT=<prefix>, see state_dump.h; for diagnostics)" OFF)
   if(UC_FN_COUNT)
     target_compile_definitions(uc_game PUBLIC UC_FN_COUNT=1)
@@ -79,22 +92,31 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
-  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp system_report.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
-  target_link_libraries(uc PRIVATE uc_client_update_lock mimalloc-static uc_public_release dxgi)
-  target_link_libraries(uc PRIVATE uc_directx)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_test_server uc_crash_bundle winmm shell32
-    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_launch uc_game_mods uc_mod_menu uc_netplay_game)
+  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp $<IF:$<BOOL:${WIN32}>,compile_screen_win.cpp,compile_screen_posix.cpp> det_trace.cpp frame_log.cpp settings_menu.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,system_report_posix.cpp>)
+  target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io)
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_test_server uc_crash_bundle
+    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_netplay_game)
+  if(NOT WIN32)
+    target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/launcher/launch_posix.cpp)   # query_features (the GPU probe), without the Windows launcher
+  endif()
+  if(WIN32)
+    target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/assets/app.rc)
+    target_link_libraries(uc PRIVATE uc_client_update_lock dxgi uc_directx winmm shell32 uc_launch)
+  endif()
   add_custom_command(TARGET uc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc>/data/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_DIRECTX_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} ${UC_DLSS5_RUNTIME_FILES} $<TARGET_FILE_DIR:uc>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed $<TARGET_FILE_DIR:uc>/data
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:uc> VERBATIM)
-  # Linker map lets crash reports (exe offsets) be resolved to runtime function names offline.
-  target_link_options(uc PRIVATE "/MAP:$<TARGET_FILE_DIR:uc>/uc.map")
+  if(WIN32)
+    add_custom_command(TARGET uc POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_DIRECTX_SHADER_FILES} $<TARGET_FILE_DIR:uc>/data/shaders
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_UPSCALER_RUNTIME} ${UC_DLSS5_RUNTIME_FILES} $<TARGET_FILE_DIR:uc> VERBATIM)
+    # Linker map lets crash reports (exe offsets) be resolved to runtime function names offline.
+    target_link_options(uc PRIVATE "/MAP:$<TARGET_FILE_DIR:uc>/uc.map")
+    install(FILES $<TARGET_FILE_DIR:uc>/uc.map DESTINATION data)
+  endif()
   install(TARGETS uc RUNTIME DESTINATION .)
-  install(FILES $<TARGET_FILE_DIR:uc>/uc.map DESTINATION data)
   install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION .)
   install(FILES ${UC_SHADER_FILES} DESTINATION data/shaders)
   install(FILES ${UC_UPSCALER_RUNTIME} DESTINATION .)

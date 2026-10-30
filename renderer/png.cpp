@@ -1,9 +1,14 @@
 #include "vulkan_renderer.h"
 #include <algorithm>
 #include <limits>
+#ifdef _WIN32
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#else
+#include "path_io.h"
+#include <miniz.h>
+#endif
 
 namespace uc {
 void save_png(const RenderPixels& pixels,const std::filesystem::path& path) {
@@ -11,6 +16,7 @@ void save_png(const RenderPixels& pixels,const std::filesystem::path& path) {
         pixels.height>std::numeric_limits<size_t>::max()/(size_t(pixels.width)*4) ||
         pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4 || pixels.rgba.size()>UINT32_MAX)
         throw std::invalid_argument("invalid PNG readback dimensions/data");
+#ifdef _WIN32
     auto require=[](HRESULT hr) { if (FAILED(hr)) throw std::runtime_error("PNG encoding failed: HRESULT "+std::to_string(static_cast<uint32_t>(hr))); };
     struct ComSession {
         HRESULT result=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -34,5 +40,17 @@ void save_png(const RenderPixels& pixels,const std::filesystem::path& path) {
     for (size_t i=0;i<bgra.size();i+=4) { std::swap(bgra[i],bgra[i+2]); bgra[i+3]=255; }
     require(frame->WritePixels(pixels.height,pixels.width*4,UINT(bgra.size()),bgra.data()));
     require(frame->Commit()); require(encoder->Commit());
+#else
+    auto rgba=pixels.rgba;
+    for (size_t i=3;i<rgba.size();i+=4) rgba[i]=255;   // opaque, as above
+    size_t size=0;
+    void* encoded=tdefl_write_image_to_png_file_in_memory(rgba.data(),int(pixels.width),int(pixels.height),4,&size);
+    if (!encoded) throw std::runtime_error("PNG encoding failed");
+    std::FILE* file=fopen_path(path,"wb");
+    const bool written=file && std::fwrite(encoded,1,size,file)==size;
+    const bool closed=!file || std::fclose(file)==0;
+    mz_free(encoded);
+    if (!written || !closed) throw std::runtime_error("cannot write the PNG file");
+#endif
 }
 }

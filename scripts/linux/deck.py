@@ -8,6 +8,7 @@
 The Deck's /home has little free space: every command that runs something ends with clean and prints the free space.
 """
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from pathlib import Path
 
 HOST = "deck"
 WORK = "~/uc-test"
-GAME = "~/uc-game"
+GAME = "~/uc-run"   # the staged game: uc, libSDL3, data/ and the extracted game/ folder (copied once, 3.8 GB)
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -47,6 +48,20 @@ def run(exe, args, env=""):
         clean()
 
 
+def stage(build_dir):
+    """Copy uc, SDL3 and data/ from the Linux build into GAME (the game/ folder there stays)."""
+    build = Path(build_dir)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        shutil.copy2(build / "game" / "uc", out / "uc")
+        # No libSDL3 here: the Deck's own SDL3 (3.4, with Wayland) is used; the one we build has no Wayland backend.
+        shutil.copytree(build / "game" / "data", out / "data")
+        ssh(f"mkdir -p {GAME}")
+        with subprocess.Popen(["tar", "-cf", "-", "-C", str(out), "."], stdout=subprocess.PIPE) as tar:
+            subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -xf - -C {GAME} && chmod +x {GAME}/uc"], stdin=tar.stdout, check=True)
+    ssh(f"du -sh {GAME}; df -h /home | tail -1")
+
+
 def selftest():
     llvm = Path("C:/Program Files/LLVM/bin/clang++.exe")
     sysroot = "D:/Toolchains/sniper-sysroot"
@@ -75,12 +90,16 @@ def main():
     c = sub.add_parser("clean")
     c.add_argument("--all", action="store_true")
     sub.add_parser("selftest")
+    sub.add_parser("stage").add_argument("build_dir", nargs="?", default=str(ROOT / "build-linux"))
     a = p.parse_args()
     if a.cmd == "push":
         push(a.files)
         return 0
     if a.cmd == "run":
         return run(a.exe, a.args)
+    if a.cmd == "stage":
+        stage(a.build_dir)
+        return 0
     if a.cmd == "clean":
         clean(a.all)
         return 0

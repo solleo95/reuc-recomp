@@ -19,7 +19,7 @@ public:
     bool done() const { return done_.load(); }
 private:
     std::FILE* file_;
-    std::wstring dump_path_;
+    std::filesystem::path dump_path_;
     const uint8_t* mem_;
     uint32_t frames_, written_ = 0;
     std::atomic<bool> done_{false};

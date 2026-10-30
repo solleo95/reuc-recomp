@@ -1,8 +1,9 @@
 #include "netplay_datagram.h"
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#endif
+#include "socket_compat.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -75,7 +76,7 @@ void Datagram::send(std::span<const uint8_t> payload) {
     std::copy(impl_->session.begin(), impl_->session.end(), wire.begin() + header.size());
     std::copy(payload.begin(), payload.end(), wire.begin() + payload_offset);
     const int size = static_cast<int>(payload_offset + payload.size());
-    const int sent = sendto(impl_->socket.value, reinterpret_cast<const char*>(wire.data()), size, 0,
+    const int sent = sendto(impl_->socket.value, reinterpret_cast<const char*>(wire.data()), size, UC_SEND_FLAGS,
                             reinterpret_cast<const sockaddr*>(&impl_->peer), sizeof(impl_->peer));
     if (sent == SOCKET_ERROR) {
         const int error = WSAGetLastError();
@@ -89,7 +90,7 @@ std::optional<std::vector<uint8_t>> Datagram::take() {
         check_stop(impl_->stop);
         std::array<uint8_t, payload_offset + max_datagram_payload> wire{};
         sockaddr_in source{};
-        int source_size = sizeof(source);
+        socklen_t source_size = sizeof(source);
         const int received = recvfrom(impl_->socket.value, reinterpret_cast<char*>(wire.data()), static_cast<int>(wire.size()), 0,
                                       reinterpret_cast<sockaddr*>(&source), &source_size);
         if (received == SOCKET_ERROR) {

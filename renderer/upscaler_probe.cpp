@@ -1,12 +1,16 @@
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 #include "upscaler_probe.h"
 #include "public_release.h"
 #include "ngx_dlss5.h"
 #include "streamline.h"
+#ifdef _WIN32
 #include "streamline_api.h"
 #include <ffx_api/ffx_api_loader.h>
+#endif
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -55,6 +59,7 @@ const char* ray_tracing_gap(VkPhysicalDevice physical) {
     return nullptr;
 }
 namespace {
+#ifdef _WIN32
 // DLSS and DLSS-G through Streamline on the first NVIDIA GPU (the one the game picks: discrete first).
 void probe_dlss(const std::filesystem::path& directory, UpscalerSupport& support) {
     std::string reason;
@@ -144,6 +149,7 @@ bool probe_fsr_fg(std::string& reason) {
     vkDestroyInstance(instance, nullptr);
     return ok;
 }
+#endif
 // What the renderer asks of the device for the effects (the same pick as the game: NVIDIA/discrete first).
 void probe_effects(UpscalerSupport& support) {
     VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO}; application.apiVersion=VK_API_VERSION_1_3;
@@ -177,6 +183,7 @@ void probe_effects(UpscalerSupport& support) {
     }
     vkDestroyInstance(instance, nullptr);
 }
+#ifdef _WIN32
 // DLSS 5: the feature is created on a throwaway device exactly as the renderer will create it, so the reason shown to the player is NGX's own answer
 // (missing runtime, GPU older/newer than the DLL, driver, CreateFeature result). The NGX log of the probe is debug/ngx_dlss5_probe.log.
 void probe_dlss5(const std::filesystem::path& directory, UpscalerSupport& support) {
@@ -265,6 +272,11 @@ void probe_fsr(const std::filesystem::path& directory, UpscalerSupport& support)
     FreeLibrary(module);
     if (support.fsr) support.fsr_fg=probe_fsr_fg(support.fsr_fg_reason);
 }
+#else   // Linux: the vendor upscalers do not exist
+void probe_dlss(const std::filesystem::path&, UpscalerSupport& support) { support.dlss_reason = support.dlss_g_reason = "DLSS is not available on Linux"; }
+void probe_dlss5(const std::filesystem::path&, UpscalerSupport& support) { support.dlss5_reason = "DLSS 5 is not available on Linux"; }
+void probe_fsr(const std::filesystem::path&, UpscalerSupport& support) { support.fsr_reason = support.fsr_fg_reason = "FSR is not available on Linux"; }
+#endif
 }
 UpscalerSupport probe_upscalers(const std::filesystem::path& directory, bool dlss5) {
     UpscalerSupport support;

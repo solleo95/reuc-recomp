@@ -2,7 +2,9 @@
 #include "native_input.h"
 #include "pointer_settings.h"
 #ifdef _WIN32
+#ifdef _WIN32
 #include <intrin.h>
+#endif
 #endif
 #include <SDL3/SDL.h>
 namespace uc {

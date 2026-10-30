@@ -1,8 +1,7 @@
 #include "netplay.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "socket_compat.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -53,7 +52,7 @@ void wait_socket(SOCKET socket, bool writing, Clock::time_point deadline, std::s
         fd_set wanted, errors;
         FD_ZERO(&wanted); FD_SET(socket, &wanted);
         FD_ZERO(&errors); FD_SET(socket, &errors);
-        const int result = select(0, writing ? nullptr : &wanted, writing ? &wanted : nullptr, &errors, &timeout);
+        const int result = select(int(socket) + 1, writing ? nullptr : &wanted, writing ? &wanted : nullptr, &errors, &timeout);   // Windows ignores the first argument
         if (result == SOCKET_ERROR) socket_error("Cannot wait for network socket");
         if (result > 0) { check_stop(stop); return; }
     }
@@ -63,7 +62,7 @@ void transfer(SOCKET socket, uint8_t* bytes, size_t size, bool writing, Clock::t
     while (size) {
         check_stop(stop);
         wait_socket(socket, writing, deadline, stop);
-        const int amount = writing ? ::send(socket, reinterpret_cast<const char*>(bytes), static_cast<int>(size), 0)
+        const int amount = writing ? ::send(socket, reinterpret_cast<const char*>(bytes), static_cast<int>(size), UC_SEND_FLAGS)
                                    : recv(socket, reinterpret_cast<char*>(bytes), static_cast<int>(size), 0);
         if (amount == SOCKET_ERROR) {
             if (WSAGetLastError() == WSAEWOULDBLOCK) continue;
@@ -141,7 +140,7 @@ Socket::Socket(const Endpoint& endpoint, std::stop_token stop, std::chrono::mill
                 error = WSAGetLastError();
                 if (error == WSAEWOULDBLOCK || error == WSAEINPROGRESS) {
                     wait_socket(candidate.value, true, deadline, stop);
-                    int length = sizeof(error);
+                    socklen_t length = sizeof(error);
                     if (getsockopt(candidate.value, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &length) == SOCKET_ERROR)
                         socket_error("Cannot inspect connection result");
                 }

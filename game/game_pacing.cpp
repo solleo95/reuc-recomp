@@ -1,4 +1,5 @@
 #include "game_pacing.h"
+#include "frame_limit_cap.h"
 #include "hooks.h"
 #include "cpu_sampler.h"
 #include "counter_probe.h"
@@ -97,7 +98,8 @@ PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit,uint32_t game_hz_o
     if(game_hz_override) return {unlock_60fps,game_hz_override};
     if(!fps_limit) return {unlock_60fps,0};
     const uint32_t limit=*fps_limit;
-    if(limit==0 || limit>60) return {unlock_60fps,limit ? std::min(limit,480u) : 480u};
+    const uint32_t ceiling=kMaxFrameLimit ? kMaxFrameLimit : 480u;   // Linux: 90 (frame_limit_cap.h)
+    if(limit==0 || limit>60) return {unlock_60fps,limit ? std::min(limit,ceiling) : ceiling};
     return {limit>30,0};
 }
 void game_pacing_set_mode(PacingMode mode) { requested_mode=(uint64_t(1)<<63)|(uint64_t(mode.unlock_60)<<32)|mode.game_hz; }

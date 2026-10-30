@@ -1,11 +1,14 @@
 #include "settings_menu.h"
+#include "frame_limit_cap.h"
 #include "dlss5_panel.h"
 #include "graphite.h"
 #include "localization.h"
 #include "prompt_icons.h"
 #include "render_scale.h"
 #include "rt_ui.h"
+#ifdef _WIN32
 #include <intrin.h>
+#endif
 #include <SDL3/SDL.h>
 #include "imgui.h"
 #include <algorithm>
@@ -137,7 +140,10 @@ void SettingsMenu::main_tab(float unit) {
     const uint32_t current_limit=options.fps_limit.value_or(options.unlock_60fps ? 60 : 30);
     const auto limit_label=[&](uint32_t value) { return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited")); };
     if(ImGui::BeginCombo("##fps",limit_label(current_limit).c_str(),ImGuiComboFlags_HeightLarge)) {
-        for(const uint32_t value:kLimits) if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value)) options.fps_limit=value;
+        for(const uint32_t value:kLimits) {
+            if(kMaxFrameLimit && (value==0 || value>kMaxFrameLimit)) continue;   // Linux: nothing above the cap, and no "unlimited"
+            if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value)) options.fps_limit=value;
+        }
         ImGui::EndCombo();
     }
     ImGui::Dummy({0,6*unit});
