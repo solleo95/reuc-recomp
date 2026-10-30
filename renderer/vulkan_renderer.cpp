@@ -2193,8 +2193,12 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     }
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachments = colors;
     const VkImageLayout depth_before=!initialized ? VK_IMAGE_LAYOUT_UNDEFINED : scene ? scene_depth_layout_ : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    // The previous pass's depth work is all this one waits for when nothing else touches the depth image: no effect, upscaler, G-buffer or RT reads it and it is already a depth
+    // attachment (the usual packet-to-packet case). Anything else keeps the full barrier. The full one drains the whole GPU between the ~23 packets of a frame.
+    const bool depth_only_wait=initialized && depth_before==VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL && upscaler_kind_==UpscalerKind::off && !motion_outputs_ && !rt_records && !effects_need_gbuffer() && !effects_need_lights();
     barrier(slot.command,target.depth,depth_before,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
+            depth_only_wait ? depth_stages : initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,
+            depth_only_wait ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
             depth_stages,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
     if (scene) scene_depth_layout_=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO}; depth.imageView=target.depth_view; depth.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
