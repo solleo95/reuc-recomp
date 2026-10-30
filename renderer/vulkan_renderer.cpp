@@ -2374,7 +2374,11 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     };
     const bool scene_only=scene_phase_ && !upscale_here && !overlay_frame;   // the whole packet belongs to the scene: copy and clear act on the scene targets
     const bool writes_scene=scene_phase_ && !overlay_frame && (scene_draws || !scene_initialized_);   // overwrites the depth and vectors frame generation may still read
-    if (writes_scene) { record_pass(scene_target,0,scene_draws,true); record_shadow(0,scene_draws); record_rt(0,scene_draws); }
+    const uint32_t timed_slot=first_query/2;   // the pass timer's slot of this submission
+    if (writes_scene) {
+        pass_timer_.begin(slot.command,timed_slot,GpuPass::scene_draws); record_pass(scene_target,0,scene_draws,true); pass_timer_.end(slot.command,timed_slot,GpuPass::scene_draws);
+        record_shadow(0,scene_draws); record_rt(0,scene_draws);
+    }
     if (upscale_here) {
         if (scene_draws || packet.present) scene_restore_copy_.reset();   // another draw changed the scene since the saved copy
         record_upscale(slot.command,packet.black_output);
@@ -2409,10 +2413,16 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     };
     const bool hudless_wanted=(dlss_generation_enabled() || (fsr_generation_enabled() && fsr_g_->active())) && hudless_[0] && scene_mode_ && !scene_phase_ && !hudless_taken_ && !overlay_frame;
     if (hudless_wanted && efb_initialized_ && hud_packet) take_hudless();
-    if (!scene_only && !overlay_frame && (!efb_initialized_ || scene_draws<packet.draws.size())) record_pass(efb_target,scene_draws,packet.draws.size(),false);
+    if (!scene_only && !overlay_frame && (!efb_initialized_ || scene_draws<packet.draws.size())) {
+        pass_timer_.begin(slot.command,timed_slot,GpuPass::efb_draws); record_pass(efb_target,scene_draws,packet.draws.size(),false); pass_timer_.end(slot.command,timed_slot,GpuPass::efb_draws);
+    }
     if (hudless_wanted && !hudless_taken_ && packet.present) take_hudless();
     const PassTarget& active=scene_only ? scene_target : efb_target;
-    if(copy_target) record_texture_copy(slot.command,active.color,active.extent,packet.texture_copy->source,*copy_target,VK_IMAGE_LAYOUT_UNDEFINED);
+    if(copy_target) {
+        pass_timer_.begin(slot.command,timed_slot,GpuPass::texture_copy);
+        record_texture_copy(slot.command,active.color,active.extent,packet.texture_copy->source,*copy_target,VK_IMAGE_LAYOUT_UNDEFINED);
+        pass_timer_.end(slot.command,timed_slot,GpuPass::texture_copy);
+    }
     if (scene_only) {
         if (copy_target && !packet.clear_after_copy) scene_restore_copy_=packet.texture_copy;
         else if (!packet.draws.empty() || (copy_target && packet.clear_after_copy)) scene_restore_copy_.reset();

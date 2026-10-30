@@ -9,6 +9,7 @@
 #include <execinfo.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <link.h>
 #include <string_view>
@@ -67,7 +68,11 @@ void write_samples() {
         const uint32_t last = ring[(total - 1) & (kRing - 1)].ms, keep = uint32_t(1000 * (seconds ? std::atoi(seconds) : 25));
         for (uint64_t i = total - count; i < total; ++i) {
             const Sample& s = ring[i & (kRing - 1)];
-            if (last - s.ms <= keep) std::fprintf(file, "%u %lx %u\n", s.tid, (unsigned long)s.rip, s.ms);
+            if (last - s.ms > keep) continue;
+            Dl_info info {};   // outside the executable (libc, the driver): named here, the symbolizer only knows the executable
+            if (dladdr(reinterpret_cast<void*>(s.rip), &info) && info.dli_fbase != reinterpret_cast<void*>(base) && info.dli_sname) std::fprintf(file, "x %u %s %u\n", s.tid, info.dli_sname, s.ms);
+            else if (info.dli_fbase && info.dli_fbase != reinterpret_cast<void*>(base) && info.dli_fname) std::fprintf(file, "x %u %s %u\n", s.tid, std::strrchr(info.dli_fname, '/') ? std::strrchr(info.dli_fname, '/') + 1 : info.dli_fname, s.ms);
+            else std::fprintf(file, "%u %lx %u\n", s.tid, (unsigned long)s.rip, s.ms);
         }
     }
     write_waits(file);

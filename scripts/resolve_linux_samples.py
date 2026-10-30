@@ -16,17 +16,20 @@ SYMBOLIZER = r"C:\Program Files\LLVM\bin\llvm-symbolizer.exe"
 
 def load(path):
     base = 0
-    samples, waits = [], []
+    samples, waits, outside = [], [], []
     for line in Path(path).read_text().splitlines():
         if line.startswith("# base"):
             base = int(line.split()[2], 16)
+        elif line.startswith("x "):   # a sample outside the executable, already named by the sampler (libc function or library file)
+            _, tid, name, ms = line.split()
+            outside.append((int(tid), name, int(ms)))
         elif line.startswith("w "):   # a wall-clock sample of the guest thread (UC_CPU_SAMPLE=wait): the top frame's name, the first frame in the executable
             _, top, caller, ms = line.split()
             waits.append((top, int(caller, 16), int(ms)))
         else:
             tid, rip, ms = line.split()
             samples.append((int(tid), int(rip, 16), int(ms)))
-    return base, samples, waits
+    return base, samples, waits, outside
 
 
 def report_waits(binary, base, waits, top):
@@ -57,15 +60,18 @@ def symbolize(binary, addresses):
 def main():
     path, binary = sys.argv[1], sys.argv[2]
     top = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 25
-    base, samples, waits = load(path)
+    base, samples, waits, outside = load(path)
     if waits:
         if "--last" in sys.argv:   # only the final N seconds (the measured window of a replay)
             seconds = int(sys.argv[sys.argv.index("--last") + 1])
             waits = [w for w in waits if w[2] >= waits[-1][2] - 1000 * seconds]
         report_waits(binary, base, waits, top)
         return
-    by_thread = collections.Counter(tid for tid, _, _ in samples)
     names = symbolize(binary, [rip - base for _, rip, _ in samples])
+    samples = samples + [(tid, base - 1 - i, ms) for i, (tid, _, ms) in enumerate(outside)]   # outside samples get a unique address below the image (rip - base < 0); the sampler named them
+    for i, (_, name, _) in enumerate(outside):
+        names[-1 - i] = f"[lib] {name}"
+    by_thread = collections.Counter(tid for tid, _, _ in samples)
     total = len(samples)
     print(f"{total} samples, {samples[-1][2] - samples[0][2]} ms; threads: " + ", ".join(f"{tid} {100 * n / total:.0f}%" for tid, n in by_thread.most_common(4)))
     for tid, count in by_thread.most_common(2):
