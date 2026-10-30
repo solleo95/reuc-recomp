@@ -99,6 +99,10 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   if(NOT WIN32)
     target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/launcher/launch_posix.cpp)   # query_features (the GPU probe), without the Windows launcher
     target_link_libraries(uc PRIVATE ${CMAKE_DL_LIBS})   # steam_overlay.cpp loads libX11 at run time
+    if(TARGET uc_profile_rt)
+      target_link_options(uc PRIVATE -Wl,-u,__llvm_profile_runtime)   # what clang's driver adds for -fprofile-instr-generate: pulls the runtime out of its archive
+      target_link_libraries(uc PRIVATE uc_profile_rt)   # the instrumentation's runtime (UC_PGO_GENERATE, runtime/linux_profile_rt.c); last, after the objects that need it
+    endif()
   endif()
   if(WIN32)
     target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/assets/app.rc)

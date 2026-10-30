@@ -70,7 +70,7 @@ class DeckRun:
         The returned ssh process ends when the game has ended (it waits for `uc` to appear, then to go)."""
         env = dict(env or {})
         for key, value in os.environ.items():
-            if key.startswith(("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_EXE")):   # diagnostics of the run: the profiler (its output lands in the run folder, which comes back with the artifacts)
+            if key.startswith(("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_EXE", "LLVM_PROFILE_FILE")):   # diagnostics of the run: the profiler (its output lands in the run folder, which comes back with the artifacts)
                 env[key] = value
         lines = [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
         if "UC_CPU_SAMPLE" in env:   # absolute: the game may change its working directory
