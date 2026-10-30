@@ -40,6 +40,7 @@ public:
     void focus(bool focused);
     void bindings(const Bindings&);
     void context(InputContext);
+    InputContext current_context() { std::lock_guard lock(mutex_); return context_; }
     void qte_window(bool);
     void host_button(PhysicalInput,bool) override;
     void host_wheel(int);
@@ -64,7 +65,12 @@ public:
     // The pointer from a position in the window (pixels, y down): a lightgun or another absolute device. The step from the previous position feeds the knife and
     // shake detectors like a mouse motion; the first position after a focus change is taken as it is.
     // gesture_scale turns the pixels of a step into the counts the detectors are tuned for (a mouse's): 1/density on a scaled display.
-    bool aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns=0,float gesture_scale=1);
+    // swipe: the point is a finger on a touchscreen (BindingResolver::motion). follow: the device is a cursor that something else (the gyro, a stick) can leave behind: its steps move the pointer
+    // from where the pointer is now (the first point after a lift only becomes the reference), so going back to the cursor does not throw the pointer to where the cursor was.
+    bool aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns=0,float gesture_scale=1,bool swipe=false,bool follow=false);
+    bool aim_place(float px,float py,uint32_t width,uint32_t height);   // the pointer goes under (px,py) at once and that point becomes the device's reference (a finger landing)
+    void tap(Action action) { std::lock_guard lock(mutex_); actions_.tap(action); }   // a touch is the action button (A) for one press
+    void aim_lift();   // the absolute device lifted (a finger): the next position is a new start, not a swing from the last one
     void pointer_smoothing(float fraction);   // 0..0.9: the share of the pointer's old place that stays at each new absolute position
     // A shot (`fire`) while the pointer is in the corner / at the edge of the window, `size_fraction` (0..0.5) of its width and height, reloads instead: the game sees
     // `reload` for one frame and never sees that shot. Only in gameplay; throws std::invalid_argument for a size outside 0..0.5.
@@ -145,7 +151,7 @@ private:
     float target_x_=0,target_y_=0,target_smoothing_=0;
     bool target_on_=false;   // the pointer is still on its way to the target
     uint64_t eased_ns_=0;
-    bool absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale=1);   // Requires mutex_; finite px/py and a window were checked.
+    bool absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale=1,bool swipe=false,bool follow=false);   // Requires mutex_; finite px/py and a window were checked.
     uint64_t sequence_=0,host_sequence_=0,consumed_sequence_=0;
     bool legacy_test_input_=false;
     uint64_t generation_=0;

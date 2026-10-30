@@ -32,7 +32,8 @@ public:
     unsigned changes() const { return changes_; }   // counts pads added or removed and the pad in use changing: status() is worth asking again
 private:
     struct Pad {
-        SDL_Gamepad* handle=nullptr; unsigned slot=0; std::string name; SDL_GamepadType type=SDL_GAMEPAD_TYPE_UNKNOWN; bool gyro=false;
+        SDL_Gamepad* handle=nullptr; unsigned slot=0; std::string name; SDL_GamepadType type=SDL_GAMEPAD_TYPE_UNKNOWN; float trackpad_peak[2]={}; bool deck=false; /* the Steam Deck's own controller: its prompts are its own buttons, not an Xbox's */ bool gyro=false, gyro_seen=false; unsigned gyro_samples=0; uint64_t gyro_logged_ns=0; float gyro_peak[3]={};
+        unsigned yaw_axis=1; float yaw_sign=1;   // which SDL gyro axis turns the aim sideways (see GamepadInput::added)   // gyro_seen: a non-zero sample arrived (logged once)
         std::array<float,6> axes{}; uint32_t buttons=0,axis_down=0; GyroBias bias;
     };
     void added(SDL_JoystickID);

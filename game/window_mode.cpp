@@ -1,5 +1,6 @@
 #include "window_mode.h"
 #include <SDL3/SDL.h>
+#include <cstdio>
 #include <stdexcept>
 namespace uc {
 bool cursor_release_key(WindowMode mode,SDL_Keycode key) {
@@ -20,7 +21,22 @@ void configure_window_mode(SDL_Window* window,WindowMode mode,int width,int heig
     default: throw std::invalid_argument("invalid window mode");
     }
     const bool fullscreen=mode!=WindowMode::windowed;
-    if(!SDL_SetWindowFullscreenMode(window,selected) || !SDL_SetWindowFullscreen(window,fullscreen) || !SDL_SyncWindow(window)) throw std::runtime_error(SDL_GetError());
-    if(bool(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN)!=fullscreen || (fullscreen && bool(SDL_GetWindowFullscreenMode(window))!=(mode==WindowMode::exclusive))) throw std::runtime_error("requested window mode was not applied");
+    if(!SDL_SetWindowFullscreenMode(window,selected) || !SDL_SetWindowFullscreen(window,fullscreen)) throw std::runtime_error(SDL_GetError());
+    if(!SDL_SyncWindow(window)) {
+#ifdef _WIN32
+        throw std::runtime_error(SDL_GetError());
+#else
+        // Linux: gamescope's Xwayland (how Steam starts a game in Game Mode) does not finish the sync within SDL's time limit and leaves no error text; the window is fine.
+        std::fprintf(stderr,"[window] the window manager did not confirm the mode in time; continuing\n");
+#endif
+    }
+    if(bool(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN)!=fullscreen || (fullscreen && bool(SDL_GetWindowFullscreenMode(window))!=(mode==WindowMode::exclusive))) {
+#ifdef _WIN32
+        throw std::runtime_error("requested window mode was not applied");
+#else
+        // Linux: the compositor decides (gamescope in Game Mode owns the window, Wayland answers asynchronously); a game that is on screen must not die over it.
+        std::fprintf(stderr,"[window] requested %s mode is not confirmed by the compositor; continuing\n",fullscreen ? "fullscreen" : "windowed");
+#endif
+    }
 }
 }

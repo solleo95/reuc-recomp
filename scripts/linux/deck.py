@@ -56,9 +56,11 @@ def stage(build_dir):
         shutil.copy2(build / "game" / "uc", out / "uc")
         # No libSDL3 here: the Deck's own SDL3 (3.4, with Wayland) is used; the one we build has no Wayland backend.
         shutil.copytree(build / "game" / "data", out / "data")
+        launcher = Path(__file__).with_name("uc-deck.sh").read_bytes().replace(b"\r\n", b"\n")   # git on Windows may check it out with CRLF; sh needs LF
+        (out / "uc-deck.sh").write_bytes(launcher)   # the Steam / terminal launcher
         ssh(f"mkdir -p {GAME}")
         with subprocess.Popen(["tar", "-cf", "-", "-C", str(out), "."], stdout=subprocess.PIPE) as tar:
-            subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -xf - -C {GAME} && chmod +x {GAME}/uc"], stdin=tar.stdout, check=True)
+            subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -xf - -C {GAME} && chmod +x {GAME}/uc {GAME}/uc-deck.sh"], stdin=tar.stdout, check=True)
     ssh(f"du -sh {GAME}; df -h /home | tail -1")
 
 
@@ -90,7 +92,7 @@ def main():
     c = sub.add_parser("clean")
     c.add_argument("--all", action="store_true")
     sub.add_parser("selftest")
-    sub.add_parser("stage").add_argument("build_dir", nargs="?", default=str(ROOT / "build-linux"))
+    sub.add_parser("stage").add_argument("build_dir", nargs="?", default=str(ROOT / "build-linux-znver2"))   # scripts/linux/build.ps1's default folder
     a = p.parse_args()
     if a.cmd == "push":
         push(a.files)

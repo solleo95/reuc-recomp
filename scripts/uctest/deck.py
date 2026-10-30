@@ -9,10 +9,12 @@ import shlex
 import socket
 import subprocess
 import time
+from pathlib import Path
 
 HOST = os.environ.get("UC_DECK_HOST", "deck")
 REMOTE = os.environ.get("UC_DECK_DIR", "~/uc-run")   # where scripts/linux/deck.py stage put uc, data/ and game/
 RUNTIME = "/run/user/1000"
+SHORTCUT_ID = os.environ.get("UC_DECK_SHORTCUT", "9709607294513184768")   # the owner's non-Steam shortcut of ~/uc-run/uc-deck.sh (Game Mode runs)
 # The Desktop Mode session on native Wayland with the Deck's own SDL3 (3.4: Wayland, Steam Deck controller); override the whole string with UC_DECK_ENV.
 # The SDL3 we build (3.2.0 against the Windows-hosted sysroot) has no Wayland backend, so scripts/linux/deck.py stage does not ship it.
 DISPLAY_ENV = "XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 SDL_VIDEODRIVER=wayland"
@@ -53,9 +55,36 @@ class DeckRun:
 
     def start(self, args, env=None):
         """args: the game's arguments after ./uc, paths already relative to or inside the run folder. Returns the ssh process (it ends with the game)."""
+        if os.environ.get("UC_DECK_GAMEMODE"):
+            return self._start_in_game_mode(args, env)
         environment = os.environ.get("UC_DECK_ENV", DISPLAY_ENV) + "".join(f" {key}={shlex.quote(value)}" for key, value in (env or {}).items())
         command = f"cd {REMOTE} && env {environment} ./uc {' '.join(shlex.quote(a) for a in args)} > {self.remote_dir}/run.log 2>&1"
         self.process = subprocess.Popen(SSH + [command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        sockets = [f"{RUNTIME}/uc-test-{self.name}-cmd.sock", f"{RUNTIME}/uc-test-{self.name}-evt.sock"]
+        self.forward = subprocess.Popen(SSH[:-1] + ["-N", "-o", "ExitOnForwardFailure=yes", "-L", f"{self.cmd_port}:{sockets[0]}", "-L", f"{self.evt_port}:{sockets[1]}", HOST],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return self.process
+
+    def _start_in_game_mode(self, args, env=None):
+        """The run the owner can watch: Steam starts the non-Steam shortcut of uc-deck.sh in Game Mode (gamescope shows it like any game); next-run.sh carries this run's arguments.
+        The returned ssh process ends when the game has ended (it waits for `uc` to appear, then to go)."""
+        env = dict(env or {})
+        for key, value in os.environ.items():
+            if key.startswith(("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_EXE")):   # diagnostics of the run: the profiler (its output lands in the run folder, which comes back with the artifacts)
+                env[key] = value
+        lines = [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
+        if "UC_CPU_SAMPLE" in env:   # absolute: the game may change its working directory
+            lines.append(f'export UC_CPU_SAMPLE_OUT="{self.remote_dir.replace("~", "$HOME", 1)}/cpu-samples.txt"')
+        lines += ["set -- " + " ".join(shlex.quote(a) for a in args), f"exec > {self.remote_dir}/run.log 2>&1"]
+        _ssh(f"mkdir -p {self.remote_dir} && cat > {REMOTE}/next-run.sh", input=("\n".join(lines) + "\n").encode(), check=True)
+        launch = (f"pkill -x uc; XDG_RUNTIME_DIR={RUNTIME} DISPLAY=:0 steam -ifrunning steam://rungameid/{SHORTCUT_ID} >/dev/null 2>&1; "
+                  "for i in $(seq 1 120); do pgrep -x uc >/dev/null && break; sleep 0.5; done; while pgrep -x uc >/dev/null; do sleep 1; done")
+        self.process = subprocess.Popen(SSH + [launch], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.environ.get("UC_DECK_MONITOR"):   # what the game uses while it runs: scripts/linux/deck_monitor.py (it ends with the game)
+            with open(Path(__file__).resolve().parents[1] / "linux" / "deck_monitor.py", "rb") as source:
+                subprocess.run(SSH + [f"cat > {self.remote_dir}/deck_monitor.py"], stdin=source, check=True)
+            # a systemd unit: a plain background process of an ssh session is killed when the session ends
+            _ssh(f"systemctl --user stop uc-monitor 2>/dev/null; systemd-run --user --unit=uc-monitor --collect python3 {self.remote_dir}/deck_monitor.py {self.remote_dir}/monitor.csv", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sockets = [f"{RUNTIME}/uc-test-{self.name}-cmd.sock", f"{RUNTIME}/uc-test-{self.name}-evt.sock"]
         self.forward = subprocess.Popen(SSH[:-1] + ["-N", "-o", "ExitOnForwardFailure=yes", "-L", f"{self.cmd_port}:{sockets[0]}", "-L", f"{self.evt_port}:{sockets[1]}", HOST],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

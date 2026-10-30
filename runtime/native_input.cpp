@@ -358,22 +358,34 @@ bool NativeInput::aim(float x,float y) {
     target_on_=false;
     state_.x=x; state_.y=y; note_aim(); return true;
 }
-bool NativeInput::aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale) {
+bool NativeInput::aim_absolute(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale,bool swipe,bool follow) {
     if(!width || !height || !std::isfinite(px) || !std::isfinite(py) || !std::isfinite(gesture_scale) || gesture_scale<=0)return false;
     std::lock_guard lock(mutex_);
-    return absolute_point(px,py,width,height,timestamp_ns,gesture_scale);
+    return absolute_point(px,py,width,height,timestamp_ns,gesture_scale,swipe,follow);
 }
-bool NativeInput::absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale) {
+bool NativeInput::aim_place(float px,float py,uint32_t width,uint32_t height) {
+    if(!width || !height || !std::isfinite(px) || !std::isfinite(py))return false;
+    std::lock_guard lock(mutex_);
+    have_absolute_=false;
+    return absolute_point(px,py,width,height,0,1,false,false);
+}
+bool NativeInput::absolute_point(float px,float py,uint32_t width,uint32_t height,uint64_t timestamp_ns,float gesture_scale,bool swipe,bool follow) {
     if(!state_.valid)return false;
-    const float x=std::clamp(2*px/width-1,-1.0f,1.0f)*kAimEdgeX,y=std::clamp(2*py/height-1,-1.0f,1.0f)*kAimEdgeY;   // the window's edge, in the game's pointer units
+    float x=std::clamp(2*px/width-1,-1.0f,1.0f)*kAimEdgeX,y=std::clamp(2*py/height-1,-1.0f,1.0f)*kAimEdgeY;   // the window's edge, in the game's pointer units
+    if(follow) {
+        if(!have_absolute_) { have_absolute_=true; absolute_px_=px; absolute_py_=py; return true; }   // the first point only becomes the reference
+        const float base_x=target_on_ ? target_x_ : state_.x, base_y=target_on_ ? target_y_ : state_.y;   // where the pointer is (going) now, whatever moved it last
+        x=std::clamp(base_x+2*(px-absolute_px_)/width*kAimEdgeX,-kAimEdgeX,kAimEdgeX); y=std::clamp(base_y+2*(py-absolute_py_)/height*kAimEdgeY,-kAimEdgeY,kAimEdgeY);
+    }
     if(have_absolute_) {
-        try { actions_.motion((px-absolute_px_)*gesture_scale,(py-absolute_py_)*gesture_scale,timestamp_ns ? timestamp_ns : motion_time()); }
+        try { actions_.motion((px-absolute_px_)*gesture_scale,(py-absolute_py_)*gesture_scale,timestamp_ns ? timestamp_ns : motion_time(),swipe); }
         catch(const std::overflow_error&) { cancel_host(); throw; }
     }
     aim_toward(x,y,smoothing_,!have_absolute_);
     have_absolute_=true; absolute_px_=px; absolute_py_=py;
     return true;
 }
+void NativeInput::aim_lift() { std::lock_guard lock(mutex_); have_absolute_=false; }
 void NativeInput::pointer_smoothing(float fraction) {
     if(!std::isfinite(fraction) || fraction<0 || fraction>.9f)throw std::invalid_argument("pointer smoothing must be 0..0.9");
     std::lock_guard lock(mutex_); smoothing_=fraction;

@@ -33,9 +33,11 @@ std::array<float,2> GyroBias::filter(float yaw,float pitch,uint64_t timestamp_ns
     if(!calibrated_) {
         const bool restart=samples_==0 || timestamp_ns<start_ns_ ||
             std::hypot(yaw-float(sum_yaw_/samples_),pitch-float(sum_pitch_/samples_))>kCalibrationMovement;
+        if(samples_==0 && first_ns_==0) first_ns_=timestamp_ns;
         if(restart) {start_ns_=timestamp_ns;samples_=0;sum_yaw_=sum_pitch_=0;}
         ++samples_;sum_yaw_+=yaw;sum_pitch_+=pitch;
-        if(timestamp_ns-start_ns_>=kCalibrationNs) {
+        // shortcut: after 2 s of movement the offset is taken from the latest short window as it is (a Deck held in the hands and aimed at once never sits still); a better one would wait for a quiet moment
+        if(timestamp_ns-start_ns_>=kCalibrationNs || (timestamp_ns-first_ns_>=2000000000ull && samples_>=20)) {
             bias_yaw_=float(sum_yaw_/samples_);bias_pitch_=float(sum_pitch_/samples_);calibrated_=true;
         }
         return {0,0};

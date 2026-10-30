@@ -26,6 +26,10 @@ void face_button(ImDrawList& list,ImVec2 center,float r,unsigned code,PadFamily 
         text_centered(list,center,r*1.35f,letters[code],pad_glyph_label({PhysicalKind::pad_button,uint16_t(code)},family));
         break;
     }
+    case PadFamily::steam_deck:   // the Deck's face buttons carry plain white letters, no colours
+        list.AddCircleFilled(center,r,rgb(24,26,29),24); list.AddCircle(center,r,rgb(150,154,160),24,r*.08f);
+        text_centered(list,center,r*1.35f,IM_COL32_WHITE,pad_glyph_label({PhysicalKind::pad_button,uint16_t(code)},family));
+        break;
     case PadFamily::playstation: {
         list.AddCircleFilled(center,r,rgb(30,33,46),24); list.AddCircle(center,r,rgb(90,96,120),24,r*.08f);
         const float s=r*.42f,t=r*.16f;
@@ -131,6 +135,7 @@ float pad_glyph_aspect(PhysicalInput input) {
     if(input.kind==PhysicalKind::wii_button) return input.code==7 || input.code==11 ? 1.4f : 1.f;
     if(is_shoulder(input) || is_trigger(input)) return 1.8f;
     if(is_button(input) && (input.code==4 || input.code==6)) return 1.5f;
+    if(is_button(input) && input.code>=kPadTrackpadPress) return 3.2f;   // "L Pad press"
     if(is_button(input) && input.code>=15) return 2.f;
     if(is_axis(input) && input.code>=12) return 1.5f;
     return 1.f;

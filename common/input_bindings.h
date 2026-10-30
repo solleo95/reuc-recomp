@@ -16,11 +16,16 @@ constexpr double kShakeStroke=20,kShakeMinPath=24,kShakePathSeconds=.06;
 constexpr uint64_t kShakeGapNs=100000000ull;
 enum class Action:uint8_t { interact,fire,weapon_previous,weapon_next,reload,grenade,knife,pause,confirm,back,release_cursor,screenshot,qte_shake,camera_up,camera_down,camera_left,camera_right,menu,speed_up,recenter,count };   // menu: the in-game settings menu, a plain key (host key, never reaches the game); speed_up: hold for game clock x8, a plain key of the same kind (` by default, unbound: off); recenter: gamepad aim reset, bound in the gamepad table
 enum class InputContext:uint8_t { inactive,menu,gameplay,qte };
-// pad_button code: SDL_GamepadButton (0..31). pad_axis code: SDL_GamepadAxis*2 + (positive direction ? 1 : 0), a stick direction or a trigger pulled past half (0..15).
+// pad_button code: SDL_GamepadButton (0..31), except the top two: the first / second touchpad of the pad (the Steam Deck's left and right trackpads) pressed past a soft threshold
+// (kPadTrackpadPress + the touchpad's index): firmer than a touch, lighter than the physical click, which is the pad's own SDL button. pad_axis code: SDL_GamepadAxis*2 + (positive direction ? 1 : 0), a stick direction or a trigger pulled past half (0..15).
 // wii_button code: a WiiButton of common/wiimote_protocol.h (0..kWiiButtonCount-1): the remote's buttons, then the nunchuk's Z and C.
 enum class PhysicalKind:uint8_t { key,mouse,wheel,pad_button,pad_axis,wii_button };
 constexpr unsigned kWiiButtonCount=13;
-enum class PadFamily:uint8_t { xbox,playstation,nintendo,generic };   // which controller's look the prompts and button names use
+constexpr uint16_t kPadTrackpadPress=30;   // pad_button 30 and 31: a soft press on touchpad 0 and 1
+// Touchpad pressure (0..1) that presses, and below which the press ends (a hysteresis, so a steady finger does not flutter). Measured on a Steam Deck: a resting finger reads up to about .07,
+// a medium press .1 to .25, a firm one .8 to 1 (the reading saturates), so the soft press sits just above a touch.
+constexpr float kTrackpadPressOn=.10f,kTrackpadPressOff=.06f;
+enum class PadFamily:uint8_t { xbox,playstation,nintendo,generic,steam_deck };   // which controller's look the prompts and button names use
 struct PhysicalInput { PhysicalKind kind=PhysicalKind::key; uint16_t code=0; bool operator==(const PhysicalInput&) const=default; };
 enum class BindingKind:uint8_t { physical,interact_fire,interact_motion,qte_motion };
 struct Binding { BindingKind kind=BindingKind::physical; PhysicalInput input; std::vector<PhysicalInput> modifiers; bool operator==(const Binding&) const=default; };
@@ -47,7 +52,9 @@ public:
     void release_pad();               // releases every held gamepad button and axis input: a gamepad went away or focus left
     void release_wii();               // the same for the Wii Remote's buttons
     void wheel(int);
-    void motion(float,float,uint64_t timestamp_ns=0);
+    // swipe: a finger on a touchscreen. It swings the knife without Interact held (a held finger must not be the knife/grenade stance) but needs twice the speed.
+    void motion(float,float,uint64_t timestamp_ns=0,bool swipe=false);
+    void tap(Action action) { pulse(action); }   // one press and release of an action, whatever is held
     ActionFrame consume();
 private:
     bool allowed(Action) const;

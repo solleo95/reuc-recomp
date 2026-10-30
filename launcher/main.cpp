@@ -11,6 +11,7 @@
 #include "render_scale.h"
 #include "rt_ui.h"
 #include "backend_ui.h"
+#include "settings_registry.h"
 #include "prompt_icons.h"
 #include "localization.h"
 #include "netplay.h"
@@ -570,6 +571,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const char* hints[]={"game_hint","graphics_hint","controls_hint","controllers_hint","audio_hint"};
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
         ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
+        const auto shown=[](const char* id) {return uc::settings::shown(id,uc::settings::desktop_launcher);};   // the settings registry decides what this page lists
         auto toggle=[&](const char* id,const char* label,bool& value,bool disabled=false,const char* why=nullptr) {
             ImGui::BeginDisabled(disabled);ImGui::PushID(id);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{6*unit,6*unit});
@@ -597,9 +599,9 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         ImGui::BeginChild("settings",{0,std::max(100*unit,ImGui::GetContentRegionAvail().y-footer)},page_scrolls ? ImGuiChildFlags_AlwaysUseWindowPadding : ImGuiChildFlags_None);
         if(page_scrolls) {ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::Indent(-12*unit);}
         if(page==0) {
-            toggle("##skip-game",tr("skip"),options.skip_intro);
-            ImGui::Dummy({0,8*unit});toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
-            ImGui::Dummy({0,8*unit});toggle("##logs-game",tr("enable_logs"),options.logs);
+            if(shown("skip_intro"))toggle("##skip-game",tr("skip"),options.skip_intro);
+            ImGui::Dummy({0,8*unit});if(shown("skip_tutorials"))toggle("##skip-tutorials-game",tr("skip_tutorials"),options.skip_tutorials);
+            ImGui::Dummy({0,8*unit});if(shown("logs"))toggle("##logs-game",tr("enable_logs"),options.logs);
             ImGui::Dummy({0,8*unit});ImGui::TextWrapped("%s",tr("alt"));
         } else if(page==1) {
             const float column_gap=88*unit;
@@ -610,7 +612,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::BeginChild("display",{column,0},ImGuiChildFlags_AlwaysUseWindowPadding);
             ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::Indent(-12*unit);
-            ImGui::PushItemWidth(-1);ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);
+            ImGui::PushItemWidth(-1);if(shown("renderer")) {ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);
             const char* renderer_names[]={"Vulkan","DirectX 11","DirectX 12"};
             const bool renderer_open=combo("##renderer",renderer_names[int(options.renderer_backend)]);track("renderer");
             if(renderer_open) {
@@ -620,7 +622,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::Dummy({0,10*unit});ImGui::TextUnformatted(tr("window"));
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});}
+            if(shown("window_mode")) {ImGui::TextUnformatted(tr("window"));
             push_font(ui.sans,22);
             const char* modes[]={"windowed","borderless","exclusive"};
             const bool window_open=combo("##window",tr(modes[int(options.window_mode)]));track("window");
@@ -628,8 +631,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 for(int i=0;i<3;++i) {if(ImGui::Selectable(tr(modes[i]),int(options.window_mode)==i))options.window_mode=uc::WindowMode(i);track("mode"+std::to_string(i));}
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::Dummy({0,10*unit});
-            ImGui::TextUnformatted(tr("scale"));push_font(ui.sans,22);
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});}
+            if(shown("render_scale")) {ImGui::TextUnformatted(tr("scale"));push_font(ui.sans,22);
             auto scale_label=[&](double scale) {
                 const double effective=scale ? scale : uc::monitor_render_scale(monitor->w,monitor->h);
                 const auto extent=uc::manual_render_extent(effective,double(monitor->w)/monitor->h);
@@ -646,8 +649,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::Dummy({0,10*unit});
-            ImGui::TextUnformatted(tr("fps_limit"));push_font(ui.sans,22);
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});}
+            if(shown("fps_limit")) {ImGui::TextUnformatted(tr("fps_limit"));push_font(ui.sans,22);
             const uint32_t limits[]={30,60,90,120,144,165,240,360,0};   // 0 = unlimited
             const uint32_t current_limit=options.fps_limit.value_or(options.unlock_60fps ? 60 : 30);   // no limit chosen yet: what the removed "60 FPS game update" toggle of the config said
             const auto limit_label=[&](uint32_t value) {return value ? std::to_string(value)+" FPS" : std::string(tr("unlimited"));};
@@ -658,8 +661,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 for(const uint32_t value:limits) {if(ImGui::Selectable(limit_label(value).c_str(),current_limit==value))options.fps_limit=value;track("fps"+std::to_string(value));}
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::Dummy({0,10*unit});
-            ImGui::TextUnformatted(tr("hud_position"));push_font(ui.sans,22);
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});}
+            if(shown("hud_position")) {ImGui::TextUnformatted(tr("hud_position"));push_font(ui.sans,22);
             const char* hud_keys[]={"hud_auto","hud_center","hud_edges"};
             const bool hud_open=combo("##hud",tr(hud_keys[int(options.hud_position)]));track("hud");
             if(ImGui::IsItemHovered())uc::launcher::tooltip(tr("hud_hint"));
@@ -667,7 +670,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 for(int i=0;i<3;++i) {if(ImGui::Selectable(tr(hud_keys[i]),int(options.hud_position)==i))options.hud_position=uc::HudPosition(i);track("hud"+std::to_string(i));}
                 ImGui::EndCombo();
             }
-            ImGui::PopFont();ImGui::PopItemWidth();ImGui::Unindent(-12*unit);ImGui::EndChild();
+            ImGui::PopFont();}ImGui::PopItemWidth();ImGui::Unindent(-12*unit);ImGui::EndChild();
             ImGui::SameLine(0,column_gap);
             ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,9*unit);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*unit,0});
@@ -677,9 +680,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             const auto api=uc::backend_ui(options.renderer_backend);   // what this graphics API can offer; the rest is hidden
             // Hidden controls keep their saved values (the renderer ignores them on this API), so switching back restores them.
             const auto rt_for=[&] {return api.ray_tracing ? uc::rt_ui(options.effects,features_ready,features.ray_tracing) : uc::RtUi{false,false,false};};
-            ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
             const bool checking=features_query.valid();
             const auto kind_label=[&](uc::UpscalerKind kind) {return kind==uc::UpscalerKind::dlss ? "DLSS" : kind==uc::UpscalerKind::fsr ? "FSR" : kind==uc::UpscalerKind::smaa ? "SMAA" : tr("off");};
+            if(shown("upscaling")) {
+            ImGui::TextUnformatted(tr("upscaling"));push_font(ui.sans,22);
             const bool upscaler_open=combo("##upscaling",kind_label(!api.fsr && options.upscaler==uc::UpscalerKind::fsr ? uc::UpscalerKind::off : options.upscaler));track("upscaling");
             if(upscaler_open) {
                 for(const auto kind:{uc::UpscalerKind::off,uc::UpscalerKind::smaa,uc::UpscalerKind::dlss,uc::UpscalerKind::fsr}) {
@@ -694,9 +698,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
                 ImGui::EndCombo();
             }
+            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            }
             const bool upscaling=options.upscaler!=uc::UpscalerKind::off;
             const bool scaled=options.upscaler==uc::UpscalerKind::dlss || options.upscaler==uc::UpscalerKind::fsr;   // SMAA renders at the output size: no quality choice
-            ImGui::PopFont();ImGui::Dummy({0,10*unit});
+            if(shown("upscale_mode")) {
             ImGui::TextUnformatted(tr("quality"));push_font(ui.sans,22);
             const auto mode_label=[&](uc::UpscaleMode mode) -> std::string {
                 switch(mode) {
@@ -720,6 +726,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             ImGui::EndDisabled();
             ImGui::PopFont();ImGui::Dummy({0,16*unit});
+            }
+            if(shown("sharpening")) {
             toggle("##sharpening",tr("sharpening"),options.sharpening,!upscaling);
             ImGui::BeginDisabled(!upscaling || !options.sharpening);
             float sharpness=float(options.sharpness);
@@ -727,7 +735,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(ImGui::SliderFloat("##sharpness",&sharpness,0.01f,1.0f,"%.2f"))options.sharpness=std::clamp(std::round(double(sharpness)*100)/100,0.01,1.0);
             track("sharpness");
             ImGui::EndDisabled();
-            if(api.frame_generation) {
+            }
+            if(api.frame_generation && shown("frame_generation")) {
             ImGui::Dummy({0,16*unit});
             ImGui::TextUnformatted(tr("framegen"));push_font(ui.sans,22);
             const auto generator=options.frame_generation ? options.upscaler : uc::UpscalerKind::off;
@@ -767,6 +776,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             }
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("effects"));
+            if(shown("anisotropy")) {
             ImGui::TextUnformatted(tr("anisotropy"));push_font(ui.sans,22);
             {
                 const uint32_t most=features_ready ? features.anisotropy_max : 16;   // until the report arrives the renderer's own clamp decides
@@ -786,6 +796,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             ImGui::PopFont();
             ImGui::Dummy({0,8*unit});
+            }
             {   // effects with off and four presets; greyed out on a GPU without the screen-space path (a saved choice stays visible and can be left)
                 const auto level_label=[&](uc::EffectLevel level) -> std::string {return level==uc::EffectLevel::off ? tr("off") : tr(level==uc::EffectLevel::low ? "level_low" : level==uc::EffectLevel::medium ? "level_medium" : level==uc::EffectLevel::high ? "level_high" : "level_ultra");};
                 const auto level_combo=[&](const char* id,const char* title,const std::string& tracked,uc::EffectLevel& value,bool locked=false,const char* locked_why=nullptr,bool with_off=true) {
@@ -805,11 +816,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     if(blocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {const char* hint=locked ? locked_why : tr("effects_unavailable");if(hint)uc::launcher::tooltip(hint);}
                     ImGui::PopFont();
                 };
-                level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,rt_for().raster_replaced,tr("replaced_by_rt"));   // path tracing replaces it
+                if(shown("ambient_occlusion")) level_combo("##ao","ambient_occlusion","ambient-occlusion",options.effects.ambient_occlusion,rt_for().raster_replaced,tr("replaced_by_rt"));   // path tracing replaces it
                 ImGui::Dummy({0,8*unit});
-                level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
+                if(shown("motion_blur")) level_combo("##blur","motion_blur","motion-blur",options.effects.motion_blur);
                 // Ray tracing (path tracing): the checkbox and its quality; it lights the scene instead of the shadow map, the contact shadows and GTAO.
-                if(api.ray_tracing) {
+                if(api.ray_tracing && shown("ray_tracing")) {
                     const auto rt=rt_for();
                     const std::string rt_why=std::string(tr("rt_unavailable"))+(features.ray_tracing_reason.empty() ? "" : " ("+features.ray_tracing_reason+")");
                     ImGui::Dummy({0,8*unit});
@@ -820,10 +831,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             }
             const auto rt=rt_for();
             ImGui::Dummy({0,8*unit});
-            toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
+            if(shown("per_pixel_lighting"))toggle("##ppl",tr("per_pixel_lighting"),options.effects.per_pixel_lighting,features_ready && !features.effects && !options.effects.per_pixel_lighting,tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
-            toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,(features_ready && !features.effects && !options.effects.contact_shadows) || rt.raster_replaced,rt.raster_replaced ? tr("replaced_by_rt") : tr("effects_unavailable"));
+            if(shown("contact_shadows"))toggle("##contact",tr("contact_shadows"),options.effects.contact_shadows,(features_ready && !features.effects && !options.effects.contact_shadows) || rt.raster_replaced,rt.raster_replaced ? tr("replaced_by_rt") : tr("effects_unavailable"));
             ImGui::Dummy({0,8*unit});
+            if(shown("bloom")) {
             toggle("##bloom",tr("bloom"),options.bloom);
             ImGui::BeginDisabled(!options.bloom);
             ImGui::Dummy({0,8*unit});ImGui::TextUnformatted(tr("bloom_strength"));
@@ -831,13 +843,15 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(uc::launcher::slider_int("##bloom_strength",bloom_strength,0,int(uc::kBloomStrengthMax),"%d%%"))options.bloom_strength=uint32_t(std::clamp(bloom_strength,0,int(uc::kBloomStrengthMax)));
             track("bloom-strength");
             ImGui::EndDisabled();
+            }
             std::error_code dlss5_ignored;const bool dlss5_runtime=fs::exists(directory/L"nvngx_dlssnr.dll",dlss5_ignored);   // the player puts it next to the exe
             if(!dlss5_runtime)options.dlss5_enabled=false;
-            if(api.dlss5) {
+            if(api.dlss5 && shown("dlss5")) {
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("dlss5"));
             toggle("##dlss5",tr("dlss5_enable"),options.dlss5_enabled,!dlss5_runtime,tr("dlss5_runtime_missing"));
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("dlss5_enable_hint"));ImGui::PopStyleColor();
             }
+            if(shown("hdr")) {
             ImGui::Dummy({0,8*unit});ImGui::SeparatorText(tr("hdr"));
             toggle("##hdr",tr("hdr"),options.hdr.enabled);
             ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr("hdr_hint"));ImGui::PopStyleColor();
@@ -852,10 +866,12 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             nits_slider("hdr-paper","hdr_paper_white",options.hdr.paper_white_nits,uc::kHdrWhiteMin,uc::kHdrWhiteMax);
             nits_slider("hdr-ui","hdr_ui",options.hdr.ui_nits,uc::kHdrWhiteMin,uc::kHdrWhiteMax);
             ImGui::EndDisabled();
+            }
             ImGui::Dummy({0,20*unit});
             ImGui::PopItemWidth();ImGui::EndChild();
         } else if(page==2) {
             push_font(ui.sans,22);
+            if(shown("pointer_device")) {
             ImGui::TextUnformatted(tr("pointer_device"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
             const char* devices[]={tr("pointer_mouse"),tr("pointer_lightgun")};
@@ -865,20 +881,24 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 ImGui::EndCombo();
             }
             ImGui::Dummy({0,8*unit});
+            }
             const bool absolute=options.pointer==uc::PointerMode::absolute;   // the cursor's position is the aim: the mouse speed means nothing, a jittery gun wants smoothing
+            if(shown("mouse_sensitivity")) {
             ImGui::BeginDisabled(absolute);
             ImGui::TextUnformatted(tr("mouse_sensitivity"));
             int sensitivity=int(options.mouse_sensitivity);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
             if(uc::launcher::slider_int("##mouse_sensitivity",sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax),"%d%%"))options.mouse_sensitivity=uint32_t(std::clamp(sensitivity,int(uc::kMouseSensitivityMin),int(uc::kMouseSensitivityMax)));
             track("mouse-sensitivity");
             ImGui::EndDisabled();
-            if(absolute) {
+            }
+            if(absolute && shown("pointer_smoothing")) {
                 ImGui::Dummy({0,8*unit});
                 ImGui::TextUnformatted(tr("pointer_smoothing"));
                 int smoothing=int(options.pointer_smoothing);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
                 if(uc::launcher::slider_int("##pointer_smoothing",smoothing,0,int(uc::kPointerSmoothingMax),"%d%%"))options.pointer_smoothing=uint32_t(std::clamp(smoothing,0,int(uc::kPointerSmoothingMax)));
                 track("pointer-smoothing");
             }
+            if(shown("reload_zone")) {
             ImGui::Dummy({0,8*unit});
             ImGui::TextUnformatted(tr("reload_zone"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
@@ -888,13 +908,15 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 for(size_t i=0;i<3;++i) {if(ImGui::Selectable(zones[i],size_t(options.reload_zone)==i))options.reload_zone=uc::ReloadZone(i);track(i==0 ? "reload-zone-off" : i==1 ? "reload-zone-corner" : "reload-zone-edge");}
                 ImGui::EndCombo();
             }
-            if(options.reload_zone!=uc::ReloadZone::off) {
+            if(options.reload_zone!=uc::ReloadZone::off && shown("reload_zone_size")) {
                 ImGui::Dummy({0,8*unit});
                 ImGui::TextUnformatted(tr("reload_zone_size"));
                 int zone_size=int(options.reload_zone_size);ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
                 if(uc::launcher::slider_int("##reload_zone_size",zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax),"%d%%"))options.reload_zone_size=uint32_t(std::clamp(zone_size,int(uc::kReloadZoneSizeMin),int(uc::kReloadZoneSizeMax)));
                 track("reload-zone-size");
             }
+            }
+            if(shown("prompt_style")) {
             ImGui::Dummy({0,8*unit});
             ImGui::TextUnformatted(tr("style"));
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.57f);
@@ -908,6 +930,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             const float ph=44*unit;const auto p=ImGui::GetCursorScreenPos();auto* preview=ImGui::GetWindowDrawList();
             for(int i=0;i<3;++i)uc::draw_mouse_icon(*preview,{p.x+i*ph,p.y},{ph*.65f,ph},{i==2 ? uc::PhysicalKind::wheel : uc::PhysicalKind::mouse,uint16_t(i==0 ? 1 : i==1 ? 3 : 1)},false,options.prompt_style);
             ImGui::Dummy({ph*3,ph});ImGui::Spacing();
+            }
+            if(shown("key_bindings")) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*unit,10*unit});
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{8*unit,8*unit});
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{4*unit,3*unit});
@@ -966,13 +990,15 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 }
                 ImGui::EndTable();
             }
-            ImGui::EndDisabled();ImGui::PopStyleVar(3);ImGui::Dummy({0,20*unit});ImGui::PopFont();
+            ImGui::EndDisabled();ImGui::PopStyleVar(3);
+            }
+            ImGui::Dummy({0,20*unit});ImGui::PopFont();
         } else if(page==3) {
             push_font(ui.sans,22);
             pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;pad_panel.combo_unit=unit;
-            uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
+            if(shown("pad_panel"))uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
             wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
-            uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
+            if(shown("wiimote"))uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
             ImGui::Dummy({0,20*unit});ImGui::PopFont();
         } else ImGui::TextWrapped("%s",tr("audio_info"));
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});

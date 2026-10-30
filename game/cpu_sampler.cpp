@@ -1,7 +1,109 @@
 #include "cpu_sampler.h"
 #ifndef _WIN32
-// A Windows-only dev profiler (SuspendThread + stack unwinding); on Linux it does nothing.
-namespace uc { void cpu_sampler_start_once(const char*) {} void cpu_sampler_set_replaying(bool) {} }
+// Linux: a flat profile of the whole process. UC_CPU_SAMPLE=1 starts a SIGPROF timer (every millisecond of process CPU time) that records the interrupted instruction and thread
+// into a ring; at exit the last UC_CPU_SAMPLE_SECONDS (default 25) go to UC_CPU_SAMPLE_OUT (default cpu-samples.txt): a "# base <hex>" line (the executable's load bias), then
+// "<tid> <rip> <ms>". scripts/resolve_linux_samples.py names the functions with llvm-symbolizer. (The Windows build samples one thread with stack unwinding, below.)
+#include <atomic>
+#include <csignal>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <link.h>
+#include <string_view>
+#include <sys/syscall.h>
+#include <sys/time.h>
+#include <ucontext.h>
+#include <unistd.h>
+namespace uc {
+namespace {
+struct Sample { uint64_t rip; uint32_t tid; uint32_t ms; };
+constexpr size_t kRing = 1 << 18;
+Sample ring[kRing];
+std::atomic<uint64_t> taken{0};
+uint32_t now_ms() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return uint32_t(t.tv_sec * 1000 + t.tv_nsec / 1000000); }
+void on_profile(int, siginfo_t*, void* context) {
+    const auto* c = static_cast<ucontext_t*>(context);
+    const uint64_t i = taken.fetch_add(1, std::memory_order_relaxed);
+    ring[i & (kRing - 1)] = {uint64_t(c->uc_mcontext.gregs[REG_RIP]), uint32_t(syscall(SYS_gettid)), now_ms()};
+}
+// UC_CPU_SAMPLE=wait: the guest thread sampled by wall-clock time (every 2 ms), blocked or not: the top frame (named at exit with dladdr when it is outside the executable: a futex
+// wait, a memcpy) and the first frame inside the executable (what called it).
+struct WaitSample { uint64_t top, caller; uint32_t ms; };
+constexpr size_t kWaitRing = 1 << 16;
+WaitSample wait_ring[kWaitRing];
+std::atomic<uint64_t> wait_taken{0};
+uintptr_t exe_low = 0, exe_high = 0;
+void on_wait(int, siginfo_t*, void* context) {
+    void* frames[24];
+    const int n = backtrace(frames, 24);
+    const auto top = uint64_t(static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RIP]);
+    uint64_t caller = 0;
+    for (int i = 1; i < n && !caller; ++i) if (uintptr_t(frames[i]) >= exe_low && uintptr_t(frames[i]) < exe_high) caller = uint64_t(uintptr_t(frames[i]));
+    wait_ring[wait_taken.fetch_add(1, std::memory_order_relaxed) & (kWaitRing - 1)] = {top, caller, now_ms()};
+}
+void write_waits(std::FILE* file) {
+    const uint64_t total = wait_taken.load(), count = total < kWaitRing ? total : kWaitRing;
+    for (uint64_t i = total - count; i < total; ++i) {
+        const WaitSample& s = wait_ring[i & (kWaitRing - 1)];
+        const bool inside = s.top >= exe_low && s.top < exe_high;
+        Dl_info info {};
+        const char* name = inside ? "exe" : (dladdr(reinterpret_cast<void*>(s.top), &info) && info.dli_sname ? info.dli_sname : "lib?");
+        std::fprintf(file, "w %s %lx %u\n", name, (unsigned long)s.caller, s.ms);
+    }
+}
+void write_samples() {
+    struct itimerval off {}; setitimer(ITIMER_PROF, &off, nullptr);
+    const char* out = std::getenv("UC_CPU_SAMPLE_OUT");
+    const char* seconds = std::getenv("UC_CPU_SAMPLE_SECONDS");
+    std::FILE* file = std::fopen(out ? out : "cpu-samples.txt", "w");
+    if (!file) return;
+    uintptr_t base = 0;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) { *static_cast<uintptr_t*>(data) = info->dlpi_addr; return 1; }, &base);   // the first object is the executable
+    std::fprintf(file, "# base %lx\n", (unsigned long)base);
+    const uint64_t total = taken.load(), count = total < kRing ? total : kRing;
+    if (total) {
+        const uint32_t last = ring[(total - 1) & (kRing - 1)].ms, keep = uint32_t(1000 * (seconds ? std::atoi(seconds) : 25));
+        for (uint64_t i = total - count; i < total; ++i) {
+            const Sample& s = ring[i & (kRing - 1)];
+            if (last - s.ms <= keep) std::fprintf(file, "%u %lx %u\n", s.tid, (unsigned long)s.rip, s.ms);
+        }
+    }
+    write_waits(file);
+    std::fclose(file);
+}
+}
+void cpu_sampler_start_once(const char* thread) {
+    static bool started = false, waiting = false;
+    const char* mode = std::getenv("UC_CPU_SAMPLE");
+    if (!mode) return;
+    if (std::string_view(mode) == "wait") {   // the guest thread by wall-clock time
+        if (waiting || std::string_view(thread) != "guest") return;
+        waiting = true;
+        void* warm[2]; backtrace(warm, 2);   // loads libgcc's unwinder now: it must not happen inside the signal handler
+        dl_iterate_phdr([](dl_phdr_info* info, size_t, void*) {   // the first object is the executable: its executable segment
+            for (int i = 0; i < info->dlpi_phnum; ++i) if (info->dlpi_phdr[i].p_type == PT_LOAD && (info->dlpi_phdr[i].p_flags & PF_X)) { exe_low = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr; exe_high = exe_low + info->dlpi_phdr[i].p_memsz; }
+            return 1; }, nullptr);
+        struct sigaction action {}; action.sa_sigaction = on_wait; action.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigaction(SIGPROF, &action, nullptr);
+        sigevent event {}; event.sigev_notify = SIGEV_THREAD_ID; event.sigev_signo = SIGPROF; event._sigev_un._tid = int(syscall(SYS_gettid));
+        timer_t timer; timer_create(CLOCK_MONOTONIC, &event, &timer);
+        itimerspec spec {}; spec.it_interval.tv_nsec = 2000000; spec.it_value.tv_nsec = 2000000;
+        timer_settime(timer, 0, &spec, nullptr);
+        std::atexit(write_samples);
+        return;
+    }
+    if (started || std::string_view(thread) != "main") return;
+    started = true;
+    struct sigaction action {}; action.sa_sigaction = on_profile; action.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGPROF, &action, nullptr);
+    struct itimerval timer {}; timer.it_interval.tv_usec = 1000; timer.it_value.tv_usec = 1000;
+    setitimer(ITIMER_PROF, &timer, nullptr);
+    std::atexit(write_samples);
+}
+void cpu_sampler_set_replaying(bool) {}
+}
 #else
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX

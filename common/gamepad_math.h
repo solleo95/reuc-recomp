@@ -5,7 +5,12 @@ namespace uc {
 enum class GyroMode:uint8_t { off,always,hold };
 struct StickCurve { float dead_zone=.15f,speed=1.2f; bool operator==(const StickCurve&) const=default; };   // speed: screen heights per second at full deflection
 // dead_zone is in rad/s (half a degree per second): below it a controller lying on a desk does not move the pointer.
-struct GyroSettings { GyroMode mode=GyroMode::off; float sensitivity_x=1,sensitivity_y=1,dead_zone=.0087f; bool invert_x=false,invert_y=false; bool operator==(const GyroSettings&) const=default; };
+#ifdef _WIN32
+inline constexpr GyroMode kDefaultGyroMode=GyroMode::off;
+#else
+inline constexpr GyroMode kDefaultGyroMode=GyroMode::always;   // Linux is the Steam Deck: its gyro aims from the first start (the in-game menu is not usable there yet)
+#endif
+struct GyroSettings { GyroMode mode=kDefaultGyroMode; float sensitivity_x=1,sensitivity_y=1,dead_zone=.0087f; bool invert_x=false,invert_y=false; bool operator==(const GyroSettings&) const=default; };
 // Mouse counts per radian of rotation. A hand swing of the controller (a few rad/s) must reach kKnifeSpeed (4000 counts/s) and a careful aim (under 1 rad/s) must not.
 constexpr float kGyroCountsPerRadian=2000.f;
 // Pointer velocity in screen heights per second from a stick (y down is positive, as SDL reports it): radial dead zone, rescaled, then a quadratic curve.
@@ -19,9 +24,10 @@ std::array<float,2> gyro_aim_counts(float yaw,float pitch,float dt,const GyroSet
 class GyroBias {
 public:
     std::array<float,2> filter(float yaw,float pitch,uint64_t timestamp_ns);
+    bool calibrated() const { return calibrated_; }
 private:
     bool calibrated_=false;
-    uint64_t start_ns_=0;
+    uint64_t start_ns_=0,first_ns_=0;   // first_ns_: the very first sample; a pad that is never still for half a second (a handheld in use) is calibrated anyway after 2 s
     unsigned samples_=0;
     double sum_yaw_=0,sum_pitch_=0;
     float bias_yaw_=0,bias_pitch_=0;

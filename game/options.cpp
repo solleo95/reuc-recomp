@@ -101,7 +101,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --ambient-occlusion";
             const auto level = effect_level_from_name(arguments[i]);
             if (!level) return "invalid value for --ambient-occlusion";
-            options.effects.ambient_occlusion = *level;
+            options.effects.ambient_occlusion = platform_ambient_occlusion(*level);
         }
         else if (arg == "--motion-blur") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --motion-blur";

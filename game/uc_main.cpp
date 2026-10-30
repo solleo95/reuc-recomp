@@ -69,6 +69,9 @@
 #include "localization.h"
 #include "prompt_hooks.h"
 #include "settings_menu.h"
+#include "deck_menu.h"
+#include "steam_overlay.h"
+#include <ctime>
 #include "system_report.h"
 #include "netplay_game.h"
 #include "game_checkpoint.h"
@@ -417,6 +420,17 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     }
     if (!options.det_out.empty()) det_trace = std::make_unique<uc::DetTrace>(options.det_out, boot.mem, options.det_frames);
     std::atomic<bool> det_stop{false};
+#ifndef _WIN32
+    if (options.guest_cpu < 0 && !std::getenv("UC_NO_GUEST_PIN")) {
+        // Linux (the Steam Deck): the guest thread runs on one physical core whose SMT sibling stays free of every other thread of the process (measured on the Deck: +5% FPS in the
+        // first scene over the system's scheduling). The second core: the first one takes the system's interrupts.
+        uint64_t allowed = 0;
+        try {
+            const auto cores = uc::cpu_topology().cores;
+            if (get_affinity(allowed) && cores.size() >= 4 && cores[1].mask != (uint64_t(1) << cores[1].cpu) && (allowed & cores[1].mask) == cores[1].mask) options.guest_cpu = cores[1].cpu;
+        } catch (const std::exception& error) { std::fprintf(stderr, "cannot inspect the CPU topology: %s\n", error.what()); }
+    }
+#endif
     if (options.guest_cpu >= 0) {
         uint64_t process_mask = 0;
         if (get_affinity(process_mask)) {
@@ -526,6 +540,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::HostInput host_input;
     host_input.sensitivity(options.mouse_sensitivity);
     host_input.pointer(options.pointer);
+#ifndef _WIN32
+    host_input.touch_pointer(true);   // Linux is the Steam Deck: its touchscreen is the pointer
+#endif
     input.pointer_smoothing(options.pointer_smoothing/100.f);
     input.reload_zone(options.reload_zone,options.reload_zone_size/100.f);
     // Who owns the mouse while the game plays. relative: SDL's relative mode (hidden cursor, raw motion). absolute (lightguns, which move the Windows cursor): the cursor is
@@ -612,7 +629,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::input_probe_init(options.input_probe);
     uc::entry_probe_init(options.input_probe);
     uc::prompt_hooks_init(input_config.input,options.input_probe);
-    bool pad_last_used=false,shown_pad_last=false;   // the last device used was a gamepad (control type "auto" shows that device's prompts); what the prompts were built for
+#ifdef _WIN32
+    bool pad_last_used=false,shown_pad_last=false;
+#else
+    bool pad_last_used=true,shown_pad_last=true;   // Linux is the Steam Deck: gamepad prompts from the first frame
+#endif
+   // the last device used was a gamepad (control type "auto" shows that device's prompts); what the prompts were built for
     unsigned pad_changes=0;
     bool wii_last_used=false,shown_wii_last=false;   // the last device used was the Wii Remote (control type "auto" shows its prompts, in its look)
     unsigned wii_changes=0,wii_activity=0;
@@ -926,6 +948,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     // In-game settings menu (Insert) and pause (P). The menu shows and saves config.json, the run's command-line overrides stay as they are.
     uc::HostKeys host_keys;
+    uc::SteamOverlay steam_overlay;   // Steam Deck: Steam's own menus (Steam button, "...") are on top: the game gets no input meanwhile
+    bool steam_overlay_open=false;
     std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert)
     std::vector<SDL_Scancode> speed_keys;   // the keys bound to the speed_up action (empty: no speed key)
     const auto set_key_lists=[&](const uc::Bindings& bindings) {
@@ -940,6 +964,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     bool restart_pending=false;   // apply upscaling changes at the next frame boundary; replace the device only when required
     std::optional<uc::LiveSettings> live_settings;
     std::optional<uc::SettingsMenu> settings_menu;
+    std::optional<uc::DeckMenu> deck_menu;   // the Steam Deck's own menu (View button): replaces the desktop menu on Linux and pauses the game while open
     std::shared_ptr<std::promise<std::string>> features_promise; std::shared_future<std::string> features_query; std::optional<uc::FeatureReport> features;
     if (!options.headless) {
         const auto* desktop=SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -983,9 +1008,16 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
             return features ? &*features : nullptr;
         },monitor_width,monitor_height,options.renderer_backend);
+#ifndef _WIN32
+        deck_menu.emplace(*live_settings,config_language=="system" ? uc::launcher::system_language() : config_language,[&]() -> const uc::FeatureReport* {
+            if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
+            return features ? &*features : nullptr;
+        },monitor_width,monitor_height);
+#endif
         settings_menu->set_mod_menu(&mod_menu);
+        if(deck_menu) deck_menu->set_mod_menu(&mod_menu);
         settings_menu->set_pad_status([&] { return gamepad ? gamepad->status() : uc::PadStatus{}; });
-        if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
+        if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { if(deck_menu) deck_menu->pad_capture(pad_input,down); else settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
         settings_menu->set_wii_status([&] { return wiimote ? wiimote->status() : uc::WiimoteStatus{}; });
         if(wiimote) wiimote->capture_sink([&](uc::PhysicalInput remote_input,bool down) { settings_menu->wii_capture(remote_input,down); });   // the Wii Remote window waits for a button
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
@@ -998,12 +1030,18 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     // Menu / pause state → renderer, mouse, game input, audio. Called after every host key and after a renderer restart.
     const auto apply_host_keys=[&] {
         if (options.headless) return;
-        renderer.set_menu(host_keys.menu_open ? std::function<void()>([&] { settings_menu->build(); }) : std::function<void()>(),[&] { settings_menu->setup(); });
+        static bool menu_was_open=false;
+        if (deck_menu && host_keys.menu_open && !menu_was_open) deck_menu->opened();
+        menu_was_open=host_keys.menu_open;
+        renderer.set_menu(!host_keys.menu_open ? std::function<void()>() : deck_menu ? std::function<void()>([&] { deck_menu->build(); }) : std::function<void()>([&] { settings_menu->build(); }),
+                          [&] { if (deck_menu) deck_menu->setup(); else settings_menu->setup(); });
         if (!host_keys.menu_open && settings_menu) settings_menu->menu_closed();   // a binding capture waiting for a pad press must not outlive the menu
-        uc::game_pacing_set_paused(host_keys.paused);
+        if (!host_keys.menu_open && deck_menu) deck_menu->menu_closed();
+        const bool halted=host_keys.paused || (deck_menu && host_keys.menu_open && !network);   // the Deck menu pauses the game (network play cannot pause)
+        uc::game_pacing_set_paused(halted);
         static bool audio_paused=false;   // only a real change: resuming drops the queued audio (a click when the menu merely opens)
-        if (audio && audio_paused!=host_keys.paused) { audio->pause(host_keys.paused); audio_paused=host_keys.paused; }
-        const bool playing=!host_keys.menu_open && !host_keys.paused;
+        if (audio && audio_paused!=halted) { audio->pause(halted); audio_paused=halted; }
+        const bool playing=!host_keys.menu_open && !host_keys.paused && !steam_overlay_open;
         capture_pointer(!host_keys.menu_open);   // the menu needs the cursor
         input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
     };
@@ -1017,6 +1055,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         }
         return true;
     };
+    if (deck_menu) deck_menu->set_close([&] { if (host_keys.menu_open) { host_keys.menu_open=false; apply_host_keys(); } });
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
     auto service_frame = [&] {
@@ -1148,9 +1187,20 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
     uc::cpu_sampler_start_once("main");
+    bool pad_back_held=false;   // View/Back held: with Start it opens and closes the settings menu from a gamepad (no keyboard on a Steam Deck)
+    const auto pad_allowed=[&] { return !host_keys.menu_open && !host_keys.paused && !steam_overlay_open && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0; };   // what the pads may hand to the game
+    const auto sync_overlay=[&] {
+        if (controlled || steam_overlay.open()==steam_overlay_open) return;
+        steam_overlay_open=!steam_overlay_open;   // Steam's menus opened or closed: nothing reaches the game while they are up, and what was held is let go
+        std::fprintf(stderr,"[steam] Steam's menu %s\n",steam_overlay_open ? "opened: the game gets no input" : "closed");
+        apply_host_keys();
+        if(gamepad) gamepad->update(input,pad_allowed());
+        if(wiimote) wiimote->update(&input,pad_allowed(),options.wiimote);
+    };
     while (!close && !runner.done.load()) {
         ++profile_loops;
         if (!options.headless) {
+            sync_overlay();
             SDL_Event event;
             const auto events_start=frame_log ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
             while (SDL_PollEvent(&event)) {
@@ -1159,9 +1209,54 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
+#ifndef _WIN32
+                {   // diagnostics (Steam Deck): what the trackpads, the menu's cursor and the Steam overlay send (a few hundred lines per run)
+                    static int logged=0; const auto type=event.type;
+                    if(logged<1500 && (type==SDL_EVENT_WINDOW_FOCUS_GAINED || type==SDL_EVENT_WINDOW_FOCUS_LOST || type==SDL_EVENT_WINDOW_MOUSE_ENTER || type==SDL_EVENT_WINDOW_MOUSE_LEAVE ||
+                                      type==SDL_EVENT_MOUSE_BUTTON_DOWN || type==SDL_EVENT_MOUSE_BUTTON_UP || type==SDL_EVENT_JOYSTICK_BUTTON_DOWN || type==SDL_EVENT_JOYSTICK_BUTTON_UP ||
+                                      type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || type==SDL_EVENT_GAMEPAD_BUTTON_UP || type==SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN || type==SDL_EVENT_GAMEPAD_TOUCHPAD_UP || type==SDL_EVENT_KEY_DOWN)) {
+                        ++logged;
+                        std::fprintf(stderr,"[diag] wall=%lld.%03d ms=%llu menu=%d focus=%d type=0x%x",(long long)std::time(nullptr),0,(unsigned long long)SDL_GetTicks(),host_keys.menu_open ? 1 : 0,(SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS) ? 1 : 0,unsigned(type));
+                        if(type==SDL_EVENT_MOUSE_BUTTON_DOWN || type==SDL_EVENT_MOUSE_BUTTON_UP) std::fprintf(stderr," mouse button=%d which=%u at %.0f,%.0f",int(event.button.button),unsigned(event.button.which),event.button.x,event.button.y);
+                        else if(type==SDL_EVENT_JOYSTICK_BUTTON_DOWN || type==SDL_EVENT_JOYSTICK_BUTTON_UP) std::fprintf(stderr," joystick which=%u button=%d",unsigned(event.jbutton.which),int(event.jbutton.button));
+                        else if(type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || type==SDL_EVENT_GAMEPAD_BUTTON_UP) std::fprintf(stderr," gamepad button=%d",int(event.gbutton.button));
+                        else if(type==SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN || type==SDL_EVENT_GAMEPAD_TOUCHPAD_UP) std::fprintf(stderr," touchpad=%d finger=%d at %.2f,%.2f",int(event.gtouchpad.touchpad),int(event.gtouchpad.finger),event.gtouchpad.x,event.gtouchpad.y);
+                        else if(type==SDL_EVENT_KEY_DOWN) std::fprintf(stderr," key scancode=%d",int(event.key.scancode));
+                        std::fputc('\n',stderr);
+                    }
+                }
+#endif
+                if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type==SDL_EVENT_GAMEPAD_BUTTON_UP) {
+                    const bool down=event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+                    if(down && (event.gbutton.button==SDL_GAMEPAD_BUTTON_GUIDE || event.gbutton.button==SDL_GAMEPAD_BUTTON_MISC1)) { steam_overlay.hint(); sync_overlay(); }   // the Steam / "..." button reaches the game before its menu shows
+                    if(deck_menu && event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) {   // View opens and closes the Deck menu
+                        if(down && !settings_menu->capturing()) host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());
+                        continue;
+                    }
+                    if(event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) pad_back_held=down;
+                    else if(down && event.gbutton.button==SDL_GAMEPAD_BUTTON_START && pad_back_held && !settings_menu->capturing()) {
+                        host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());   // the same toggle as the menu key; the Start press is not passed on (no pause)
+                        continue;
+                    }
+                }
                 if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
                 if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
+                else if(pad_last_used && (event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION)) {
+                    static int shown=0;   // diagnostics: who switched the prompts from the pad to the mouse and keyboard (a few lines per run)
+                    if(shown++<12) {
+                        const bool mouse=event.type!=SDL_EVENT_KEY_DOWN;
+                        const SDL_KeyboardID key_source=event.key.which; const SDL_MouseID mouse_source=event.motion.which;
+                        const char* name=mouse ? SDL_GetMouseNameForID(mouse_source) : SDL_GetKeyboardNameForID(key_source);
+                        std::fprintf(stderr,"[input] prompts left the pad for %s id=%u \"%s\"%s\n",mouse ? "the mouse" : "the keyboard",mouse ? unsigned(mouse_source) : unsigned(key_source),name ? name : "?",
+                                     event.type==SDL_EVENT_MOUSE_MOTION ? (" motion "+std::to_string(event.motion.xrel)+","+std::to_string(event.motion.yrel)).c_str() : "");
+                    }
+                    pad_last_used=false;
+                }
+                if(false) {}
                 else if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION || event.type==SDL_EVENT_MOUSE_WHEEL) {pad_last_used=false;wii_last_used=false;}
+#ifndef _WIN32
+                pad_last_used=true;   // Steam Deck: a touch is a mouse to SDL, but the prompts stay the Deck's buttons, never a mouse or a keyboard
+#endif
                 // Hold the speed key (` by default): game clock x8 (the harness's `speed` command), back to x1 on release or focus loss
                 if(!network && event.type==SDL_EVENT_WINDOW_FOCUS_LOST) uc::set_clock_speed(1);
                 if((event.type==SDL_EVENT_KEY_UP || event.type==SDL_EVENT_KEY_DOWN) && std::find(speed_keys.begin(),speed_keys.end(),event.key.scancode)!=speed_keys.end() && !settings_menu->capturing()) {
@@ -1170,6 +1265,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 }
                 if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat && host_key_pressed(event.key.scancode)) continue;
                 if(event.type==SDL_EVENT_KEY_UP && (uc::is_menu_key(event.key.scancode,menu_keys) || event.key.scancode==SDL_SCANCODE_P) && !settings_menu->capturing()) continue;   // the releases of host keys
+                if(deck_menu && host_keys.menu_open && deck_menu->event(event)) continue;   // the pad, the sticks and the keys of the Deck menu; a touch reaches it as the mouse below
                 if(host_keys.menu_open) {
                     if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) settings_menu->focus_lost();
                     if(settings_menu->capturing()) settings_menu->capture_event(event); else renderer.menu_event(event);
@@ -1189,9 +1285,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             {
                 int width=0,height=0;
                 if(SDL_GetWindowSizeInPixels(window.get(),&width,&height)) input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));   // stick speed and gyro counts are in pixels
-                if(gamepad) gamepad->update(input,!host_keys.menu_open && !host_keys.paused && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+                host_input.update(input,SDL_GetTicksNS());
+                if(gamepad) gamepad->update(input,pad_allowed());
                 if(wiimote) {
-                    wiimote->update(&input,!host_keys.menu_open && !host_keys.paused && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0,options.wiimote);
+                    wiimote->update(&input,pad_allowed(),options.wiimote);
                     if(wiimote->activity()!=wii_activity) {wii_activity=wiimote->activity();wii_last_used=true;pad_last_used=false;}
                     if(wiimote->changes()!=wii_changes || wii_last_used!=shown_wii_last) {wii_changes=wiimote->changes();shown_wii_last=wii_last_used;refresh_prompt_device();}   // the remote came or went, or the other device was used
                 }
@@ -1202,6 +1299,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             // A game frame is ~23 packets: do not pay a wait per packet. A pending renderer restart stops at the end of a frame.
             for (int drained = 0; drained < 64 && !close && !(restart_pending && at_frame_boundary) && render_pending(); ++drained) {}
             if (settings_menu) settings_menu->commit();   // the menu's picks, applied outside rendering
+            if (deck_menu) deck_menu->commit();
             if (restart_pending && at_frame_boundary && !debug_capture_serial && !debug_capture_requested && !audit_capture_serial && !scene_capture_serial && !scene_dump_serial) {
                 restart_pending=false;
                 const auto began=std::chrono::steady_clock::now();

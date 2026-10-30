@@ -66,7 +66,7 @@ std::optional<std::string> validate(const Bindings& bindings,Device device) {
 Bindings default_bindings() {
     Bindings result;
     result[size_t(Action::interact)]={mouse(1)};
-    result[size_t(Action::fire)]={mouse(3)};
+    result[size_t(Action::fire)]={mouse(3)};   // (the Steam Deck's touchscreen never presses the left button: HostInput taps Interact and holds Fire itself)
     result[size_t(Action::weapon_previous)]={{BindingKind::physical,{PhysicalKind::wheel,1},{}},key(26)};
     result[size_t(Action::weapon_next)]={{BindingKind::physical,{PhysicalKind::wheel,2},{}},key(22)};
     result[size_t(Action::reload)]={key(21)};
@@ -93,18 +93,32 @@ Bindings default_pad_bindings() {
     Bindings result;
     result[size_t(Action::interact)]={pad_button(0)};
     result[size_t(Action::fire)]={pad_axis(11)};
+#ifdef _WIN32
     result[size_t(Action::weapon_previous)]={pad_button(9)};
     result[size_t(Action::weapon_next)]={pad_button(10)};
+#else
+    result[size_t(Action::weapon_previous)]={pad_button(11)};   // Steam Deck: the D-pad, up (SDL dpup 11) and down (dpdown 12); the shoulders stay free
+    result[size_t(Action::weapon_next)]={pad_button(12)};
+#endif
+#ifdef _WIN32
     result[size_t(Action::reload)]={pad_button(2)};
+#else
+    result[size_t(Action::reload)]={pad_axis(9)};   // Steam Deck: the left trigger (L2); X stays free
+#endif
     // No special kinds here: the interact+fire throw, the swing and the shake are switched by the keyboard table's entries for them, for every device (the gyro swings and shakes like a mouse).
     result[size_t(Action::grenade)]={pad_button(3)};
     result[size_t(Action::knife)]={pad_button(1)};
     result[size_t(Action::pause)]={pad_button(6)};
     result[size_t(Action::confirm)]={pad_button(0)};
     result[size_t(Action::back)]={pad_button(1)};
+#ifdef _WIN32
     result[size_t(Action::screenshot)]={pad_button(4)};
-    result[size_t(Action::qte_shake)]={pad_button(8)};
     result[size_t(Action::recenter)]={pad_button(7)};
+#else
+    // Steam Deck: View (Back) opens the menu together with Menu (Start), so it takes no screenshot (the capture froze the game for a moment); the aim reset is on L4 (SDL's paddle2).
+    result[size_t(Action::recenter)]={pad_button(17)};
+#endif
+    result[size_t(Action::qte_shake)]={pad_button(8)};
     return result;
 }
 Bindings default_wii_bindings() {
@@ -287,23 +301,25 @@ void BindingResolver::qte_motion(float x,float y,uint64_t time) {
     s.dx=s.back_x/length; s.dy=s.back_y/length; s.proj=s.peak=length; s.back_x=s.back_y=0;
     finish_motion(); pulse(Action::qte_shake,float(s.dx),float(s.dy));
 }
-void BindingResolver::motion(float x,float y,uint64_t timestamp_ns) {
+void BindingResolver::motion(float x,float y,uint64_t timestamp_ns,bool swipe) {
     if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid mouse motion");
     if(x!=0 || y!=0)qte_motion(x,y,timestamp_ns);
-    if((x==0 && y==0) || !(frame_.held&bit(Action::interact)) || !special(Action::knife,BindingKind::interact_motion))return;
+    if((x==0 && y==0) || (!swipe && !(frame_.held&bit(Action::interact))) || !special(Action::knife,BindingKind::interact_motion))return;
+    const float needed_speed=swipe ? 1.5f*kKnifeSpeed : kKnifeSpeed;   // a finger's swing: 6000 px/s
     // Speed, not distance: motion inside a short window is summed and divided by the window's age. Slow drags and jitter never reach the speed.
     if(!timestamp_ns)return;   // no clock, no speed
     // The first event of a window has no start to measure from: it is credited the time since the previous event, at most one mouse report interval.
-    const uint64_t since_last=last_motion_time_ && timestamp_ns>last_motion_time_ ? timestamp_ns-last_motion_time_ : kKnifeReportNs;
+    const uint64_t since_last=last_motion_time_ && timestamp_ns>last_motion_time_ ? timestamp_ns-last_motion_time_ : swipe ? 16000000ull : kKnifeReportNs;   // no earlier event: a finger's sensor reports at about 60 Hz
     last_motion_time_=timestamp_ns;
     if(!motion_event_ && (!stroke_time_ || timestamp_ns<stroke_time_ || timestamp_ns-stroke_time_>kKnifeWindowNs)) {
-        stroke_time_=timestamp_ns;stroke_lead_=std::clamp<uint64_t>(since_last,1000000,kKnifeReportNs);motion_x_=motion_y_=0;
+        // A mouse reports every 8 ms or faster; a touchscreen reports as it likes (16 ms and slower), so a finger's first step is credited its real interval (up to 50 ms).
+        stroke_time_=timestamp_ns;stroke_lead_=std::clamp<uint64_t>(since_last,1000000,swipe ? 50000000ull : kKnifeReportNs);motion_x_=motion_y_=0;
     }
     motion_x_+=x;motion_y_+=y;
     const auto length=std::hypot(motion_x_,motion_y_);
     if(!motion_event_) {
         const double seconds=double(timestamp_ns-stroke_time_+stroke_lead_)/1e9;
-        if(length<kKnifeMinLength || length/seconds<kKnifeSpeed)return;
+        if(length<kKnifeMinLength || length/seconds<needed_speed)return;
         motion_event_=frame_.count;pulse(Action::knife);
     }
     auto& event=frame_.events[*motion_event_];

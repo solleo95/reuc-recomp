@@ -142,6 +142,8 @@ class Game:
             args = ["--test-server", self.name, "--save-root", f"{base}/saves", "--capture-dir", base,
                     "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]
             pin = ["2" if part == str(GUEST_CPU) else part for part in pin]   # the Deck has 8 logical CPUs
+            if os.environ.get("UC_DECK_NOPIN"):
+                pin = []   # as the owner starts it: no guest CPU pinning
             config_argument = f"{base}/config.json"
         else:
             args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),

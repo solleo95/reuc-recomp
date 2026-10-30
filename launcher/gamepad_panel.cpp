@@ -57,7 +57,6 @@ std::string binding_name(const Binding& binding,PadFamily family,const PanelText
     return text+input_name(binding.input,family);
 }
 // One action's bindings as the controller's own pictures: "LT + A / B", the special kinds as words.
-struct Piece { std::string text; std::optional<PhysicalInput> input; };
 std::vector<Piece> pieces(const std::vector<Binding>& entries,const PanelText& tr) {
     std::vector<Piece> result;
     for(size_t i=0;i<entries.size();++i) {
@@ -232,6 +231,7 @@ bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,con
     return changed;
 }
 }
+std::span<const Action> gamepad_panel_actions() { return kActions; }
 PadFamily gamepad_panel_family(const GamepadSettings& settings,const PadStatus& status) {
     switch(settings.model) {
     case PadModel::xbox: return PadFamily::xbox;

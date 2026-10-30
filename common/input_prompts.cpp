@@ -61,8 +61,13 @@ std::string pad_glyph_label(PhysicalInput input,PadFamily family) {
         static constexpr const char* names[kWiiButtonCount]={"D-pad Left","D-pad Right","D-pad Down","D-pad Up","+","2","1","B","A","-","Home","Z","C"};
         return input.code<kWiiButtonCount ? names[input.code] : "Button "+std::to_string(input.code);
     }
-    const bool xbox=family==PadFamily::xbox,sony=family==PadFamily::playstation,nintendo=family==PadFamily::nintendo;
-    const auto pick=[&](const char* x,const char* p,const char* n,const char* g) { return std::string(xbox ? x : sony ? p : nintendo ? n : g); };
+    const bool deck=family==PadFamily::steam_deck,xbox=family==PadFamily::xbox || deck,sony=family==PadFamily::playstation,nintendo=family==PadFamily::nintendo;
+    const auto pick=[&](const char* x,const char* p,const char* n,const char* g) {
+        std::string label=xbox ? x : sony ? p : nintendo ? n : g;
+        static constexpr std::pair<std::string_view,const char*> deck_names[]={{"Xbox","Steam"},{"LB","L1"},{"RB","R1"},{"LT","L2"},{"RT","R2"},{"LS","L3"},{"RS","R3"}};   // the Deck's own names for the Xbox layout
+        if(deck) for(const auto& [from,to]:deck_names) if(label==from) return std::string(to);
+        return label;
+    };
     if(input.kind==PhysicalKind::pad_button) {
         switch(input.code) {
         case 0: return pick("A","Cross","B","South");
@@ -76,6 +81,13 @@ std::string pad_glyph_label(PhysicalInput input,PadFamily family) {
         case 8: return pick("RS","R3","RS","R3");
         case 9: return pick("LB","L1","L","LB");
         case 10: return pick("RB","R1","R","RB");
+        case 15: return deck ? "..." : "Button 15";   // the Steam Deck's own extra buttons: the quick access button, then its back paddles
+        case 16: return deck ? "R4" : "Button 16";
+        case 17: return deck ? "L4" : "Button 17";
+        case 18: return deck ? "R5" : "Button 18";
+        case 19: return deck ? "L5" : "Button 19";
+        case kPadTrackpadPress: return deck ? "L Pad press" : "Pad 1 press";
+        case kPadTrackpadPress+1: return deck ? "R Pad press" : "Pad 2 press";
         case 11: return "D-pad Up";
         case 12: return "D-pad Down";
         case 13: return "D-pad Left";

@@ -10,6 +10,9 @@ target_include_directories(uc_launcher_locale PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(uc_launcher_locale PUBLIC uc_input_config)
 target_include_directories(uc_binding_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_binding_editor PUBLIC uc_input)
+add_library(uc_settings_registry STATIC settings_registry.cpp)   # the one table of settings: where each shows (desktop/Deck menu, desktop/Deck launcher) and how the simple ones are read and changed
+target_include_directories(uc_settings_registry PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
+target_link_libraries(uc_settings_registry PUBLIC uc_live_settings)
 add_library(uc_gamepad_panel STATIC gamepad_panel.cpp wiimote_panel.cpp)   # the Controllers tab with its Gamepad and Wii Remote windows: shared by the launcher and the in-game menu
 target_include_directories(uc_gamepad_panel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_panel PUBLIC uc_binding_editor uc_gamepad_config uc_wiimote_config uc_input_prompts uc_prompt_icons uc_imgui uc_ui_style)
@@ -120,7 +123,7 @@ target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale 
 target_compile_definitions(uc_update_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(uc_launcher WIN32 main.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_public_release)
-set(uc_launcher_libraries uc_binding_editor uc_gamepad_panel uc_gamepad_input uc_wiimote_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
+set(uc_launcher_libraries uc_binding_editor uc_settings_registry uc_gamepad_panel uc_gamepad_input uc_wiimote_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
 target_link_libraries(uc_launcher PRIVATE ${uc_launcher_libraries})
 add_executable(test_launcher_update_bootstrap WIN32 ${CMAKE_SOURCE_DIR}/tests/test_launcher_update_bootstrap.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(test_launcher_update_bootstrap PRIVATE ${uc_launcher_libraries} uc_update_ui)

@@ -3,6 +3,7 @@
 #include "gamepad_config.h"
 #include "gamepad_target.h"
 #include <functional>
+#include <span>
 #include <string_view>
 struct ImFont;
 namespace uc {
@@ -15,6 +16,7 @@ struct GamepadPanelState { bool modal_open=false; ImFont* heading=nullptr; float
 // editor (BindingTable::gamepad); the settings' bindings follow it. A pad press for a pending capture comes from outside, through editor.event().
 // Returns true when `settings` changed. Call inside an ImGui window, with the host's style variables (frame padding, item spacing) already pushed.
 bool gamepad_tab(GamepadPanelState&,GamepadSettings&,BindingEditor& editor,const PadStatus&,float unit,const PanelText&);
+std::span<const Action> gamepad_panel_actions();   // the actions the gamepad table lists, in the panel's order (the Deck menu's Buttons page uses the same)
 // The family whose button names and pictures the tab shows: the chosen model, or the connected pad's (the Xbox look without a pad).
 PadFamily gamepad_panel_family(const GamepadSettings&,const PadStatus&);
 }

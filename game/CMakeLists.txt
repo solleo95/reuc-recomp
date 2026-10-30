@@ -92,12 +92,13 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
-  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp $<IF:$<BOOL:${WIN32}>,compile_screen_win.cpp,compile_screen_posix.cpp> det_trace.cpp frame_log.cpp settings_menu.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,system_report_posix.cpp>)
+  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp $<IF:$<BOOL:${WIN32}>,compile_screen_win.cpp,compile_screen_posix.cpp> det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,system_report_posix.cpp>)
   target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_test_server uc_crash_bundle
-    uc_live_settings uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_netplay_game)
+    uc_live_settings uc_settings_registry uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_netplay_game)
   if(NOT WIN32)
     target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/launcher/launch_posix.cpp)   # query_features (the GPU probe), without the Windows launcher
+    target_link_libraries(uc PRIVATE ${CMAKE_DL_LIBS})   # steam_overlay.cpp loads libX11 at run time
   endif()
   if(WIN32)
     target_sources(uc PRIVATE ${CMAKE_SOURCE_DIR}/assets/app.rc)

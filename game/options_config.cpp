@@ -155,7 +155,7 @@ Options options_from_config(const ConfigDocument& document) {
         if(graphics.contains("ambient_occlusion")) {
             const auto level=graphics["ambient_occlusion"].is_string() ? effect_level_from_name(graphics["ambient_occlusion"].get<std::string>()) : std::nullopt;
             if(!level)invalid("graphics.ambient_occlusion must be off, low, medium, high or ultra");
-            options.effects.ambient_occlusion=*level;
+            options.effects.ambient_occlusion=platform_ambient_occlusion(*level);
         }
         if(graphics.contains("motion_blur")) {
             const auto level=graphics["motion_blur"].is_string() ? effect_level_from_name(graphics["motion_blur"].get<std::string>()) : std::nullopt;

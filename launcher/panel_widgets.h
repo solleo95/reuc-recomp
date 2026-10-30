@@ -1,6 +1,8 @@
 #pragma once
 #include "binding_editor.h"
 #include "gamepad_panel.h"
+#include "imgui.h"
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -13,4 +15,8 @@ bool percent_slider(const char* id,float& fraction,float low_percent,float high_
 bool float_slider(const char* id,float& value,float low,float high,const char* format,float width,bool logarithmic=false);
 bool toggle(const char* label,bool& value,float unit);
 void bindings_rows(BindingEditor& editor,std::span<const Action> actions,PadFamily family,float unit,const PanelText& tr);
+// One action's bindings as pieces: the controller's own buttons ("LT + A / B") and the special kinds as words; draw_pieces centres them in a rectangle (the Deck menu's rows use these).
+struct Piece { std::string text; std::optional<PhysicalInput> input; };
+std::vector<Piece> pieces(const std::vector<Binding>& entries,const PanelText& tr);
+void draw_pieces(ImDrawList& list,ImVec2 low,ImVec2 high,const std::vector<Piece>& parts,PadFamily family,const char* empty);
 }

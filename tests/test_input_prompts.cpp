@@ -5,6 +5,15 @@ using namespace uc;
 static Binding key(uint16_t code) {return {BindingKind::physical,{PhysicalKind::key,code},{}};}
 static PhysicalInput button(uint16_t code) {return {PhysicalKind::pad_button,code};}
 static PhysicalInput axis(uint16_t code) {return {PhysicalKind::pad_axis,code};}
+static void steam_deck_prompts() {
+    // The Deck's own names (its extra buttons and trackpads), plain letters for the face buttons, L1/L2 for the Xbox LB/LT
+    CHECK(pad_glyph_label(button(0),PadFamily::steam_deck)=="A" && pad_glyph_label(button(4),PadFamily::steam_deck)=="View" && pad_glyph_label(button(6),PadFamily::steam_deck)=="Menu" && pad_glyph_label(button(5),PadFamily::steam_deck)=="Steam");
+    CHECK(pad_glyph_label(button(9),PadFamily::steam_deck)=="L1" && pad_glyph_label(button(10),PadFamily::steam_deck)=="R1" && pad_glyph_label(axis(9),PadFamily::steam_deck)=="L2" && pad_glyph_label(axis(11),PadFamily::steam_deck)=="R2");
+    CHECK(pad_glyph_label(button(7),PadFamily::steam_deck)=="L3" && pad_glyph_label(button(8),PadFamily::steam_deck)=="R3");
+    CHECK(pad_glyph_label(button(17),PadFamily::steam_deck)=="L4" && pad_glyph_label(button(16),PadFamily::steam_deck)=="R4" && pad_glyph_label(button(19),PadFamily::steam_deck)=="L5" && pad_glyph_label(button(18),PadFamily::steam_deck)=="R5" && pad_glyph_label(button(15),PadFamily::steam_deck)=="...");
+    CHECK(pad_glyph_label(button(kPadTrackpadPress),PadFamily::steam_deck)=="L Pad press" && pad_glyph_label(button(kPadTrackpadPress+1),PadFamily::steam_deck)=="R Pad press");
+    CHECK(pad_glyph_label(button(17),PadFamily::xbox)=="Button 17");   // other pads have no names for them
+}
 static void pad_prompts() {
     // Button names follow the family of the controller: SDL positions south 0, east 1, west 2, north 3, back 4, start 6, left shoulder 9, right shoulder 10, axis codes axis*2+1.
     CHECK(pad_glyph_label(button(0),PadFamily::xbox)=="A" && pad_glyph_label(button(1),PadFamily::xbox)=="B" && pad_glyph_label(button(2),PadFamily::xbox)=="X" && pad_glyph_label(button(3),PadFamily::xbox)=="Y");
@@ -16,7 +25,7 @@ static void pad_prompts() {
     CHECK(pad_glyph_label(button(0),PadFamily::generic)=="South" && pad_glyph_label(button(1),PadFamily::generic)=="East" && pad_glyph_label(button(2),PadFamily::generic)=="West" && pad_glyph_label(button(3),PadFamily::generic)=="North");
     CHECK(pad_glyph_label(button(7),PadFamily::xbox)=="LS" && pad_glyph_label(button(8),PadFamily::playstation)=="R3" && pad_glyph_label(button(11),PadFamily::xbox)=="D-pad Up");
     CHECK(pad_glyph_label(axis(2),PadFamily::xbox)=="Left Stick Up" && pad_glyph_label(axis(1),PadFamily::xbox)=="Left Stick Right" && pad_glyph_label(axis(7),PadFamily::generic)=="Right Stick Down");
-    CHECK(pad_glyph_label(button(31),PadFamily::xbox)=="Button 31" && pad_glyph_label({PhysicalKind::key,4},PadFamily::xbox).empty());   // unnamed inputs get a number; non-pad inputs have no glyph
+    CHECK(pad_glyph_label(button(29),PadFamily::xbox)=="Button 29" && pad_glyph_label({PhysicalKind::key,4},PadFamily::xbox).empty());   // unnamed inputs get a number; non-pad inputs have no glyph
     // Prompts built from the gamepad table: the first assigned input of each action, and the family travels with the description.
     const auto pad=default_pad_bindings(); const PromptDevice xbox{true,PadFamily::xbox,false};
     auto reload=primary_prompt(pad,{Action::reload},xbox);
@@ -75,7 +84,7 @@ static void wii_prompts() {
 }
 int main() {
     wii_prompts();
-    pad_prompts();
+    pad_prompts(); steam_deck_prompts();
     auto bindings=default_bindings();
     auto weapon=describe_prompt(bindings,Action::weapon_previous);
     CHECK(weapon.alternatives.size()==2 && weapon.alternatives[0].choices[0].bindings[0].input.kind==PhysicalKind::wheel);

@@ -1,5 +1,6 @@
 #pragma once
 #include "bloom_math.h"
+#include "frame_limit_cap.h"
 #include "dlss5_settings.h"
 #include "gamepad_config.h"
 #include "graphics_effects.h"
@@ -20,6 +21,12 @@ namespace uc {
 enum class WindowMode { windowed,borderless,exclusive };
 enum class HudPosition { automatic,center,edges };   // where the in-game interface sits on a wider than 16:9 picture: automatic = edges up to about 21:9, the middle beyond
 std::filesystem::path default_game_folder();   // "game" next to the executable
+// Ambient occlusion (GTAO) is off on Linux (the Steam Deck): whatever the config or the command line says, it stays off there.
+#ifdef _WIN32
+inline EffectLevel platform_ambient_occlusion(EffectLevel level) { return level; }
+#else
+inline EffectLevel platform_ambient_occlusion(EffectLevel) { return EffectLevel::off; }
+#endif
 constexpr uint32_t kMouseSensitivityMin=10, kMouseSensitivityMax=300;
 constexpr uint32_t kReticleDotMin=25, kReticleDotMax=300, kReticleTailMin=25, kReticleTailMax=400;   // percent
 // How the aim reticle looks (the in-game menu's Reticle tab; graphics.reticle_* in config.json). The size slider stays graphics.crosshair_scale.
@@ -46,7 +53,11 @@ struct Options {
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
     uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
-    PointerMode pointer=PointerMode::relative;   // config "pointer": relative = the mouse as motion, absolute = the cursor's window position (lightguns); --pointer
+#ifdef _WIN32
+    PointerMode pointer=PointerMode::relative;
+#else
+    PointerMode pointer=PointerMode::absolute;   // Steam Deck: the touchscreen arrives as a cursor that jumps to the finger (gamescope); the position is the aim
+#endif   // config "pointer": relative = the mouse as motion, absolute = the cursor's window position (lightguns); --pointer
     uint32_t pointer_smoothing=0;                // percent 0..kPointerSmoothingMax (config pointer_smoothing): steadies the pointer of jittery infrared guns
     ReloadZone reload_zone=ReloadZone::off;      // config "reload_zone": a shot in the corner / at the edge reloads
     uint32_t reload_zone_size=5;                 // percent kReloadZoneSizeMin..Max of the window (config reload_zone_size)
@@ -83,8 +94,9 @@ struct Options {
     // It caps how often finished frames are presented and it chooses the game update rate: above 60 (or unlimited) the timer-driven step of game_hz
     // (at most 480), 31..60 the retrace-locked 60 Hz update, 30 or less the original 30 Hz. --game-hz still wins. Unset keeps the previous behaviour:
     // presentation capped at 240, step from unlock_60fps / game_hz.
-    std::optional<uint32_t> fps_limit;
-    uint32_t game_hz = 0;    // experimental: game step above 60 Hz from a wall-clock timer (61..480); 0 keeps the retrace-locked step
+    // Linux (Steam Deck OLED): 90 unless the config or --fps-limit says otherwise (frame_limit_cap.h); Windows keeps "unset".
+    std::optional<uint32_t> fps_limit = kMaxFrameLimit ? std::optional<uint32_t>(kMaxFrameLimit) : std::nullopt;
+    uint32_t game_hz = 0;   // experimental: game step above 60 Hz from a wall-clock timer (61..480); 0 keeps the retrace-locked step
     bool input_probe = false;
     bool gx_gaps = false, audio_audit = false; // diagnostics: reports in <exe>/debug at exit
     std::filesystem::path test_control,save_root,config,capture_dir;

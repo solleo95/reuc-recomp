@@ -17,6 +17,8 @@ struct Virtual {
         const SDL_VirtualJoystickSensorDesc sensors[1]={{SDL_SENSOR_GYRO,250.f}};
         desc.type=SDL_JOYSTICK_TYPE_GAMEPAD; desc.naxes=SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
         desc.nsensors=1; desc.sensors=sensors; desc.name=name;
+        static const SDL_VirtualJoystickTouchpadDesc touchpads[2]={{1,{}},{1,{}}};   // two trackpads (the Steam Deck's), one finger each
+        desc.ntouchpads=2; desc.touchpads=touchpads;
         id=SDL_AttachVirtualJoystick(&desc); CHECK(id);
         joystick=SDL_OpenJoystick(id); CHECK(joystick);
     }
@@ -25,6 +27,7 @@ struct Virtual {
     void button(SDL_GamepadButton b,bool down) { CHECK(SDL_SetJoystickVirtualButton(joystick,b,down)); }
     void axis(SDL_GamepadAxis a,int value) { CHECK(SDL_SetJoystickVirtualAxis(joystick,a,Sint16(value))); }
     void trigger(SDL_GamepadAxis a,float pull) { axis(a,int(std::lround(pull*65535.f))-32768); }   // joysticks report triggers from -32768 (released) to 32767; the gamepad layer maps that to 0..32767
+    void touch(int touchpad,bool down,float pressure=.05f) { CHECK(SDL_SetJoystickVirtualTouchpad(joystick,touchpad,0,down,.5f,.5f,pressure)); }
     void gyro(float yaw,float pitch,uint64_t timestamp_ns) { const float data[3]={pitch,yaw,0}; CHECK(SDL_SendJoystickVirtualSensorData(joystick,SDL_SENSOR_GYRO,timestamp_ns,data,3)); }
 };
 static void pump(GamepadInput& pads,NativeInput* input,bool active=true) {
@@ -54,6 +57,23 @@ static void a_pad_appears_and_its_buttons_reach_the_input() {
     pad.button(SDL_GAMEPAD_BUTTON_WEST,false); rig.pump(); rig.input.consume_actions();
     pad.button(SDL_GAMEPAD_BUTTON_SOUTH,true); rig.pump();
     CHECK(rig.input.consume_actions().held&bit(Action::interact));
+}
+static void a_firm_press_on_a_trackpad_is_a_button() {   // between a touch and the physical click
+    Rig rig; Virtual pad; rig.pump();
+    GamepadSettings settings;   // the right trackpad's press fires, the left one reloads
+    settings.bindings[size_t(Action::fire)]={{BindingKind::physical,{PhysicalKind::pad_button,kPadTrackpadPress+1},{}}};
+    settings.bindings[size_t(Action::reload)]={{BindingKind::physical,{PhysicalKind::pad_button,kPadTrackpadPress},{}}};
+    CHECK(!validate_gamepad(settings)); rig.input.pad_settings(settings);
+    const auto fire=[&] { return (rig.input.consume_actions().held&bit(Action::fire))!=0; };
+    pad.touch(1,true,.05f); rig.pump(); CHECK(!fire());                    // a resting finger is only a touch
+    pad.touch(1,true,.15f); rig.pump(); CHECK(fire());                    // a medium press
+    pad.touch(1,true,.08f); rig.pump(); CHECK(fire());                    // eased off a little: still pressed (hysteresis)
+    pad.touch(1,true,.03f); rig.pump(); CHECK(!fire());                   // eased off further: released while the finger stays
+    pad.touch(1,true,.08f); rig.pump(); CHECK(!fire());                   // back below the press level: not pressed again
+    pad.touch(1,true,1.f); rig.pump(); CHECK(fire());                     // a firm press
+    pad.touch(1,false,0); rig.pump(); CHECK(!fire());
+    pad.touch(0,true,.9f); rig.pump(); CHECK(rig.input.consume_actions().pressed&bit(Action::reload));
+    pad.touch(0,false,0); rig.pump(); rig.input.consume_actions();
 }
 static void triggers_press_at_half_with_a_hysteresis() {
     Rig rig; Virtual pad; rig.pump();
@@ -122,7 +142,7 @@ static void the_capture_sink_sees_every_input_even_while_inactive() {
 int main() {
     // Only the virtual pads of this test: a gamepad plugged into the PC must not take part.
     for(const char* hint:{SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_RAWINPUT,SDL_HINT_JOYSTICK_WGI,SDL_HINT_JOYSTICK_DIRECTINPUT,SDL_HINT_XINPUT_ENABLED}) SDL_SetHint(hint,"0");
-    family_from_type_table(); a_pad_appears_and_its_buttons_reach_the_input(); triggers_press_at_half_with_a_hysteresis();
+    family_from_type_table(); a_pad_appears_and_its_buttons_reach_the_input(); a_firm_press_on_a_trackpad_is_a_button(); triggers_press_at_half_with_a_hysteresis();
     sticks_move_the_pointer_and_the_camera(); gyro_is_calibrated_and_moves_the_pointer(); a_removed_pad_is_released();
     an_inactive_gamepad_feeds_nothing_and_resumes_cleanly(); the_capture_sink_sees_every_input_even_while_inactive();
 }

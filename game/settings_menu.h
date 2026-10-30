@@ -7,6 +7,7 @@
 #include "wiimote_panel.h"
 #include "ui_fonts.h"
 #include "menu_bridge.h"
+#include "settings_registry.h"
 #include <functional>
 #include <set>
 #include <string>
@@ -42,6 +43,7 @@ public:
     void set_mod_menu(mods::ModMenu* menu) { mod_menu_=menu; }   // the Mods tab and one tab per mod after the built-in tabs; nullptr: none
 private:
     const char* tr(std::string_view key) const;
+    bool shown(const char* id) const { return settings::shown(id,settings::desktop_menu); }   // the settings registry decides what this menu lists
     void main_tab(float unit);
     void controls_tab(float unit);
     void reticle_tab(float unit);

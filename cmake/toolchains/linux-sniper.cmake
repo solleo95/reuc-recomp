@@ -19,9 +19,12 @@ set(CMAKE_AR "${UC_LLVM_DIR}/bin/llvm-ar.exe")
 set(CMAKE_RANLIB "${UC_LLVM_DIR}/bin/llvm-ranlib.exe")
 set(CMAKE_STRIP "${UC_LLVM_DIR}/bin/llvm-strip.exe")
 
-set(CMAKE_C_FLAGS_INIT "-march=x86-64-v3 -pthread")
+if(NOT DEFINED UC_TUNE)
+  set(UC_TUNE "znver2")   # -mtune target: the Steam Deck's CPU (measured on the Deck: +3.8% FPS in the first scene over generic); build.ps1 -Tune generic
+endif()
+set(CMAKE_C_FLAGS_INIT "-march=x86-64-v3 -mtune=${UC_TUNE} -pthread")
 get_filename_component(UC_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
-set(CMAKE_CXX_FLAGS_INIT "-march=x86-64-v3 -pthread -include \"${UC_ROOT_DIR}/runtime/linux_std_shim.h\"")   # quoted: the checkout path has a space
+set(CMAKE_CXX_FLAGS_INIT "-march=x86-64-v3 -mtune=${UC_TUNE} -pthread -include \"${UC_ROOT_DIR}/runtime/linux_std_shim.h\"")   # quoted: the checkout path has a space
 set(CMAKE_C_FLAGS_RELEASE_INIT "-O2 -DNDEBUG")     # -O2 as the Windows build's /O2 (CMake's default -O3 also folds signalling-NaN round trips differently: test_ppc_float)
 set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O2 -DNDEBUG")
 foreach(kind EXE SHARED MODULE)
