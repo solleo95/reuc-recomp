@@ -56,7 +56,10 @@ void downFirstMain(uint3 id : SV_DispatchThreadID) {
     for (int j = 0; j < 4; ++j)
         for (int i = 0; i < 4; ++i) {
             int2 p = clamp(origin + int2(i, j), int2(0, 0), int2(params.region) - 1);
-            float3 e = expandColor(pow(saturate(imageA.Load(int3(p, 0)).rgb), 2.2));
+            float3 encoded = saturate(imageA.Load(int3(p, 0)).rgb);
+            // Below the soft threshold's knee (linear luminance <= 0.3, i.e. every channel <= 0.5775 encoded) expandColor is exactly zero: the three pow() calls are skipped
+            float3 e = float3(0.0, 0.0, 0.0);
+            [branch] if (max(encoded.r, max(encoded.g, encoded.b)) > 0.5775) e = expandColor(pow(encoded, 2.2));
             float w = tapWeight[i] * tapWeight[j] / (1.0 + luma(e));   // Karis: one hot pixel cannot flicker the level
             sum += e * w;
             total += w;
