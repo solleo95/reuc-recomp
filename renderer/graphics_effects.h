@@ -60,6 +60,7 @@ inline bool needs_scene_targets(const GraphicsEffects& effects) { return effects
 // Bits of the per-draw push constant `effects` (smoke.slang Projection.effects).
 constexpr uint32_t kEffectPerPixelLighting=1;
 constexpr uint32_t kEffectRtMaterial=2;     // write the albedo and material-record targets (any RT effect active); the draw's record index rides in the push constant
+constexpr uint32_t kEffectUiDimShift=8;     // bits 8..15: HDR interface brightness (DrawPacket::ui_dim, hdr_math.h): the colour of the draw is scaled by it / 255; 0 = none
 constexpr uint32_t kEffectRtModelValid=4;   // the draw's record has kRtModelValid (rt_material.h): the G-buffer flags carry kGBufferModelValid
 inline bool valid_anisotropy(uint32_t value) { return value==1 || value==2 || value==4 || value==8 || value==16; }
 // The level a device runs: 1 without samplerAnisotropy, never above its maxSamplerAnisotropy.

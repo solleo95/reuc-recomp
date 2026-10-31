@@ -114,8 +114,15 @@ int main() {
         CHECK(packets.complete(partial->serial)); uc::gx_completed(partial->serial);
         // NW4R bypasses the SDK cache; SDK flushes and reset still replace the actual XF selectors.
         ppc::wr32(c,0x80001080,60u<<6);
-        for(uint32_t i=0;i<8;++i) ppc::wr32(c,0x80002100+i*4,i==0 ? 9 : 60);
-        c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw(); take(43);
+        for(uint32_t i=0;i<8;++i) ppc::wr32(c,0x80002100+i*4,i==0 || i==4 ? 9 : 60);
+        c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw();
+        ppc::wr32(c,0x80002110,60);
+        c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw();
+        c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto selectors_packet=packets.try_take(); CHECK(selectors_packet && selectors_packet->draws.size()==2);
+        CHECK(selectors_packet->draws[0].uniforms->tex_rows[0][3]==43 && selectors_packet->draws[1].uniforms->tex_rows[0][3]==43);
+        CHECK(selectors_packet->draws[0].uniforms->tex_rows[12][3]==43 && selectors_packet->draws[1].uniforms->tex_rows[12][3]==0);
+        CHECK(packets.complete(selectors_packet->serial)); uc::gx_completed(selectors_packet->serial);
         CHECK(ppc::rd32(c,0x80001080)==60u<<6);
         c.r[3]=0; hle_GXSetMatrixIndex(c); draw(); take(0);
         begin(0x8000C000); c.r[3]=0x80002100; hle_ResTexMatrixIndices(c); draw(); const auto selectors_list=end();
@@ -135,6 +142,46 @@ int main() {
         rejected=false; try { play(0x8000E000,parent_selectors); } catch(const gx::Error&) { rejected=true; }
         CHECK(rejected); draw(); take(0);
         ppc::wr8(c,0x8000D000,child_byte);
+        // Position and reserved bits preserve texture selectors; identical setters still record.
+        ppc::wr32(c,0x80001080,(9u<<6)|3); c.r[3]=0; hle_GXSetMatrixIndex(c); draw();
+        ppc::wr32(c,0x80001080,0xC0000000u|(9u<<6)|6); c.r[3]=0; hle_GXSetMatrixIndex(c); draw();
+        c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto positions=packets.try_take(); CHECK(positions && positions->draws.size()==2);
+        CHECK(positions->draws[0].transforms->current==3 && positions->draws[1].transforms->current==6);
+        CHECK(positions->draws[0].uniforms->tex_rows[0][3]==43 && positions->draws[1].uniforms->tex_rows[0][3]==43);
+        CHECK(packets.complete(positions->serial)); uc::gx_completed(positions->serial);
+        begin(0x80010000); c.r[3]=0; hle_GXSetMatrixIndex(c); draw(); const auto position_index_list=end();
+        ppc::wr32(c,0x80001080,(9u<<6)|12); c.r[3]=0; hle_GXSetMatrixIndex(c);
+        play(0x80010000,position_index_list); draw();
+        c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto replay_positions=packets.try_take(); CHECK(replay_positions && replay_positions->draws.size()==2);
+        for(const auto& item:replay_positions->draws) CHECK(item.transforms->current==6 && item.uniforms->tex_rows[0][3]==43);
+        CHECK(packets.complete(replay_positions->serial)); uc::gx_completed(replay_positions->serial);
+        // SDK snapshots accept aligned and unaligned MEM2 blocks and own earlier draw data.
+        for(uint32_t sdk:{0x90001000u,0x90002001u}) {
+            for(uint32_t i=0;i<0x600;++i) ppc::wr8(c,sdk+i,ppc::rd8(c,0x80001000+i));
+            ppc::wr32(c,sdk+0x180,sdk==0x90001000u ? 0x112233 : 0x223344);
+            ppc::wr32(c,sdk+0x1C0,0x556677);
+            ppc::wr32(c,sdk+0x254,(2u<<10)|(2u<<4));
+            ppc::wr32(c,sdk+0x228,29); ppc::wr32(c,sdk+0x224,427);
+            ppc::wr32(c,sdk+0xB0,0x12345678); ppc::wr32(c,sdk+0xA8,0x87654321);
+            ppc::wr32(c,c.r[2]-8968,sdk); draw();
+        }
+        c.r[3]=0x80008000; c.r[4]=0; hle_GXCopyDisp(c);
+        auto mem2=packets.try_take(); CHECK(mem2 && mem2->draws.size()==2);
+        CHECK(mem2->draws[0].material.stage[0].color==0x112233 && mem2->draws[1].material.stage[0].color==0x223344);
+        for(const auto& item:mem2->draws) {
+            CHECK(item.material.stages==3 && item.material.stage[0].alpha==0x556677);
+            CHECK(item.uniforms->pixel[1]==29 && item.uniforms->pixel[2]==427 && item.uniforms->pixel[3]==2);
+            CHECK(item.uniforms->materials[0][0]==0x12/255.f && item.uniforms->materials[0][3]==0x78/255.f);
+            CHECK(item.uniforms->ambient[0][0]==0x87/255.f && item.uniforms->ambient[0][3]==0x21/255.f);
+            CHECK(item.uniforms->tex_rows[0][3]==43 && item.uniforms->tex_gens[0]==6 && item.uniforms->tex_posts[0]==0x103);
+        }
+        CHECK(packets.complete(mem2->serial)); uc::gx_completed(mem2->serial);
+        ppc::wr32(c,c.r[2]-8968,0x93FFFA04);
+        rejected=false; try { draw(); } catch(const gx::Error& error) { CHECK(error.code==gx::ErrorCode::array_bounds); rejected=true; }
+        CHECK(rejected);
+        ppc::wr32(c,c.r[2]-8968,0x80001000); draw(); take(43);
     });
     sched.run(thread);
 }

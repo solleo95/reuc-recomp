@@ -4,6 +4,7 @@
 #include "arc/u8.h"
 #include "audio/brstm.h"
 #include "mod_guest_call.h"
+#include "standalone.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -16,7 +17,7 @@ GameMods::GameMods(const fs::path& exe_dir, const nlohmann::ordered_json& mods_s
     : exe_dir_(exe_dir), mods_dir_(exe_dir / "mods"), section_(mods_section.is_object() ? mods_section : nlohmann::ordered_json::object()), dvd_(&dvd) {
     std::error_code error;
     if (disabled || !fs::is_directory(mods_dir_, error)) return;
-    registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::ApiVersion{1, 1}, game_id));
+    registry_.emplace(mods::ModRegistry::discover(mods_dir_, section_, mods::kHostModApi, game_id));
     // Audio replacement: the converter learns each original stream's rate and channel count from its BRSTM header on the disc.
     audio_ = std::make_unique<mods::AudioConverter>(mods_dir_ / ".cache", [this](const std::string& stem, std::string& why) -> std::optional<mods::StreamOriginal> {
         const std::string name = "sound/stream/" + stem + ".brstm";

@@ -1,5 +1,7 @@
 #include "release.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -51,6 +53,7 @@ std::string format_version(Version value) {
 Result<std::wstring> path_key(std::string_view relative) {
     if (relative.empty() || relative.size() > 32760 || relative.find('\0') != relative.npos)
         return invalid(ErrorCode::unsafe_path, "Empty or oversized relative path");
+#ifdef _WIN32
     int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, relative.data(),
         static_cast<int>(relative.size()), nullptr, 0);
     if (!count) return invalid(ErrorCode::unsafe_path, "Path is not valid UTF-8");
@@ -58,6 +61,26 @@ Result<std::wstring> path_key(std::string_view relative) {
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, relative.data(), static_cast<int>(relative.size()), wide.data(), count);
     if (!LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, wide.data(), count, key.data(), count, nullptr, nullptr, 0))
         return invalid(ErrorCode::unsafe_path, "Cannot normalize path");
+#else
+    // shortcut: Linux case folding is ASCII-only; manifests are produced by our own scripts. Upgrade if third-party manifests appear.
+    std::wstring key;
+    for (size_t i = 0; i < relative.size();) {
+        const auto lead = static_cast<unsigned char>(relative[i]);
+        const size_t length = lead < 0x80 ? 1 : (lead >> 5) == 6 ? 2 : (lead >> 4) == 14 ? 3 : (lead >> 3) == 30 ? 4 : 0;
+        if (!length || i + length > relative.size()) return invalid(ErrorCode::unsafe_path, "Path is not valid UTF-8");
+        char32_t code = length == 1 ? lead : lead & (0xff >> (length + 1));
+        for (size_t k = 1; k < length; ++k) {
+            const auto next = static_cast<unsigned char>(relative[i + k]);
+            if ((next & 0xc0) != 0x80) return invalid(ErrorCode::unsafe_path, "Path is not valid UTF-8");
+            code = (code << 6) | (next & 0x3f);
+        }
+        constexpr char32_t least[] = {0, 0, 0x80, 0x800, 0x10000};
+        if (code < least[length] || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff))
+            return invalid(ErrorCode::unsafe_path, "Path is not valid UTF-8");
+        key.push_back(static_cast<wchar_t>(code >= 'a' && code <= 'z' ? code - 32 : code));
+        i += length;
+    }
+#endif
     for (wchar_t c : key)
         if (c < 32 || c == 127 || c == L'\\' || c == L':' || c == L'~' ||
             c == L'<' || c == L'>' || c == L'"' || c == L'|' || c == L'?' || c == L'*')
@@ -80,7 +103,7 @@ Status validate_managed_path(std::string_view relative) {
     const auto& path = std::get<std::wstring>(key);
     const auto root = path.substr(0, path.find(L'/'));
     if(root.starts_with(L"CONFIG.JSON.") || root.starts_with(L"CPU-PROFILE.JSON.") ||
-        root==L"NVNGX_DLSSNR.DLL" || root==L"CPU-SAMPLES.TXT" ||
+        root==L"NVNGX_DLSSNR.DLL" || root==L"CPU-SAMPLES.TXT" || root==L"STEAM-ENV.TXT" || root==L"NEXT-RUN.SH" || root==L"LAUNCHER-STATE.JSON" ||
         path==L"DATA/PIPELINE_KEYS.BIN" || path==L"DATA/PIPELINE_CACHE.BIN" || path==L"DATA/PIPELINE_CACHE.TMP")
         return invalid(ErrorCode::unsafe_path, "Protected user runtime file");
     for (auto reserved : {L"CONFIG.JSON", L"CPU-PROFILE.JSON", L"SAVES", L"MODS", L"TEXTURES",
@@ -88,7 +111,7 @@ Status validate_managed_path(std::string_view relative) {
         if (root == reserved) return invalid(ErrorCode::unsafe_path, "Protected user or update metadata path");
     return std::monostate{};
 }
-Result<Manifest> parse_manifest(std::string_view text) {
+Result<Manifest> parse_manifest(std::string_view text, Platform platform) {
     if (text.size() > max_manifest_size) return invalid(ErrorCode::invalid_manifest, "Manifest exceeds limit");
     try {
         auto json = Json::parse(text);
@@ -121,8 +144,14 @@ Result<Manifest> parse_manifest(std::string_view text) {
             for (size_t slash = path.find(L'/'); slash != path.npos; slash = path.find(L'/', slash + 1))
                 if (paths.contains(path.substr(0, slash)))
                     return invalid(ErrorCode::invalid_manifest, "File/directory collision");
-        for (auto required : {L"UC.EXE", L"UC_LAUNCHER.EXE", L"UC_UPDATER.EXE"})
+        const bool windows = platform == Platform::windows;
+        for (auto required : windows ? std::initializer_list<const wchar_t*>{L"UC.EXE", L"UC_LAUNCHER.EXE", L"UC_UPDATER.EXE"}
+                                     : std::initializer_list<const wchar_t*>{L"UC", L"UC_LAUNCHER"})
             if (!paths.contains(required)) return invalid(ErrorCode::invalid_manifest, "Missing required executable");
+        if (!windows) {
+            if (!json.at("helper_files").empty()) return invalid(ErrorCode::invalid_manifest, "Steam Deck packages have no helper files");
+            return manifest;
+        }
         std::set<std::wstring> helpers;
         for (const auto& item : json.at("helper_files")) {
             if (!item.is_string()) return invalid(ErrorCode::invalid_manifest, "Invalid helper file");
@@ -142,7 +171,7 @@ Result<Manifest> parse_manifest(std::string_view text) {
         return invalid(ErrorCode::invalid_manifest, std::string("Malformed manifest: ") + e.what());
     }
 }
-Result<std::optional<Release>> select_release(std::string_view text, Version installed) {
+Result<std::optional<Release>> select_release(std::string_view text, Version installed, Platform platform) {
     if (text.size() > max_metadata_size) return invalid(ErrorCode::invalid_release, "Release response exceeds limit");
     try {
         auto json = Json::parse(text);
@@ -150,20 +179,25 @@ Result<std::optional<Release>> select_release(std::string_view text, Version ins
             return invalid(ErrorCode::invalid_release, "Invalid release flags");
         if (json.at("draft").get<bool>() || json.at("prerelease").get<bool>()) return std::optional<Release>{};
         auto tag = json.at("tag_name").get<std::string>();
-        auto version = parse_version(tag, true);
-        if (failed(version)) return std::get<Error>(version);
-        if (std::get<Version>(version) <= installed) return std::optional<Release>{};
         if (!json.at("assets").is_array()) return invalid(ErrorCode::invalid_release, "Invalid release assets");
-        const auto name = "UC-Windows-" + format_version(std::get<Version>(version)) + ".zip";
+        const std::string prefix(archive_prefix(platform));
         const Json* asset = nullptr;
+        Version version{};
         for (const auto& item : json.at("assets")) {
             if (!item.is_object() || !item.at("name").is_string())
                 return invalid(ErrorCode::invalid_release, "Invalid asset");
-            if (item.at("name") != name) continue;
+            const auto& candidate = item.at("name").get_ref<const std::string&>();
+            if (!candidate.starts_with(prefix) || !candidate.ends_with(".zip")) continue;
             if (asset) return invalid(ErrorCode::invalid_release, "Duplicate release archive");
+            auto parsed = parse_version(std::string_view(candidate).substr(prefix.size(), candidate.size() - prefix.size() - 4));
+            if (failed(parsed)) return std::get<Error>(parsed);
+            version = std::get<Version>(parsed);
             asset = &item;
         }
-        if (!asset || asset->at("state") != "uploaded" || !unsigned_size(asset->at("size"), max_zip_size) ||
+        if (!asset) return invalid(ErrorCode::invalid_release, "Release has no archive for this platform");
+        if (version <= installed) return std::optional<Release>{};
+        const auto name = asset->at("name").get<std::string>();
+        if (asset->at("state") != "uploaded" || !unsigned_size(asset->at("size"), max_zip_size) ||
             asset->at("size") == 0)
             return invalid(ErrorCode::invalid_release, "Missing or invalid release archive");
         if (!asset->contains("digest") || !asset->at("digest").is_string())
@@ -176,7 +210,7 @@ Result<std::optional<Release>> select_release(std::string_view text, Version ins
             return invalid(ErrorCode::invalid_release, "Unexpected release download URL");
         std::string notes;
         if (json.contains("body") && !json.at("body").is_null()) notes = json.at("body").get<std::string>();
-        return std::optional<Release>{Release{std::get<Version>(version), std::move(url), std::move(notes),
+        return std::optional<Release>{Release{version, std::move(url), std::move(notes),
             digest.substr(7), asset->at("size").get<uint64_t>()}};
     } catch (const Json::exception& e) {
         return invalid(ErrorCode::invalid_release, std::string("Malformed release: ") + e.what());

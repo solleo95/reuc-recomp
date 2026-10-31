@@ -22,6 +22,8 @@
 #include "diagnostic_log.h"
 #include "graphite.h"
 #include "image_unpack.h"
+#include "menu_ui.h"
+#include "standalone.h"
 #include "ui_fonts.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -29,6 +31,7 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <iterator>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -253,6 +256,8 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     std::string language="system",saved_language="system";
     active_language=system_language;
     bool failed=false;uc::Options failed_options;uc::Bindings failed_bindings;std::string failed_language;   // the last state an automatic save was refused for
+    std::optional<uc::mods::StandaloneMods> mods_state;std::optional<uc::mods::ModMenuUi> mods_menu;std::string mods_error;   // the Mods page: built when it is first opened (finding the mods unpacks their .zip files); mods_error: the mods folder could not be read
+    auto load_mods=[&] {mods_state.emplace(directory/L"mods",document.properties.value("mods",nlohmann::ordered_json::object()));};
     auto reload=[&] {
         failed=false;
         try {auto loaded=uc::load_config(config_path);auto settings=uc::options_from_config(loaded);
@@ -267,6 +272,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             network_address=std::move(last_peer);
             editor=uc::BindingEditor(loaded.input);pad_editor=uc::BindingEditor(settings.gamepad.bindings,uc::BindingTable::gamepad);wii_editor=uc::BindingEditor(settings.wiimote.bindings,uc::BindingTable::wiimote);document=std::move(loaded);options=saved_options=settings;
             language=saved_language=locale;active_language=locale=="system" ? system_language : locale;blocked=false;error.clear();
+            mods_menu.reset();mods_state.reset();mods_error.clear();   // the file changed under the page: its mods (and what the page remembers of them) are read again when it is next drawn
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
     reload();std::string game_path=utf8(options.game);    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
@@ -509,16 +515,20 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const float sidebar=std::round(344*unit);
         auto combo=[&](const char* id,const char* preview,ImGuiComboFlags flags=0) {return uc::launcher::combo(id,preview,unit,flags);};
         auto* background=ImGui::GetWindowDrawList();
-        background->AddRectFilledMultiColor({0,0},{sidebar,available.y},IM_COL32(12,16,17,255),IM_COL32(15,19,20,255),IM_COL32(12,16,17,255),IM_COL32(9,13,14,255));
+        background->AddRectFilled({0,0},{sidebar,available.y},IM_COL32(13,16,17,255));   // exactly the background of assets/launcher/graphite-brand.png (measured), so that the pictures have no visible edge
         background->AddRectFilledMultiColor({sidebar,0},available,IM_COL32(25,29,30,255),IM_COL32(19,23,24,255),IM_COL32(15,19,20,255),IM_COL32(22,26,27,255));
         ImGui::BeginChild("sidebar",{sidebar,0},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         auto* draw=ImGui::GetWindowDrawList();
-        if(ui.brand)ui.art(ui.brand,*draw,{0,0},{sidebar,std::round(446*unit)},{0,0},{342,446});
-        else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit},90*unit);draw->AddText({28*unit,50*unit},IM_COL32_WHITE,"RESIDENT EVIL");}
-        const char* sections[]={"game","graphics","controls","controllers","audio"};
-        ImGui::SetCursorPos({6*unit,455*unit});
-        constexpr int kNavigationTabs=4;   // the Sound tab (index 4, page code below) is hidden; set to 5 to bring it back
-        for(int i=0;i<kNavigationTabs;++i) {
+        constexpr int kNavigationPages[]={0,1,2,3,5};   // the Sound page (4, page code below) is hidden: add it here to bring it back
+        // The logo shrinks (centred) when the window is too low for the tabs, the language select and the footer picture under it.
+        const float tab_pitch=60*unit+ImGui::GetStyle().ItemSpacing.y;
+        const float below=float(std::size(kNavigationPages))*tab_pitch+16*unit+90*unit+75*unit+9*unit;
+        const float logo_height=std::clamp(available.y-below,220*unit,446*unit),logo_scale=logo_height/(446*unit);
+        if(ui.brand)ui.art(ui.brand,*draw,{std::round(sidebar*(1-logo_scale)/2),0},{std::round(sidebar*logo_scale),std::round(logo_height)},{0,0},{340,446});   // x=340..341 is a darker edge line of the picture
+        else {uc::launcher::draw_umbrella(*draw,{sidebar/2,200*unit*logo_scale},90*unit*logo_scale);draw->AddText({28*unit,50*unit*logo_scale},IM_COL32_WHITE,"RESIDENT EVIL");}
+        const char* sections[]={"game","graphics","controls","controllers","audio","deck_page_mods"};
+        ImGui::SetCursorPos({6*unit,std::round(logo_height+9*unit)});
+        for(const int i:kNavigationPages) {
             ImGui::SetCursorPosX(std::round(6*unit));
             ImGui::PushID(i);auto p=ImGui::GetCursorScreenPos();
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
@@ -568,7 +578,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         ImGui::BeginChild("body",{main_size.x-104*unit,main_size.y-hero_height-32*unit},ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
         push_font(ui.serif,36);ImGui::TextUnformatted(tr(page==1 ? "graphics_title" : sections[page]));ImGui::PopFont();
         ImGui::PushFont(ui.sans,std::round(22*unit));
-        const char* hints[]={"game_hint","graphics_hint","controls_hint","controllers_hint","audio_hint"};
+        const char* hints[]={"game_hint","graphics_hint","controls_hint","controllers_hint","audio_hint","mods_hint"};
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));ImGui::TextWrapped("%s",tr(hints[page]));ImGui::PopStyleColor();
         ImGui::Dummy({0,8*unit});ImGui::Separator();ImGui::Dummy({0,20*unit});
         const auto shown=[](const char* id) {return uc::settings::shown(id,uc::settings::desktop_launcher);};   // the settings registry decides what this page lists
@@ -586,7 +596,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             if(disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))uc::launcher::tooltip(why ? why : tr("unavailable"));
             ImGui::PopStyleVar(3);ImGui::PopID();ImGui::EndDisabled();
         };
-        const bool controls_page=page==2 || page==3;   // no game folder row under them: only the Multiplayer and Play buttons
+        const bool controls_page=page==2 || page==3 || page==5;   // no game folder row under them: only the Multiplayer and Play buttons
         const float footer=((controls_page ? 140.f : 212.f)+(error.empty() ? 0.f : 100.f))*unit;
         // The page scrolls as a whole with the same slim scrollbar as the Graphics columns (the Graphics page has its own scrolling columns); the negative indent
         // keeps the controls flush with the page and leaves a gap before the bar.
@@ -1000,7 +1010,26 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
             if(shown("wiimote"))uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
             ImGui::Dummy({0,20*unit});ImGui::PopFont();
+        } else if(page==5) {
+            if(!mods_state && mods_error.empty()) {
+                try {load_mods();} catch(const std::exception& e) {mods_state.reset();mods_error=e.what();}   // a folder that cannot be read is shown, never fatal; config.json is not touched
+            }
+            if(!mods_state) ImGui::TextWrapped("%s",mods_error.c_str());
+            else {
+            if(!mods_menu) {
+                mods_menu.emplace([&] {return &mods_state->registry();},[]() -> uc::mods::ModHost* {return nullptr;},active_language);
+                mods_menu->set_standalone(&*mods_state);
+                mods_menu->set_save([&](const nlohmann::ordered_json& section) {   // what the page changed goes into the config at once, beside the launcher's own settings
+                    try {auto next=document;next.properties["mods"]=section;uc::save_config(config_path,next);document=std::move(next);}
+                    catch(const std::exception& e) {error=e.what();}
+                });
+            }
+            mods_menu->set_language(active_language);
+            mods_menu->set_row_style({6*unit,6*unit,3*unit,8*unit,4*unit});   // the rows use the same boxes as the other pages' switches; the windows over them keep the launcher's look
+            mods_menu->manager_tab(unit);
+            }
         } else ImGui::TextWrapped("%s",tr("audio_info"));
+        if(mods_menu)mods_menu->commit();   // every frame, whatever the page: a change made just before leaving the page is saved too
         ImGui::EndChild();ImGui::Separator();ImGui::Dummy({0,10*unit});
         if(!error.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1});ImGui::TextWrapped("%s",tr(error.find("changed since loading")!=std::string::npos ? "stale" : "error"));ImGui::PopStyleColor();

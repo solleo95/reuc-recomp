@@ -6,6 +6,7 @@ Each name is a binary next to the staged game on the Deck (~/uc-run/<name>; `uc`
 the result is the mean of the game's own once-a-second `[fps]` lines of the measured window (finer than the harness's 50 ms windows, which are quantised to the display's rhythm).
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -13,6 +14,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from uctest import runsummary
 LINE = re.compile(r"^\[fps\] window_ms ([0-9.]+) retraces \d+:\d+ presents (\d+)", re.MULTILINE)
 
 
@@ -25,8 +28,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--game-arg", action="append", default=[], help="a game argument for every run (repeat it for a value: --game-arg=--guest-cpu --game-arg=2)")
+    parser.add_argument("--owner", action="store_true", help="the owner's graphics settings (per-pixel lighting, ultra motion blur, bloom 150), uncapped FPS and the pacing/GPU summary of each run")
     parser.add_argument("builds", nargs="+", help="BUILD or BUILD|--arg|value: arguments for that run only")
     args = parser.parse_args()
+    if args.owner:
+        args.game_arg += ["--per-pixel-lighting", "--motion-blur", "ultra", "--bloom-strength", "150", "--fps-limit", "0"]
     env = dict(os.environ, UC_DECK_GAMEMODE="1")
     for spec in args.builds:
         name, *own = spec.split("|")
@@ -37,12 +43,26 @@ def main():
         if not (run / "run.log").exists():
             print(f"{spec}: the game did not start: " + " | ".join((result.stdout + result.stderr).strip().splitlines()[-3:]))
             continue
-        rows = [(float(ms), int(p)) for ms, p in LINE.findall((run / "run.log").read_text(errors="replace"))][-args.seconds:]
-        if not rows or "PASS" not in result.stdout:
+        try:
+            measured = json.loads((run / "report.json").read_text())["result"]
+            start, stop = measured["measure_from_retrace"], measured["measure_to_retrace"]
+            if type(start) is not int or type(stop) is not int or not 0 <= start < stop:
+                raise ValueError("invalid measurement retrace bounds")
+            filtered_log = runsummary.measurement_log((run / "run.log").read_text(errors="replace"), start, stop)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"{name}: measurement report failed ({run}): {error}")
+            continue
+        rows = [(float(ms), int(p)) for ms, p in LINE.findall(filtered_log)]
+        if not rows:
+            print(f"{name}: no complete FPS seconds within measurement retraces {start}:{stop} ({run})")
+            continue
+        if "PASS" not in result.stdout:
             print(f"{name}: the run failed ({run})")
             continue
         fps = [1000 * p / ms for ms, p in rows]
         print(f"{spec}: {sum(1000 * p for _, p in rows) / sum(ms for ms, _ in rows):.1f} FPS over {len(rows)} s (lowest second {min(fps):.0f}, highest {max(fps):.0f})", flush=True)
+        if args.owner:
+            print("  " + runsummary.format_summary(filtered_log, len(rows)), flush=True)
 
 
 main()

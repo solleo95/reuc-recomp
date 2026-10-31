@@ -30,14 +30,19 @@ ROLES = {
     "ps_madd": "Fd Fs Fs Fs B", "ps_msub": "Fd Fs Fs Fs B", "ps_madds0": "Fd Fs Fs Fs B", "ps_madds1": "Fd Fs Fs Fs B", "ps_nmadd": "Fd Fs Fs Fs B",
     "ps_merge00": "Fd Fs Fs B", "ps_merge01": "Fd Fs Fs B", "ps_merge10": "Fd Fs Fs B", "ps_merge11": "Fd Fs Fs B",
     "ps_neg": "Fd Fs B", "ps_mr": "Fd Fs B", "ps_abs": "Fd Fs B", "ps_sum0": "Fd Fs Fs Fs B", "ps_sum1": "Fd Fs Fs Fs B",
+    "ps_nmsub": "Fd Fs Fs Fs B",
+    "stmw": "Is Ib N", "lmw": "Id Ib N",   # the registers from the named one to r31 (RANGE_OPS)
     "mfspr": "Id S", "mtspr": "Is S",
 }
+RANGE_OPS = {"stmw", "lmw"}
 SPEC_LOAD = {"lwz", "lbz", "lhz", "lha", "lfs"}
 SPEC_STORE = {"stw", "stb", "sth", "stfs"}
 XER_WRITE = {"srawi", "sraw", "subfic"}
 OP = re.compile(r"ppc::op_(\w+)\(c,\s*([^)]*)\)")
 BRANCH = re.compile(r"\{ \{ if \((?P<cond>.*)\) \{ (?P<poll>ppc::poll\(c\); )?goto (?P<lbl>L_[0-9A-F]+); \} \} \}")
 GOTO = re.compile(r"\{ (?P<poll>ppc::poll\(c\); )?goto (?P<lbl>L_[0-9A-F]+); \}")
+COND_RETURN = re.compile(r"\{ \{ if \((?P<cond>.*)\) \{ return; \} \} \}")   # beqlr, bnelr...: leaves the function when the condition holds
+BDNZ = re.compile(r"\{ \{ --c\.ctr; if \(c\.ctr != 0\) \{ (?P<poll>ppc::poll\(c\); )?goto (?P<lbl>L_[0-9A-F]+); \} \} \}")
 
 
 def parse_hybrid(body):
@@ -61,6 +66,14 @@ def parse_hybrid(body):
             return None, "calls another function"
         if s.rstrip() in ("{ return; }", "{ return;"):
             items.append(("return",))
+            continue
+        m = COND_RETURN.fullmatch(s)
+        if m:
+            items.append(("branch", m.group("cond"), "L_done", False))
+            continue
+        m = BDNZ.fullmatch(s)
+        if m:
+            items.append(("bdnz", m.group("lbl"), bool(m.group("poll"))))
             continue
         m = BRANCH.fullmatch(s)
         if m:
@@ -87,7 +100,11 @@ def analyse(items):
     ints, ints_w, fl, fl_w, crw, crr = set(), set(), set(), set(), set(), set()
     base_ops = {}      # base register -> list of (op, offset)
     xer, xer_w, lr_w, ctr_w, gqr = False, False, False, False, set()
+    ctr_used, lmw_regs = False, set()
     for it in items:
+        if it[0] == "bdnz":
+            ctr_used = True
+            continue
         if it[0] == "branch":
             for n in re.findall(r"crbit\(c, (\d+)\)", it[1]):
                 crr.add(int(n) >> 2); xer = xer
@@ -110,6 +127,13 @@ def analyse(items):
             if kind == "B" and v == "true": crw.add(0); xer = True
         if name in ("andi_", "andis_"): crw.add(0); xer = True
         if name in XER_WRITE: xer = True; xer_w = True
+        if name in RANGE_OPS:   # rS..r31: every register of the range is read (stmw) or written (lmw)
+            for r in range(vals[0], 32):
+                ints.add(r)
+                if name == "lmw":
+                    ints_w.add(r); lmw_regs.add(r)
+        if name in ("mfspr", "mtspr") and vals[1] == 9:
+            ctr_used = True
         if name == "mfspr" and vals[1] == 8 or name == "mtspr" and vals[1] == 8:
             lr_w = lr_w or name == "mtspr"
         if name in ("mfspr", "mtspr") and vals[1] not in (8, 9):
@@ -120,7 +144,7 @@ def analyse(items):
         if name in SPEC_LOAD | SPEC_STORE and ROLES[name].split()[1] == "Ib" and isinstance(vals[1], int) and vals[1] not in (0, 1, 2, 13):
             size = {"lwz": 4, "stw": 4, "lfs": 4, "stfs": 4, "lhz": 2, "lha": 2, "sth": 2, "lbz": 1, "stb": 1}[name]
             base_ops.setdefault(vals[1], []).append((name, vals[2], size))
-    return dict(ints=ints, ints_w=ints_w, fl=fl, fl_w=fl_w, crw=crw, crr=crr, base_ops=base_ops, xer=xer, xer_w=xer_w, lr_w=lr_w, ctr_w=ctr_w, gqr=gqr)
+    return dict(ints=ints, ints_w=ints_w, fl=fl, fl_w=fl_w, crw=crw, crr=crr, base_ops=base_ops, xer=xer, xer_w=xer_w, lr_w=lr_w, ctr_w=ctr_w, gqr=gqr, ctr_used=ctr_used, lmw_regs=lmw_regs)
 
 
 def to_lc(text):
@@ -151,7 +175,7 @@ def emit_hybrid(address, name, items, raw):
     copy_in, copy_out, flush = [], [], []
     for r in sorted(a["ints"]):
         copy_in.append("lc.r[%d] = c.r[%d];" % (r, r)); flush.append("c.r[%d] = lc.r[%d];" % (r, r))
-        if r == 0 or 3 <= r <= 12 and r in a["ints_w"]: copy_out.append("c.r[%d] = lc.r[%d];" % (r, r))
+        if r == 0 or 3 <= r <= 12 and r in a["ints_w"] or r in a["lmw_regs"]: copy_out.append("c.r[%d] = lc.r[%d];" % (r, r))   # lmw: the registers it restores
     for r in sorted(a["fl"]):
         copy_in.append("lc.f[%d] = c.f[%d]; lc.ps1[%d] = c.ps1[%d];" % (r, r, r, r)); flush.append("c.f[%d] = lc.f[%d]; c.ps1[%d] = lc.ps1[%d];" % (r, r, r, r))
         if r in a["fl_w"] and r <= 13: copy_out.append("c.f[%d] = lc.f[%d]; c.ps1[%d] = lc.ps1[%d];" % (r, r, r, r))
@@ -162,14 +186,14 @@ def emit_hybrid(address, name, items, raw):
         copy_in.append("lc.xer_so = c.xer_so; lc.xer_ca = c.xer_ca; lc.xer_ov = c.xer_ov;"); flush.append("c.xer_so = lc.xer_so; c.xer_ca = lc.xer_ca; c.xer_ov = lc.xer_ov;")
         if a["xer_w"]: copy_out.append("c.xer_ca = lc.xer_ca;")
     uses_lr = any(it[0] == "op" and it[1] in ("mfspr", "mtspr") and it[2][1] == "8" for it in items)
-    uses_ctr = any(it[0] == "op" and it[1] in ("mfspr", "mtspr") and it[2][1] == "9" for it in items)
+    uses_ctr = a["ctr_used"]
     if uses_lr:
         copy_in.append("lc.lr = c.lr;"); flush.append("c.lr = lc.lr;"); copy_out.append("c.lr = lc.lr;")
     if uses_ctr:
         copy_in.append("lc.ctr = c.ctr;"); flush.append("c.ctr = lc.ctr;"); copy_out.append("c.ctr = lc.ctr;")
     for g in sorted(a["gqr"]):
         copy_in.append("lc.gqr[%d] = c.gqr[%d];" % (g, g))
-    if any((it[0] == "branch" and it[3]) or (it[0] == "goto" and it[2]) for it in items):
+    if any((it[0] == "branch" and it[3]) or (it[0] == "goto" and it[2]) or (it[0] == "bdnz" and it[2]) for it in items):
         copy_out = list(flush)   # a loop polls: the registers flushed at a safe point must end at their final values too (the stack pointer, below all)
     for line in copy_in:
         L.append("    " + line)
@@ -182,6 +206,11 @@ def emit_hybrid(address, name, items, raw):
             if it[2]:
                 L.append("    if ((++c.poll_count & 0x7FFu) == 0) { %s ppc::poll_slow(c); %s }" % (" ".join(flush), " ".join(copy_in)))
             L.append("    goto %s;" % it[1])
+        elif it[0] == "bdnz":
+            if it[2]:
+                L.append("    if (--lc.ctr != 0) { if ((++c.poll_count & 0x7FFu) == 0) { %s ppc::poll_slow(c); %s } goto %s; }" % (" ".join(flush), " ".join(copy_in), it[1]))
+            else:
+                L.append("    if (--lc.ctr != 0) goto %s;" % it[1])
         elif it[0] == "branch":
             if it[3]:
                 L.append("    if (%s) { if ((++c.poll_count & 0x7FFu) == 0) { %s ppc::poll_slow(c); %s } goto %s; }" % (to_lc(it[1]), " ".join(flush), " ".join(copy_in), it[2]))
@@ -242,6 +271,6 @@ def has_loop(items):
     for it in items:
         if it[0] == "label":
             seen.add(it[1])
-        elif it[0] == "branch" and it[2] in seen or it[0] == "goto" and it[1] in seen:
+        elif it[0] == "branch" and it[2] in seen or it[0] in ("goto", "bdnz") and it[1] in seen:
             return True
     return False

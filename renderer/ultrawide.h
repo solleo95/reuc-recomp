@@ -317,4 +317,17 @@ inline void widen_packet(FramePacket& packet, ViewFactors k, WideFrame& frame) {
     }
     if (packet.present) { set_view_scene(frame.scene); frame.scene = false; frame.boxes.clear(); frame.players.clear(); }
 }
+// HDR interface brightness (hdr_math.h): every orthographic draw of the game's own interface gets `dim`, the movie, the game's scratch passes (packets that end in an EFB
+// copy: the bloom chain and composites) and the draws that multiply their destination excepted. No test of size or place: a menu is dimmed as a whole, backdrops and panels
+// with its text, and nothing flips while it animates.
+// A draw that multiplies what is under it (GX blend: source factor dst colour, or destination factor src colour: the dirt and shading of the menu panels) does not add light: the
+// backdrop under it is dimmed already, and dimming its colour too would darken it twice. Logic ops are left alone as well.
+inline bool multiplies_destination(const BlendState& b) {
+    return b.mode == 2 || (b.mode == 1 && (b.source == 2 || b.source == 3 || b.destination == 2 || b.destination == 3));
+}
+inline void mark_ui_draws(FramePacket& packet, uint8_t dim) {
+    if (!dim || packet.texture_copy) return;
+    for (auto& draw : packet.draws)
+        if (!is_perspective(draw.transforms->projection) && draw.callsite != kMovieCallsite && !multiplies_destination(draw.blend)) draw.ui_dim = dim;
+}
 }

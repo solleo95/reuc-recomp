@@ -77,6 +77,7 @@ struct DrawPacket {
     bool layer = false;      // any reticle quad or wake: drawn over the held frame instead of in the game's (VulkanRenderer reticle layer)
     bool wake = false;       // the local reticle's wake strip: laid along the mouse path instead of shifted (late_aim.h)
     bool late_aim = false;   // an aim reticle quad: the renderer moves it to the freshest pointer (late_aim.h)
+    uint8_t ui_dim = 0;      // HDR interface brightness (hdr_math.h hdr_ui_dim, set by mark_ui_draws): the shader scales the colour by ui_dim/255; 0 = untouched
     std::shared_ptr<const MeshBuffers> mesh;   // when set, the geometry lives here and `vertices`/`indices` stay empty
     std::span<const Vertex> vertex_view() const { return mesh ? std::span<const Vertex>(mesh->vertices) : std::span<const Vertex>(vertices); }
     std::span<const uint32_t> index_view() const { return mesh ? std::span<const uint32_t>(mesh->indices) : std::span<const uint32_t>(indices); }

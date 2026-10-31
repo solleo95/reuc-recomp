@@ -16,6 +16,7 @@ inline void note_write_range(uint32_t address, size_t size) {
     if (!size) return;
     uc::rollback_note_range(address,size);
     const uint64_t first = (address & 0x3FFFFFFFu) >> 12, last = ((address & 0x3FFFFFFFu) + uint64_t(size) - 1) >> 12;
+    if (first == last) { page_epoch[first] = write_epoch; return; }
     for (uint64_t page = first; page <= last && page < kWatchPages; ++page) page_epoch[page] = write_epoch;
 }
 // "Verified now": every store after this call gets a larger epoch than the returned stamp.

@@ -1,5 +1,6 @@
 #include "gx_packets.h"
 #include "gx_scene.h"
+#include "hdr_math.h"
 #include "ultrawide.h"
 #include <atomic>
 #include <chrono>
@@ -28,6 +29,7 @@ LatencyWindow take_latency_window() { return {window_sealed_max_ns.exchange(0) /
 FrameLatency frame_latency() { return {latency_frames.load(), latency_total_ns.load(), latency_max_ns.load()}; }
 uint64_t Packets::seal_batch(FramePacket packet) {
     widen_packet(packet, view_factors(), wide_frame_);   // one producer at a time (the guest baton): wide_frame_ needs no lock
+    mark_ui_draws(packet, uc::g_hdr_ui_dim.load(std::memory_order_relaxed));
     std::unique_lock lock(mutex_);
     if(scene_capture_) {
         if(canceled_)throw Error(ErrorCode::canceled,0,0,0);

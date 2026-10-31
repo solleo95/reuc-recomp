@@ -205,7 +205,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if (arg == "--speed") { if (number > 32) return "invalid value for --speed"; options.speed = number; }
             else if (arg == "--width") options.width = number;
             else if (arg == "--height") options.height = number;
-            else if (arg == "--fps-limit") { if (number != 0 && (number < 20 || number > 1000)) return "invalid value for --fps-limit"; options.fps_limit = clamp_frame_limit(number); }
+            else if (arg == "--fps-limit") { if (number != 0 && (number < 20 || number > 1000)) return "invalid value for --fps-limit"; options.fps_limit = number; }
             else if (arg == "--det-frames") options.det_frames = number;
             else if (arg == "--stop-retrace") options.stop_retrace = number;
             else if (arg == "--game-hz") { if (number < 61 || number > 480) return "invalid value for --game-hz"; options.game_hz = number; }
@@ -227,6 +227,7 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
     if (!options.demo_play.empty() && !options.deterministic && options.det_out.empty()) return "--demo-play requires --deterministic";
     if (options.speed != 1 && options.test_server.empty()) return "--speed requires --test-server";
     if (options.god && options.test_server.empty()) return "--god requires --test-server";
+    options.fps_limit=clamp_frame_limit(options.fps_limit,!options.test_server.empty());
     return options;
 }
 }

@@ -24,10 +24,38 @@ constexpr size_t kRing = 1 << 18;
 Sample ring[kRing];
 std::atomic<uint64_t> taken{0};
 uint32_t now_ms() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return uint32_t(t.tv_sec * 1000 + t.tv_nsec / 1000000); }
+// UC_CPU_SAMPLE_STACKS=1: every sample also keeps up to kStack return addresses (the callers of the interrupted function), parallel to `ring` (untouched pages cost nothing when off).
+constexpr int kStack = 12;
+struct StackSample { uint64_t frames[kStack]; uint8_t depth; };
+StackSample stack_ring[kRing];
+bool want_stacks = false;
+uintptr_t exe_low = 0, exe_high = 0;   // the executable's code segment (set when stacks or the wait mode are on)
+void find_exe_text() {
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void*) {   // the first object is the executable: its executable segment
+        for (int i = 0; i < info->dlpi_phnum; ++i) if (info->dlpi_phdr[i].p_type == PT_LOAD && (info->dlpi_phdr[i].p_flags & PF_X)) { exe_low = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr; exe_high = exe_low + info->dlpi_phdr[i].p_memsz; }
+        return 1; }, nullptr);
+}
 void on_profile(int, siginfo_t*, void* context) {
     const auto* c = static_cast<ucontext_t*>(context);
     const uint64_t i = taken.fetch_add(1, std::memory_order_relaxed);
-    ring[i & (kRing - 1)] = {uint64_t(c->uc_mcontext.gregs[REG_RIP]), uint32_t(syscall(SYS_gettid)), now_ms()};
+    const uint64_t rip = uint64_t(c->uc_mcontext.gregs[REG_RIP]);
+    ring[i & (kRing - 1)] = {rip, uint32_t(syscall(SYS_gettid)), now_ms()};
+    if (!want_stacks) return;
+    StackSample& s = stack_ring[i & (kRing - 1)];
+    s.depth = 0;
+    // backtrace() is not async-signal-safe (libgcc's unwinder and dl_iterate_phdr keep caches and locks): it runs only for a sample taken in our own code, where the interrupted
+    // thread cannot be inside them. A sample inside a library keeps its address and at most one caller: the word at the stack pointer when it is a return address into the
+    // executable, which names the caller of a frameless leaf (memcpy, memcmp; for other library functions the word is usually not an executable address and is dropped).
+    if (rip < exe_low || rip >= exe_high) {
+        const uint64_t top = *reinterpret_cast<const uint64_t*>(c->uc_mcontext.gregs[REG_RSP]);
+        if (top >= exe_low && top < exe_high) s.frames[s.depth++] = top;
+        return;
+    }
+    void* frames[kStack + 5];
+    const int n = backtrace(frames, kStack + 5);
+    int k = 0;
+    while (k < n && k < 5 && uint64_t(uintptr_t(frames[k])) != rip) ++k;   // the handler and the signal trampoline come first, then the interrupted pc
+    if (k < n && k < 5) for (int j = k + 1; j < n && s.depth < kStack; ++j) s.frames[s.depth++] = uint64_t(uintptr_t(frames[j]));
 }
 // UC_CPU_SAMPLE=wait: the guest thread sampled by wall-clock time (every 2 ms), blocked or not: the top frame (named at exit with dladdr when it is outside the executable: a futex
 // wait, a memcpy) and the first frame inside the executable (what called it).
@@ -35,7 +63,6 @@ struct WaitSample { uint64_t top, caller; uint32_t ms; };
 constexpr size_t kWaitRing = 1 << 16;
 WaitSample wait_ring[kWaitRing];
 std::atomic<uint64_t> wait_taken{0};
-uintptr_t exe_low = 0, exe_high = 0;
 void on_wait(int, siginfo_t*, void* context) {
     void* frames[24];
     const int n = backtrace(frames, 24);
@@ -73,6 +100,12 @@ void write_samples() {
             if (dladdr(reinterpret_cast<void*>(s.rip), &info) && info.dli_fbase != reinterpret_cast<void*>(base) && info.dli_sname) std::fprintf(file, "x %u %s %u\n", s.tid, info.dli_sname, s.ms);
             else if (info.dli_fbase && info.dli_fbase != reinterpret_cast<void*>(base) && info.dli_fname) std::fprintf(file, "x %u %s %u\n", s.tid, std::strrchr(info.dli_fname, '/') ? std::strrchr(info.dli_fname, '/') + 1 : info.dli_fname, s.ms);
             else std::fprintf(file, "%u %lx %u\n", s.tid, (unsigned long)s.rip, s.ms);
+            if (want_stacks) {   // s <tid> <ms> <rip> <return addresses...> (scripts/inclusive_profile.py)
+                const StackSample& st = stack_ring[i & (kRing - 1)];
+                std::fprintf(file, "s %u %u %lx", s.tid, s.ms, (unsigned long)s.rip);
+                for (int j = 0; j < st.depth; ++j) std::fprintf(file, " %lx", (unsigned long)st.frames[j]);
+                std::fputc('\n', file);
+            }
         }
     }
     write_waits(file);
@@ -87,9 +120,7 @@ void cpu_sampler_start_once(const char* thread) {
         if (waiting || std::string_view(thread) != "guest") return;
         waiting = true;
         void* warm[2]; backtrace(warm, 2);   // loads libgcc's unwinder now: it must not happen inside the signal handler
-        dl_iterate_phdr([](dl_phdr_info* info, size_t, void*) {   // the first object is the executable: its executable segment
-            for (int i = 0; i < info->dlpi_phnum; ++i) if (info->dlpi_phdr[i].p_type == PT_LOAD && (info->dlpi_phdr[i].p_flags & PF_X)) { exe_low = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr; exe_high = exe_low + info->dlpi_phdr[i].p_memsz; }
-            return 1; }, nullptr);
+        find_exe_text();
         struct sigaction action {}; action.sa_sigaction = on_wait; action.sa_flags = SA_SIGINFO | SA_RESTART;
         sigaction(SIGPROF, &action, nullptr);
         sigevent event {}; event.sigev_notify = SIGEV_THREAD_ID; event.sigev_signo = SIGPROF; event._sigev_un._tid = int(syscall(SYS_gettid));
@@ -101,6 +132,11 @@ void cpu_sampler_start_once(const char* thread) {
     }
     if (started || std::string_view(thread) != "main") return;
     started = true;
+    if (const char* stacks = std::getenv("UC_CPU_SAMPLE_STACKS"); stacks && stacks[0] == '1') {
+        void* warm[2]; backtrace(warm, 2);   // loads libgcc's unwinder now: it must not happen inside the signal handler
+        find_exe_text();
+        want_stacks = true;
+    }
     struct sigaction action {}; action.sa_sigaction = on_profile; action.sa_flags = SA_SIGINFO | SA_RESTART;
     sigaction(SIGPROF, &action, nullptr);
     struct itimerval timer {}; timer.it_interval.tv_usec = 1000; timer.it_value.tv_usec = 1000;

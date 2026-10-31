@@ -97,6 +97,16 @@ def package_release(stage: Path, version: str, output: Path) -> Path:
     return output
 
 
+def checklist(version: str) -> str:
+    """What to do on GitHub with the archives (the publication itself is manual)."""
+    return (
+        f"Publishing checklist for {version}:\n"
+        f"  - attach BOTH archives: UC-Windows-<version>.zip and UC-SteamDeck-<version>.zip "
+        f"(a platform that did not change keeps its previous archive, with its own version in the name)\n"
+        f"  - publish the release as the latest release (tag {version}); wait until every asset is uploaded"
+    )
+
+
 def cleanup_workspace(work: Path, repo: Path, owner: str):
     if work.parent != repo or not work.name.startswith(".release-build-") or work.resolve() != work:
         raise ValueError(f"Refusing cleanup outside owned workspace: {work}")
@@ -192,7 +202,7 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
                 retain = True
                 raise OSError(f"Publication rollback failed; previous output retained at {previous}: {rollback}") from rollback
             raise
-        print(f"Release: {final}\nClient:  {destination}\nSHA256:  {digest}")
+        print(f"Release: {final}\nClient:  {destination}\nSHA256:  {digest}\n{checklist(version)}")
         return final
     finally:
         if not retain:

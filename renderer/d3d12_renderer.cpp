@@ -811,12 +811,18 @@ void D3D12Renderer::motion_blur(Slot& slot) {
     if(!effect_output_) effect_output_=image(efb_->width,efb_->height,1,color_format,false,false,true);
     if(!effect_source_) effect_source_=image(efb_->width,efb_->height,1,color_format,false);
     if(!blur_tiles_ || blur_tiles_->width!=tile_width || blur_tiles_->height!=tile_height) blur_tiles_=image(tile_width,tile_height,1,DXGI_FORMAT_R16G16_FLOAT,false,false,true);
-    transition(slot,*efb_,D3D12_RESOURCE_STATE_COPY_SOURCE);
-    for(const auto& target:{effect_source_,effect_output_}) { transition(slot,*target,D3D12_RESOURCE_STATE_COPY_DEST); slot.command->CopyResource(target->resource.Get(),efb_->resource.Get()); }
-    const NativeBlurParams params{{width,height},{render_width,render_height},preset.shutter,preset.samples,16,0};
+    // Only the scene region is read and written back; the rest of the EFB stays as it is.
+    const auto copy_region=[&](Image& source,Image& destination) {
+        transition(slot,source,D3D12_RESOURCE_STATE_COPY_SOURCE); transition(slot,destination,D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource=source.resource.Get(); from.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource=destination.resource.Get(); to.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        const D3D12_BOX region{0,0,0,width,height,1}; slot.command->CopyTextureRegion(&to,0,0,0,&from,&region);
+    };
+    copy_region(*efb_,*effect_source_);
+    const NativeBlurParams params{{width,height},{render_width,render_height},preset.shutter,preset.samples,16,blur_full_samples() ? 1u : 0u};
     effect_dispatch(slot,4,&params,sizeof params,{nullptr,scene_motion_,nullptr,nullptr,nullptr,nullptr,nullptr},{nullptr,blur_tiles_,nullptr,nullptr},tile_width,tile_height);
     effect_dispatch(slot,5,&params,sizeof params,{effect_source_,scene_motion_,blur_tiles_,nullptr,nullptr,nullptr,nullptr},{effect_output_,nullptr,nullptr,nullptr},width,height);
-    transition(slot,*effect_output_,D3D12_RESOURCE_STATE_COPY_SOURCE); transition(slot,*efb_,D3D12_RESOURCE_STATE_COPY_DEST); slot.command->CopyResource(efb_->resource.Get(),effect_output_->resource.Get());
+    copy_region(*effect_output_,*efb_);
 }
 void D3D12Renderer::copy_depth(Slot& slot,RenderExtent source,RenderExtent target) {
     if(!depth_blit_pipeline_) {
@@ -1028,6 +1034,7 @@ void D3D12Renderer::set_hdr(const HdrSettings& settings) {
     if(hdr_!=settings) hdr_metadata_dirty_=true;
     if(generation_ && hdr_!=settings) output_dirty_=true;
     hdr_=settings;
+    publish_hdr_ui_dim(hdr_,hdr_active_);
 }
 void D3D12Renderer::hdr_metadata() {
     if(!hdr_metadata_dirty_) return;
@@ -1055,6 +1062,7 @@ void D3D12Renderer::rebuild_output() {
     UINT support=0; ComPtr<IDXGISwapChain4> metadata_chain;
     hdr_active_=hdr_.enabled && SDL_GetBooleanProperty(SDL_GetWindowProperties(window_),SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN,false) && SUCCEEDED(swapchain_.As(&metadata_chain)) &&
         SUCCEEDED(swapchain_->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,&support)) && (support&DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
+    publish_hdr_ui_dim(hdr_,hdr_active_);
     const auto format=hdr_active_ ? DXGI_FORMAT_R10G10B10A2_UNORM : color_format;
     if(generation_recreate_) {
         metadata_chain.Reset();
@@ -1656,7 +1664,7 @@ void D3D12Renderer::draw(Slot& slot,const gx::DrawPacket& draw,const gx::FramePa
     DrawPush push; push.projection=draw.transforms->projection; push.current_row=draw.transforms->current; push.indexed=draw.state->descriptors[0]!=gx::Mode::none;
     if(scene && reconstruction()) { push.jitter[0]=jitter_[0]; push.jitter[1]=jitter_[1]; }
     if(vectors) push.motion=0;
-    push.effects=controls_.per_pixel_lighting ? 1u : 0u;
+    push.effects=(controls_.per_pixel_lighting ? 1u : 0u)|uint32_t(draw.ui_dim)<<kEffectUiDimShift;
     if(scene && rt_active()) {
         push.effects|=kEffectRtMaterial;
         if(vectors && draw.blend.mode!=2) {
@@ -2175,7 +2183,7 @@ void D3D12Renderer::shutdown() {
     for(auto& pipeline:bloom_pipelines_) pipeline.Reset(); bloom_root_.Reset(); scene_restore_copy_.reset(); boundary_.reset(); frame_start_=true; scene_phase_=false;
     efb_.reset(); depth_.reset(); output_.reset(); white_.reset(); black_.reset(); blit_pipeline_.Reset();
     for(auto& resource:backbuffers_) resource.Reset(); backbuffer_views_.Reset(); hdr_pipeline_.Reset(); ui_image_.reset();
-    hdr_active_=false; output_dirty_=hdr_metadata_dirty_=true;
+    hdr_active_=false; publish_hdr_ui_dim(hdr_,false); output_dirty_=hdr_metadata_dirty_=true;
     swapchain_.Reset();
     if(generation_) retired_generated_+=generation_->generated(); generation_.reset(); generation_kind_=UpscalerKind::off;
     hudless_={}; hudless_sdr_.reset();

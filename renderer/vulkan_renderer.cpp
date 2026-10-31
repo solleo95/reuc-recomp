@@ -243,6 +243,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         if(disallow_exclusive_)device_extensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
 #else
         disallow_exclusive_=false;
+        if (std::any_of(supported.begin(), supported.end(), [](const auto& extension) { return std::strcmp(extension.extensionName, VK_EXT_HDR_METADATA_EXTENSION_NAME) == 0; })) device_extensions.push_back(VK_EXT_HDR_METADATA_EXTENSION_NAME);   // gamescope's layer needs the content's range to map HDR10 onto the panel
 #endif
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
@@ -488,8 +489,21 @@ void VulkanRenderer::record_texture_copy(VkCommandBuffer command, VkImage source
         mip.dstOffsets[1]={int32_t(std::max(1u,target.extent.width>>i)),int32_t(std::max(1u,target.extent.height>>i)),1};
         vkCmdBlitImage(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&mip,VK_FILTER_LINEAR);
     }
-    barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,target.mip_levels-1);
-    barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels);
+    // The last mip never feeds a blit: finish both layout ranges in one dependency.
+    VkImageMemoryBarrier2 ready[2]{{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}};
+    ready[0].srcStageMask=VK_PIPELINE_STAGE_2_TRANSFER_BIT; ready[0].srcAccessMask=VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    ready[0].dstStageMask=VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; ready[0].dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    ready[0].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; ready[0].newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ready[0].srcQueueFamilyIndex=ready[0].dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+    ready[0].image=target.image; ready[0].subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels-1,1,0,1};
+    uint32_t count=1;
+    if(target.mip_levels>1) {
+        ready[1]=ready[0]; ready[1].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        ready[1].subresourceRange.baseMipLevel=0; ready[1].subresourceRange.levelCount=target.mip_levels-1;
+        count=2;
+    }
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dependency.imageMemoryBarrierCount=count; dependency.pImageMemoryBarriers=ready;
+    vkCmdPipelineBarrier2(command,&dependency);
 }
 void VulkanRenderer::recycle_copy_texture(Texture& texture) {
     const double factor=std::max(efb_extent_.width/640.0,efb_extent_.height/480.0);
@@ -1055,7 +1069,9 @@ void VulkanRenderer::set_hdr(const HdrSettings& settings) {
     if (instance_) owner();
     if (!valid_hdr_settings(settings)) throw std::invalid_argument("invalid HDR settings");
     if (settings.enabled!=hdr_settings_.enabled) resized_=true;   // a new swapchain format; the brightness sliders apply from the next frame
+    if (settings!=hdr_settings_) std::fprintf(stderr,"HDR settings: %s peak %u paper white %u interface %u nits\n",settings.enabled ? "on" : "off",settings.peak_nits,settings.paper_white_nits,settings.ui_nits);
     hdr_settings_=settings;
+    publish_hdr_ui_dim(hdr_settings_,hdr_active_);
 }
 void VulkanRenderer::set_prompt_style(PromptStyle style) {
     owner();
@@ -1593,9 +1609,14 @@ void VulkanRenderer::rebuild() {
     std::vector<VkSurfaceFormatKHR> formats(count); vk_check(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &count, formats.data()), "surface formats");
     VkSurfaceFormatKHR chosen{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     // HDR10 when asked for and possible; SDL reads Windows' "Use HDR" of the window's display (DXGI), the surface may list HDR10 either way.
+#ifdef _WIN32
     const bool windows_hdr = SDL_GetBooleanProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false);
+#else
+    const bool windows_hdr = true;   // Linux: gamescope's layer lists the HDR10 format only while its output is in HDR (Steam's "Enable HDR"), so the list is the test
+#endif
     const bool hdr10_format = colorspace_ext_ && std::any_of(formats.begin(), formats.end(), [](const auto& format) { return format.format == HdrPass::kFormat && format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT; });
     hdr_active_ = hdr_settings_.enabled && windows_hdr && hdr10_format;
+    publish_hdr_ui_dim(hdr_settings_, hdr_active_);
     if (hdr_active_) chosen = {HdrPass::kFormat, VK_COLOR_SPACE_HDR10_ST2084_EXT};
     else for (const auto& format : formats) {
         if (format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) continue;
@@ -1638,6 +1659,15 @@ void VulkanRenderer::rebuild() {
     vk_check(present_.create(device, &create, nullptr, &swapchain_), "swapchain");
     std::fprintf(stderr,"Swapchain: %ux%u format=%d present=%s exclusive=%s\n",extent_.width,extent_.height,int(chosen.format),create.presentMode==VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : create.presentMode==VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo",disallow_exclusive_ ? "disallowed" : "driver default");
     old_swapchain_ = VK_NULL_HANDLE;   // retired by the call above; reap_retired() frees it when its presentations are done
+    if (hdr_active_) {   // BT.2020 primaries and D65, as the D3D renderers send; null where the extension was not enabled (Windows)
+        if (const auto set_metadata = PFN_vkSetHdrMetadataEXT(vkGetDeviceProcAddr(device, "vkSetHdrMetadataEXT"))) {
+            VkHdrMetadataEXT metadata{VK_STRUCTURE_TYPE_HDR_METADATA_EXT};
+            metadata.displayPrimaryRed={.708f,.292f}; metadata.displayPrimaryGreen={.170f,.797f}; metadata.displayPrimaryBlue={.131f,.046f}; metadata.whitePoint={.3127f,.3290f};
+            metadata.maxLuminance=float(std::max(hdr_settings_.peak_nits,hdr_settings_.ui_nits)); metadata.minLuminance=0.f;
+            metadata.maxContentLightLevel=metadata.maxLuminance; metadata.maxFrameAverageLightLevel=0.f;
+            set_metadata(device,1,&swapchain_,&metadata);
+        }
+    }
     vk_check(present_.images(device, swapchain_, &count, nullptr), "swapchain image count");
     std::vector<VkImage> swapchain_images(count); vk_check(present_.images(device, swapchain_, &count, swapchain_images.data()), "swapchain images");
     images_.resize(count);
@@ -2193,9 +2223,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     }
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO}; rendering.renderArea = {{0, 0}, target.extent}; rendering.layerCount = 1; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachments = colors;
     const VkImageLayout depth_before=!initialized ? VK_IMAGE_LAYOUT_UNDEFINED : scene ? scene_depth_layout_ : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    // The previous pass's depth work is all this one waits for when nothing else touches the depth image: no effect, upscaler, G-buffer or RT reads it and it is already a depth
-    // attachment (the usual packet-to-packet case). Anything else keeps the full barrier. The full one drains the whole GPU between the ~23 packets of a frame.
-    const bool depth_only_wait=initialized && depth_before==VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL && upscaler_kind_==UpscalerKind::off && !motion_outputs_ && !rt_records && !effects_need_gbuffer() && !effects_need_lights();
+    // Effects/upscalers move sampled depth to GENERAL; while it stays an attachment, only earlier depth tests touch it.
+    const bool depth_only_wait=initialized && depth_before==VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     barrier(slot.command,target.depth,depth_before,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             depth_only_wait ? depth_stages : initialized ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_2_NONE,
             depth_only_wait ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : initialized ? VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
@@ -2280,6 +2309,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             push.viewport[0]=draw_viewport.x; push.viewport[1]=draw_viewport.y; push.viewport[2]=draw_viewport.width; push.viewport[3]=draw_viewport.height;
             push.shift[0]=late_shift[0]; push.shift[1]=late_shift[1];
             if (effects_.per_pixel_lighting && motion_outputs_) push.effects|=kEffectPerPixelLighting;   // only lit draws change: nothing else has a lighting channel on
+            push.effects|=uint32_t(draw.ui_dim)<<kEffectUiDimShift;
             if (scene) {
                 push.motion=draw_motion[d];
                 if (summary.draws[d].perspective) { push.jitter[0]=jitter_[0]; push.jitter[1]=jitter_[1]; }   // post-style quads stay unjittered
@@ -2423,6 +2453,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (hudless_wanted && !hudless_taken_ && packet.present) take_hudless();
     const PassTarget& active=scene_only ? scene_target : efb_target;
     if(copy_target) {
+        const auto& source=packet.texture_copy->source;   // guest EFB pixels (640x480): x, y, width, height
+        ++copy_stats_.count; copy_stats_.pixels+=uint64_t(source[2])*source[3]; copy_stats_.large+=uint64_t(source[2])*source[3]*10>=uint64_t(640)*480*9; copy_stats_.clearing+=packet.clear_after_copy;
         pass_timer_.begin(slot.command,timed_slot,GpuPass::texture_copy);
         record_texture_copy(slot.command,active.color,active.extent,packet.texture_copy->source,*copy_target,VK_IMAGE_LAYOUT_UNDEFINED);
         pass_timer_.end(slot.command,timed_slot,GpuPass::texture_copy);

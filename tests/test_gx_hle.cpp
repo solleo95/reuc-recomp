@@ -278,7 +278,12 @@ int main() {
         ctx.r[3]=9; ctx.r[4]=0x80003000; ctx.r[5]=0x0102030C; hle_GXSetArray(ctx);
         ctx.r[3]=0x90; ctx.r[4]=0; ctx.r[5]=3; hle_GXBegin(ctx);
         // Mixed FIFO widths must retain the same big-endian primitive payload.
-        for (uint32_t i=0;i<12;++i) { uc::gx_fifo_write(2,i>>16); uc::gx_fifo_write(1,i>>8); uc::gx_fifo_write(1,i); }
+        for (uint32_t i=0;i<12;++i) {
+            const uint32_t word=0x3F123450u+i;
+            if(i%3==0) { uc::gx_fifo_write(2,0xABCD0000u|(word>>16)); uc::gx_fifo_write(1,word>>8); uc::gx_fifo_write(1,word); }
+            else if(i%3==1) { uc::gx_fifo_write(1,word>>24); uc::gx_fifo_write(2,0xABCD0000u|(word>>8)); uc::gx_fifo_write(1,word); }
+            else uc::gx_fifo_write(4,word);
+        }
         ppc::wr32(ctx,0x80001014,0x1234); ppc::wr32(ctx,0x80001008,23);
         hle_GXEndDisplayList(ctx);
         CHECK(ctx.r[3]==96 && ppc::rd8(ctx,0x800015F8)==0);
@@ -286,7 +291,8 @@ int main() {
         CHECK(ppc::rd8(ctx,0x80002000)==0x61 && ppc::rd32(ctx,0x80002001)==0x410004A0);
         CHECK(ppc::rd32(ctx,0x8000200D)==0x0102030C);
         CHECK(ppc::rd8(ctx,0x80002011)==0x90 && ppc::rd16(ctx,0x80002012)==3);
-        CHECK(ppc::rd32(ctx,0x80002014)==0 && ppc::rd32(ctx,0x80002040)==11 && ppc::rd32(ctx,0x8000205C)==0);
+        CHECK(ppc::rd32(ctx,0x80002014)==0x3F123450u && ppc::rd32(ctx,0x80002018)==0x3F123451u);
+        CHECK(ppc::rd32(ctx,0x80002040)==0x3F12345Bu && ppc::rd32(ctx,0x8000205C)==0);
         CHECK(uc::gx_stats().draws==0); // recording resource data submits no geometry
         rejects(gx::ErrorCode::sequence,[&]{hle_GXEndDisplayList(ctx);});
         // A primitive without vertices (a quad batch with nothing to draw) is legal and draws nothing, live and recorded.

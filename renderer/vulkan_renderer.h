@@ -148,6 +148,8 @@ public:
     RtScene::Stats rt_stats() const { return rt_.stats(); }   // the acceleration structures of the latest frame
     RtScene::CacheStats rt_cache_stats() const { return rt_.cache_stats(); }   // the cached BLASes of static meshes
     uint64_t rt_buffer_growths() const { return rt_.buffer_growths(); }
+    struct CopyStats { uint64_t count=0, large=0, clearing=0, pixels=0; };   // EFB texture copies since the last take: how many, how many cover >= 90% of the 640x480 EFB, how many clear after, summed guest pixels
+    CopyStats take_copy_stats() { const auto stats=copy_stats_; copy_stats_={}; return stats; }
     double take_pass_total_ms(GpuPass pass) { return pass_timer_.take_total_ms(pass); }   // summed GPU time of a pass over the submissions retired since the last call (frame log)
     RenderPixels capture_scene();    // tests/tools: the internal-resolution scene color of the last scene (waits for the GPU)
     std::vector<uint64_t> poll_completions();
@@ -367,6 +369,7 @@ private:
     bool force_gbuffer_=false, force_scene_targets_=false, force_lights_=false;
     OcclusionPass occlusion_;
     MotionBlurPass motion_blur_;
+    CopyStats copy_stats_;
     ShadowMap shadow_map_;
     VkShaderModule shadow_vertex_module_=VK_NULL_HANDLE;
     VkPipeline shadow_pipeline_=VK_NULL_HANDLE;

@@ -91,6 +91,8 @@ State zone_size_state(const Options& o,const Env&) { return o.reload_zone==Reloa
 State sharpness_state(const Options& o,const Env&) { return State{true,o.sharpening && o.upscaler!=UpscalerKind::off,nullptr}; }
 State bloom_strength_state(const Options& o,const Env&) { return State{true,o.bloom,nullptr}; }
 State hdr_slider_state(const Options& o,const Env&) { return State{true,o.hdr.enabled,nullptr}; }
+State hold_button_state(const Options& o,const Env&) { return o.gamepad.gyro.mode==GyroMode::hold ? State{} : State{false,false,nullptr}; }   // the button that holds the gyro on: only for "while a button is held"
+State gyro_state(const Options& o,const Env&) { return o.gamepad.gyro.mode==GyroMode::off ? State{false,false,nullptr} : State{}; }   // the gyro's sensitivity and inversion mean nothing while the gyro is off
 State tail_state(const Options& o,const Env&) { return State{true,!o.reticle.hide_tail,nullptr}; }
 State dot_state(const Options& o,const Env&) { return State{true,!o.reticle.hide_dot,nullptr}; }
 State upscaling_state(const Options&,const Env& env) { return effects_blocked(env) ? State{true,false,"effects_unavailable"} : State{}; }
@@ -129,10 +131,11 @@ const std::vector<Item>& table() {
         t.push_back(choice("hud_position","hud_position",V,DM|DL,
             [](const Options&,const Env&,const Text& tr) { return std::vector<std::string>{tr("hud_auto"),tr("hud_center"),tr("hud_edges")}; },
             [](const Options& o,const Env&) { return int(o.hud_position); },[](Options& o,const Env&,int i) { o.hud_position=HudPosition(i); },nullptr,"hud_hint"));
-        t.push_back(toggle("hdr","hdr",V,DM|DL,[](const Options& o) { return o.hdr.enabled; },[](Options& o,bool v) { o.hdr.enabled=v; },nullptr,"hdr_hint"));
+        t.push_back(toggle("hdr","hdr",V,kEverywhere,[](const Options& o) { return o.hdr.enabled; },[](Options& o,bool v) { o.hdr.enabled=v; },nullptr,
+            kHdrDefault ? nullptr : "hdr_hint"));   // the hint names Windows' HDR switch: no hint where HDR is on by default (Linux)
         t.push_back(slider("hdr_peak","hdr_peak",V,DM|DL,[](const Options& o) { return int(o.hdr.peak_nits); },[](Options& o,int v) { o.hdr.peak_nits=uint32_t(v); },int(kHdrPeakMin),int(kHdrPeakMax),10,"%d nits",hdr_slider_state));
         t.push_back(slider("hdr_paper_white","hdr_paper_white",V,DM|DL,[](const Options& o) { return int(o.hdr.paper_white_nits); },[](Options& o,int v) { o.hdr.paper_white_nits=uint32_t(v); },int(kHdrWhiteMin),int(kHdrWhiteMax),5,"%d nits",hdr_slider_state));
-        t.push_back(slider("hdr_ui","hdr_ui",V,DM|DL,[](const Options& o) { return int(o.hdr.ui_nits); },[](Options& o,int v) { o.hdr.ui_nits=uint32_t(v); },int(kHdrWhiteMin),int(kHdrWhiteMax),5,"%d nits",hdr_slider_state));
+        t.push_back(slider("hdr_ui","hdr_ui",V,kEverywhere,[](const Options& o) { return int(o.hdr.ui_nits); },[](Options& o,int v) { o.hdr.ui_nits=uint32_t(v); },int(kHdrWhiteMin),int(kHdrWhiteMax),5,"%d nits",hdr_slider_state));
         // Effects
         t.push_back(choice("anisotropy","anisotropy",E,kEverywhere,anisotropy_labels,
             [](const Options& o,const Env& e) { const auto levels=anisotropy_levels(o,e); const auto at=std::find(levels.begin(),levels.end(),o.effects.anisotropy); return at==levels.end() ? -1 : int(at-levels.begin()); },
@@ -164,10 +167,13 @@ const std::vector<Item>& table() {
         t.push_back(choice("gyro_mode","gyro_mode",P,KM|KL,
             [](const Options&,const Env&,const Text& tr) { return std::vector<std::string>{tr("off"),tr("gyro_always"),tr("gyro_hold")}; },
             [](const Options& o,const Env&) { return int(o.gamepad.gyro.mode); },[](Options& o,const Env&,int i) { o.gamepad.gyro.mode=GyroMode(i); }));
-        t.push_back(slider("gyro_sens_x","gyro_sens_x",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_x); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_x=float(v)/100; },10,500,5,"%d%%"));
-        t.push_back(slider("gyro_sens_y","gyro_sens_y",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_y); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_y=float(v)/100; },10,500,5,"%d%%"));
-        t.push_back(toggle("gyro_invert_x","gyro_invert_x",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_x; },[](Options& o,bool v) { o.gamepad.gyro.invert_x=v; }));
-        t.push_back(toggle("gyro_invert_y","gyro_invert_y",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_y; },[](Options& o,bool v) { o.gamepad.gyro.invert_y=v; }));
+        {   // chosen by pressing the button (the Deck menus draw and capture it themselves: it is a custom row)
+            Item hold=custom("gyro_hold_button","gyro_hold_button",P,KM|KL); hold.state=hold_button_state; t.push_back(hold);
+        }
+        t.push_back(slider("gyro_sens_x","gyro_sens_x",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_x); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_x=float(v)/100; },10,500,5,"%d%%",gyro_state));
+        t.push_back(slider("gyro_sens_y","gyro_sens_y",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_y); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_y=float(v)/100; },10,500,5,"%d%%",gyro_state));
+        t.push_back(toggle("gyro_invert_x","gyro_invert_x",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_x; },[](Options& o,bool v) { o.gamepad.gyro.invert_x=v; },gyro_state));
+        t.push_back(toggle("gyro_invert_y","gyro_invert_y",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_y; },[](Options& o,bool v) { o.gamepad.gyro.invert_y=v; },gyro_state));
         t.push_back(slider("aim_speed","aim_speed",P,KM|KL,[](const Options& o) { return percent(o.gamepad.aim.speed); },[](Options& o,int v) { o.gamepad.aim.speed=float(v)/100; },20,400,10,"%d%%"));
         t.push_back(slider("aim_dead_zone","deck_aim_dead_zone",P,KM|KL,[](const Options& o) { return percent(o.gamepad.aim.dead_zone); },[](Options& o,int v) { o.gamepad.aim.dead_zone=float(v)/100; },0,50,1,"%d%%"));
         t.push_back(slider("camera_dead_zone","deck_camera_dead_zone",P,KM|KL,[](const Options& o) { return percent(o.gamepad.camera_dead_zone); },[](Options& o,int v) { o.gamepad.camera_dead_zone=float(v)/100; },0,50,1,"%d%%"));
@@ -178,8 +184,8 @@ const std::vector<Item>& table() {
             [](const Options& o,const Env&) { return int(o.reload_zone); },[](Options& o,const Env&,int i) { o.reload_zone=ReloadZone(i); }));
         t.push_back(slider("reload_zone_size","reload_zone_size",P,kEverywhere,[](const Options& o) { return int(o.reload_zone_size); },[](Options& o,int v) { o.reload_zone_size=uint32_t(v); },int(kReloadZoneSizeMin),int(kReloadZoneSizeMax),1,"%d%%",zone_size_state));
         // Deck pages the menu draws itself: the gamepad's buttons and the mod manager
-        t.push_back(custom("pad_bindings","bindings",Page::buttons,KM));
-        // Reticle: the in-game menus (the launcher has no reticle page)
+        t.push_back(custom("pad_bindings","bindings",Page::buttons,KM|KL));
+        // Reticle: the in-game menus (the launchers have no reticle page)
         t.push_back(custom("reticle_preview","reticle_preview",R,DM));
         t.push_back(slider("crosshair_scale","crosshair_scale",R,DM|KM,[](const Options& o) { return int(o.crosshair_scale); },[](Options& o,int v) { o.crosshair_scale=uint32_t(v); },0,100,5,"%d%%"));
         t.push_back(toggle("hide_tail","hide_tail",R,DM|KM,[](const Options& o) { return o.reticle.hide_tail; },[](Options& o,bool v) { o.reticle.hide_tail=v; }));

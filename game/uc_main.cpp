@@ -331,10 +331,20 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if(controlled && (options.headless || options.save_root.empty())) throw std::invalid_argument("--test-control and --test-server require a renderer and an isolated --save-root");
     if(controlled && options.window_mode!=uc::WindowMode::windowed) throw std::invalid_argument("process-local diagnostics require Windowed mode to preserve desktop focus");
     const auto& game = options.game;
+    bool fixed_hdr_levels=false;   // Game Mode: peak and paper white are the Deck's, not the config's (the menu sends its copy of them with every HDR change)
 #ifdef _WIN32
     if(options.no_vulkan_layers && !SetEnvironmentVariableA("VK_LOADER_LAYERS_DISABLE","~implicit~")) throw std::runtime_error("cannot disable implicit Vulkan layers");   // read by the loader at vkCreateInstance
 #else
     if(options.no_vulkan_layers && setenv("VK_LOADER_LAYERS_DISABLE","~implicit~",1)) throw std::runtime_error("cannot disable implicit Vulkan layers");
+    // Game Mode: gamescope's own Vulkan layer is what offers an HDR10 swapchain (Proton sets the same variables for HDR games); it stays on when the other implicit layers are off.
+    // Game Mode: HDR is on by default (the checkbox turns it off) and its peak and paper white are fixed here for the Deck OLED, whatever config.json holds. The panel holds 600 nits
+    // over the whole screen but 1000 only in small areas (its limiter dims a large bright area): 300 nits paper white keeps the mid-tones as bright as SDR at a normal brightness, and a 400 nits
+    // peak keeps white areas and the bloom's glow (which the HDR encode adds up to the peak) from blowing out; 600 did.
+    if(std::getenv("GAMESCOPE_WAYLAND_DISPLAY")) {
+        setenv("ENABLE_GAMESCOPE_WSI","1",1); setenv("ENABLE_HDR_WSI","1",1); setenv("VK_LOADER_LAYERS_ENABLE","VK_LAYER_FROG_gamescope_wsi*",1);
+        options.hdr.peak_nits=400; options.hdr.paper_white_nits=300;   // the interface brightness (ui_nits) stays the player's: a slider
+        fixed_hdr_levels=true;
+    }
 #endif
     uc::intro_init(options.skip_intro);
     // Network play steps at the session tick whatever the frame limit says; the limit then only caps presents.
@@ -990,7 +1000,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.pointer=[&](uc::PointerMode mode,uint32_t smoothing) { options.pointer=mode; options.pointer_smoothing=smoothing; host_input.pointer(mode); input.pointer_smoothing(smoothing/100.f); capture_pointer(!host_keys.menu_open); };   // the in-game menu is open while it changes this, but the harness changes it during play: the cursor changes hands now
         targets.reload_zone=[&](uc::ReloadZone zone,uint32_t size) { options.reload_zone=zone; options.reload_zone_size=size; input.reload_zone(zone,size/100.f); };
         targets.hud_position=[&](uc::HudPosition position) { options.hud_position=position; view_for_output(view_width,view_height); };
-        targets.hdr=[&](const uc::HdrSettings& hdr) { options.hdr=hdr; renderer.set_hdr(hdr); };
+        targets.hdr=[&](uc::HdrSettings hdr) {
+            if(fixed_hdr_levels) { hdr.peak_nits=options.hdr.peak_nits; hdr.paper_white_nits=options.hdr.paper_white_nits; }
+            options.hdr=hdr; renderer.set_hdr(hdr);
+        };
         targets.effects=[&](const uc::GraphicsEffects& effects) { options.effects=effects; renderer.set_effects(effects); };
         targets.dlss5=[&](const uc::Dlss5Settings& settings) { options.dlss5=settings; renderer.set_dlss5(settings); };
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
@@ -1325,6 +1338,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 last_profile_time=now; last_profile_retrace=profile_retrace;
                 std::fprintf(stderr,"[gpu] passes: upscale %.2f ms, smaa %.2f ms, occlusion %.2f ms, shadow %.2f ms, motion blur %.2f ms (%llu runs), rt_as (last packet) %.2f ms, rt_shadows %.2f ms, bloom %.2f ms\n",renderer.pass_ms(uc::GpuPass::upscale),renderer.pass_ms(uc::GpuPass::smaa),renderer.pass_ms(uc::GpuPass::occlusion),renderer.pass_ms(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::motion_blur),(unsigned long long)renderer.pass_runs(uc::GpuPass::shadow),renderer.pass_ms(uc::GpuPass::rt_as),renderer.pass_ms(uc::GpuPass::rt_shadows),renderer.pass_ms(uc::GpuPass::bloom));
                 std::fprintf(stderr,"[gpu-sum] per second: scene draws %.1f ms, efb draws %.1f ms, texture copies %.1f ms, bloom %.1f ms, upscale %.1f ms\n",renderer.take_pass_total_ms(uc::GpuPass::scene_draws),renderer.take_pass_total_ms(uc::GpuPass::efb_draws),renderer.take_pass_total_ms(uc::GpuPass::texture_copy),renderer.take_pass_total_ms(uc::GpuPass::bloom),renderer.take_pass_total_ms(uc::GpuPass::upscale));
+                const auto copies=renderer.take_copy_stats();
+                if(renderer.copy_stats_available()) std::fprintf(stderr,"[efb-copies] per second: %llu copies, %llu cover 90%% of the EFB, %llu clear it after, %.2f EFB areas copied\n",(unsigned long long)copies.count,(unsigned long long)copies.large,(unsigned long long)copies.clearing,double(copies.pixels)/(640.0*480.0));
                 std::fprintf(stderr,"[perf] presents %llu render %.2f ms texture creates %llu CPU decodes %llu late-aim draws %llu cache evictions %llu cache MB %llu\n",(unsigned long long)(presents-last_profile_presents),render_ns/1e6,(unsigned long long)(textures-last_profile_textures),(unsigned long long)(decodes-last_profile_decodes),(unsigned long long)renderer.late_aim_draws(),(unsigned long long)(uc::gx_stats().texture_evictions-last_profile_evictions),(unsigned long long)(uc::gx_stats().texture_resident>>20));
                 last_profile_presents=presents; last_profile_textures=textures; last_profile_decodes=decodes; last_profile_evictions=uc::gx_stats().texture_evictions; render_ns=0;
                 if(!present_intervals.empty()) {
@@ -1433,7 +1448,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
 #ifdef _WIN32
 int wmain(int argc, wchar_t** argv) {
 #else
+namespace uc { void text_to_huge_pages(); }   // huge_text_posix.cpp
 int main(int argc, char** argv) {   // Linux arguments are bytes already (UTF-8)
+    uc::text_to_huge_pages();   // first, while this is the only thread
 #endif
     uc::Options startup_options;
     std::optional<uc::DiagnosticLog> diagnostics;

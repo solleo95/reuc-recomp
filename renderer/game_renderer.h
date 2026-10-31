@@ -94,6 +94,8 @@ public:
         native_gpu_window_ns_=total; return double(elapsed)/1e6;
     }
     double take_pass_total_ms(GpuPass pass) {return vulkan_ ? vulkan_->take_pass_total_ms(pass) : 0;}
+    bool copy_stats_available() const {return vulkan_!=nullptr;}   // only the Vulkan renderer counts its EFB copies
+    VulkanRenderer::CopyStats take_copy_stats() {return vulkan_ ? vulkan_->take_copy_stats() : VulkanRenderer::CopyStats{};}
     double pass_ms(GpuPass pass) const {return vulkan_ ? vulkan_->pass_ms(pass) : 0;}
     uint64_t pass_runs(GpuPass pass) const {return vulkan_ ? vulkan_->pass_runs(pass) : 0;}    RtScene::Stats rt_stats() const {return vulkan_ ? vulkan_->rt_stats() : native_->rt_stats();}
     void shutdown() {if(vulkan_)vulkan_->shutdown();else if(initialized_)native_->shutdown();initialized_=false;}

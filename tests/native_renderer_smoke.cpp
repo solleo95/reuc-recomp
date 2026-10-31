@@ -399,6 +399,7 @@ int main(int argc,char** argv) {
         std::printf("%s: motion blur changed %zu edge pixels\n",argv[1],blur_pixels);CHECK(blur_pixels>=8);
         moving_frame(.125f);CHECK(renderer->capture(serial).rgba==blur_off.rgba);
         uc::save_png(blur_on,std::filesystem::path(SDL_GetBasePath())/(std::string("blur-")+argv[1]+".png"));
+        blurred(uc::EffectLevel::off);CHECK(blurred(uc::EffectLevel::high).rgba==blur_on.rgba);   // off and on again: no stale effect image or half-sized copy
         controls.effects={};renderer->set_controls(controls);
         mesh_surfaces=true;
         const auto shadow_base=occluded(uc::EffectLevel::off,false,true);

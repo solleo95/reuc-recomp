@@ -4,8 +4,10 @@
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 namespace uc::launcher {
 constexpr uint64_t unpacked_bytes=4ull<<30;   // shortcut: the NTSC-U disc unpacks to 3.8 GiB; other sizes are not needed because other discs are refused
 enum class UnpackStatus {running,done,failed,cancelled};
@@ -29,14 +31,22 @@ private:
     void run();
     bool stopped();
     // Runs Wit with a UTF-8 locale (without it Wit cannot open non-ASCII paths) and returns its exit code; `output` gets everything it prints.
+#ifdef _WIN32
     int wit(const std::wstring& arguments,std::string& output,bool track_progress);
+#else
+    int wit(const std::vector<std::string>& arguments,std::string& output,bool track_progress);   // posix_spawn in its own process group, so a cancel stops what Wit started too
+#endif
     std::filesystem::path root_,image_,wit_;
     uint64_t required_bytes_;
     std::atomic<UnpackStatus> status_{UnpackStatus::running};
     std::atomic<UnpackError> error_{UnpackError::none};
     std::atomic<int> percent_{0};
     std::mutex process_lock_;
+#ifdef _WIN32
     void* process_=nullptr;
+#else
+    long process_=0;   // the process group leader's pid while Wit runs
+#endif
     bool cancelled_=false;
     std::jthread worker_;
 };

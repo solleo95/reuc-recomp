@@ -1,4 +1,5 @@
 #include "motion_blur_pass.h"
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -8,13 +9,22 @@ namespace uc {
 namespace {
 void check(VkResult result, const char* what) { if (result != VK_SUCCESS) throw std::runtime_error(std::string("motion blur: ") + what + " failed: VkResult " + std::to_string(result)); }
 // shaders/motion_blur.slang Params (push constants)
-struct Params { uint32_t output_size[2], render_size[2]; float shutter; uint32_t samples, tile_size, reserved; };
+struct Params { uint32_t output_size[2], render_size[2]; float shutter; uint32_t samples, tile_size, full_samples; };
 static_assert(sizeof(Params)==32);
 constexpr uint32_t kTileSize=16;
 void barrier_all(VkCommandBuffer command) {
     VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     barrier.srcStageMask=barrier.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     barrier.srcAccessMask=barrier.dstAccessMask=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+    VkDependencyInfo info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; info.memoryBarrierCount=1; info.pMemoryBarriers=&barrier;
+    vkCmdPipelineBarrier2(command,&info);
+}
+// Between the copy / the tile pass and the blur pass: only those writes must reach the blur's reads.
+void barrier_copy_and_tiles(VkCommandBuffer command) {
+    VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask=VK_PIPELINE_STAGE_2_COPY_BIT|VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; barrier.dstStageMask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     VkDependencyInfo info{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; info.memoryBarrierCount=1; info.pMemoryBarriers=&barrier;
     vkCmdPipelineBarrier2(command,&info);
 }
@@ -114,18 +124,19 @@ void MotionBlurPass::record(const MotionBlurInputs& in) {
     if (!source_.initialized) { image_barrier(command,source_.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL); source_.initialized=true; }
     if (!tiles_.initialized) { image_barrier(command,tiles_.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL); tiles_.initialized=true; }
     barrier_all(command);   // the upscaler's writes
-    VkImageCopy copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.extent={full.width,full.height,1};
+    // The gather reads the colour only inside the scene region, so only that part is copied; the tile pass does not need the copy and runs beside it.
+    VkImageCopy copy{}; copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+    copy.extent={std::min(in.output_size.width,full.width),std::min(in.output_size.height,full.height),1};
     vkCmdCopyImage(command,in.color.image,VK_IMAGE_LAYOUT_GENERAL,source_.image,VK_IMAGE_LAYOUT_GENERAL,1,&copy);
-    barrier_all(command);
     Params params{};
     params.output_size[0]=in.output_size.width; params.output_size[1]=in.output_size.height;
     params.render_size[0]=in.render_size.width; params.render_size[1]=in.render_size.height;
-    params.shutter=preset.shutter; params.samples=preset.samples; params.tile_size=kTileSize;
+    params.shutter=preset.shutter; params.samples=preset.samples; params.tile_size=kTileSize; params.full_samples=blur_full_samples() ? 1 : 0;
     vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set_,0,nullptr);
     vkCmdPushConstants(command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
     vkCmdDispatch(command,(tiles.width+7)/8,(tiles.height+7)/8,1);
-    barrier_all(command);
+    barrier_copy_and_tiles(command);   // the blur reads the copy and the tile maxima
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
     vkCmdDispatch(command,(in.output_size.width+7)/8,(in.output_size.height+7)/8,1);
     barrier_all(command);

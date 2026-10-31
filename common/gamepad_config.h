@@ -1,6 +1,8 @@
 #pragma once
 #include "gamepad_math.h"
 #include "input_config.h"
+#include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 namespace uc {
@@ -19,6 +21,9 @@ struct GamepadSettings {
     Bindings bindings=default_pad_bindings();
     bool operator==(const GamepadSettings&) const=default;
 };
+// The inputs that can hold the gyro on (GyroMode::hold): a trigger, a shoulder button or a stick button. The Deck menus ask the player to press one and take it only if it is here.
+inline constexpr std::array<PhysicalInput,6> kGyroHoldChoices{{{PhysicalKind::pad_axis,9},{PhysicalKind::pad_axis,11},{PhysicalKind::pad_button,9},{PhysicalKind::pad_button,10},{PhysicalKind::pad_button,7},{PhysicalKind::pad_button,8}}};
+inline bool gyro_hold_allowed(PhysicalInput input) { return std::find(kGyroHoldChoices.begin(),kGyroHoldChoices.end(),input)!=kGyroHoldChoices.end(); }
 std::optional<std::string> validate_gamepad(const GamepadSettings&);   // ranges, distinct stick roles, a valid gamepad table
 // No "gamepad" object gives the defaults; a malformed or out-of-range one throws std::invalid_argument("config: ..."). Unknown keys are refused.
 GamepadSettings gamepad_from_config(const ConfigDocument&);

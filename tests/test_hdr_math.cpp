@@ -27,6 +27,12 @@ int main() {
     CHECK(std::abs(pq_encode(10000)-1)<1e-5f);
     CHECK(std::abs(pq_encode(100)-.5081f)<1e-3f);
     CHECK(pq_encode(-5)==pq_encode(0));
+    // Interface brightness of the game's own interface: none while HDR is off or the interface is not dimmer than paper white; else (ui/paper)^(1/2.2) of 255.
+    CHECK(hdr_ui_dim(HdrSettings{false,1000,300,100})==0 && hdr_ui_dim(HdrSettings{true,1000,300,300})==0 && hdr_ui_dim(HdrSettings{true,1000,300,500})==0);
+    CHECK(hdr_ui_dim(HdrSettings{true,1000,300,150})==uint8_t(std::lround(255*std::pow(.5,1/2.2))));   // 186
+    CHECK(hdr_ui_dim(HdrSettings{true,1000,500,80})>=1 && hdr_ui_dim(HdrSettings{true,1000,500,499})==254);
+    publish_hdr_ui_dim(HdrSettings{true,1000,300,150},true); CHECK(g_hdr_ui_dim.load()==186);
+    publish_hdr_ui_dim(HdrSettings{true,1000,300,150},false); CHECK(g_hdr_ui_dim.load()==0);
     // Ranges the config and the sliders share.
     CHECK(valid_hdr_settings(HdrSettings{}));
     CHECK(!valid_hdr_settings(HdrSettings{true,0,200,200}) && !valid_hdr_settings(HdrSettings{true,2001,200,200}));

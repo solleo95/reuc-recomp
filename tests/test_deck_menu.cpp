@@ -113,6 +113,23 @@ static void exercise(uc::DeckMenu& menu,uc::LiveSettings& live,const std::functi
         CHECK(live.options().gamepad.bindings==uc::default_pad_bindings());
         tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     }
+    {   // "while a button is held": a row under the mode waits for the button; only a trigger, a shoulder or a stick button is taken
+        tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Effects, then Controls
+        for(int i=0;i<3 && live.options().gamepad.gyro.mode!=uc::GyroMode::hold;++i) { tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); menu.commit(); }   // the mode row is the first
+        CHECK(live.options().gamepad.gyro.mode==uc::GyroMode::hold && !live.error());
+        capture("gyro-hold");
+        tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN);                  // the new row
+        tap(SDL_GAMEPAD_BUTTON_SOUTH);                      // A: waits for a button
+        capture("gyro-hold-capture");
+        const auto before=live.options().gamepad.gyro_hold;
+        menu.pad_capture({uc::PhysicalKind::pad_button,0},true);   // a face button cannot hold the gyro: ignored, the row keeps waiting
+        auto face=pad_button(SDL_GAMEPAD_BUTTON_SOUTH,true); CHECK(menu.event(face)); frame(); frame(); menu.commit();
+        CHECK(live.options().gamepad.gyro_hold==before);
+        menu.pad_capture({uc::PhysicalKind::pad_axis,11},true);    // the right trigger
+        auto trigger=pad_axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,30000); CHECK(menu.event(trigger)); frame(); frame(); menu.commit();
+        CHECK(live.options().gamepad.gyro_hold==(uc::PhysicalInput{uc::PhysicalKind::pad_axis,11}) && !live.error());
+        tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);   // back to the first page
+    }
     {   // the Mods page exists only with a mod platform; its manager is drawn in a window of its own
         struct Fake : uc::mods::ModMenu { int drawn=0; std::string manager_title() override { return "Mods"; } void manager_tab(float) override { ++drawn; ImGui::TextUnformatted("fake mod manager"); } void commit() override {} } fake;
         CHECK(!ImGui::FindWindowByName("##deck_mods"));

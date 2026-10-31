@@ -16,6 +16,26 @@
 #include "vulkan_compat.h"
 using namespace std::chrono_literals;
 
+static thread_local VkImage copied_image=VK_NULL_HANDLE;
+static thread_local uint32_t copied_source_levels=0;
+static thread_local uint32_t attachment_depth_waits=0,full_attachment_depth_waits=0;
+VKAPI_ATTR void VKAPI_CALL vkCmdBlitImage(VkCommandBuffer command,VkImage source,VkImageLayout source_layout,VkImage destination,VkImageLayout destination_layout,uint32_t count,const VkImageBlit* regions,VkFilter filter) {
+    if(source!=destination) { copied_image=destination; copied_source_levels=0; }
+    vulkan_export<PFN_vkCmdBlitImage>("vkCmdBlitImage")(command,source,source_layout,destination,destination_layout,count,regions,filter);
+}
+VKAPI_ATTR void VKAPI_CALL vkCmdPipelineBarrier2(VkCommandBuffer command,const VkDependencyInfo* info) {
+    for(uint32_t i=0;i<info->imageMemoryBarrierCount;++i) {
+        const auto& image=info->pImageMemoryBarriers[i];
+        if(image.image==copied_image && image.oldLayout==VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && image.newLayout==VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            copied_source_levels+=image.subresourceRange.levelCount;
+        if(image.oldLayout==VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL && image.newLayout==VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
+            ++attachment_depth_waits;
+            full_attachment_depth_waits+=(image.srcStageMask&VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)!=0;
+        }
+    }
+    vulkan_export<PFN_vkCmdPipelineBarrier2>("vkCmdPipelineBarrier2")(command,info);
+}
+
 static std::filesystem::path executable_dir() {
     std::vector<wchar_t> path(32768);
     DWORD size = GetModuleFileNameW(nullptr, path.data(), DWORD(path.size()));
@@ -182,6 +202,7 @@ int main(int argc, char** argv) {
             }
         }
         CHECK(renderer.presentation_count()==19);
+        CHECK(attachment_depth_waits>0 && full_attachment_depth_waits==0);
         CHECK(renderer.descriptor_pool_creations()<=descriptor_creations+16); // one pool per frame slot (VulkanRenderer::kFrameSlots)
         auto submit=[&](gx::FramePacket& work,uc::VulkanRenderer* selected=nullptr,bool display=true) {
             auto& target=selected ? *selected : renderer;
@@ -315,6 +336,7 @@ int main(int argc, char** argv) {
         quad.vertices[2].position={1,1,0}; quad.vertices[3].position={-1,1,0};
         work.draws[0]=quad;
         work.texture_copy=gx::TextureCopy{{0,0,640,480},old_copy}; submit(work);
+        CHECK(copied_image!=VK_NULL_HANDLE && copied_source_levels==2); // Only the first two mips feed another blit.
         work.serial=57; work.draws.clear(); work.clear_color={0,0,255,255};
         work.texture_copy=gx::TextureCopy{{0,0,640,480},new_copy}; submit(work);
         work=packet; work.serial=58; work.draws[0].texture=old_copy;
@@ -371,6 +393,7 @@ int main(int argc, char** argv) {
         auto partial_copy=std::make_shared<gx::TexturePixels>(); partial_copy->gpu_only=true; partial_copy->levels={{4,4,{}}};
         work=packet; work.serial=76; work.present=false; work.draws[0]=quad; work.clear_color={0,255,0,255};
         work.texture_copy=gx::TextureCopy{{0,0,320,480},partial_copy}; submit(work);
+        CHECK(copied_image!=VK_NULL_HANDLE && copied_source_levels==0); // A one-level copy feeds only the shader.
         auto intermediate=renderer.capture(76,true);
         const auto efb_left=(size_t(intermediate.height/2)*intermediate.width+intermediate.width/4)*4;
         const auto efb_right=(size_t(intermediate.height/2)*intermediate.width+intermediate.width*3/4)*4;

@@ -25,8 +25,12 @@ void unmap_all(uint8_t* base) { munmap(base, kSpan); }
 
 bool map_all(uint8_t* base, const int (&files)[3]) {
     for (unsigned v = 0; v < 3; ++v)
-        for (unsigned i = 0; i < kViews[v].count; ++i)
+        for (unsigned i = 0; i < kViews[v].count; ++i) {
             if (mmap(base + kViews[v].at[i], kViews[v].size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, files[v], 0) == MAP_FAILED) return false;
+            // 2 MB pages for the RAM files (shmem THP "advise" mode, before the first touch): the translated code reaches all of MEM1/MEM2, far more than
+            // the TLB covers with 4 KB pages. Only a hint: without THP the kernel keeps 4 KB pages.
+            madvise(base + kViews[v].at[i], kViews[v].size, MADV_HUGEPAGE);
+        }
     return true;
 }
 
@@ -47,10 +51,15 @@ void guest_mem_init() {
     // Reserve the whole range first (no access, no commit), then map the views over it; another thread may take part of it in between, so try again.
     int error = 0;
     for (int attempt = 0; attempt < 16 && !g_base; ++attempt) {
-        void* reserved = mmap(nullptr, kSpan, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (reserved == MAP_FAILED) { error = errno; break; }
-        if (map_all(static_cast<uint8_t*>(reserved), files)) g_base = static_cast<uint8_t*>(reserved);
-        else { error = errno; unmap_all(static_cast<uint8_t*>(reserved)); }
+        // 2 MB more than the span, trimmed to a 2 MB aligned base: a huge page needs the same alignment in the file and in the address space.
+        constexpr uint64_t kHuge = 0x200000;
+        void* raw = mmap(nullptr, kSpan + kHuge, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (raw == MAP_FAILED) { error = errno; break; }
+        auto* reserved = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(raw) + kHuge - 1) & ~uintptr_t(kHuge - 1));
+        if (reserved != raw) munmap(raw, size_t(reserved - static_cast<uint8_t*>(raw)));
+        munmap(reserved + kSpan, size_t(static_cast<uint8_t*>(raw) + kSpan + kHuge - (reserved + kSpan)));
+        if (map_all(reserved, files)) g_base = reserved;
+        else { error = errno; unmap_all(reserved); }
     }
     for (int file : files) close(file);   // the mappings keep the memory alive
     if (!g_base) give_up("4 GiB range", error);

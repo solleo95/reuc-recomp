@@ -1,8 +1,18 @@
-add_library(uc_update_core STATIC release.cpp files.cpp package.cpp transaction.cpp transaction_faults.cpp)
+if(NOT WIN32)   # Linux (Steam Deck): the same headers on POSIX, see updater/posix/
+add_library(uc_update_core STATIC release.cpp sha256.cpp posix/files_posix.cpp posix/package_posix.cpp posix/transaction_posix.cpp transaction_faults.cpp)
+target_include_directories(uc_update_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/posix)
+target_link_libraries(uc_update_core PUBLIC nlohmann_json::nlohmann_json uc_miniz)
+add_library(uc_update_download STATIC download_common.cpp posix/download_curl.cpp)   # libcurl: the Deck has libcurl.so.4
+# The sysroot holds copies, not symlinks: libcurl.so is the GnuTLS flavour (libcurl-gnutls.so.4), but the Deck ships libcurl.so.4 (OpenSSL), so link that file by name.
+find_library(UC_CURL NAMES libcurl.so.4 curl REQUIRED)
+target_link_libraries(uc_update_download PUBLIC uc_update_core ${UC_CURL})
+return()
+endif()
+add_library(uc_update_core STATIC release.cpp sha256.cpp files.cpp package.cpp transaction.cpp transaction_faults.cpp)
 target_include_directories(uc_update_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_update_core PUBLIC nlohmann_json::nlohmann_json uc_miniz bcrypt ntdll)
 target_compile_definitions(uc_update_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-add_library(uc_update_download STATIC download.cpp)
+add_library(uc_update_download STATIC download.cpp download_common.cpp)
 target_link_libraries(uc_update_download PUBLIC uc_update_core PRIVATE winhttp)
 target_compile_definitions(uc_update_download PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_library(uc_update_process STATIC process.cpp)

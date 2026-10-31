@@ -1,4 +1,4 @@
-#include "download.h"
+#include "download_internal.h"
 #include "files.h"
 #include <winhttp.h>
 #include <algorithm>
@@ -11,13 +11,11 @@ namespace {
 Error network_error(std::string action) {
     return {ErrorCode::network,std::move(action)+" (Windows "+std::to_string(GetLastError())+")"};
 }
-Error cancelled() { return {ErrorCode::cancelled,"Update cancelled"}; }
+using detail::cancelled;
+using detail::ascii_url;
+using detail::status_error;
 struct HttpCloser { void operator()(void* handle) const { if(handle) WinHttpCloseHandle(handle); } };
 using HttpHandle=std::unique_ptr<void,HttpCloser>;
-bool ascii_url(std::string_view url) {
-    return url.size()<=16384 && url.starts_with("https://") &&
-        std::all_of(url.begin(),url.end(),[](unsigned char c){return c>32 && c<127 && c!='\\' && c!='#';});
-}
 Result<unsigned> request(std::string url,bool metadata,const DownloadSink& sink,std::stop_token stop) {
     if(stop.stop_requested()) return cancelled();
     HttpHandle session(WinHttpOpen(L"UC-Launcher-Update/1",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -90,25 +88,12 @@ Result<unsigned> request(std::string url,bool metadata,const DownloadSink& sink,
     }
     return Error{ErrorCode::network,"HTTPS redirect limit"};
 }
-Error status_error(unsigned status) {
-    return {(status==403 || status==429)?ErrorCode::rate_limited:ErrorCode::network,
-        "GitHub HTTP "+std::to_string(status)};
-}
-}
-bool allowed_download_url(std::string_view url,bool redirect) {
-    if(!ascii_url(url)) return false;
-    const auto slash=url.find('/',8);
-    if(slash==url.npos) return false;
-    const auto host=url.substr(8,slash-8);
-    if(!redirect) return host=="github.com" &&
-        url.substr(slash).starts_with("/solleo95/reuc-recomp/releases/download/");
-    return host=="github.com" || host=="release-assets.githubusercontent.com" || host=="objects.githubusercontent.com";
 }
 Result<HttpResponse> WinHttpTransport::get_metadata(std::stop_token stop) {
     std::string body;
     auto status=request("https://api.github.com/repos/solleo95/reuc-recomp/releases/latest",true,
         [&](std::span<const char> bytes)->Status {
-            if(bytes.size()>max_metadata_size-body.size()) return Error{ErrorCode::invalid_release,"GitHub response exceeds limit"};
+            if(bytes.size()>max_metadata_size-body.size()) return Error{ErrorCode::network,"GitHub response exceeds limit"};
             body.append(bytes.data(),bytes.size()); return std::monostate{};
         },stop);
     if(failed(status)) return std::get<Error>(status);
@@ -119,15 +104,6 @@ Status WinHttpTransport::download(const Release& release,const DownloadSink& sin
     if(failed(status)) return std::get<Error>(status);
     if(std::get<unsigned>(status)!=200) return status_error(std::get<unsigned>(status));
     return std::monostate{};
-}
-Result<std::optional<Release>> check_release(Transport& transport,Version installed,std::stop_token stop) {
-    if(stop.stop_requested()) return cancelled();
-    auto response=transport.get_metadata(stop);
-    if(stop.stop_requested()) return cancelled();
-    if(failed(response)) return std::get<Error>(response);
-    auto& http=std::get<HttpResponse>(response);
-    if(http.status!=200) return status_error(http.status);
-    return select_release(http.body,installed);
 }
 Status download_release(Transport& transport,const Release& release,const fs::path& destination,
     Progress progress,std::stop_token stop) {

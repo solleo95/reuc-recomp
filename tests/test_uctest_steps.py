@@ -30,6 +30,26 @@ class ScriptedGame:
     def fail(self, message, awaited=""): raise StepFailed(message, {"awaited": awaited})
 
 class CheckpointTest(unittest.TestCase):
+    def test_perf_records_bounds_after_capture_and_around_measurement(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from unittest.mock import Mock, call, patch
+        from uctest import scenarios
+        g=SimpleNamespace(frame={"retraces":120,"speed":1,"context":"gameplay"},run_dir=Path("."),
+                          set_speed=Mock(),wait=Mock(),step=lambda name:nullcontext())
+        def capture():
+            g.frame["retraces"]=125
+            return "frame.png"
+        def measure(game,seconds,csv_path):
+            game.frame["retraces"]=725
+            return {"fps_mean":77}
+        g.capture=capture
+        with patch.object(scenarios,"reach_gameplay"),patch.object(steps,"measure_fps",side_effect=measure):
+            result=scenarios.perf(g,SimpleNamespace(chapter=1,measure=10))
+        self.assertEqual((result["measure_from_retrace"],result["measure_to_retrace"]),(125,725))
+        self.assertEqual((result["capture"],result["fps_mean"]),("frame.png",77))
+        self.assertEqual(g.set_speed.call_args_list,[call(8),call(1)])
+
     def test_route_goes_to_the_requested_chapter(self):
         from uctest import scenarios
         self.assertEqual(scenarios.route(1)[3], "chapter_1")
@@ -64,6 +84,46 @@ class PauseSceneTest(unittest.TestCase):
                   dict(a, enemies=[(160, [507.08, -0.5, 1.491], 10)]), dict(a, view=[float("nan")])):
             with self.subTest(scene=b):
                 self.assertFalse(scenarios._same_scene(a, b))
+
+class MissionGame(ScriptedGame):
+    """The mission screen with the pre-mission cutscene running (player not valid); the first press of `end_with` ends it. A tutorial page can be up instead."""
+    def __init__(self, end_with, tutorial=False):
+        self.end_with, self.tutorial, self.done = end_with, tutorial, False
+        super().__init__(["mission"])
+    def _frame(self):
+        frame = super()._frame()
+        frame.update(context="gameplay", player={"valid": self.done}, tutorial_loaded=self.tutorial and not self.done, tutorial=5)
+        return frame
+    def press(self, button, frames=2, x=0.0, y=0.0, **kw):
+        self.presses.append((button, x, y)); self.press_log = getattr(self, "press_log", []) + [(button, frames, self.n)]; self.n += frames
+        self.done = self.done or (button == self.end_with and len(self.presses) >= getattr(self, "needed", 1))
+        self.frame = self._frame(); return self.n
+
+class WaitGameplayTest(unittest.TestCase):
+    def test_pre_mission_cutscene_is_skipped_with_b(self):
+        g = MissionGame("B")
+        steps.wait_gameplay(g)
+        self.assertEqual(g.presses[0][0], "B")
+    def test_cutscene_skip_presses_are_spaced_and_not_held(self):
+        # On the Deck B pressed every 6 ticks skipped the cutscene only now and then, and a held B never did (measured: 408 / 1188 / 3573 ticks and never);
+        # 4-sample presses 24 ticks apart skipped it every time in about 50-90 ticks.
+        g = MissionGame("B"); g.needed = 3
+        steps.wait_gameplay(g)
+        presses = [p for p in g.press_log if p[0] == "B"]
+        self.assertEqual(len(presses), 3)
+        self.assertTrue(all(frames == 4 for _, frames, _ in presses), presses)
+        self.assertTrue(all(b[2] - a[2] >= 24 for a, b in zip(presses, presses[1:])), presses)
+    def test_a_mission_page_that_only_a_ends_gets_a_after_b_has_done_nothing(self):
+        g = MissionGame("A")
+        steps.wait_gameplay(g, seconds=5)
+        buttons = [p[0] for p in g.presses]
+        self.assertEqual(buttons[0], "B")
+        self.assertEqual(buttons[-1], "A")
+        self.assertEqual(buttons[:10], ["B"] * 10)   # B alone first: it ends the cutscene in 2-4 presses
+    def test_tutorial_page_is_dismissed_with_a(self):
+        g = MissionGame("A", tutorial=True)
+        steps.wait_gameplay(g)
+        self.assertEqual(g.presses[0][0], "A")
 
 class StepsTest(unittest.TestCase):
     def test_select_presses_target_and_sees_change(self):

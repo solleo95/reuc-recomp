@@ -6,6 +6,11 @@ from .menus import TARGETS, screen_of
 
 AIM_SETTLE_TICKS = 3   # the pointer must be sampled once or twice before the page sees the new hover
 PRESS_FRAMES = 3       # KPAD samples A is held
+# The pre-mission cutscene is skipped by B pressed for 4 samples with 24 ticks between presses (Deck: 50-90 ticks every time). B every 6 ticks skipped it only now and
+# then (408 / 1188 / 3573 ticks) and B held for 30 samples never did (9000 ticks).
+SKIP_PRESS_FRAMES = 4
+SKIP_GAP_TICKS = 24
+SKIP_B_ONLY_PRESSES = 10   # about 240 ticks; the cutscene needs 2-4
 SCALE = 1.0            # multiplies the settle (tuning knob)
 # SDL scancodes of default_bindings() in common/input_bindings.cpp: reload R, grenade G, knife V, pause Escape.
 KEYS = {"reload": 21, "grenade": 10, "knife": 25, "pause": 41}
@@ -41,9 +46,10 @@ def select(g, target, *, retries=30):
 
 
 def wait_gameplay(g, *, seconds=60, stable_ticks=20):
-    """Dismiss mission-intro and tutorial pages with A until the player is controllable."""
+    """Skip the pre-mission cutscene with B and dismiss tutorial pages with A until the player is controllable."""
     deadline = time.monotonic() + seconds
-    since = None
+    since = last_skip = None
+    skip_presses = 0
     while True:
         f = g.frame
         tutorial_up = f.get("tutorial_loaded") and f.get("tutorial") not in (0, 0x100000)   # a tutorial page can be up while the context reads gameplay
@@ -55,8 +61,13 @@ def wait_gameplay(g, *, seconds=60, stable_ticks=20):
             since = None
             if screen_of(f) == "game_over":
                 g.fail("the player died before gameplay was reached", "gameplay")
-            if tutorial_up or screen_of(f) == "mission":
+            if tutorial_up:
                 g.press("A", PRESS_FRAMES, wait=False)
+            elif screen_of(f) == "mission" and (last_skip is None or f["retraces"] - last_skip >= SKIP_GAP_TICKS):   # the pre-mission cutscene (context "qte")
+                # B alone first (it ends the cutscene); a mission screen that B does nothing on (an intro page that wants A) gets A on every second press after that
+                g.press("A" if skip_presses >= SKIP_B_ONLY_PRESSES and skip_presses % 2 else "B", SKIP_PRESS_FRAMES, wait=False)
+                last_skip = f["retraces"]
+                skip_presses += 1
         if time.monotonic() > deadline:
             g.fail("gameplay not reached", "gameplay")
         g.advance(6)

@@ -515,6 +515,84 @@ int main(int argc, char** argv) {
             CHECK(std::abs(value(on,20,20)-value(off,20,20))<=4);   // the corners are where the vertices are: the same light there
             for(int channel=0;channel<3;++channel) CHECK(value(on,1100,100,channel)==value(off,1100,100,channel));   // the baked-colour quad is unchanged
         }
+        if (wanted("blur-adaptive")) {
+            // The blur takes two samples per pixel of its length, at least 8 (blur_sample_count), instead of the preset's 32, and the centre weighs as much less (blur_centre_weight). The picture
+            // may differ from the full-sample one by a bounded amount; both captures go to PNG files next to the executable for a look.
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            auto frame=[&](float shift) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.motion_blur=uc::EffectLevel::ultra; renderer.set_effects(effects);
+                gx::FramePacket scene; scene.present=false;
+                auto red=quad(0x1234,-1,-1,0.1f,1,{255,0,0,255},true);
+                red.transforms.edit().position_rows[0][3]=shift;
+                scene.draws.push_back(std::move(red));
+                submit(std::move(scene));
+                gx::FramePacket boundary; boundary.present=false; boundary.clear_after_copy=false;
+                auto target=std::make_shared<gx::TexturePixels>(); target->gpu_only=true; target->levels={{640,360,{}}};
+                boundary.texture_copy=gx::TextureCopy{{0,0,640,360},target};
+                submit(std::move(boundary));
+                gx::FramePacket empty; empty.present=false; empty.clear_after_copy=false;
+                submit(std::move(empty));
+                gx::FramePacket hud; hud.present=true; hud.display_source={0,0,640,360};
+                return renderer.capture(submit(std::move(hud)));
+            };
+            const auto moved=[&](bool full) { _putenv_s("UC_BLUR_FULL_SAMPLES",full ? "1" : "0"); frame(0); frame(0); return frame(0.015625f); };   // 10 internal pixels
+            const auto full=moved(true), adaptive=moved(false);
+            _putenv_s("UC_BLUR_FULL_SAMPLES","0");
+            CHECK(full.rgba.size()==adaptive.rgba.size());
+            int largest=0; size_t differing=0;
+            for(size_t i=0;i<full.rgba.size();++i) { const int d=std::abs(int(full.rgba[i])-int(adaptive.rgba[i])); largest=std::max(largest,d); differing+=d!=0; }
+            const auto intermediate=[&](const uc::RenderPixels& pixels) { std::set<int> values; for(uint32_t x=0;x<pixels.width;++x) { const int red=pixels.rgba[(size_t(360)*pixels.width+x)*4]; if(red>20 && red<250) values.insert(red); } return values; };
+            const auto distinct=intermediate(adaptive);
+            std::fprintf(stderr,"blur-adaptive: largest channel difference %d, %zu bytes differ, distinct intermediate values %zu (full samples %zu)\n",largest,differing,distinct.size(),intermediate(full).size());
+            uc::save_png(full,executable_dir()/"blur-adaptive-full.png"); uc::save_png(adaptive,executable_dir()/"blur-adaptive-adaptive.png");
+            CHECK(largest<=8);   // measured 5 on this synthetic hard edge (17 before the centre weight followed the sample count, 35 with 1 sample per pixel); the owner sees the two PNGs
+            CHECK(distinct.size()>=4);   // still a smear, not a hard edge (the full-sample one has 4)
+            const auto still_off=frame(0.015625f);   // the previous frame was the same: no motion
+            frame(0.015625f); const auto still=frame(0.015625f);
+            CHECK(still_off.rgba==still.rgba);
+        }
+        if (wanted("ppl-exact")) {
+            // Pixel-exact characterisation of the GX lighting equations, per vertex and per pixel: each case is rendered with per-pixel lighting off and on and the capture's hash
+            // is compared with the one recorded before the light-loop rewrites (plan 2026-10-31-performance-roadmap, tasks 3-5). The hashes depend on the GPU's rounding of the
+            // shader's float steps: they were taken on the owner's PC; UC_GOLDEN_PRINT=1 prints them instead of checking (to re-record on another machine).
+            CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));
+            constexpr uint32_t kLit=1|2|(1<<2)|(2<<7)|(3<<9);   // vertex colour as material, lighting on, light 0, clamped diffuse, distance attenuation
+            struct Case { const char* name; std::array<uint32_t,4> channels; bool second_light; bool channel1_stage; };
+            const std::array<Case,6> cases{{
+                {"equal colour and alpha controls",{kLit,0,kLit,0},false,false},
+                {"alpha control differs",{kLit,0,2|(1<<2)|(1<<7),0},false,false},
+                {"channel 0 lit, channel 1 unlit (stage reads 1)",{kLit,0,kLit,0},false,true},   // the unlit channel's raw colour reaches the picture: per pixel and per vertex must agree
+                {"channel 1 lit, channel 0 unlit",{0,kLit,0,kLit},false,true},
+                {"spot attenuation, two lights",{1|2|(3<<2)|(2<<7)|(1<<9),0,1|2|(3<<2)|(2<<7)|(1<<9),0},true,false},
+                {"unlit baked colour",{0,0,0,0},false,false}}};
+            constexpr std::array<uint64_t,12> kPplGolden{   // [2*case+per_pixel], recorded on the owner's PC before the light-loop rewrites
+                0x3988318561424383ull,0x47a5a1e5a3f75a27ull,0xcfd03387e1424383ull,0x5774ff5f0b77d5baull,0x7992649b1fd32383ull,0x7992649b1fd32383ull,
+                0x3ac5fc8e20702b03ull,0x086c8988fe828d66ull,0xfd84892f56abd4c1ull,0x652a88b3ee158c4eull,0x0545b2577c0e4383ull,0x0545b2577c0e4383ull};
+            const auto hash=[](const uc::RenderPixels& pixels) { uint64_t h=1469598103934665603ull; for(uint8_t byte:pixels.rgba) { h^=byte; h*=1099511628211ull; } return h; };
+            const bool print=std::getenv("UC_GOLDEN_PRINT")!=nullptr;
+            uint64_t unlit_channel_vertex=0;
+            for(size_t index=0;index<cases.size();++index) for(int per_pixel=0;per_pixel<2;++per_pixel) {
+                uc::GraphicsEffects effects; effects.anisotropy=1; effects.per_pixel_lighting=per_pixel!=0; renderer.set_effects(effects);
+                gx::FramePacket packet; packet.present=true; packet.display_source={0,0,640,360};
+                auto lit=quad(0x3333,-1,-1,1,1,{255,255,255,255},true);
+                for(size_t v=0;v<lit.vertices.size();++v) { lit.vertices[v].normal={0,0,1,0,0,0,0,0,0}; lit.vertices[v].color[1]={uint8_t(60*v),200,90,255}; }
+                auto& uniforms=lit.uniforms.edit();
+                for(size_t c=0;c<4;++c) uniforms.channels[c]=cases[index].channels[c];
+                uniforms.pixel[3]=2;
+                uniforms.materials[1]={0.2f,0.5f,0.8f,1.f};   // an unlit channel shows its material register: a distinct colour tells whether channel 1 is read at all
+                auto& light=uniforms.lights[0];
+                light.color={255,255,255,255}; light.cosine={1,0,0,0}; light.distance={1,0,4,0}; light.position={0,0,-0.8f,0}; light.direction={0,0,1,0};
+                if(cases[index].second_light) { auto& other=uniforms.lights[1]; other.color={255,128,0,255}; other.cosine={1,0,0,0}; other.distance={1,0,2,0}; other.position={0.5f,0.2f,-0.7f,0}; other.direction={0,0,1,0}; }
+                if(cases[index].channel1_stage) { lit.material.stages=1; lit.material.swaps={0xE4,0xE4,0xE4,0xE4}; lit.material.stage[0]={0x8FFFA,0x8FFC0,1u<<7,0,0}; }   // stage 0: rasterised colour of channel 1
+                packet.draws.push_back(std::move(lit));
+                const auto capture=renderer.capture(submit(std::move(packet)));
+                const uint64_t value=hash(capture);
+                const auto centre=[&](int channel) { return int(capture.rgba[(size_t(360)*capture.width+640)*4+channel]); };
+                std::fprintf(stderr,"ppl-exact: %-34s per-pixel %d hash %016llx centre %d %d %d\n",cases[index].name,per_pixel,(unsigned long long)value,centre(0),centre(1),centre(2));
+                if(!print) CHECK(value==kPplGolden[2*index+per_pixel]);
+                if(index==2) { if(per_pixel==0) unlit_channel_vertex=value; else if(!print) CHECK(value==unlit_channel_vertex); }   // an unlit channel is shaded the same either way
+            }
+        }
         if (wanted("blur")) {
             // A red quad moves 40 internal pixels between frames: its edge smears along the motion; a still scene and a camera cut (field of view jump) stay as drawn.
             CHECK(renderer.set_upscaling(uc::UpscalerKind::off,uc::UpscaleMode::quality,false,0.5,false,2));

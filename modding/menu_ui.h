@@ -10,6 +10,8 @@
 
 namespace uc::mods {
 
+class StandaloneMods;
+
 // The mod platform's part of the Insert menu, drawn with Dear ImGui into the menu's window: the Mods tab (manager), one tab per mod with
 // settings or a drawing function, and the widgets a mod's drawing function calls (UiApi). Everything runs on the menu thread except commit(),
 // which the main loop calls. Strings exist in English and Russian; other menu languages show English.
@@ -27,6 +29,12 @@ public:
     using StatusLine = std::function<std::string(const std::string& mod_id)>;
     void set_status_line(StatusLine line) { status_line_ = std::move(line); }
     void set_save(SaveSection save) { save_ = std::move(save); }   // the config's "mods" section writer (LiveSettings::apply_mods); may arrive after construction
+    // The launchers' mode: with no host, a mod's declared settings are edited through StandaloneMods and written whole with the registry's choices.
+    void set_standalone(StandaloneMods* mods) { standalone_ = mods; }
+    void set_language(const std::string& language) { language_ = language; }   // the launchers can change language while the menu lives
+    // The size of the checkboxes and arrows of the mod rows (and of a mod's declared settings): the host's own, when the style's default is larger. Not used for the windows.
+    struct RowStyle { float pad_x, pad_y, rounding, spacing_x, spacing_y; };
+    void set_row_style(RowStyle style) { row_style_ = style; }
 
     // ModMenu
     std::string manager_title() override;
@@ -56,6 +64,10 @@ private:
     std::string localized(const std::map<std::string, std::string>& texts, const std::string& fallback) const;
     void draw_mod_window(const std::string& id, float unit);   // the body of a mod's settings window: declared settings, then what the mod draws
     bool gear_button(const char* id, float size);
+    void push_row_style();   // no-ops without set_row_style; pop only undoes what was pushed
+    void pop_row_style();
+    bool begin_modal(const std::string& title, const char* id, bool* open, float unit);   // id includes the "###" identity; true: draw the body, then end_modal()
+    void end_modal();
     void draw_declared_settings(const std::string& id, ModSettings& settings, const std::vector<SettingDecl>& declared);
     void mark_changed();   // the registry changed: save it, refresh the conflict list
     void remember(const std::string& key);   // records the rectangle of the item just drawn (rect_of)
@@ -75,7 +87,10 @@ private:
     bool open_settings_ = false;
     std::vector<Conflict> conflicts_;
     Apply apply_;
-    std::map<std::string, std::string> hash_cache_;                // id -> sha256 of its DLL (computed once)
+    StandaloneMods* standalone_ = nullptr;
+    std::optional<RowStyle> row_style_;
+    int row_style_depth_ = 0;
+    std::map<std::string, std::string> hash_cache_;               // id -> sha256 of its DLL (computed once)
     std::map<std::string, nlohmann::ordered_json> saved_settings_; // the settings of each mod that changed this session, as last written to the config
     std::map<std::string, std::string> text_buffers_, last_text_;  // input_text state per (mod, label): the edit buffer and what the script was given last
     std::map<std::string, std::array<float, 4>> rects_;

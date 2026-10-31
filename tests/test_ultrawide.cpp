@@ -34,6 +34,22 @@ static std::array<float,2> y_range(const gx::DrawPacket& draw) { return *gx::ort
 static float centre(std::array<float,2> range) { return (range[0] + range[1]) / 2; }
 static float width(std::array<float,2> range) { return range[1] - range[0]; }
 int main() {
+    {   // HDR interface brightness: every orthographic draw (HUD, menu panels and backdrops alike) takes it; the 3D scene, the movie and the scratch passes (EFB copies) do not; never when off.
+        const auto marked = [](gx::FramePacket packet, uint8_t dim) { gx::mark_ui_draws(packet, dim); std::vector<int> dims; for (const auto& draw : packet.draws) dims.push_back(draw.ui_dim); return dims; };
+        gx::FramePacket packet;
+        packet.draws.push_back(ortho_quad(-0.3f, 0.3f, nullptr, -0.2f, 0.2f));   // a HUD element
+        packet.draws.push_back(scene_draw());                                     // 3D
+        packet.draws.push_back(ortho_quad(-1.f, 1.f));                            // a backdrop
+        packet.draws.push_back(ortho_quad(0.f, 1.f, nullptr, -1.f, 0.f));         // a panel
+        auto movie = ortho_quad(-1.f, 1.f); movie.callsite = gx::kMovieCallsite; packet.draws.push_back(std::move(movie));
+        auto shade = ortho_quad(-0.5f, 0.5f); shade.blend = {1, 0, 2, 3, true, true}; packet.draws.push_back(std::move(shade));   // dst * src colour: the panels' dirt
+        auto glow = ortho_quad(-0.5f, 0.5f); glow.blend = {1, 4, 1, 3, true, true}; packet.draws.push_back(std::move(glow));       // additive: light, dimmed
+        auto plain = ortho_quad(-0.5f, 0.5f); plain.blend = {1, 4, 5, 3, true, true}; packet.draws.push_back(std::move(plain));    // ordinary alpha
+        CHECK((marked(packet, 150) == std::vector<int>{150, 0, 150, 150, 0, 0, 150, 150}));
+        CHECK((marked(packet, 0) == std::vector<int>{0, 0, 0, 0, 0, 0, 0, 0}));
+        packet.texture_copy = gx::TextureCopy{};   // a packet that ends in an EFB copy: the game's own pass
+        CHECK((marked(packet, 150) == std::vector<int>{0, 0, 0, 0, 0, 0, 0, 0}));
+    }
     {   // The factors of an output shape: 16:9 and its neighbours change nothing.
         const auto same = gx::factors_for_aspect(16.0 / 9), wide = gx::factors_for_aspect(21.0 / 9, true), super = gx::factors_for_aspect(32.0 / 9), tall = gx::factors_for_aspect(16.0 / 10, true);
         CHECK(same.x == 1.f && same.y == 1.f && !same.edges);

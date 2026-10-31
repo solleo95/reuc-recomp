@@ -112,7 +112,7 @@ void ModRegistry::evaluate() {
         if (m.api.major != host_api_.major || m.api.minor > host_api_.minor) {
             e.state = ModState::incompatible;
             e.messages.push_back("needs mod API " + std::to_string(m.api.major) + "." + std::to_string(m.api.minor) + ", this game offers " + std::to_string(host_api_.major) + "." + std::to_string(host_api_.minor));
-        } else if (!m.game.empty() && std::find(m.game.begin(), m.game.end(), game_version_) == m.game.end()) {
+        } else if (!game_version_.empty() && !m.game.empty() && std::find(m.game.begin(), m.game.end(), game_version_) == m.game.end()) {
             e.state = ModState::incompatible;
             e.messages.push_back("made for another game version than " + game_version_);
         } else e.state = ModState::enabled;

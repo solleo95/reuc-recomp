@@ -23,6 +23,8 @@ def load(path):
         elif line.startswith("x "):   # a sample outside the executable, already named by the sampler (libc function or library file)
             _, tid, name, ms = line.split()
             outside.append((int(tid), name, int(ms)))
+        elif line.startswith("s "):   # a call stack (UC_CPU_SAMPLE_STACKS=1): scripts/inclusive_profile.py reads those
+            continue
         elif line.startswith("w "):   # a wall-clock sample of the guest thread (UC_CPU_SAMPLE=wait): the top frame's name, the first frame in the executable
             _, top, caller, ms = line.split()
             waits.append((top, int(caller, 16), int(ms)))

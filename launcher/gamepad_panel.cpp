@@ -14,8 +14,7 @@ namespace uc {
 namespace {
 constexpr std::array<Action,17> kActions{Action::interact,Action::fire,Action::weapon_previous,Action::weapon_next,Action::reload,Action::grenade,Action::knife,Action::pause,
     Action::confirm,Action::back,Action::screenshot,Action::qte_shake,Action::recenter,Action::camera_up,Action::camera_down,Action::camera_left,Action::camera_right};
-// Inputs that can hold the gyro on: a trigger or a shoulder or stick button.
-constexpr std::array<PhysicalInput,6> kHoldChoices{{{PhysicalKind::pad_axis,9},{PhysicalKind::pad_axis,11},{PhysicalKind::pad_button,9},{PhysicalKind::pad_button,10},{PhysicalKind::pad_button,7},{PhysicalKind::pad_button,8}}};
+constexpr const auto& kHoldChoices=kGyroHoldChoices;   // inputs that can hold the gyro on (common/gamepad_config.h)
 }
 namespace panel_shared {   // the widgets the Wii Remote window uses as well (panel_widgets.h)
 // The same rhythm as the host's own pages: a small caption above each control, a gap after it.

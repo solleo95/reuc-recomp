@@ -243,5 +243,24 @@ int main() {
     c.f[1]=1.0;c.ps1[1]=2.0;c.f[2]=10.0;c.ps1[2]=20.0;
     op_ps_cmpu0(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
     op_ps_cmpu1(c, 2, 1, 2);           CHECK(c.cr[2] == 8);
+    // Range marks clip at physical RAM's watch limit; rollback sees exactly the same touched pages.
+    struct RangeCase { uint32_t address; size_t size; uint32_t first, end; };
+    const RangeCase ranges[]={
+        {0x80001000u,0,0,0}, {0x80001000u,4,1,2}, {0x80001FFCu,4,1,2},
+        {0x80001FFFu,2,1,3}, {0x80001100u,0x3000,1,5}, {0xC0001000u,8,1,2},
+        {0xBFFFFFFEu,8,gx::kWatchPages-1,gx::kWatchPages},
+        {0x80001000u,SIZE_MAX,0,0}
+    };
+    for(bool rollback : {false,true}) for(const auto& range:ranges) {
+        gx::watch_reset();gx::write_epoch=17;uc::rollback_dirty.fill(0);
+        uc::rollback_memory_base=rollback ? c.mem : nullptr;
+        gx::note_write_range(range.address,range.size);
+        for(uint32_t page=0;page<gx::kWatchPages;++page) {
+            const bool touched=page>=range.first && page<range.end;
+            CHECK(gx::page_epoch[page]==(touched ? 17u : 0u));
+            CHECK(uc::rollback_dirty[page]==(rollback && touched ? 1 : 0));
+        }
+    }
+    uc::rollback_memory_base=nullptr;
     return 0;
 }

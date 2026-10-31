@@ -1,21 +1,34 @@
 #include "check.h"
 #include "download.h"
 #include <nlohmann/json.hpp>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#endif
+#include <chrono>
 #include <fstream>
 #include <cstdio>
 using namespace uc::update;
 namespace fs=std::filesystem;
 using Json=nlohmann::json;
+#ifdef _WIN32
+using NativeTransport=WinHttpTransport;
+unsigned long process_id() {return GetCurrentProcessId();}
+#else
+using NativeTransport=CurlTransport;
+unsigned long process_id() {return static_cast<unsigned long>(::getpid());}
+#endif
 std::string hash="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-std::string url="https://github.com/solleo95/reuc-recomp/releases/download/0.0.1/UC-Windows-0.0.1.zip";
+std::string name=std::string(archive_prefix(host_platform))+"0.0.1.zip";   // this platform's archive: the default platform of check_release
+std::string url="https://github.com/solleo95/reuc-recomp/releases/download/0.0.1/"+name;
 struct Fake:Transport {
     unsigned status=200;
     std::string data="abc";
     bool fail=false;
     std::stop_source* cancel=nullptr;
     std::string body=Json{{"tag_name","0.0.1"},{"draft",false},{"prerelease",false},{"body","Notes"},
-        {"assets",Json::array({{{"name","UC-Windows-0.0.1.zip"},{"state","uploaded"},
+        {"assets",Json::array({{{"name",name},{"state","uploaded"},
             {"size",3},{"digest","sha256:"+hash},{"browser_download_url",url}}})}}.dump();
     Result<HttpResponse> get_metadata(std::stop_token) override { return HttpResponse{status,body}; }
     Status download(const Release&,const DownloadSink& sink,std::stop_token) override {
@@ -27,7 +40,14 @@ struct Fake:Transport {
 };
 template<class T> ErrorCode error(const Result<T>& result) {CHECK(failed(result));return std::get<Error>(result).code;}
 std::string read(const fs::path& p) {std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
-int main() {
+int main(int argc,char** argv) {
+    if(argc>1 && std::string_view(argv[1])=="--check") {   // manual smoke against the real GitHub API (no assertions): an offer, "no archive for this platform" or a network error
+        NativeTransport real;auto result=check_release(real,{0,0,0});
+        if(failed(result)) std::printf("check_release: error %d: %s\n",int(std::get<Error>(result).code),std::get<Error>(result).detail.c_str());
+        else if(auto& offer=std::get<std::optional<Release>>(result)) std::printf("check_release: offer %s (%llu bytes)\n",format_version(offer->version).c_str(),(unsigned long long)offer->size);
+        else std::printf("check_release: nothing newer\n");
+        return 0;
+    }
     CHECK(allowed_download_url(url,false));
     CHECK(allowed_download_url("https://release-assets.githubusercontent.com/a?token=secret",true));
     CHECK(allowed_download_url("https://objects.githubusercontent.com/a",true));
@@ -42,9 +62,9 @@ int main() {
     for(unsigned status:{403u,429u}) {fake.status=status;CHECK(error(check_release(fake,{0,0,0}))==ErrorCode::rate_limited);}
     fake.status=200;
     auto original=fake.body;fake.body="{";CHECK(failed(check_release(fake,{0,0,0})));
-    fake.body=std::string(max_metadata_size+1,' ');CHECK(failed(check_release(fake,{0,0,0})));fake.body=original;
+    fake.body=std::string(max_metadata_size+1,' ');CHECK(error(check_release(fake,{0,0,0}))==ErrorCode::network);fake.body=original;   // too big to be GitHub's answer: the check is skipped silently, as a network failure is (no error window)
     auto meta=Json::parse(fake.body);meta["assets"][0].erase("digest");fake.body=meta.dump();CHECK(failed(check_release(fake,{0,0,0})));fake.body=original;
-    auto root=fs::temp_directory_path()/("uc-download-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64()));
+    auto root=fs::temp_directory_path()/("uc-download-"+std::to_string(process_id())+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     CHECK(fs::create_directory(root));
     auto out=root/"release.zip";
     Release release{{0,0,1},url,"Notes",hash,3};
@@ -57,17 +77,17 @@ int main() {
     fs::remove(out);
     for(auto data:{"ab","abcd","xyz"}) {
         fake.data=data;CHECK(error(download_release(fake,release,out))==ErrorCode::integrity);
-        CHECK(!fs::exists(out));CHECK(!fs::exists(fs::path(out.wstring()+L".part")));
+        CHECK(!fs::exists(out));CHECK(!fs::exists(fs::path(out.string()+".part")));
     }
     fake.data="abc";fake.fail=true;CHECK(error(download_release(fake,release,out))==ErrorCode::network);CHECK(!fs::exists(out));fake.fail=false;
     std::stop_source stop;fake.cancel=&stop;
     CHECK(error(download_release(fake,release,out,{},stop.get_token()))==ErrorCode::cancelled);
     CHECK(!fs::exists(out));fake.cancel=nullptr;
     CHECK(error(check_release(fake,{0,0,0},stop.get_token()))==ErrorCode::cancelled);
-    auto part=fs::path(out.wstring()+L".part");
+    auto part=fs::path(out.string()+".part");
     {std::ofstream f(part);f<<"EXISTING";}
     CHECK(failed(download_release(fake,release,out)));CHECK(read(part)=="EXISTING");
     fs::remove(part);
-    WinHttpTransport native;CHECK(error(native.get_metadata(stop.get_token()))==ErrorCode::cancelled);
+    NativeTransport native;CHECK(error(native.get_metadata(stop.get_token()))==ErrorCode::cancelled);
     fs::remove(root); std::puts("update download: URL policy, failures, cancellation and publication passed");
 }

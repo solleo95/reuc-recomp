@@ -15,6 +15,12 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   add_compile_options(-Wno-deprecated-declarations)   # "unsafe CRT function" (getenv, fopen), winsock and std::filesystem::u8path notes in the tools and third-party code are noise
 endif()
+# Guest memory access tracer (runtime/mem_trace.h): records the loads and stores of selected translated functions to find work that can run in parallel. Diagnostics only,
+# 20x slower; build it in its own folder (the leaf functions then run as translated code, so every access is seen).
+option(UC_TRACE_MEM "record guest memory accesses of the functions in UC_TRACE_MEM_FUNCS" OFF)
+if(UC_TRACE_MEM)
+  add_compile_definitions(UC_TRACE_MEM=1)
+endif()
 # Profile-guided optimization: ~8% more frames in gameplay. `python scripts/pgo.py` records project/pgo/uc.profdata from a harness run of an
 # instrumented build; while that file exists every build uses it (stale parts are ignored silently, re-record after big changes).
 option(UC_PGO_GENERATE "build an instrumented uc.exe that records a profile (scripts/pgo.py)" OFF)
@@ -71,6 +77,7 @@ if(UC_LINUX)
   add_subdirectory(runtime)
   add_subdirectory(renderer)
   add_subdirectory(modding)
+  add_subdirectory(updater)    # the POSIX update stack (updater/posix) for the Deck launcher
   add_subdirectory(launcher)   # only the pieces the game shares (settings UI, bindings editor); the launcher program itself is Windows-only
   add_subdirectory(game)
   add_subdirectory(tests/linux)

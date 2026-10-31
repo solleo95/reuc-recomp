@@ -19,6 +19,15 @@ struct Version {
     uint16_t major{}, minor{}, patch{};
     auto operator<=>(const Version&) const = default;
 };
+enum class Platform { windows, steamdeck };
+#ifdef _WIN32
+inline constexpr Platform host_platform = Platform::windows;
+#else
+inline constexpr Platform host_platform = Platform::steamdeck;
+#endif
+inline constexpr std::string_view archive_prefix(Platform platform) {
+    return platform == Platform::windows ? "UC-Windows-" : "UC-SteamDeck-";
+}
 struct FileEntry { std::string path; uint64_t size{}; std::string sha256; };
 struct Manifest { Version version; std::vector<FileEntry> files; std::vector<std::string> helper_files; };
 struct Release { Version version; std::string asset_url, notes, sha256; uint64_t size{}; };
@@ -31,6 +40,8 @@ Result<Version> parse_version(std::string_view text, bool allow_v_prefix = false
 std::string format_version(Version version);
 Status validate_managed_path(std::string_view relative);
 Result<std::wstring> path_key(std::string_view relative);
-Result<Manifest> parse_manifest(std::string_view json);
-Result<std::optional<Release>> select_release(std::string_view json, Version installed);
+// Windows: uc.exe, uc_launcher.exe, uc_updater.exe and the updater as helper. Steam Deck: uc and uc_launcher, no helper files.
+Result<Manifest> parse_manifest(std::string_view json, Platform platform = host_platform);
+// The version of an archive is the one in its name (UC-<Platform>-X.Y.Z.zip); the release tag only names the release and the download URL.
+Result<std::optional<Release>> select_release(std::string_view json, Version installed, Platform platform = host_platform);
 }

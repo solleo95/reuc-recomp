@@ -1,6 +1,8 @@
 #include "menu_ui.h"
+#include "menu_text.h"
 #include "mod_paths.h"
 #include "runtime_native.h"
+#include "standalone.h"
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
@@ -32,6 +34,7 @@ constexpr Text kTexts[] = {
     {"dep_off", "dependency is off", "зависимость выключена"},
     {"stopped", "switched off for this session", "отключён до перезапуска"},
     {"has_native", "contains native code", "содержит нативный код"},
+    {"native_linux", "contains native code, which does not run on Linux", "содержит нативный код, который на Linux не работает"},
     {"confirmed", "native code confirmed", "нативный код подтверждён"},
     {"confirm", "Confirm native code…", "Подтвердить нативный код…"},
     {"confirm_title", "Confirm native code", "Подтверждение нативного кода"},
@@ -46,13 +49,18 @@ constexpr Text kTexts[] = {
 };
 }  // namespace
 
+const char* manager_text(std::string_view language, std::string_view key) {
+    for (const auto& t : kTexts) if (key == t.key) return language == "ru" ? t.ru : t.en;
+    return nullptr;
+}
+
 ModMenuUi::ModMenuUi(GetRegistry registry, GetHost host, std::string language) : registry_(std::move(registry)), host_(std::move(host)), language_(std::move(language)) {
     if (auto* r = registry_()) conflicts_ = r->conflicts();
 }
 
 const char* ModMenuUi::tr(const char* key) const {
-    for (const auto& t : kTexts) if (std::strcmp(t.key, key) == 0) return language_ == "ru" ? t.ru : t.en;
-    return key;
+    const char* text = manager_text(language_, key);
+    return text ? text : key;
 }
 
 std::string ModMenuUi::localized(const std::map<std::string, std::string>& texts, const std::string& fallback) const {
@@ -84,6 +92,38 @@ void ModMenuUi::mark_changed() {
     if (auto* r = registry_()) conflicts_ = r->conflicts();
 }
 
+void ModMenuUi::push_row_style() {
+    if (!row_style_) return;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(row_style_->pad_x, row_style_->pad_y));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, row_style_->rounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(row_style_->spacing_x, row_style_->spacing_y));
+    ++row_style_depth_;
+}
+void ModMenuUi::pop_row_style() {
+    if (row_style_depth_ <= 0) return;
+    ImGui::PopStyleVar(3);
+    --row_style_depth_;
+}
+
+// A window over the manager in the look of the launcher's other windows (update, unpack): no title bar, the title as a large heading, wide padding, a fixed width.
+bool ModMenuUi::begin_modal(const std::string& title, const char* id, bool* open, float unit) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowSize(ImVec2(std::min(660 * unit, display.x - 32), 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(display.x - 32, display.y - 32));
+    ImGui::SetNextWindowPos(ImVec2(display.x / 2, display.y / 2), ImGuiCond_Always, ImVec2(.5f, .5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28 * unit, 26 * unit));
+    if (!ImGui::BeginPopupModal((title + id).c_str(), open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar)) { ImGui::PopStyleVar(); return false; }   // the ### part of id is the popup's identity
+    ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.3f);
+    ImGui::TextWrapped("%s", title.c_str());
+    ImGui::PopFont();
+    ImGui::Spacing();
+    return true;
+}
+void ModMenuUi::end_modal() {
+    ImGui::EndPopup();
+    ImGui::PopStyleVar();
+}
+
 void ModMenuUi::manager_tab(float unit) {
     auto* r = registry_();
     ImGui::Dummy({0, 6 * unit});
@@ -92,22 +132,22 @@ void ModMenuUi::manager_tab(float unit) {
     ImGui::Separator();
 
     bool allow = r->allow_native();
+    push_row_style();   // the rows (not the windows that open over them) use the host's own box size
     if (ImGui::Checkbox(tr("allow_native"), &allow)) {
         if (allow) ImGui::OpenPopup("###native_warning");
         else { r->set_allow_native(false); mark_changed(); }
     }
     remember("manager/allow_native");
-    // The title goes in the window's own title bar (the ### part is the popup's identity).
-    if (ImGui::BeginPopupModal((std::string(tr("native_title")) + "###native_warning").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
+    pop_row_style();
+    if (begin_modal(tr("native_title"), "###native_warning", nullptr, unit)) {
         ImGui::TextWrapped("%s", tr("native_warning"));
-        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
         const bool enable_native = ImGui::Button(tr("ok"));
         remember("popup/native_ok");
         if (enable_native) { r->set_allow_native(true); mark_changed(); ImGui::CloseCurrentPopup(); }
         ImGui::SameLine();
         if (ImGui::Button(tr("cancel"))) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        end_modal();
     }
     if (auto* host = host_()) {
         ImGui::SameLine();
@@ -115,6 +155,7 @@ void ModMenuUi::manager_tab(float unit) {
     }
     ImGui::Separator();
 
+    push_row_style();
     const auto status = host_() ? host_()->status() : std::vector<ModHost::ModStatus>();
     // Copy the ids: moving a mod reorders the list under the loop.
     std::vector<std::string> ids;
@@ -194,27 +235,25 @@ void ModMenuUi::manager_tab(float unit) {
         ImGui::Separator();
         ImGui::PopID();
     }
+    pop_row_style();
     if (open_confirm_) { ImGui::OpenPopup("###native_confirm"); open_confirm_ = false; }
-    if (ImGui::BeginPopupModal((std::string(tr("confirm_title")) + "###native_confirm").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
+    if (begin_modal(tr("confirm_title"), "###native_confirm", nullptr, unit)) {
         ImGui::TextWrapped("%s", tr("confirm_text"));
-        ImGui::TextUnformatted(hash_cache_[confirm_id_].c_str());
-        ImGui::PopTextWrapPos();
+        ImGui::TextWrapped("%s", hash_cache_[confirm_id_].c_str());
+        ImGui::Spacing();
         const bool confirmed_now = ImGui::Button(tr("ok"));
         remember("popup/confirm_ok");
         if (confirmed_now) { r->set_native_hash(confirm_id_, hash_cache_[confirm_id_]); mark_changed(); ImGui::CloseCurrentPopup(); }
         ImGui::SameLine();
         if (ImGui::Button(tr("cancel"))) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        end_modal();
     }
     if (open_settings_) { ImGui::OpenPopup("###mod_settings"); open_settings_ = false; }
     {
         const ModEntry* shown = settings_id_.empty() ? nullptr : entry(settings_id_);
         bool open = true;
-        ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 26, 0), ImVec2(FLT_MAX, FLT_MAX));
-        if (ImGui::BeginPopupModal(((shown ? localized(shown->manifest.names, shown->manifest.name) : std::string()) + "###mod_settings").c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (begin_modal(shown ? localized(shown->manifest.names, shown->manifest.name) : std::string(), "###mod_settings", &open, unit)) {
             ImGui::PushID("window");
-            ImGui::Spacing();
             draw_mod_window(settings_id_, unit);
             ImGui::Spacing();
             ImGui::Separator();
@@ -222,7 +261,7 @@ void ModMenuUi::manager_tab(float unit) {
             remember("popup/settings_close");
             ImGui::PopID();
             if (!open) { ImGui::CloseCurrentPopup(); settings_id_.clear(); }
-            ImGui::EndPopup();
+            end_modal();
         }
     }
     if (!conflicts_.empty()) {
@@ -298,13 +337,18 @@ void ModMenuUi::draw_declared_settings(const std::string&, ModSettings& settings
 
 void ModMenuUi::draw_mod_window(const std::string& id, float unit) {
     auto* host = host_();
-    if (!host) return;
+    if (!host && !standalone_) return;
     ImGui::PushID(id.c_str());
     current_mod_ = id;
     (void)unit;
     const auto declared = entry(id) ? entry(id)->manifest.settings : std::vector<SettingDecl>();
-    if (!declared.empty()) host->edit_settings(id, [&](ModSettings& settings) { draw_declared_settings(id, settings, declared); });
-    const auto status = host->status();
+    if (!declared.empty()) {
+        push_row_style();
+        if (host) host->edit_settings(id, [&](ModSettings& settings) { draw_declared_settings(id, settings, declared); });
+        else if (auto* settings = standalone_->settings(id)) draw_declared_settings(id, *settings, declared);
+        pop_row_style();
+    }
+    const auto status = host ? host->status() : std::vector<ModHost::ModStatus>();   // without a game nothing runs: no drawing of the mod's own
     const auto it = std::find_if(status.begin(), status.end(), [&](const ModHost::ModStatus& s) { return s.id == id; });
     if (it != status.end() && it->has_ui) {
         if (!declared.empty()) ImGui::Separator();
@@ -329,7 +373,8 @@ void ModMenuUi::commit() {
     auto* r = registry_();
     if (!r) return;
     auto* host = host_();
-    if (!host && !dirty_) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
+    const bool standalone = !host && standalone_;
+    if (!host && !dirty_ && !(standalone && standalone_->settings_dirty())) return;   // runs every main-loop iteration: with no running mod and nothing changed in the manager it must cost nothing
     // While a widget of a mod's tab is being edited the value changes every frame: write it (and tell the mod) once, when the edit ends.
     // (Wall-clock time, not ImGui state: commit() runs in the main loop, where the menu's ImGui context is not current.)
     if (Clock::now() < editing_until_) return;
@@ -352,13 +397,10 @@ void ModMenuUi::commit() {
             for (const auto& key : keys) notify.emplace_back(id, key);
         }
     }
+    if (standalone && standalone_->settings_dirty()) changed = true;
     if (changed && save_) {
-        nlohmann::ordered_json section = r->to_config();
-        for (const auto& [id, settings] : saved_settings_) {
-            if (!section.contains(id) || !section[id].is_object()) section[id] = nlohmann::ordered_json::object();
-            section[id]["settings"] = settings;
-        }
-        save_(section);
+        if (standalone) save_(standalone_->section());   // the settings it edited are merged into the registry's section there
+        else save_(merge_mod_settings(r->to_config(), saved_settings_));
     }
     dirty_ = false;
     if (manager_changed && apply_) apply_();   // the running game follows what was just saved: mods start and stop, files and textures swap

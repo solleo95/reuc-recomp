@@ -2,6 +2,7 @@
 #include "binding_editor.h"
 #include "deck_menu_nav.h"
 #include "feature_report.h"
+#include "gamepad_config.h"
 #include "menu_bridge.h"
 #include "live_settings.h"
 #include "ui_fonts.h"
@@ -26,7 +27,16 @@ public:
     void set_mod_menu(mods::ModMenu* menu) { mods_=menu; }   // the Mods page; without one there is no such page
     // The Buttons page waits for a pad button while a binding is captured: GamepadInput's capture sink calls this for every pad press and release.
     // The same pad event then reaches event(): when a capture was waiting it is the capture's (B bound to an action must not also be "back"), even though it has just ended the capture.
-    void pad_capture(PhysicalInput input,bool down) { if(editor_.capturing()) capture_took_=true; editor_.event(input,down); }
+    // The same sink serves the gyro's hold button ("while a button is held"): the row waits for the next press of a trigger, a shoulder or a stick button.
+    void pad_capture(PhysicalInput input,bool down) {
+        if(hold_capturing_) {
+            capture_took_=true;
+            if(down && gyro_hold_allowed(input)) { std::lock_guard lock(mutex_); hold_result_=input; hold_capturing_=false; }   // another button is ignored: the row keeps waiting
+            return;
+        }
+        if(editor_.capturing()) capture_took_=true;
+        editor_.event(input,down);
+    }
     void menu_closed();   // the menu was closed: a capture still waiting for a button is dropped
 private:
     std::vector<settings::Page> pages() const;   // the Deck pages that exist in this run (no Mods page without a mod platform)
@@ -56,6 +66,8 @@ private:
     uint64_t capture_since_ns_=0;             // a capture nobody answers is dropped after a few seconds
     bool was_mods_page_=false;
     bool capture_took_=false;                 // the pad event being dispatched went to a waiting capture
+    bool hold_capturing_=false;               // the gyro's hold-button row waits for a pad press (capture_since_ns_ times it out)
+    std::optional<PhysicalInput> hold_result_;   // the press that answered it, for build() to store
     // The right trackpad pressed past the soft threshold is the left mouse button of ImGui's cursor (the trackpad moves it; its click is not a mouse click here).
     bool right_pad_pressed_=false, click_open_=false;
     std::deque<bool> clicks_;                 // button transitions for build() to hand to ImGui

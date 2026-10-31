@@ -8,7 +8,7 @@ struct Params {
     float shutter;       // fraction of the frame the shutter is open
     uint samples;
     uint tileSize;       // scene-target pixels per tile
-    uint reserved;
+    uint fullSamples;    // nonzero: always the preset's sample count (UC_BLUR_FULL_SAMPLES), else two samples per pixel of the blur (blur_sample_count in raster_effects_math.h)
 };
 [[vk::push_constant]] ConstantBuffer<Params> params : register(b0);
 [[vk::binding(1, 0)]] Texture2D<float4> sourceColor : register(t0);
@@ -59,10 +59,12 @@ void blurMain(uint3 id : SV_DispatchThreadID) {
     }
     const float length = sqrt(dot(direction, direction));
     if (length < 1.0) { outputColor[id.xy] = centre; return; }
-    float4 sum = centre;
-    float weights = 1.0;
-    for (uint i = 0; i < params.samples; ++i) {
-        const float t = (float(i) + 0.5) / float(params.samples) - 0.5;
+    const uint count = params.fullSamples != 0 ? params.samples : min(params.samples, max(8u, uint(ceil(2.0 * length))));
+    const float centreWeight = float(count) / float(params.samples);   // blur_centre_weight in raster_effects_math.h: fewer samples must not make the centre count more
+    float4 sum = centre * centreWeight;
+    float weights = centreWeight;
+    for (uint i = 0; i < count; ++i) {
+        const float t = (float(i) + 0.5) / float(count) - 0.5;
         const int2 at = clamp(pixel + int2(round(direction * t)), int2(0, 0), int2(params.outputSize) - 1);
         const float2 sampleMotion = motionAt(at) * toOutput;
         const float w = saturate(sqrt(dot(sampleMotion, sampleMotion)) - abs(t) * length + 1.0);

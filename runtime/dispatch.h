@@ -12,6 +12,9 @@ template<Fn Function> void invoke_hle(ppc::Ctx& c) {
         explicit Scope(ppc::Ctx& c):c(c) { ++c.native_depth; }
         ~Scope() { --c.native_depth; }
     } scope(c);
+#ifdef UC_TRACE_MEM
+    ::uc::mem_trace::hle(__PRETTY_FUNCTION__, c);   // "void uc::invoke_hle<&hle_Name>(ppc::Ctx &)": the HLE function's accesses are not traced
+#endif
     Function(c);
 }
 struct FnEntry { uint32_t addr; Fn fn; };

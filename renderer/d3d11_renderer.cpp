@@ -423,7 +423,7 @@ void D3D11Renderer::rebuild() {
     hdr_active_=hdr_.enabled && SDL_GetBooleanProperty(SDL_GetWindowProperties(window_),SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN,false) && color_available && SUCCEEDED(swapchain_.As(&metadata_chain)) && SUCCEEDED(color_chain->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,&support)) && (support&DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
     check(swapchain_->ResizeBuffers(0,width_,height_,hdr_active_ ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM,tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0),"resize D3D11 swapchain");
     if(color_available) check(color_chain->SetColorSpace1(hdr_active_ ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709),"D3D11 output color space");
-    hdr_metadata_dirty_=true; hdr_metadata(); bloom_valid_=false;
+    hdr_metadata_dirty_=true; hdr_metadata(); bloom_valid_=false; publish_hdr_ui_dim(hdr_,hdr_active_);
     check(swapchain_->GetBuffer(0,IID_PPV_ARGS(&backbuffer_.texture)),"D3D11 backbuffer");
     check(device_->CreateRenderTargetView(backbuffer_.texture.Get(),nullptr,&backbuffer_.rtv),"D3D11 backbuffer view"); backbuffer_.width=width_; backbuffer_.height=height_;
     const auto visible=manual_render_extent(scale_,aspect_); const RenderExtent extent{visible.width,uint32_t(std::llround(960*scale_))};
@@ -460,6 +460,7 @@ void D3D11Renderer::set_hdr(const HdrSettings& settings) {
     if(hdr_.enabled!=settings.enabled) { resized_=true; invalidate_held(); }
     if(hdr_!=settings) hdr_metadata_dirty_=true;
     hdr_=settings;
+    publish_hdr_ui_dim(hdr_,hdr_active_);
 }
 bool D3D11Renderer::set_upscaling(UpscalerKind kind,UpscaleMode mode,bool sharpening,double sharpness,bool generation,uint32_t multiplier) {
     owner();
@@ -722,7 +723,7 @@ bool D3D11Renderer::render(const gx::FramePacket& packet,bool display,uint64_t s
         for(size_t i=0;i<draw.material.stages;++i) { const auto& stage=draw.material.stage[i]; packed.tev[2+i*4]=stage.color; packed.tev[3+i*4]=stage.alpha; packed.tev[4+i*4]=stage.order; packed.tev[5+i*4]=stage.konst; }
         auto [palette_it,new_palette]=palette_indices.emplace(&*draw.transforms,UINT(palettes.size())); if(new_palette) { palettes.emplace_back(); gx::fill_palette(palettes.back(),*draw.transforms); }
         packed.push.projection=draw.transforms->projection; packed.push.palette=palette_it->second; packed.push.current=draw.transforms->current; packed.push.indexed=indexed;
-        packed.push.effects=controls_.per_pixel_lighting ? 1u : 0u;
+        packed.push.effects=(controls_.per_pixel_lighting ? 1u : 0u)|uint32_t(draw.ui_dim)<<kEffectUiDimShift;
         if(scene_packet) {
             if(controls_.effects.contact_shadows || controls_.effects.shadows!=EffectLevel::off) scene_lights_.add(*draw.uniforms);
             const auto summary=gx::summarize(draw); const auto key=tracker_->key(draw);
@@ -1035,7 +1036,7 @@ void D3D11Renderer::shutdown() {
     invalidate_held(); held_={}; held_depth_view_.Reset(); held_depth_.Reset();
     for(auto& level:bloom_down_) level={}; for(auto& level:bloom_up_) level={}; bloom_color_={}; bloom_region_={}; bloom_constants_={}; bloom_sampler_.Reset();
     for(auto& shader:bloom_shaders_) shader.Reset(); boundary_.reset(); scene_restore_copy_.reset(); frame_start_=true; scene_phase_=false;
-    hdr_constants_={}; hdr_vertex_.Reset(); hdr_pixel_.Reset(); hdr_active_=false; hdr_metadata_dirty_=true; bloom_valid_=false;
+    hdr_constants_={}; hdr_vertex_.Reset(); hdr_pixel_.Reset(); hdr_active_=false; publish_hdr_ui_dim(hdr_,false); hdr_metadata_dirty_=true; bloom_valid_=false;
     smaa_source_={}; smaa_edges_={}; smaa_weights_={}; smaa_output_={}; smaa_area_={}; smaa_search_={}; smaa_constants_={}; rcas_constants_={};
     for(auto& shader:smaa_shaders_) shader.Reset(); rcas_shader_.Reset();
     scene_color_={}; scene_depth_={}; scene_motion_={}; scene_gbuffer_={}; tracker_.reset(); scene_projection_.reset(); scene_captured_=scene_tracking_=scene_cleared_=false; motion_vertex_.Reset(); motion_pixel_.Reset();
@@ -1222,7 +1223,7 @@ void D3D11Renderer::blur_scene(const gx::SceneBoundary& boundary) {
     const uint32_t tile_width=(render_width+15)/16,tile_height=(render_height+15)/16;
     if(blur_tiles_.width!=tile_width || blur_tiles_.height!=tile_height) blur_tiles_=image(tile_width,tile_height,1,DXGI_FORMAT_R16G16_FLOAT,nullptr,true);
     if(effect_color_.width!=efb_.width || effect_color_.height!=efb_.height) effect_color_=image(efb_.width,efb_.height,1,DXGI_FORMAT_R8G8B8A8_UNORM,nullptr,true);
-    NativeBlurParams params{{width,height},{render_width,render_height},preset.shutter,preset.samples,16,0};
+    NativeBlurParams params{{width,height},{render_width,render_height},preset.shutter,preset.samples,16,blur_full_samples() ? 1u : 0u};
     upload(blur_constants_,&params,sizeof params,D3D11_BIND_CONSTANT_BUFFER); unbind_images(); context_->CSSetConstantBuffers(0,1,blur_constants_.buffer.GetAddressOf());
     for(size_t pass=0;pass<2;++pass) {
         ID3D11ShaderResourceView* inputs[]{efb_.srv.Get(),scene_motion_.srv.Get(),pass ? blur_tiles_.srv.Get() : nullptr};

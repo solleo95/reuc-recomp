@@ -1,6 +1,7 @@
 #include "check.h"
 #include "ax_audio.h"
 #include "ppc_fixture.h"
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <chrono>
@@ -51,6 +52,59 @@ int main() {
     setup(123,0x2000,0x2000); bool rejected=false;
     try { uc::mix_ax_voice(c,pb,mix); } catch (const std::invalid_argument&) { rejected=true; }
     CHECK(rejected);
+
+    // Independent PCM16 arithmetic/state oracle for signed ramps and playback boundaries.
+    {
+        std::array<int16_t,96> wave{};
+        for(size_t i=0;i<wave.size();++i) wave[i]=int16_t(int(i)*683-32768);
+        wave[1]=32767;
+        for(size_t i=0;i<wave.size();++i) ppc::wr16(c,0x80002000+uint32_t(i)*2,uint16_t(wave[i]));
+        struct Ramp { int envelope,left,right,delta,left_delta,right_delta; };
+        constexpr Ramp ramps[]={{32768,32768,16384,0,0,0},
+            {0,1,65535,32767,-32768,32767},
+            {65535,65535,0,-32768,32767,-32768},
+            {12345,23456,34567,-1,1,-1}};
+        for(const auto& ramp:ramps) for(uint32_t control:{0u,1u,2u,3u,7u})
+        for(uint16_t initial_phase:{uint16_t(0),uint16_t(12345)})
+        for(unsigned stop:{1u,7u,96u,0u}) {
+            const bool loop=stop==0;
+            const unsigned emitted=loop ? 96 : stop;
+            setup(10,0x1000,0x1000+(loop ? 4 : stop)-1);
+            ppc::wr32(c,pb+0x0C,control);
+            ppc::wr16(c,pb+0xAA,initial_phase);
+            ppc::wr16(c,pb+0x6A,uint16_t(ramp.envelope));
+            ppc::wr16(c,pb+0x14,uint16_t(ramp.left));
+            ppc::wr16(c,pb+0x18,uint16_t(ramp.right));
+            ppc::wr16(c,pb+0x6C,uint16_t(ramp.delta));
+            ppc::wr16(c,pb+0x16,uint16_t(ramp.left_delta));
+            ppc::wr16(c,pb+0x1A,uint16_t(ramp.right_delta));
+            if(loop) { ppc::wr16(c,pb+0x6E,1); ppc::wr32(c,pb+0x72,0x1000); }
+            std::array<int32_t,192> expected{};
+            for(size_t i=0;i<mix.size();++i) mix[i]=expected[i]=int32_t(i)*17-1200;
+            int envelope=ramp.envelope,left=ramp.left,right=ramp.right;
+            for(unsigned i=0;i<emitted;++i) {
+                const int64_t scaled=int64_t(wave[loop ? i%4 : i])*envelope/32768;
+                if(control&5) expected[i*2]+=int32_t(scaled*left/32768);
+                if(control&6) expected[i*2+1]+=int32_t(scaled*right/32768);
+                envelope=std::clamp(envelope+ramp.delta,0,65535);
+                if(control&4) {
+                    left=std::clamp(left+ramp.left_delta,0,65535);
+                    right=std::clamp(right+ramp.right_delta,0,65535);
+                }
+            }
+            uc::mix_ax_voice(c,pb,mix);
+            CHECK(mix==expected);
+            CHECK(ppc::rd16(c,pb+0x10)==(loop ? 1 : 0));
+            CHECK(ppc::rd32(c,pb+0x7A)==(loop ? 0x1000u : 0u));
+            CHECK(ppc::rd16(c,pb+0xAA)==initial_phase);
+            CHECK(ppc::rd16(c,pb+0xB2)==uint16_t(wave[loop ? 3 : emitted-1]));
+            CHECK(ppc::rd16(c,pb+0x6A)==envelope);
+            CHECK(ppc::rd16(c,pb+0x14)==left && ppc::rd16(c,pb+0x18)==right);
+            CHECK(ppc::rd16(c,pb+0x6C)==uint16_t(ramp.delta));
+            CHECK(ppc::rd16(c,pb+0x16)==uint16_t(ramp.left_delta));
+            CHECK(ppc::rd16(c,pb+0x1A)==uint16_t(ramp.right_delta));
+        }
+    }
 
     uc::Sched sched(c.mem);
     uint64_t blocks=0;

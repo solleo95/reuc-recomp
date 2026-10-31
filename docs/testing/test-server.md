@@ -107,5 +107,6 @@ The demo benchmark currently needs Python 3.12 or newer; on this machine use `py
 - "Accepts input" per page is unknown; the harness repeats presses instead (counted as `press_retries` in `report.json`).
 - Rendering is not skipped at speed > 1; logic is capped near 160–190 KPAD samples/s above speed 4.
 - Performance may only be measured at speed 1.
+- Steam Deck harness runs explicitly pass `--test-server` and `--fps-limit 0`, including `deck_perf.py --owner`: presentation is uncapped for tests, menus use x8 and measurement returns to x1. Ordinary Linux launches and config limits retain the 90 FPS maximum. A valid test server plus an explicit CLI zero is required for this exception; argument order does not matter.
 - Enemy aiming works for the zombie class only (`0x803F2B60`); other classes (boss, leeches, other chapters) are not aimed at and the bot fires at the screen centre. Dead = `hp` <= 0. See G22.
 - `--test-control` (file polling) stays until `scripts/train_route.py` is removed by the owner.

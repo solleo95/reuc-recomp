@@ -1,9 +1,13 @@
 add_library(uc_binding_editor STATIC binding_editor.cpp)
 if(WIN32)   # the self-updater is Windows-only; the Linux build (Steam Deck) uses the shared UI pieces below
-add_library(uc_launcher_update STATIC update.cpp)
+add_library(uc_launcher_update STATIC update.cpp update_common.cpp)
 target_include_directories(uc_launcher_update PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_launcher_update PUBLIC uc_update_download uc_update_process PRIVATE ole32)
 target_compile_definitions(uc_launcher_update PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()   # Linux (Steam Deck): update_posix.cpp, the same controller without a helper process
+add_library(uc_launcher_update STATIC update_common.cpp update_posix.cpp)
+target_include_directories(uc_launcher_update PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_launcher_update PUBLIC uc_update_download)
 endif()
 add_library(uc_launcher_locale STATIC localization.cpp)
 target_include_directories(uc_launcher_locale PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -29,7 +33,7 @@ FetchContent_MakeAvailable(wit)
 install(FILES ${wit_SOURCE_DIR}/bin/wit.exe ${wit_SOURCE_DIR}/bin/cygwin1.dll ${wit_SOURCE_DIR}/bin/cygz.dll
   ${wit_SOURCE_DIR}/bin/cygcrypto-1.1.dll ${wit_SOURCE_DIR}/bin/cygncursesw-10.dll DESTINATION tools/wit)
 install(FILES ${wit_SOURCE_DIR}/gpl-2.0.txt ${wit_SOURCE_DIR}/doc/wit-source.txt ${CMAKE_SOURCE_DIR}/third_party/wit/NOTICE.txt DESTINATION licenses/wit)
-add_library(uc_image_unpack STATIC image_unpack.cpp)
+add_library(uc_image_unpack STATIC image_unpack.cpp image_unpack_common.cpp)
 target_include_directories(uc_image_unpack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(uc_image_unpack PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(uc_image_unpack PRIVATE uc_windows_args)
@@ -117,15 +121,29 @@ target_link_libraries(uc_ui_style PUBLIC uc_imgui)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
   target_compile_options(uc_ui_style PRIVATE /FIintrin.h)
 endif()
+add_library(uc_deck_pages STATIC deck/settings_pages.cpp deck/rows.cpp deck/mods_page.cpp)   # the Steam Deck launcher's tabs over the settings registry and the mod manager (built on both platforms so the host tests cover it)
+target_include_directories(uc_deck_pages PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+target_link_libraries(uc_deck_pages PUBLIC uc_deck_nav uc_settings_registry uc_gamepad_panel uc_binding_editor uc_ui_style uc_imgui uc_mod_menu)
+add_library(uc_deck_nav STATIC deck/focus.cpp deck/nav_keys.cpp)   # the Deck launcher's focus model and key queue (no drawing): host-testable
+target_include_directories(uc_deck_nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+target_link_libraries(uc_deck_nav PUBLIC SDL3::SDL3)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)   # SDL3-3.2.0's prefetch workaround needs the Clang intrinsic guard loaded first
+  target_compile_options(uc_deck_nav PUBLIC /FIintrin.h)
+endif()
+add_library(uc_deck_game STATIC deck/game_path.cpp deck/exec_game.cpp)   # whether the chosen path holds the game, and the command that starts it (host-testable)
+target_include_directories(uc_deck_game PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+add_library(uc_file_browser STATIC deck/file_browser.cpp)   # the Deck launcher's file browser model (no UI): built on both platforms so the host tests cover it
+target_include_directories(uc_file_browser PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+target_link_libraries(uc_file_browser PUBLIC nlohmann_json::nlohmann_json)
 if(WIN32)   # the launcher program and its update window
 add_library(uc_update_ui STATIC update_ui.cpp)
 target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale uc_imgui)
 target_compile_definitions(uc_update_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-add_executable(uc_launcher WIN32 main.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+add_executable(uc_launcher WIN32 main.cpp graphite.cpp graphite_art.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_public_release)
-set(uc_launcher_libraries uc_binding_editor uc_settings_registry uc_gamepad_panel uc_gamepad_input uc_wiimote_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat shell32 ole32 windowscodecs dwmapi)
+set(uc_launcher_libraries uc_binding_editor uc_settings_registry uc_gamepad_panel uc_gamepad_input uc_wiimote_input uc_launch uc_image_unpack uc_cpu_calibration uc_imgui uc_ui_style uc_prompt_icons uc_launcher_locale uc_nat uc_mod_menu shell32 ole32 windowscodecs dwmapi)
 target_link_libraries(uc_launcher PRIVATE ${uc_launcher_libraries})
-add_executable(test_launcher_update_bootstrap WIN32 ${CMAKE_SOURCE_DIR}/tests/test_launcher_update_bootstrap.cpp graphite.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+add_executable(test_launcher_update_bootstrap WIN32 ${CMAKE_SOURCE_DIR}/tests/test_launcher_update_bootstrap.cpp graphite.cpp graphite_art.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
 target_link_libraries(test_launcher_update_bootstrap PRIVATE ${uc_launcher_libraries} uc_update_ui)
 target_include_directories(test_launcher_update_bootstrap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
 target_compile_options(test_launcher_update_bootstrap PRIVATE /FIintrin.h)
@@ -143,4 +161,38 @@ add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-brand.png)
 install(FILES ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png DESTINATION assets/launcher)
+else()   # the Steam Deck launcher (docs/superpowers/specs/2026-10-31-steamdeck-launcher-design.md)
+# stb_image decodes the two PNGs of the launcher's artwork (the Windows launcher uses WIC); pinned like the other dependencies.
+set(stb_image_url "https://raw.githubusercontent.com/nothings/stb/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5/stb_image.h")
+if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/stb_image-2.30.h")
+  set(stb_image_url "${CMAKE_SOURCE_DIR}/build/deps/stb_image-2.30.h")
+endif()
+include(FetchContent)
+FetchContent_Declare(stb_image URL "${stb_image_url}" URL_HASH SHA256=594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3
+  DOWNLOAD_NO_EXTRACT TRUE DOWNLOAD_NAME stb_image.h)
+FetchContent_MakeAvailable(stb_image)
+# Wit (Wiimms ISO Tools, GPL-2.0+) unpacks the disc image chosen in the launcher: the same version as the Windows package, the static Linux build. It runs as a
+# separate program; only the binary is installed.
+set(wit_linux_archive "https://wit.wiimm.de/download/wit-v3.05a-r8638-x86_64.tar.gz")
+if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-x86_64.tar.gz")
+  set(wit_linux_archive "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-x86_64.tar.gz")
+endif()
+FetchContent_Declare(wit_linux URL "${wit_linux_archive}"
+  URL_HASH SHA256=df95a14f1b4b2bd95d3111b70c6304e91d4ed3e4c7f72b1ad5306c3616d8933f DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
+FetchContent_MakeAvailable(wit_linux)
+add_library(uc_update_ui STATIC update_ui.cpp)
+target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale uc_imgui)
+add_library(uc_launch_probe STATIC launch_posix.cpp)   # query_features: the GPU report asked of uc itself
+target_include_directories(uc_launch_probe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/game)
+target_link_libraries(uc_launch_probe PUBLIC uc_options_config)
+add_library(uc_image_unpack STATIC image_unpack_posix.cpp image_unpack_common.cpp)   # the Linux ImageUnpack (Wit through posix_spawn)
+target_include_directories(uc_image_unpack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(uc_launcher deck/main_deck.cpp deck/paths_posix.cpp deck/instance_lock.cpp deck/file_browser_ui.cpp graphite_art.cpp graphite_posix.cpp)
+target_include_directories(uc_launcher PRIVATE ${stb_image_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_deck_nav uc_deck_pages uc_deck_game uc_file_browser uc_launch_probe uc_image_unpack uc_gamepad_input uc_ui_style uc_settings_registry uc_launcher_locale uc_options_config uc_imgui)
+add_custom_command(TARGET uc_launcher POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-brand.png)
+# The Deck package is assembled by scripts/linux/deck.py (package): `cmake --install` of this tree would also want the unbuilt test tools.
 endif()

@@ -37,7 +37,7 @@ uint4 loadedRows(uint palette) { return palettes[palette].loaded; }
 // alphaPass: ubershader only. motion/jitter/viewport: the MOTION variant (upscaling) only; jitter in target pixels, viewport = the draw's
 // Vulkan viewport (x, y, width, height) in target pixels.
 // effects: bit 0 = per-pixel lighting (uc::kEffectPerPixelLighting), bit 1 = albedo and material targets (kEffectRtMaterial), bit 2 = the draw's record is
-// model-valid (kEffectRtModelValid); the MOTION variant only. record: the draw's material record index (rt_material.h), ~0u = none.
+// model-valid (kEffectRtModelValid); the MOTION variant only. Bits 8..15: the interface brightness factor (kEffectUiDimShift), every variant. record: the draw's material record index (rt_material.h), ~0u = none.
 struct Projection { float4 rows[4]; uint palette; uint currentRow; uint indexed; uint alphaPass; uint bank; uint motion; float2 jitter; float4 viewport; uint effects; uint record; float2 shift; };
 [[vk::push_constant]] ConstantBuffer<Projection> projection : register(b1);
 // Last frame's matrices of this draw (gx::MotionTracker): kind 1 = previous palette + previous projection, kind 2 = camera only
@@ -68,8 +68,8 @@ float4 lightControl(float4 base, uint channel, uint control, float3 position, fl
     uint mask = ((control >> 2) & 15) | ((control >> 7) & 240);
     uint diffuse = (control >> 7) & 3;
     uint attenuation = (control >> 9) & 3;
-    for(uint i=0; i<8; ++i) if((mask & (1u << i)) != 0) {
-        NativeLight light = drawState.lights[i];
+    for(uint remaining = mask; remaining != 0; remaining &= remaining - 1) {   // the set bits only, lowest first
+        NativeLight light = drawState.lights[firstbitlow(remaining)];
         float3 delta = light.position.xyz - position;
         float lengthSquared = dot(delta,delta);
         float distance = sqrt(lengthSquared);
@@ -98,8 +98,9 @@ float4 lightControl(float4 base, uint channel, uint control, float3 position, fl
 }
 float4 shadeChannel(float4 base, uint channel, float3 position, float3 normal) {
     if(channel>=drawState.pixel.w) return float4(0.0);
-    float4 color = lightControl(base,channel,drawState.channels[channel],position,normal);
-    color.a = lightControl(base,channel,drawState.channels[channel+2],position,normal).a;
+    const uint colorControl = drawState.channels[channel], alphaControl = drawState.channels[channel+2];
+    float4 color = lightControl(base,channel,colorControl,position,normal);
+    if(alphaControl != colorControl) color.a = lightControl(base,channel,alphaControl,position,normal).a;   // equal controls give the same alpha lane
     return color;
 }
 // GX regular texgen (XF 0x1040+n): source row, AB11/ABC1 input, ST/STQ through the texture matrix,
@@ -153,8 +154,17 @@ Output vertexMain(Input input) {
     if (allLoaded) viewNormal = float3(dot(normalRowAt(projection.palette, normalRow).xyz, input.objectNormal), dot(normalRowAt(projection.palette, normalRow + 1).xyz, input.objectNormal), dot(normalRowAt(projection.palette, normalRow + 2).xyz, input.objectNormal));
 #ifndef SHADOW   // the shadow map's vertex stage (smoke.shadow.vert.spv) stops here: position only, no lighting, no texture coordinates
     float3 normal = dot(viewNormal,viewNormal)>0.0 ? normalize(viewNormal) : float3(0.0);
+    output.color = input.color;
+    output.color1 = input.color1;
+#if defined(MOTION) || defined(UC_DIRECTX)
+    // With per-pixel lighting the fragment stage lights a lit channel again from the raw colours (shadeFragment): the vertex result would be thrown away.
+    const bool pixelLit = (projection.effects & 1u) != 0;
+    if(!(pixelLit && ((drawState.channels[0] | drawState.channels[2]) & 2u) != 0)) output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
+    if(!(pixelLit && ((drawState.channels[1] | drawState.channels[3]) & 2u) != 0)) output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
+#else
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
+#endif
 #if defined(MOTION) || defined(UC_DIRECTX)
     output.rawColor0 = input.color; output.rawColor1 = input.color1; output.viewPosition = viewPosition.xyz; output.viewNormal = viewNormal;
 #endif
@@ -278,6 +288,8 @@ float4 shadeFragment(Output input) {
     bool pass=operation==0 ? first&&second : operation==1 ? first||second : operation==2 ? first!=second : first==second;
     if(!pass) discard;
     result.rgb=applyFog(result.rgb,input.position.z);
+    const uint uiDim=(projection.effects>>8)&255u;   // kEffectUiDimShift: the HDR interface brightness of this draw
+    if(uiDim!=0u) result.rgb*=float(uiDim)/255.0;
     if(destinationAlphaPass!=0) result.a=float(drawState.pixel.z&255)/255.0;
     return result;
 }

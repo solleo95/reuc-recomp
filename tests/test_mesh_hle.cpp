@@ -241,7 +241,7 @@ int main() {
         ppc::wr32(c,0x80001080,30u<<6);
         ppc::wr8(c,0x80002546,0x30); ppc::wr32(c,0x80002547,0xB078);
         ppc::wr8(c,0x8000254B,0x90); ppc::wr16(c,0x8000254C,3);
-        for(uint32_t i=0;i<3;++i) ppc::wr8(c,0x8000254E+i,uint8_t(i));
+        for(uint32_t i=0;i<3;++i) ppc::wr8(c,0x8000254E + i,uint8_t(i));
         c.r[3]=0x80002000; hle_ResMeshDraw(c);
         c.r[3]=0x80004000; c.r[4]=0; hle_GXCopyDisp(c);
         packet=packets.try_take(); CHECK(packet && packet->draws.size()==3);

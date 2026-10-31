@@ -348,7 +348,9 @@ def perf(g, args):
         g.wait(lambda f: f.get("speed") == 1 and f.get("context") == "gameplay", seconds=10, awaited="speed 1 in gameplay")
     result = {"capture": g.capture()}
     with g.step("measure_fps"):
+        result["measure_from_retrace"] = int(g.frame["retraces"])
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
+        result["measure_to_retrace"] = int(g.frame["retraces"])
     return result
 
 
@@ -665,6 +667,37 @@ def overlay(g, args):
         g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
         result["closed"] = g.capture()
     return result
+
+
+def hdr_toggle(g, args):
+    """HDR switched off and on again in gameplay (the checkbox): the game keeps running through every switch. The modes picked are the "HDR output:" lines of the run log."""
+    reach_gameplay(g, args.chapter)
+    for enabled in (False, True, False, True):
+        with g.step(f"set_hdr={enabled}"):
+            g.set_options(hdr=enabled)
+            g.advance(120)
+            if g.frame.get("context") != "gameplay":
+                g.fail(f"hdr={enabled}: gameplay ended", "settings")
+    return {}
+
+
+def hdr_ui(g, args):
+    """The interface brightness slider in gameplay: 300 nits (paper white on the Deck: no change), then 80; the HUD of the game and the menu follow it live.
+    UC_HDR_UI_NITS=<n> holds that one value for a minute instead (to grab frames of it from outside)."""
+    import os
+    reach_gameplay(g, args.chapter)
+    held = os.environ.get("UC_HDR_UI_NITS")
+    if held:
+        g.set_options(hdr_ui_nits=int(held))
+        g.advance(3600)
+        return {}
+    for nits in (300, 80, 300):
+        with g.step(f"set_hdr_ui_nits={nits}"):
+            g.set_options(hdr_ui_nits=nits)
+            g.advance(600)
+            if g.frame.get("context") != "gameplay":
+                g.fail(f"hdr_ui_nits={nits}: gameplay ended", "settings")
+    return {}
 
 
 MODS_SMOKE_MODS = ["infinite_ammo", "god_mode", "pistol_autofire", "faster_handgun"]
@@ -1635,7 +1668,7 @@ def pointer_range(g, args):
 
 
 SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "no_tutorials": no_tutorials, "controls": controls, "weapon_switch": weapon_switch, "perf": perf, "fight": fight, "autoplay": autoplay, "resize": resize,
-             "pause": pause, "overlay": overlay, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent, "dol_names": dol_names}
+             "pause": pause, "overlay": overlay, "hdr_toggle": hdr_toggle, "hdr_ui": hdr_ui, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent, "dol_names": dol_names}
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"], "dol_names": ["dol_names"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a fixture that leaves input unchanged
 SCENARIOS["camera_stick"] = camera_stick

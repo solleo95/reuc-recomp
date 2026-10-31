@@ -4,6 +4,7 @@
 #include "menu_ui.h"
 #include "options_config.h"
 #include "settings_menu.h"
+#include "standalone.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <fstream>
@@ -318,8 +319,59 @@ static void no_mods_menu_is_harmless() {
     w.select(5);
 }
 
+// The launchers' manager: no game, no host. The same widgets over StandaloneMods; a declared setting is edited and saved, nothing a running mod would draw.
+static void standalone_declared_setting_click_and_commit() {
+    const auto dir = fresh("menu_standalone");
+    for (const char* id : {"alpha", "plain"}) {
+        fs::create_directories(dir / id);
+        std::ofstream(dir / id / "mod.json") << R"({"id":")" << id << R"(","name":")" << id << R"(","version":"1.0","api":"1.0","script":"s.lua")" << (std::string(id) == "alpha" ? std::string(",") + kSettings : std::string()) << "}";
+    }
+    StandaloneMods mods(dir, json::object());
+    std::vector<json> saved;
+    ModMenuUi ui([&] { return &mods.registry(); }, []() -> ModHost* { return nullptr; }, "en");
+    ui.set_standalone(&mods);
+    ui.set_save([&](const json& section) { saved.push_back(section); });
+    ImGuiContext* context = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.DisplaySize = {1280, 720}; io.DeltaTime = 1.f / 60; io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0}); ImGui::SetNextWindowSize({1280, 720});
+        ImGui::Begin("Mods", nullptr, ImGuiWindowFlags_NoDecoration);
+        ui.manager_tab(1.f);
+        ImGui::End();
+        ImGui::Render();
+        for (auto* texture : ImGui::GetPlatformIO().Textures) { texture->SetTexID(1); texture->SetStatus(ImTextureStatus_OK); }
+        ui.commit();
+    };
+    const auto click = [&](const std::string& key) {
+        const auto rect = ui.rect_of(key);
+        if (!rect) return false;
+        io.AddMousePosEvent(((*rect)[0] + (*rect)[2]) / 2, ((*rect)[1] + (*rect)[3]) / 2); frame();
+        io.AddMouseButtonEvent(0, true); frame();
+        io.AddMouseButtonEvent(0, false); frame(); frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));   // commit() waits a moment after a widget was active
+        frame();
+        return true;
+    };
+    for (int i = 0; i < 6; ++i) frame();
+    CHECK(ui.rect_of("manager/settings/alpha") && !ui.rect_of("manager/settings/plain"));   // a gear only for a mod that declares settings
+    CHECK(click("manager/enable/plain") && mods.registry().wanted("plain") && !saved.empty());   // the manager saves the registry's choice
+    CHECK(saved.back()["enabled"][0] == "plain");
+    saved.clear();
+    CHECK(click("manager/settings/alpha"));
+    for (int i = 0; i < 3; ++i) frame();
+    CHECK(mods.settings("alpha") && mods.settings("alpha")->get("on") == false);
+    CHECK(click("setting/alpha/on"));
+    CHECK(mods.settings("alpha")->get("on") == true);
+    CHECK(!saved.empty() && saved.back()["alpha"]["settings"]["on"] == true);
+    ImGui::DestroyContext(context);
+}
+
 int main() {
     const std::pair<const char*, void (*)()> tests[] = {
+        {"standalone_declared_setting_click_and_commit", standalone_declared_setting_click_and_commit},
         {"mods_have_one_tab_and_a_gear_each", mods_have_one_tab_and_a_gear_each}, {"many_mods_do_not_add_tabs", many_mods_do_not_add_tabs},
         {"declared_setting_click_and_commit", declared_setting_click_and_commit}, {"commit_waits_for_the_end_of_a_drag", commit_waits_for_the_end_of_a_drag},
         {"language_fallback_for_names_and_labels", language_fallback_for_names_and_labels},

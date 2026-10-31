@@ -12,6 +12,6 @@ struct NativeOcclusionParams {
 static_assert(sizeof(NativeOcclusionParams)==128 && offsetof(NativeOcclusionParams,depth_range)==88 && offsetof(NativeOcclusionParams,light)==96);
 struct NativeShadowBlock { float rows[3][4],info[4]; uint32_t taps[4]; float to_light[4]; };
 static_assert(sizeof(NativeShadowBlock)==96);
-struct NativeBlurParams { uint32_t output_size[2],render_size[2]; float shutter; uint32_t samples,tile_size=16,reserved=0; };
+struct NativeBlurParams { uint32_t output_size[2],render_size[2]; float shutter; uint32_t samples,tile_size=16,full_samples=0; };
 static_assert(sizeof(NativeBlurParams)==32);
 }
