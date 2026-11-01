@@ -122,7 +122,9 @@ void GxStream::walk(std::span<const std::byte> bytes,unsigned depth,uint32_t ori
                     if(reg==0x65)load_palette();
                 }
             } else if(op&0x80) {
-                auto count=be(bytes,p,2);auto state=layout();
+                auto count=be(bytes,p,2);
+                if(count) {   // a primitive without vertices draws nothing
+                auto state=layout();
                 auto size=gx::encoded_draw_size(state,uint8_t(op&0xF8),uint8_t(op&7),uint16_t(count),origin+uint32_t(start));
                 if(size>bytes.size()-p) throw std::runtime_error("truncated primitive");
                 if(stats.vertices+count>1000000 || stats.draws>=100000) throw std::runtime_error("decoded geometry budget exceeded");
@@ -133,6 +135,7 @@ void GxStream::walk(std::span<const std::byte> bytes,unsigned depth,uint32_t ori
                 auto draw=vertices.take_draw();draw.transforms=transforms();material(draw);
                 bind_textures(draw);check_texgen(draw);pending_.draws.push_back(std::move(draw));
                 ++stats.draws;stats.vertices+=count;p+=size;
+                }
             } else throw std::runtime_error("unknown opcode "+std::to_string(op));
             command_bytes_+=p-start;
             if(command_bytes_>128*1024*1024)throw std::runtime_error("command budget exceeded");

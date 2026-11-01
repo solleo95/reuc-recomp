@@ -289,6 +289,15 @@ int main() {
         CHECK(ppc::rd32(ctx,0x80002014)==0 && ppc::rd32(ctx,0x80002040)==11 && ppc::rd32(ctx,0x8000205C)==0);
         CHECK(uc::gx_stats().draws==0); // recording resource data submits no geometry
         rejects(gx::ErrorCode::sequence,[&]{hle_GXEndDisplayList(ctx);});
+        // A primitive without vertices (a quad batch with nothing to draw) is legal and draws nothing, live and recorded.
+        ctx.r[3]=0x80; ctx.r[4]=0; ctx.r[5]=0; hle_GXBegin(ctx);
+        CHECK(!uc::gx_fifo_in_primitive() && uc::gx_stats().draws==0);
+        ppc::wr32(ctx,0x800015FC,0);
+        ctx.r[3]=0x80002000; ctx.r[4]=128; hle_GXBeginDisplayList(ctx);
+        ctx.r[3]=0x80; ctx.r[4]=0; ctx.r[5]=0; hle_GXBegin(ctx);
+        CHECK(!uc::gx_fifo_in_primitive());
+        hle_GXEndDisplayList(ctx);
+        CHECK(ctx.r[3]==32 && ppc::rd8(ctx,0x80002000)==0x80 && ppc::rd16(ctx,0x80002001)==0);
         ctx.r[3]=0x80002001; ctx.r[4]=128;
         rejects(gx::ErrorCode::layout,[&]{hle_GXBeginDisplayList(ctx);});
         ctx.r[3]=0xCC008000; ctx.r[4]=128;

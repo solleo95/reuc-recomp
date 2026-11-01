@@ -905,6 +905,7 @@ void hle_GXBegin(ppc::Ctx& c) {
         if (!read32(sdk)) uc::call_guest(c,0x8028511C,{});
         uc::gx_fifo_write(1,uint8_t(primitive) | uint8_t(vat));
         uc::gx_fifo_write(2,uint16_t(count));
+        if (!uint16_t(count)) return;   // the list keeps the header; a primitive without vertices draws nothing
         if (!recording->overflow) {
             auto layout=snapshot(c);
             const size_t expected=gx::encoded_draw_size(layout,uint8_t(primitive),uint8_t(vat),uint16_t(count),callsite);
@@ -920,6 +921,7 @@ void hle_GXBegin(ppc::Ctx& c) {
         for(uint32_t reg=0;reg<2;++reg) set_matrix_index(reg,read32(sdk+0x80+reg*4));
         ppc::wr32(c,sdk+0x5FC,dirty&~0x04000000u);
     }
+    if (!uint16_t(c.r[5])) return;   // a primitive without vertices (an empty quad batch) draws nothing
     capture->begin(gx::share(live_state,snapshot(c)), uint8_t(c.r[3]), uint8_t(c.r[4]), uint16_t(c.r[5]), producer(), c.lr ? c.lr - 4 : 0x80284FD0,replaying);
     if(replaying) { known_sdk=sdk; return; }
     live_texture=snapshot_texture(bound_textures[0],palettes);
