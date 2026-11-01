@@ -5,6 +5,7 @@ ports by one `ssh -L`. Saves and config go over as a tar, the artifacts (run.log
 removed afterwards: the Deck has little free space. Enable with `python -m uctest run <scenario> --deck` (sets UC_DECK=1).
 """
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -67,7 +68,7 @@ class DeckRun:
 
     def _start_in_game_mode(self, args, env=None):
         """The run the owner can watch: Steam starts the non-Steam shortcut of uc-deck.sh in Game Mode (gamescope shows it like any game); next-run.sh carries this run's arguments.
-        The returned ssh process ends when the game has ended (it waits for `uc` to appear, then to go)."""
+        The returned ssh process ends when the selected executable has appeared, then exited."""
         env = dict(env or {})
         for key, value in os.environ.items():
             if key.startswith(("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_EXE", "LLVM_PROFILE_FILE", "RADV_", "MESA_", "AMD_", "mesa_")):   # diagnostics of the run, and the driver's switches: the profiler (its output lands in the run folder, which comes back with the artifacts)
@@ -77,8 +78,10 @@ class DeckRun:
             lines.append(f'export UC_CPU_SAMPLE_OUT="{self.remote_dir.replace("~", "$HOME", 1)}/cpu-samples.txt"')
         lines += ["set -- " + " ".join(shlex.quote(a) for a in args), f"exec > {self.remote_dir}/run.log 2>&1"]
         _ssh(f"mkdir -p {self.remote_dir} && cat > {REMOTE}/next-run.sh", input=("\n".join(lines) + "\n").encode(), check=True)
+        # Linux comm is limited to 15 bytes; staged test executable names are ASCII.
+        process = shlex.quote(re.escape(env.get("UC_EXE", "./uc").rsplit("/", 1)[-1][:15]))
         launch = (f"pkill -x uc; XDG_RUNTIME_DIR={RUNTIME} DISPLAY=:0 steam -ifrunning steam://rungameid/{SHORTCUT_ID} >/dev/null 2>&1; "
-                  "for i in $(seq 1 120); do pgrep -x uc >/dev/null && break; sleep 0.5; done; while pgrep -x uc >/dev/null; do sleep 1; done")
+                  f"for i in $(seq 1 120); do pgrep -x {process} >/dev/null && break; sleep 0.5; done; while pgrep -x {process} >/dev/null; do sleep 1; done")
         self.process = subprocess.Popen(SSH + [launch], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.environ.get("UC_DECK_MONITOR"):   # what the game uses while it runs: scripts/linux/deck_monitor.py (it ends with the game)
             with open(Path(__file__).resolve().parents[1] / "linux" / "deck_monitor.py", "rb") as source:

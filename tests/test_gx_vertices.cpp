@@ -1,6 +1,8 @@
 #include "check.h"
 #include "gx_vertices.h"
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstring>
 
 static std::span<const std::byte> bytes(const std::vector<uint8_t>& v) {
@@ -11,7 +13,54 @@ template<class Fn> static void rejects(gx::ErrorCode code, Fn fn) {
     try { fn(); } catch (const gx::Error& e) { caught = true; CHECK(e.code == code); }
     CHECK(caught);
 }
+static void scalar_cases() {
+    for (auto type : {gx::Type::u8, gx::Type::s8, gx::Type::u16, gx::Type::s16, gx::Type::f32}) {
+        const unsigned width = type == gx::Type::f32 ? 4 : type == gx::Type::u16 || type == gx::Type::s16 ? 2 : 1;
+        const bool normal = type == gx::Type::s8 || type == gx::Type::s16 || type == gx::Type::f32;
+        const std::vector<uint32_t> values = type == gx::Type::f32
+            ? std::vector<uint32_t>{0, 0x80000000, 0x3F800000, 0xBF800000, 1, 0x7F7FFFFF, 0x7F800000, 0x7FC12345}
+            : width == 1 ? std::vector<uint32_t>{0, 1, 0x3F, 0x7F, 0x80, 0x81, 0xFE, 0xFF}
+                         : std::vector<uint32_t>{0, 1, 0x3FFF, 0x7FFF, 0x8000, 0x8001, 0xFFFE, 0xFFFF};
+        for (uint8_t fraction = 0; fraction <= 31; ++fraction) for (uint32_t raw : values) {
+            gx::State state;
+            for (size_t attr : {9, 11, 13}) state.descriptors[attr] = gx::Mode::direct;
+            state.formats[0][9] = state.formats[0][13] = {type, 2, fraction};
+            if (normal) {
+                state.descriptors[10] = gx::Mode::direct;
+                state.formats[0][10] = {type, 9, fraction};
+            }
+            std::vector<uint8_t> input;
+            auto append = [&](unsigned count) {
+                for (unsigned i = 0; i < count; ++i) for (unsigned b = width; b; --b)
+                    input.push_back(uint8_t(raw >> ((b - 1) * 8)));
+            };
+            append(2);
+            if (normal) append(9);
+            input.insert(input.end(), {17, 83, 149, 211});
+            append(2);
+            gx::Vertices capture({{}, {}, {}});
+            capture.begin(state, 0xB8, 0, 1, 7, 0);
+            capture.write_attribute(7, bytes(input));
+            const auto draw = capture.take_draw();
+            float value = float(raw);
+            if (type == gx::Type::s8) value = float(std::bit_cast<int8_t>(uint8_t(raw)));
+            if (type == gx::Type::s16) value = float(std::bit_cast<int16_t>(uint16_t(raw)));
+            const uint32_t expected = type == gx::Type::f32 ? raw : std::bit_cast<uint32_t>(std::ldexp(value, -int(fraction)));
+            for (unsigned i = 0; i < 2; ++i) {
+                CHECK(std::bit_cast<uint32_t>(draw.vertices[0].position[i]) == expected);
+                CHECK(std::bit_cast<uint32_t>(draw.vertices[0].texcoord[0][i]) == expected);
+            }
+            CHECK((draw.vertices[0].color[0] == std::array<uint8_t,4>{17,83,149,211}));
+            if (normal) {
+                const int shift = type == gx::Type::s8 ? 6 : 14;
+                const uint32_t want = type == gx::Type::f32 ? raw : std::bit_cast<uint32_t>(std::ldexp(value, -shift));
+                for (float component : draw.vertices[0].normal) CHECK(std::bit_cast<uint32_t>(component) == want);
+            }
+        }
+    }
+}
 int main() {
+    scalar_cases();
     std::vector<std::byte> ram(256);
     gx::Vertices capture({ram, {}, {}});
     gx::State state;

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+void hle_Leaf_80137BC4(ppc::Ctx&);
 int main() {
     Fix f;
     auto tracker=std::make_unique<uc::RollbackMemory>(f.c.mem);
@@ -92,6 +93,28 @@ int main() {
         memory.capture();
     }
     const auto dirty_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-dirty_start).count();
+    // Native matrix outputs and spills cross pages; tracking must cover both without invalidating GPU caches for stack-only writes.
+    for(uint32_t output : {0x80041FE0u,0x90041FE0u,0x80031FF0u}) {
+        memory.restore(*initial);
+        f.c.r[1]=0x80032004; f.c.r[3]=output; f.c.r[4]=0x80050FE0; f.c.gqr[0]=0;
+        for(uint32_t i=0;i<16;++i) {
+            ppc::wr32(f.c,output+i*4,0x3F800000u+i*0x10000);
+            ppc::wr32(f.c,f.c.r[4]+i*4,0x40000000u+i*0x10000);
+        }
+        for(int i=0;i<32;++i) { f.c.f[i]=i+0.25; f.c.ps1[i]=i+0.5; }
+        const auto before=memory.capture(true);
+        const auto stamp=gx::watch_stamp();
+        hle_Leaf_80137BC4(f.c);
+        CHECK(uc::rollback_dirty[(output&0x3FFFFFFFu)>>12]);
+        CHECK(uc::rollback_dirty[((output+63)&0x3FFFFFFFu)>>12]);
+        CHECK(uc::rollback_dirty[0x31] && uc::rollback_dirty[0x32]);
+        if(output!=0x80031FF0u) CHECK(!gx::written_since(0x80031EC4,320,stamp));
+        const auto after=memory.capture(true);
+        CHECK(!uc::RollbackMemory::difference(*before,*after).empty());
+        memory.restore(*before);
+        CHECK(uc::RollbackMemory::difference(*before,*memory.capture(true)).empty());
+    }
+    memory.restore(*initial);
     std::printf("rollback memory: first full hash %.3f ms, changed hash %.3f ms, 120 unchanged captures %.3f ms, 120 x 64 dirty pages %.3f ms\n",hash_ms,changed_hash_ms,capture_ms,dirty_ms);
     tracker.reset();
     // Returned snapshots retain their pages after the second tracker leaves scope.

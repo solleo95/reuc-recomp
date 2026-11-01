@@ -11,6 +11,10 @@ function(uc_linux_test name)
 endfunction()
 
 uc_linux_test(test_compat_bswap)
+uc_linux_test(test_gx_vertices uc_gx)
+target_include_directories(test_gx_vertices PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
+uc_linux_test(test_gx_packets uc_gx)
+target_include_directories(test_gx_packets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
 
 add_library(uc_clock_only STATIC ${CMAKE_SOURCE_DIR}/runtime/clock.cpp)   # until the whole runtime links for Linux
 target_compile_options(uc_clock_only PUBLIC "-iquote${CMAKE_SOURCE_DIR}/runtime")
@@ -48,7 +52,7 @@ target_include_directories(test_diagnostic_log_posix PRIVATE ${CMAKE_CURRENT_SOU
 add_library(test_support STATIC ${CMAKE_CURRENT_SOURCE_DIR}/../mmio_stub.cpp)   # the same stubs the Windows tests use
 target_link_libraries(test_support PUBLIC uc_runtime)
 foreach(t test_ppc_int test_ppc_mem test_ppc_float test_mmio test_lowmem test_sched test_sched_restore test_os_hle test_dvd test_vi test_exi test_ios test_dsp
-          test_gx_audit test_gx_hle test_texture_matrix_hle test_mesh_hle test_sdk_math_hle test_sdk_regs_hle test_save_hle test_rollback_memory)   # not test_leaf_hle: it catches host faults with Windows SEH (__try/__except)
+          test_gx_audit test_gx_hle test_texture_matrix_hle test_mesh_hle test_sdk_math_hle test_sdk_regs_hle test_leaf_hle test_save_hle test_rollback_memory)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../${t}.cpp)
     uc_linux_test(${t} test_support)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
