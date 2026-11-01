@@ -188,7 +188,7 @@ target_link_libraries(uc_launch_probe PUBLIC uc_options_config)
 add_library(uc_image_unpack STATIC image_unpack_posix.cpp image_unpack_common.cpp)   # the Linux ImageUnpack (Wit through posix_spawn)
 target_include_directories(uc_image_unpack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(uc_launcher deck/main_deck.cpp deck/paths_posix.cpp deck/instance_lock.cpp deck/file_browser_ui.cpp graphite_art.cpp graphite_posix.cpp)
-target_include_directories(uc_launcher PRIVATE ${stb_image_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck)
+target_include_directories(uc_launcher PRIVATE ${stb_image_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck ${CMAKE_SOURCE_DIR}/common)
 target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_deck_nav uc_deck_pages uc_deck_game uc_file_browser uc_launch_probe uc_image_unpack uc_gamepad_input uc_ui_style uc_settings_registry uc_launcher_locale uc_options_config uc_imgui)
 add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher

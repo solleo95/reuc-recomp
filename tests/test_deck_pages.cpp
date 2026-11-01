@@ -50,13 +50,25 @@ int main() {
         for (size_t i = 0; i < items.size(); ++i) { if (std::string_view(items[i]->id) == "gyro_mode") mode_at = i; if (std::string_view(items[i]->id) == "gyro_hold_button") hold_at = i; }
         CHECK(mode_at != 99 && hold_at == mode_at + 1);
     }
-    // what can be chosen as the hold button: a trigger, a shoulder or a stick button; a face button or a key cannot
+    // what can be chosen as the hold button: any gamepad button (face, D-pad, View, sticks, shoulders, paddles) or a trigger; a stick direction, a key or the mouse cannot
     for (const PhysicalInput input : {PhysicalInput{PhysicalKind::pad_axis, 9}, PhysicalInput{PhysicalKind::pad_axis, 11}, PhysicalInput{PhysicalKind::pad_button, 9},
-                                      PhysicalInput{PhysicalKind::pad_button, 10}, PhysicalInput{PhysicalKind::pad_button, 7}, PhysicalInput{PhysicalKind::pad_button, 8}})
+                                      PhysicalInput{PhysicalKind::pad_button, 10}, PhysicalInput{PhysicalKind::pad_button, 7}, PhysicalInput{PhysicalKind::pad_button, 8},
+                                      PhysicalInput{PhysicalKind::pad_button, 0}, PhysicalInput{PhysicalKind::pad_button, 1}, PhysicalInput{PhysicalKind::pad_button, 11},
+                                      PhysicalInput{PhysicalKind::pad_button, 16}, PhysicalInput{PhysicalKind::pad_button, 31}})
         CHECK(gyro_hold_allowed(input));
-    for (const PhysicalInput input : {PhysicalInput{PhysicalKind::pad_button, 0}, PhysicalInput{PhysicalKind::pad_button, 1}, PhysicalInput{PhysicalKind::pad_axis, 0},
-                                      PhysicalInput{PhysicalKind::key, 9}, PhysicalInput{PhysicalKind::mouse, 1}})
+    for (const PhysicalInput input : {PhysicalInput{PhysicalKind::pad_axis, 0}, PhysicalInput{PhysicalKind::pad_axis, 1}, PhysicalInput{PhysicalKind::key, 9}, PhysicalInput{PhysicalKind::mouse, 1}})
         CHECK(!gyro_hold_allowed(input));
+    {   // the recenter row: after the gyro button, only while the gyro is on, on the Deck surfaces only
+        CHECK(shown("gyro_recenter", deck_menu) && shown("gyro_recenter", deck_launcher) && !shown("gyro_recenter", desktop_menu) && !shown("gyro_recenter", desktop_launcher));
+        Options on;
+        on.gamepad.gyro.mode = GyroMode::off; CHECK(!shown("gyro_recenter", deck_launcher, on, env));
+        on.gamepad.gyro.mode = GyroMode::always; CHECK(shown("gyro_recenter", deck_launcher, on, env));
+        on.gamepad.gyro.mode = GyroMode::hold; CHECK(shown("gyro_recenter", deck_launcher, on, env));
+        const auto items = items_for(deck_launcher, Page::gamepad);
+        size_t hold_at = 99, recenter_at = 99;
+        for (size_t i = 0; i < items.size(); ++i) { if (std::string_view(items[i]->id) == "gyro_hold_button") hold_at = i; if (std::string_view(items[i]->id) == "gyro_recenter") recenter_at = i; }
+        CHECK(hold_at != 99 && recenter_at == hold_at + 1);   // right under the gyro button
+    }
     CHECK(!validate_gamepad(options.gamepad));   // the default hold button (the left trigger) is one of them
     std::puts("deck pages: tabs and registry passed");
 }

@@ -33,7 +33,7 @@ settings::Env DeckMenu::env() const {
 }
 void DeckMenu::opened() {
     std::lock_guard lock(mutex_);
-    nav_=DeckNav{}; queue_.clear(); has_hold_=false; stick_scroll_=0; close_requested_=false; moved_by_key_=true; list_was_open_=false; stick_dir_[0]=stick_dir_[1]=0;
+    nav_=DeckNav{}; queue_.clear(); has_hold_=false; stick_scroll_=0; close_requested_=quit_armed_=quit_requested_=false; button_sub_=0; moved_by_key_=true; list_was_open_=false; stick_dir_[0]=stick_dir_[1]=0;
     editor_=BindingEditor(current().gamepad.bindings,BindingTable::gamepad); was_mods_page_=false;
     right_pad_pressed_=click_open_=false; clicks_.clear();
 }
@@ -42,6 +42,12 @@ std::vector<settings::Page> DeckMenu::pages() const {
     auto result=settings::pages_for(settings::deck_menu);
     if(!mods_) result.erase(std::remove(result.begin(),result.end(),settings::Page::mods),result.end());
     return result;
+}
+bool DeckMenu::custom_press(std::string_view id,uint64_t now_ns) {
+    if(id=="gyro_hold_button") { hold_capturing_=true; capture_since_ns_=now_ns; return true; }   // press the button that holds the gyro on
+    if(id=="gyro_recenter") { editor_.begin_capture(Action::recenter,true); capture_since_ns_=now_ns; return true; }   // the next pad button replaces the recenter binding
+    if(id=="quit_game") { if(quit_armed_) quit_requested_=true; else quit_armed_=true; return true; }
+    return false;
 }
 void DeckMenu::press(NavKey key) { std::lock_guard lock(mutex_); queue_.push_back(key); }
 void DeckMenu::hold(NavKey key,bool down) {
@@ -119,6 +125,7 @@ bool DeckMenu::event(const SDL_Event& event) {
 void DeckMenu::commit() {
     if(pending_) { const auto next=*pending_; pending_.reset(); live_.apply(next); }
     if(close_requested_) { close_requested_=false; if(close_) close_(); }
+    if(quit_requested_) { quit_requested_=false; if(quit_) quit_(); }
 }
 void DeckMenu::build() {
     auto& io=ImGui::GetIO();
@@ -150,8 +157,10 @@ void DeckMenu::build() {
     const int button_rows=int(actions.size())+1;   // every action of the gamepad table, then "restore defaults"
     for(const auto key:keys) {
         const auto page=page_of();
+        if(key!=NavKey::accept || page!=settings::Page::quit) quit_armed_=false;   // the second press must follow the first at once
         if(hold_capturing_) { if(key==NavKey::back) hold_capturing_=false; continue; }   // a keyboard can give up; the pad's buttons belong to the capture (event())
-        if(key==NavKey::up || key==NavKey::down || key==NavKey::page_prev || key==NavKey::page_next) { moved_by_key_=true; moved_list_=true; }
+        if(page!=settings::Page::buttons && editor_.capturing()) { if(key==NavKey::back) editor_.cancel_capture(); continue; }   // the same for the recenter row (the Buttons page handles its own)
+        if(key==NavKey::up || key==NavKey::down || key==NavKey::page_prev || key==NavKey::page_next) { moved_by_key_=true; moved_list_=true; button_sub_=0; }   // a row that was just reached starts on the row itself
         if(page==settings::Page::buttons && key!=NavKey::page_prev && key!=NavKey::page_next) {   // the gamepad's buttons: a row per action
             nav_.row=std::clamp(nav_.row,0,button_rows-1);
             const bool on_action=nav_.row<int(actions.size());
@@ -159,7 +168,13 @@ void DeckMenu::build() {
             switch(key) {
             case NavKey::up: nav_.row=std::max(0,nav_.row-1); break;
             case NavKey::down: nav_.row=std::min(button_rows-1,nav_.row+1); break;
-            case NavKey::accept: if(on_action) { editor_.begin_capture(action,true); capture_since_ns_=now_ns; } else editor_.restore_defaults(); break;
+            case NavKey::left: if(on_action) button_sub_=std::max(0,button_sub_-1); break;    // the row itself, its plus, its cross
+            case NavKey::right: if(on_action) button_sub_=std::min(2,button_sub_+1); break;
+            case NavKey::accept:   // on the row: replace the bindings; on the plus: add one; on the cross: clear them
+                if(!on_action) editor_.restore_defaults();
+                else if(button_sub_==2) editor_.clear(action);
+                else { editor_.begin_capture(action,button_sub_==0); capture_since_ns_=now_ns; }
+                break;
             case NavKey::add: if(on_action) { editor_.begin_capture(action); capture_since_ns_=now_ns; } break;
             case NavKey::clear: if(on_action) editor_.clear(action); break;
             case NavKey::back: if(editor_.capturing()) editor_.cancel_capture(); else close_requested_=true; break;
@@ -169,11 +184,11 @@ void DeckMenu::build() {
         }
         if(page==settings::Page::mods && key==NavKey::back && ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId|ImGuiPopupFlags_AnyPopupLevel)) continue;   // a mod's window closes first (ImGui takes the button itself)
         const auto rows=deck_rows(page,options,where);
-        if(key==NavKey::accept && !rows.empty() && std::string_view(rows[size_t(std::clamp(nav_.row,0,int(rows.size())-1))]->id)=="gyro_hold_button") { hold_capturing_=true; capture_since_ns_=now_ns; continue; }   // press the button that holds the gyro on
+        if(key==NavKey::accept && !rows.empty() && custom_press(rows[size_t(std::clamp(nav_.row,0,int(rows.size())-1))]->id,now_ns)) continue;
         const auto result=nav_.handle(key,options,where,rows,page_count);
         changed|=result.changed; if(result.close) close_requested_=true;
     }
-    if(page_of()==settings::Page::buttons && !editor_.capturing() && editor_.bindings()!=options.gamepad.bindings) { options.gamepad.bindings=editor_.bindings(); changed=true; }   // the table follows its editor
+    if((page_of()==settings::Page::buttons || page_of()==settings::Page::gamepad) && !editor_.capturing() && editor_.bindings()!=options.gamepad.bindings) { options.gamepad.bindings=editor_.bindings(); changed=true; }   // the table follows its editor
     auto rows=deck_rows(page_of(),options,where);
     {
         const int row_total=page_of()==settings::Page::buttons ? button_rows : page_of()==settings::Page::mods ? 1 : int(rows.size());
@@ -207,7 +222,7 @@ void DeckMenu::build() {
         const ImVec2 at{origin.x+14*s,origin.y+(100+i*66)*s}, size{side-28*s,58*s};
         ImGui::SetCursorScreenPos(at); ImGui::PushID(i);
         ImGui::InvisibleButton("##page",size);
-        if(ImGui::IsItemClicked()) { nav_.page=i; nav_.row=0; nav_.list_open=false; moved_by_key_=true; }
+        if(ImGui::IsItemClicked()) { nav_.page=i; nav_.row=0; nav_.list_open=false; moved_by_key_=true; quit_armed_=false; button_sub_=0; }
         const bool selected=i==nav_.page, hot=ImGui::IsItemHovered();
         draw.AddRectFilled(at,{at.x+size.x,at.y+size.y},selected ? rgb(kAccent) : hot ? rgb(kRowHot) : rgb(kSide),10*s);
         text(draw,25*s,{at.x+20*s,std::round(at.y+(size.y-25*s)/2)},rgb(selected ? 0xffffff : kIvory),tr(settings::page_label_key(pages[size_t(i)])));
@@ -276,10 +291,13 @@ void DeckMenu::build() {
                     right_text(rows_draw,24*s,(low.x+high.x+text_width(24*s,hint))/2,std::round((low.y+high.y)/2-12*s),rgb(kIvory),hint);
                 } else panel_shared::draw_pieces(rows_draw,low,high,panel_shared::pieces(editor_.bindings()[size_t(actions[size_t(i)])],panel_text),PadFamily::steam_deck,tr("unbound"));
                 const float k=8*s;   // the add button's plus and the clear button's cross
-                rows_draw.AddRectFilled(add_at,{add_at.x+small,add_at.y+small},add_hot ? rgb(kTrack) : rgb(kSide),small/2);
+                const bool add_selected=focused && button_sub_==1, clear_selected=focused && button_sub_==2;   // the D-pad's left and right move onto them
+                rows_draw.AddRectFilled(add_at,{add_at.x+small,add_at.y+small},add_selected ? rgb(kAccent) : add_hot ? rgb(kTrack) : rgb(kSide),small/2);
+                if(add_selected) rows_draw.AddCircle({add_at.x+small/2,add_at.y+small/2},small/2+3*s,rgb(kAccentHot),32,2.5f*s);
                 const ImVec2 plus{add_at.x+small/2,add_at.y+small/2};
                 rows_draw.AddLine({plus.x-k,plus.y},{plus.x+k,plus.y},rgb(kIvory),2.5f*s); rows_draw.AddLine({plus.x,plus.y-k},{plus.x,plus.y+k},rgb(kIvory),2.5f*s);
-                rows_draw.AddRectFilled(clear_at,{clear_at.x+small,clear_at.y+small},clear_hot ? rgb(kTrack) : rgb(kSide),small/2);
+                rows_draw.AddRectFilled(clear_at,{clear_at.x+small,clear_at.y+small},clear_selected ? rgb(kAccent) : clear_hot ? rgb(kTrack) : rgb(kSide),small/2);
+                if(clear_selected) rows_draw.AddCircle({clear_at.x+small/2,clear_at.y+small/2},small/2+3*s,rgb(kAccentHot),32,2.5f*s);
                 const ImVec2 cross{clear_at.x+small/2,clear_at.y+small/2}, c=cross; const float m=7*s;
                 rows_draw.AddLine({c.x-m,c.y-m},{c.x+m,c.y+m},rgb(kIvory),2.5f*s); rows_draw.AddLine({c.x-m,c.y+m},{c.x+m,c.y-m},rgb(kIvory),2.5f*s);
             } else {
@@ -310,8 +328,7 @@ void DeckMenu::build() {
             if(ImGui::IsItemActive() && std::abs(io.MousePos.y-press_y_)>10*s) { dragged_=true; ImGui::SetScrollY(ImGui::GetScrollY()-io.MouseDelta.y); }   // a finger drags the list
             if(ImGui::IsItemDeactivated() && !dragged_ && hovered) {   // a tap: one tap does it
                 nav_.row=int(i);
-                if(std::string_view(item.id)=="gyro_hold_button") { hold_capturing_=true; capture_since_ns_=now_ns; }
-                else {
+                if(!custom_press(item.id,now_ns)) {
                     const auto result=nav_.handle(NavKey::accept,options,where,rows,page_count);
                     changed|=result.changed;
                 }
@@ -334,7 +351,8 @@ void DeckMenu::build() {
             if(focused) rows_draw.AddRect(at,end,rgb(kAccentHot),10*s,0,2*s);
             const ImU32 ink=rgb(state.enabled ? kIvory : kMuted,state.enabled ? 1.f : .75f);
             const float label_y=state.enabled || !state.why ? at.y+(row_height-25*s)/2 : at.y+9*s;
-            text(rows_draw,25*s,{at.x+22*s,std::round(label_y)},ink,tr(item.label_key));
+            const bool ask_quit=quit_armed_ && std::string_view(item.id)=="quit_game";   // the row itself asks for the second press
+            text(rows_draw,25*s,{at.x+22*s,std::round(label_y)},ask_quit ? rgb(kAccentHot) : ink,tr(ask_quit ? "quit_game_confirm" : item.label_key));
             if(!state.enabled && state.why) text(rows_draw,18*s,{at.x+22*s,at.y+row_height-27*s},rgb(kMuted),tr(state.why));
             const float edge=end.x-22*s, mid=at.y+row_height/2;
             const float fade=state.enabled ? 1.f : .5f;
@@ -371,6 +389,11 @@ void DeckMenu::build() {
                 break;
             }
             case settings::Kind::custom:
+                if(std::string_view(item.id)=="gyro_recenter") {   // the recenter binding: its picture, or the prompt while the row waits for a press
+                    const ImVec2 low{edge-300*s,at.y+7*s}, high{edge,end.y-7*s};
+                    if(editor_.capturing()==Action::recenter) { const char* hint=tr("deck_press_button"); right_text(rows_draw,24*s,edge,std::round(mid-12*s),rgb(kIvory),hint); }
+                    else panel_shared::draw_pieces(rows_draw,low,high,panel_shared::pieces(editor_.bindings()[size_t(Action::recenter)],panel_text),PadFamily::steam_deck,tr("unbound"));
+                }
                 if(std::string_view(item.id)=="gyro_hold_button") {   // the button that holds the gyro on: its picture, or the prompt while the row waits for a press
                     const ImVec2 low{edge-300*s,at.y+7*s}, high{edge,end.y-7*s};
                     if(hold_capturing_) { const char* hint=tr("deck_press_button"); right_text(rows_draw,24*s,edge,std::round(mid-12*s),rgb(kIvory),hint); }

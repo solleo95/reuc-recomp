@@ -170,6 +170,9 @@ const std::vector<Item>& table() {
         {   // chosen by pressing the button (the Deck menus draw and capture it themselves: it is a custom row)
             Item hold=custom("gyro_hold_button","gyro_hold_button",P,KM|KL); hold.state=hold_button_state; t.push_back(hold);
         }
+        {   // the gamepad's "recenter aim" binding, right under it: it only matters while the gyro aims (the Deck menus draw and capture it themselves)
+            Item recenter=custom("gyro_recenter","recenter",P,KM|KL); recenter.state=gyro_state; t.push_back(recenter);
+        }
         t.push_back(slider("gyro_sens_x","gyro_sens_x",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_x); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_x=float(v)/100; },10,500,5,"%d%%",gyro_state));
         t.push_back(slider("gyro_sens_y","gyro_sens_y",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_y); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_y=float(v)/100; },10,500,5,"%d%%",gyro_state));
         t.push_back(toggle("gyro_invert_x","gyro_invert_x",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_x; },[](Options& o,bool v) { o.gamepad.gyro.invert_x=v; },gyro_state));
@@ -198,6 +201,7 @@ const std::vector<Item>& table() {
         t.push_back(color("reticle_color_p1","reticle_color_p1",R,DM|KM,[](const Options& o) { return o.reticle.color_p1; },[](Options& o,uint32_t v) { o.reticle.color_p1=v; }));
         t.push_back(color("reticle_color_p2","reticle_color_p2",R,DM|KM,[](const Options& o) { return o.reticle.color_p2; },[](Options& o,uint32_t v) { o.reticle.color_p2=v; }));
         t.push_back(custom("mods_manager","deck_page_mods",Page::mods,KM));   // the mod platform's own manager (it exists only while mods are on: the Deck menu hides the page otherwise)
+        t.push_back(custom("quit_game","quit_game",Page::quit,KM));   // closes the game: the first press asks, the second quits (DeckMenu)
         return t;
     }();
     return rows;
@@ -225,7 +229,7 @@ std::vector<const Item*> items_for(Surface surface,Page page) {
 }
 std::vector<Page> pages_for(Surface surface) {
     std::vector<Page> pages;
-    for(const auto page:{Page::game,Page::graphics,Page::effects,Page::controls,Page::gamepad,Page::buttons,Page::reticle,Page::mods}) if(!items_for(surface,page).empty()) pages.push_back(page);
+    for(const auto page:{Page::game,Page::graphics,Page::effects,Page::controls,Page::gamepad,Page::buttons,Page::reticle,Page::mods,Page::quit}) if(!items_for(surface,page).empty()) pages.push_back(page);
     return pages;
 }
 const char* page_label_key(Page page) {
@@ -238,6 +242,7 @@ const char* page_label_key(Page page) {
     case Page::buttons: return "bindings";
     case Page::reticle: return "reticle";
     case Page::mods: return "deck_page_mods";
+    case Page::quit: return "quit_game";
     }
     return "";
 }

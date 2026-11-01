@@ -15,6 +15,7 @@
 #include "feature_report.h"
 #include "launch.h"
 #include "menu_text.h"
+#include "window_icon.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "imgui_impl_sdl3.h"
@@ -33,8 +34,7 @@
 // The Steam Deck launcher: the look of the Windows launcher (graphite sidebar, train header), three tabs and a language select, driven by the gamepad (D-pad on the
 // right part, L1/R1 on the left), by touch and by the right trackpad. Large on purpose: the Deck's screen is small.
 namespace uc::deck {
-namespace fs = std::filesystem;
-namespace {
+namespace fs = std::filesystem;namespace {
 constexpr float kScale = 1.05f;   // the whole interface is this much larger than a 1280x800 layout at 1:1 (large on purpose: the Deck's screen is small)
 struct Args { fs::path snapshot; int width = 0, height = 0; fs::path config; };
 Args parse_args(int argc, char** argv) {
@@ -71,7 +71,9 @@ struct Platform {   // SDL, the window, ImGui and the artwork; closes everything
         SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1");
         SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) throw std::runtime_error(SDL_GetError());
-        const bool windowed = !args.snapshot.empty() || args.width;
+        // Fullscreen only in Game Mode (gamescope); on the Deck's desktop (and anywhere else) the launcher is an ordinary resizable window.
+        const bool game_mode = std::getenv("GAMESCOPE_WAYLAND_DISPLAY") != nullptr;
+        const bool windowed = !args.snapshot.empty() || args.width || !game_mode;
         int width = args.width ? args.width : 1280, height = args.height ? args.height : 720;
         if (!windowed) {
             const auto* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -79,8 +81,9 @@ struct Platform {   // SDL, the window, ImGui and the artwork; closes everything
             else { width = 1280; height = 800; }
         }
         app.window = SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", width, height,
-                                      (windowed ? 0 : SDL_WINDOW_FULLSCREEN) | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                                      (windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN) | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!app.window) throw std::runtime_error(SDL_GetError());
+        set_window_icon(app.window);
         app.renderer = SDL_CreateRenderer(app.window, nullptr);
         if (!app.renderer || !SDL_SetRenderVSync(app.renderer, 1)) throw std::runtime_error(SDL_GetError());
         ImGui::CreateContext(); imgui = true;
@@ -774,6 +777,7 @@ int run(int argc, char** argv) {
         return 0;
     }
     bool confirmed = !confirm;
+    bool trackpad_pressed = false;   // the right trackpad pressed past the soft threshold is the left mouse button (Game Mode: Steam does not turn its click into one for us)
     while (!app.quit) {
         updates.poll();
         if (updates.close_requested()) { updates.handoff(); launcher::restart_launcher(app.directory / "uc_launcher", updates.applied_operation().filename().string(), argv); break; }
@@ -781,8 +785,16 @@ int run(int argc, char** argv) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) app.quit = true;
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) app.pad_editor.focus(false);
+            const bool listening = app.pad_editor.capturing() || app.hold_capture;   // asked before the pad sink: the press that is bound ends the capture, and must not then also act as a menu key
             if (pads) pads->event(event, nullptr);
-            if (app.pad_editor.capturing() || app.hold_capture) {   // a pad press belongs to the binding being captured, not to the menu; Escape on a keyboard gives up
+            if ((event.type == SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN || event.type == SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION || event.type == SDL_EVENT_GAMEPAD_TOUCHPAD_UP)
+                && event.gtouchpad.touchpad == 1 && event.gtouchpad.finger == 0) {
+                const float pressure = event.type == SDL_EVENT_GAMEPAD_TOUCHPAD_UP ? 0.f : event.gtouchpad.pressure;
+                const bool now = trackpad_pressed ? pressure >= kTrackpadPressOff : pressure >= kTrackpadPressOn;
+                if (now != trackpad_pressed && (!now || !listening)) ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, now);   // a press that binds a button is not also a click
+                trackpad_pressed = now;
+            }
+            if (listening) {   // a pad press belongs to the binding being captured, not to the menu; Escape on a keyboard gives up
                 if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE) { app.pad_editor.cancel_capture(); app.hold_capture = false; }
             } else app.keys.event(event, SDL_GetTicksNS());
             ImGui_ImplSDL3_ProcessEvent(&event);

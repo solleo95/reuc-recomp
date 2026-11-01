@@ -111,6 +111,17 @@ static void exercise(uc::DeckMenu& menu,uc::LiveSettings& live,const std::functi
         for(int i=0;i<17;++i) tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
         tap(SDL_GAMEPAD_BUTTON_SOUTH); menu.commit();   // the last row
         CHECK(live.options().gamepad.bindings==uc::default_pad_bindings());
+        {   // the D-pad reaches the plus and the cross of a row: right, A adds a binding; right, A clears them
+            for(int i=0;i<17;++i) tap(SDL_GAMEPAD_BUTTON_DPAD_UP);   // back to the first row
+            const auto before=live.options().gamepad.bindings[interact].size();
+            tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); tap(SDL_GAMEPAD_BUTTON_SOUTH);   // the plus: waits for a button
+            menu.pad_capture({uc::PhysicalKind::pad_button,3},true); auto north=pad_button(SDL_GAMEPAD_BUTTON_NORTH,true); CHECK(menu.event(north));
+            menu.pad_capture({uc::PhysicalKind::pad_button,3},false); auto north_up=pad_button(SDL_GAMEPAD_BUTTON_NORTH,false); menu.event(north_up);
+            frame(); frame(); menu.commit();
+            CHECK(live.options().gamepad.bindings[interact].size()==before+1);   // added, the old ones stay
+            tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); tap(SDL_GAMEPAD_BUTTON_SOUTH); menu.commit();   // the cross
+            CHECK(live.options().gamepad.bindings[interact].empty());
+        }
         tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     }
     {   // "while a button is held": a row under the mode waits for the button; only a trigger, a shoulder or a stick button is taken
@@ -122,19 +133,34 @@ static void exercise(uc::DeckMenu& menu,uc::LiveSettings& live,const std::functi
         tap(SDL_GAMEPAD_BUTTON_SOUTH);                      // A: waits for a button
         capture("gyro-hold-capture");
         const auto before=live.options().gamepad.gyro_hold;
-        menu.pad_capture({uc::PhysicalKind::pad_button,0},true);   // a face button cannot hold the gyro: ignored, the row keeps waiting
-        auto face=pad_button(SDL_GAMEPAD_BUTTON_SOUTH,true); CHECK(menu.event(face)); frame(); frame(); menu.commit();
+        menu.pad_capture({uc::PhysicalKind::pad_axis,1},true);   // a stick direction cannot hold the gyro: ignored, the row keeps waiting
+        auto stick=pad_axis(SDL_GAMEPAD_AXIS_LEFTX,30000); CHECK(menu.event(stick)); frame(); frame(); menu.commit();
         CHECK(live.options().gamepad.gyro_hold==before);
+        menu.pad_capture({uc::PhysicalKind::pad_button,0},true);   // any button can: a face button is taken at once (and the row stops waiting)
+        auto face=pad_button(SDL_GAMEPAD_BUTTON_SOUTH,true); CHECK(menu.event(face)); frame(); frame(); menu.commit();
+        CHECK(live.options().gamepad.gyro_hold==(uc::PhysicalInput{uc::PhysicalKind::pad_button,0}) && !live.error());
+        tap(SDL_GAMEPAD_BUTTON_SOUTH);                      // A: waits again, for the trigger below
         menu.pad_capture({uc::PhysicalKind::pad_axis,11},true);    // the right trigger
         auto trigger=pad_axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,30000); CHECK(menu.event(trigger)); frame(); frame(); menu.commit();
         CHECK(live.options().gamepad.gyro_hold==(uc::PhysicalInput{uc::PhysicalKind::pad_axis,11}) && !live.error());
+        {   // the recenter row right under the gyro button: A waits for a button, which replaces the binding; the old one is gone
+            tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN);   // from the hold button to recenter
+            const auto recenter=size_t(uc::Action::recenter);
+            tap(SDL_GAMEPAD_BUTTON_SOUTH);
+            capture("recenter-capture");
+            menu.pad_capture({uc::PhysicalKind::pad_button,3},true); auto north=pad_button(SDL_GAMEPAD_BUTTON_NORTH,true); CHECK(menu.event(north));
+            menu.pad_capture({uc::PhysicalKind::pad_button,3},false); auto north_up=pad_button(SDL_GAMEPAD_BUTTON_NORTH,false); menu.event(north_up);
+            frame(); frame(); menu.commit();
+            CHECK(live.options().gamepad.bindings[recenter].size()==1 && live.options().gamepad.bindings[recenter][0].input==(uc::PhysicalInput{uc::PhysicalKind::pad_button,3}) && !live.error());
+            capture("recenter");
+        }
         tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);   // back to the first page
     }
     {   // the Mods page exists only with a mod platform; its manager is drawn in a window of its own
         struct Fake : uc::mods::ModMenu { int drawn=0; std::string manager_title() override { return "Mods"; } void manager_tab(float) override { ++drawn; ImGui::TextUnformatted("fake mod manager"); } void commit() override {} } fake;
         CHECK(!ImGui::FindWindowByName("##deck_mods"));
         menu.set_mod_menu(&fake);
-        for(int i=0;i<8;++i) tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // to the last page: Mods
+        for(int i=0;i<5;++i) tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Effects, Controls, Buttons, Reticle, Mods (Quit game comes after it)
         for(int i=0;i<3;++i) frame();
         CHECK(fake.drawn>0 && ImGui::FindWindowByName("##deck_mods"));
         capture("mods");
@@ -143,11 +169,23 @@ static void exercise(uc::DeckMenu& menu,uc::LiveSettings& live,const std::functi
         for(int i=0;i<8;++i) tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     }
     {   // a slider with left/right and a colour with A: the reticle page
-        for(int i=0;i<8;++i) tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // to the last page: Reticle again (no Mods page without a mod platform)
+        for(int i=0;i<4;++i) tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Reticle again (no Mods page without a mod platform)
         capture("reticle");
         const auto before=live.options().crosshair_scale;
         tap(SDL_GAMEPAD_BUTTON_DPAD_LEFT); menu.commit();
         CHECK(live.options().crosshair_scale==before-5 && !live.error());
+    }
+    {   // the last page, Quit game: the first A asks, only a second A at once quits; any other key takes the question back
+        int quits=0; menu.set_quit([&] { ++quits; });
+        tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Quit game
+        capture("quit");
+        tap(SDL_GAMEPAD_BUTTON_SOUTH); menu.commit();
+        CHECK(quits==0);
+        capture("quit-ask");
+        tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN); tap(SDL_GAMEPAD_BUTTON_SOUTH); menu.commit();   // a key between the two presses: asks again
+        CHECK(quits==0);
+        tap(SDL_GAMEPAD_BUTTON_SOUTH); menu.commit();
+        CHECK(quits==1 && !closed);
     }
     std::puts("Deck menu passed: pages, list, switch, slider, repeat, tap, close");
 }

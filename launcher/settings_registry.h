@@ -13,7 +13,7 @@ namespace uc::settings {
 // hand-written widgets and only ask `shown()`; the Deck menu draws every item that has its bit. A new setting is one row in settings_registry.cpp.
 enum Surface : uint8_t { desktop_menu=1, deck_menu=2, desktop_launcher=4, deck_launcher=8 };
 constexpr uint8_t kDesktop=desktop_menu|desktop_launcher, kDeck=deck_menu|deck_launcher, kMenus=desktop_menu|deck_menu, kEverywhere=15;
-enum class Page : uint8_t { game, graphics, effects, controls, gamepad, buttons, reticle, mods };   // buttons and mods are drawn by the Deck menu itself (one custom item each)
+enum class Page : uint8_t { game, graphics, effects, controls, gamepad, buttons, reticle, mods, quit };   // buttons, mods and quit are drawn by the Deck menu itself (one custom item each)
 enum class Kind : uint8_t { toggle, choice, slider, color, custom };   // custom: listed for its surfaces, drawn by the surface's own code
 // What the machine and the run offer (the feature report, the graphics API, the monitor): items are greyed out or hidden by it.
 struct Env {

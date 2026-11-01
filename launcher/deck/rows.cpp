@@ -260,11 +260,11 @@ void hold_row(RowCtx& c, const char* label, PhysicalInput current, PadFamily fam
     auto& draw = *ImGui::GetWindowDrawList();
     row_background(f, s, f.hovered);
     text_at(draw, 26 * s, {f.at.x + 22 * s, std::round(f.at.y + (f.height - 26 * s) / 2)}, rgb(kIvory), label);
-    const float width = f.end.x - f.at.x;
-    const ImVec2 low{f.at.x + width * .45f, f.at.y + 8 * s}, high{f.end.x - 22 * s, f.end.y - 8 * s};
+    const float width = f.end.x - f.at.x, tools = 2 * 48 * s + 24 * s;   // the picture sits where a binding row's does (binding_row), whose plus and cross this row has no use for
+    const ImVec2 low{f.at.x + width * .34f, f.at.y + 8 * s}, high{f.end.x - tools - 6 * s, f.end.y - 8 * s};
     if (waiting) {
         const char* hint = c.panel_text("deck_press_button");
-        right_text(draw, 25 * s, f.end.x - 22 * s, std::round((low.y + high.y) / 2 - 12.5f * s), rgb(kIvory), hint);
+        right_text(draw, 25 * s, (low.x + high.x + text_width(25 * s, hint)) / 2, std::round((low.y + high.y) / 2 - 12.5f * s), rgb(kIvory), hint);
     } else panel_shared::draw_pieces(draw, low, high, {panel_shared::Piece{{}, current}}, family, c.panel_text("unbound"));
     ImGui::PopID();
     row_gap(c, f);

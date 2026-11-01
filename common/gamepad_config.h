@@ -23,7 +23,9 @@ struct GamepadSettings {
 };
 // The inputs that can hold the gyro on (GyroMode::hold): a trigger, a shoulder button or a stick button. The Deck menus ask the player to press one and take it only if it is here.
 inline constexpr std::array<PhysicalInput,6> kGyroHoldChoices{{{PhysicalKind::pad_axis,9},{PhysicalKind::pad_axis,11},{PhysicalKind::pad_button,9},{PhysicalKind::pad_button,10},{PhysicalKind::pad_button,7},{PhysicalKind::pad_button,8}}};
-inline bool gyro_hold_allowed(PhysicalInput input) { return std::find(kGyroHoldChoices.begin(),kGyroHoldChoices.end(),input)!=kGyroHoldChoices.end(); }
+// What the Deck menus take when the player presses a button for the gyro: any gamepad button (face, D-pad, Start/View, sticks, shoulders, paddles, the soft trackpad presses) or a trigger.
+// A stick direction is not offered: it would hold the gyro on at every touch of the stick.
+inline bool gyro_hold_allowed(PhysicalInput input) { return input.kind==PhysicalKind::pad_button || (input.kind==PhysicalKind::pad_axis && (input.code==9 || input.code==11)); }
 std::optional<std::string> validate_gamepad(const GamepadSettings&);   // ranges, distinct stick roles, a valid gamepad table
 // No "gamepad" object gives the defaults; a malformed or out-of-range one throws std::invalid_argument("config: ..."). Unknown keys are refused.
 GamepadSettings gamepad_from_config(const ConfigDocument&);

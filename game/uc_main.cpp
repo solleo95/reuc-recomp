@@ -48,6 +48,9 @@
 #include "game_pacing.h"
 #include "render_scale.h"
 #include "window_mode.h"
+#ifndef _WIN32
+#include "window_icon.h"
+#endif
 #include "wide_view.h"
 #include "late_aim.h"
 #include "reticle_style.h"
@@ -596,6 +599,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const SDL_WindowFlags graphics_window=options.renderer_backend==uc::RendererBackend::vulkan ? SDL_WINDOW_VULKAN : 0;
         window.reset(SDL_CreateWindow("Resident Evil: The Umbrella Chronicles", window_width, window_height, graphics_window | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN));
         if (!window) throw std::runtime_error(SDL_GetError());
+#ifndef _WIN32
+        uc::set_window_icon(window.get());   // Windows has the icon in the exe (app.rc)
+#endif
         // Enter fullscreen only after the compile overlay closes and Vulkan is ready to present.
         init_renderer(true);
 #ifdef _WIN32
@@ -1069,6 +1075,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         return true;
     };
     if (deck_menu) deck_menu->set_close([&] { if (host_keys.menu_open) { host_keys.menu_open=false; apply_host_keys(); } });
+    if (deck_menu) deck_menu->set_quit([&] { close=true; });   // the Quit game page: leaves the main loop like closing the window
     // One loop iteration without event polling: harness commands, input services, rendering. Also run from the event watch,
     // so the harness (and the bot) keep working while Windows runs its modal drag/resize loop.
     auto service_frame = [&] {

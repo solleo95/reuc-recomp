@@ -22,7 +22,7 @@ int main() {
             case Kind::slider: CHECK(item.get_int && item.set_int && item.min<item.max && item.step>0 && item.format); break;
             case Kind::choice: CHECK(item.labels && item.index && item.select); break;
             case Kind::color: CHECK(item.get_color && item.set_color); break;
-            case Kind::custom: CHECK(!(item.surfaces&deck_menu) || std::string(item.id)=="pad_bindings" || std::string(item.id)=="mods_manager" || std::string(item.id)=="gyro_hold_button"); break;   // the Deck menu draws rows only, but for its two pages of its own and the row that captures the gyro's hold button
+            case Kind::custom: CHECK(!(item.surfaces&deck_menu) || std::string(item.id)=="pad_bindings" || std::string(item.id)=="mods_manager" || std::string(item.id)=="gyro_hold_button" || std::string(item.id)=="gyro_recenter" || std::string(item.id)=="quit_game"); break;   // the Deck menu draws rows only, but for its three pages of its own and the row that captures the gyro's hold button
             }
         }
         for(const auto page:{Page::game,Page::graphics,Page::effects,Page::controls,Page::gamepad,Page::reticle})
@@ -39,7 +39,7 @@ int main() {
         bool threw=false; try { shown("fps_limt",deck_menu); } catch(const std::logic_error&) { threw=true; }
         CHECK(threw);   // a typo in a menu is an error, not a hidden setting
         const auto pages=pages_for(deck_menu);
-        CHECK(pages.size()==6 && pages[0]==Page::graphics && pages[1]==Page::effects && pages[2]==Page::gamepad && pages[3]==Page::buttons && pages[4]==Page::reticle && pages[5]==Page::mods);   // Graphics, Effects, Controls (the gamepad page), Buttons, Reticle, Mods
+        CHECK(pages.size()==7 && pages[0]==Page::graphics && pages[1]==Page::effects && pages[2]==Page::gamepad && pages[3]==Page::buttons && pages[4]==Page::reticle && pages[5]==Page::mods && pages[6]==Page::quit);   // Graphics, Effects, Controls (the gamepad page), Buttons, Reticle, Mods, Quit
         CHECK(std::string(page_label_key(Page::gamepad))=="controls");
         for(const auto* item:items_for(deck_menu,Page::graphics)) CHECK(on_surface(*item,deck_menu));
         Options o; o.pointer=PointerMode::relative;

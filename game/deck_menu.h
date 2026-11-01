@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 union SDL_Event;
 namespace uc {
 // The Steam Deck's in-game menu (the View button): every settings-registry item with the Deck bit, on pages, driven by the D-pad, the sticks, the standard buttons and the
@@ -24,6 +25,7 @@ public:
     bool event(const SDL_Event&);   // pad, stick and key events while the menu is open; true: the menu used it
     void opened();                  // the menu was opened: focus goes back to the first row
     void set_close(std::function<void()> close) { close_=std::move(close); }
+    void set_quit(std::function<void()> quit) { quit_=std::move(quit); }   // the Quit game page: A twice ends the game
     void set_mod_menu(mods::ModMenu* menu) { mods_=menu; }   // the Mods page; without one there is no such page
     // The Buttons page waits for a pad button while a binding is captured: GamepadInput's capture sink calls this for every pad press and release.
     // The same pad event then reaches event(): when a capture was waiting it is the capture's (B bound to an action must not also be "back"), even though it has just ended the capture.
@@ -45,6 +47,7 @@ private:
     settings::Env env() const;
     void press(NavKey);                       // a key from a pad, the keyboard or a tap
     void hold(NavKey,bool down);              // a direction kept down repeats
+    bool custom_press(std::string_view id,uint64_t now_ns);   // A or a tap on a custom row of its own; false: not one of them
     LiveSettings& live_;
     std::string language_;
     std::function<const FeatureReport*()> features_;
@@ -52,7 +55,9 @@ private:
     ui::Fonts fonts_;
     DeckNav nav_;
     std::optional<Options> pending_;          // picked by build(), applied by commit()
-    std::function<void()> close_;
+    std::function<void()> close_, quit_;
+    int button_sub_=0;                        // the Buttons page's focused row: 0 the row itself, 1 its plus, 2 its cross
+    bool quit_armed_=false, quit_requested_=false;   // the first press on Quit game asks, the second ends the game (any other key disarms)
     std::mutex mutex_;                        // the queue and the held key: event() runs on the main loop, build() inside the renderer
     std::deque<NavKey> queue_;
     bool close_requested_=false, moved_by_key_=false, moved_list_=false, list_was_open_=false;
