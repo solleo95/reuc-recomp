@@ -14,14 +14,18 @@ static void pointer_centered_dots_gives_zero() {
     const auto pointer=wii_ir_pointer(two_dots(462,384,562,384));
     CHECK(pointer && near((*pointer)[0],0) && near((*pointer)[1],0));
 }
-static void pointer_mirrors_both_axes() {
+static void pointer_mirrors_horizontally_and_follows_the_camera_vertically() {
     const auto right=wii_ir_pointer(two_dots(362,384,462,384));   // the bar appears left of the middle: the remote points right of it
     CHECK(right && (*right)[0]>.1f && near((*right)[1],0));
-    const auto down=wii_ir_pointer(two_dots(462,284,562,284));    // the bar appears high: the remote points below it
+    // The camera's y grows upward (a player's report: with the pointer mirrored in y, aiming up moved the crosshair down): a bar with a high y is above the
+    // middle of the picture, so the remote points below it.
+    const auto down=wii_ir_pointer(two_dots(462,484,562,484));
     CHECK(down && (*down)[1]>.1f && near((*down)[0],0));
+    const auto up=wii_ir_pointer(two_dots(462,284,562,284));
+    CHECK(up && (*up)[1]<-.1f && near((*up)[0],0));
 }
 static void pointer_clamps_to_the_window() {
-    const auto edge=wii_ir_pointer(two_dots(0,0,100,0));
+    const auto edge=wii_ir_pointer(two_dots(0,767,100,767));
     CHECK(edge && (*edge)[0]==1.f && (*edge)[1]==1.f);
 }
 static void pointer_needs_two_distinct_dots() {
@@ -99,7 +103,7 @@ static void swing_restarts_after_a_pause() {
 }
 int main() {
     pointer_centered_dots_gives_zero();
-    pointer_mirrors_both_axes();
+    pointer_mirrors_horizontally_and_follows_the_camera_vertically();
     pointer_clamps_to_the_window();
     pointer_needs_two_distinct_dots();
     pointer_uses_the_outer_pair();

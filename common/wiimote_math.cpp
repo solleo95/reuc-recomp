@@ -18,7 +18,7 @@ std::optional<std::array<float,2>> wii_ir_pointer(const std::array<WiiIrDot,4>& 
     const float roll=std::atan2(float(second->y)-first->y,float(second->x)-first->x);
     const float vx=(float(first->x)+second->x)/2-kCenterX,vy=(float(first->y)+second->y)/2-kCenterY;
     const float turned_x=vx*std::cos(roll)+vy*std::sin(roll),turned_y=-vx*std::sin(roll)+vy*std::cos(roll);   // the roll undone
-    return std::array<float,2>{std::clamp(-turned_x/kCenterX*kWiiPointerRange,-1.f,1.f),std::clamp(-turned_y/kCenterY*kWiiPointerRange,-1.f,1.f)};   // the bar moves against the aim
+    return std::array<float,2>{std::clamp(-turned_x/kCenterX*kWiiPointerRange,-1.f,1.f),std::clamp(turned_y/kCenterY*kWiiPointerRange,-1.f,1.f)};   // the bar moves against the aim sideways; the camera's y grows upward, so a high bar is a remote aimed below it
 }
 std::array<float,2> wii_stick(std::array<uint8_t,2> raw,float dead_zone) {
     const float x=(float(raw[0])-128)/kStickRange,y=(128-float(raw[1]))/kStickRange;

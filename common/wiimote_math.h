@@ -6,8 +6,8 @@
 namespace uc {
 // How far the pointer travels for a turn of the remote: the IR camera sees the sensor bar move by about this fraction of a screen for each screen's width of aim.
 constexpr float kWiiPointerRange=1.8f;
-// The pointer the IR camera gives: the middle of the two dots furthest apart (the ends of the sensor bar), turned back by the roll of the remote and mirrored, as -1..1
-// of the window (y down), clamped. Nothing while fewer than two dots, or two closer than 6 camera pixels, are seen.
+// The pointer the IR camera gives: the middle of the two dots furthest apart (the ends of the sensor bar), turned back by the roll of the remote and mirrored sideways (the camera's y grows upward, so it
+// maps straight to y down), as -1..1 of the window (y down), clamped. Nothing while fewer than two dots, or two closer than 6 camera pixels, are seen.
 std::optional<std::array<float,2>> wii_ir_pointer(const std::array<WiiIrDot,4>& dots);
 // The nunchuk's stick as -1..1 (x right, y down like SDL's sticks): centre 128, +-95 to full, a radial dead zone (0..1 of the full deflection) rescaled past it.
 // shortcut: no calibration from the nunchuk's EEPROM; read it when sticks are seen to be off-centre.
