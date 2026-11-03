@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include "decal_bias.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -47,6 +48,8 @@ inline std::vector<PipelineKey> uber_key_closure(const std::vector<PipelineKey>&
     std::set<uint32_t> blends,depths,topologies;
     for(const auto& key:keys) { blends.insert(key[0]); depths.insert(key[68]); topologies.insert(key[69]); }
     std::vector<PipelineKey> result;
+inline bool decal_depth_bias(const PipelineKey& key) { return decal_depth_bias(key[0]&3,key[68]); }
+
     for(auto blend:blends) for(auto depth:depths) for(auto topology:topologies) { PipelineKey key{}; key[0]=blend; key[68]=depth; key[69]=topology; result.push_back(key); }
     return result;
 }

@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include "late_aim.h"
 #include "render_scale.h"
+#include "decal_bias.h"
 #include "prompt_picture.h"
 #include "bloom_math.h"
 #include "hdr_math.h"
@@ -601,8 +602,8 @@ void D3D11Renderer::state(const gx::DrawPacket& draw,bool alpha,bool scene,bool 
     auto depth=depths_.find(z);
     if(depth==depths_.end()) { D3D11_DEPTH_STENCIL_DESC desc{}; desc.DepthEnable=(z&1)!=0; desc.DepthWriteMask=(z&16) ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO; desc.DepthFunc=D3D11_COMPARISON_FUNC(((z>>1)&7)+1); ComPtr<ID3D11DepthStencilState> result; check(device_->CreateDepthStencilState(&desc,&result),"GX depth state"); depth=depths_.emplace(z,std::move(result)).first; ++stats_.state_objects; }
     if(last_depth_!=depth->second.Get()) { last_depth_=depth->second.Get(); context_->OMSetDepthStencilState(last_depth_,0); }
-    const uint32_t cull=draw.state->cull; auto raster=rasters_.find(cull);
-    if(raster==rasters_.end()) { D3D11_RASTERIZER_DESC desc{}; desc.FillMode=D3D11_FILL_SOLID; desc.CullMode=cull==1 ? D3D11_CULL_BACK : cull==2 ? D3D11_CULL_FRONT : D3D11_CULL_NONE; desc.FrontCounterClockwise=FALSE; desc.DepthClipEnable=TRUE; desc.ScissorEnable=TRUE; ComPtr<ID3D11RasterizerState> result; check(device_->CreateRasterizerState(&desc,&result),"GX rasterizer state"); raster=rasters_.emplace(cull,std::move(result)).first; ++stats_.state_objects; }
+    const uint32_t cull=draw.state->cull; const bool decal=decal_depth_bias(blend.mode,z); const uint32_t raster_key=cull|(uint32_t(decal)<<2); auto raster=rasters_.find(raster_key);
+    if(raster==rasters_.end()) { D3D11_RASTERIZER_DESC desc{}; desc.FillMode=D3D11_FILL_SOLID; desc.CullMode=cull==1 ? D3D11_CULL_BACK : cull==2 ? D3D11_CULL_FRONT : D3D11_CULL_NONE; desc.FrontCounterClockwise=FALSE; desc.DepthClipEnable=TRUE; desc.ScissorEnable=TRUE; if(decal) { desc.DepthBias=kDecalDepthBias; desc.SlopeScaledDepthBias=kDecalSlopeBias; } ComPtr<ID3D11RasterizerState> result; check(device_->CreateRasterizerState(&desc,&result),"GX rasterizer state"); raster=rasters_.emplace(raster_key,std::move(result)).first; ++stats_.state_objects; }
     if(last_raster_!=raster->second.Get()) { last_raster_=raster->second.Get(); context_->RSSetState(last_raster_); }
 }
 void D3D11Renderer::blit(const Image& source,Image& target,const std::array<uint32_t,4>& region,uint32_t channels,bool linear_filter) {

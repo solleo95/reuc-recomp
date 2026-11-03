@@ -753,7 +753,7 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO}; input.vertexBindingDescriptionCount = 1; input.pVertexBindingDescriptions = &binding; input.vertexAttributeDescriptionCount = uint32_t(attributes.size()); input.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; assembly.topology = VkPrimitiveTopology(key[69]);
         VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; viewport.viewportCount = viewport.scissorCount = 1;
-        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode = VK_POLYGON_MODE_FILL; raster.cullMode = cull_mode(key); raster.frontFace = VK_FRONT_FACE_CLOCKWISE; raster.lineWidth = 1;
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO}; raster.polygonMode = VK_POLYGON_MODE_FILL; raster.cullMode = cull_mode(key); raster.frontFace = VK_FRONT_FACE_CLOCKWISE; raster.lineWidth = 1; raster.depthBiasEnable = VK_TRUE;   // the bias itself is dynamic: zero except for decals
         VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState blend{};
         blend.colorWriteMask=(mode.color_write ? VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT : 0)|(mode.alpha_write ? VK_COLOR_COMPONENT_A_BIT : 0);
@@ -771,7 +771,7 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         blends[4].colorWriteMask=rt_writes ? gbuffer_write_mask(key) : 0;    // albedo
         VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blending.attachmentCount = scene_color_attachments(); blending.pAttachments = blends;
         blending.logicOpEnable=mode.mode==2; blending.logicOp=VkLogicOp(mode.logic);
-        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};   // the last four: set_draw_state
+        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_DEPTH_BIAS};   // the last five: set_draw_state
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = uint32_t(std::size(dynamic_states)); dynamic.pDynamicStates = dynamic_states;
         const VkFormat formats[5] = {VK_FORMAT_R8G8B8A8_UNORM, kMotionFormat, kGBufferFormat, kMaterialFormat, kAlbedoFormat};
         VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO}; rendering.colorAttachmentCount = scene_color_attachments(); rendering.pColorAttachmentFormats = formats;
@@ -2251,7 +2251,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         const Buffer* bound_vertices=nullptr; const Buffer* bound_indices=nullptr; VkDeviceSize bound_vertex_offset=0, bound_index_offset=0;
         uint32_t bound_state=~0u;   // cull and depth state last set on this command buffer (every pipeline bound below leaves them dynamic)
         const auto set_draw_state=[&](const PipelineKey& key) {
-            const uint32_t state=((key[0]>>14)&3)|((key[68]&31)<<2);
+            const bool decal=decal_depth_bias(key);
+            const uint32_t state=((key[0]>>14)&3)|((key[68]&31)<<2)|(decal<<7);
             if (state==bound_state) return;
             bound_state=state;
             vkCmdSetCullMode(slot.command,cull_mode(key));
@@ -2296,6 +2297,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 static const bool log_aim=std::getenv("UC_AIM_LOG")!=nullptr;   // diagnostics: one line per shifted reticle draw (consumed, latest, shift in aim units)
                 if (log_aim) std::fprintf(stderr,"[aim] t=%.4f consumed %.4f %.4f latest %.4f %.4f callsite %08X\n",std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),from[0],from[1],latest[0],latest[1],draw.callsite);
                 if (dx!=0 || dy!=0) { late_shift[0]=dx*2/draw_viewport.width; late_shift[1]=dy*2/draw_viewport.height; draw_scissor=scissor; ++late_aim_draws_; }
+            vkCmdSetDepthBias(slot.command,decal ? float(kDecalDepthBias) : 0.f,0.f,decal ? kDecalSlopeBias : 0.f);
             }
             vkCmdSetViewport(slot.command,0,1,&draw_viewport); vkCmdSetScissor(slot.command,0,1,&draw_scissor);
             const Buffer& vertex_buffer=info.vertices ? *info.vertices : slot.vertices;

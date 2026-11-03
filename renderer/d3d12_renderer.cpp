@@ -5,6 +5,7 @@
 #include "native_tev.h"
 #include "late_aim.h"
 #include "render_scale.h"
+#include "decal_bias.h"
 #include "native_viewport.h"
 #include "bloom_math.h"
 #include "hdr_math.h"
@@ -1469,7 +1470,8 @@ ID3D12PipelineState* D3D12Renderer::pipeline(const gx::DrawPacket& draw,bool alp
     bool lines=false;
     switch(draw.primitive) { case 0x80: case 0x90: case 0x98: case 0xA0: break; case 0xA8: case 0xB0: lines=true; break; default: throw std::invalid_argument("Unsupported DirectX GX primitive"); }
     const bool material=scene && rt_active();
-    const uint64_t key=blend.mode|(blend.source<<2)|(blend.destination<<5)|(blend.logic<<8)|(uint32_t(blend.color_write)<<12)|(uint32_t(blend.alpha_write)<<13)|(uint32_t(cull)<<14)|(depth<<16)|(uint32_t(lines)<<21)|(uint32_t(scene)<<22)|(uint32_t(alpha_pass)<<23)|(uint32_t(surface_pass)<<24)|(uint32_t(material)<<25);
+    const bool decal=decal_depth_bias(blend.mode,depth);
+    const uint64_t key=blend.mode|(blend.source<<2)|(blend.destination<<5)|(blend.logic<<8)|(uint32_t(blend.color_write)<<12)|(uint32_t(blend.alpha_write)<<13)|(uint32_t(cull)<<14)|(depth<<16)|(uint32_t(lines)<<21)|(uint32_t(scene)<<22)|(uint32_t(alpha_pass)<<23)|(uint32_t(surface_pass)<<24)|(uint32_t(material)<<25)|(uint64_t(decal)<<26);
     ID3D12PipelineState* uber=nullptr;
     if(const auto found=pipelines_.find(key);found!=pipelines_.end()) uber=found->second.Get();
     TevShaders::Bytecode spec_code; SpecKey spec_key{};
@@ -1503,6 +1505,7 @@ ID3D12PipelineState* D3D12Renderer::pipeline(const gx::DrawPacket& draw,bool alp
     desc.PrimitiveTopologyType=lines ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     desc.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID; desc.RasterizerState.CullMode=cull==1 ? D3D12_CULL_MODE_BACK : cull==2 ? D3D12_CULL_MODE_FRONT : D3D12_CULL_MODE_NONE;
     desc.RasterizerState.FrontCounterClockwise=FALSE; desc.RasterizerState.DepthClipEnable=TRUE;
+    if(decal) { desc.RasterizerState.DepthBias=kDecalDepthBias; desc.RasterizerState.SlopeScaledDepthBias=kDecalSlopeBias; }
     desc.NumRenderTargets=1; desc.RTVFormats[0]=blend.mode==2 ? DXGI_FORMAT_R8G8B8A8_UINT : color_format; desc.DSVFormat=DXGI_FORMAT_D32_FLOAT;
     desc.DepthStencilState.DepthEnable=(depth&1)!=0; desc.DepthStencilState.DepthWriteMask=(depth&16) ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
     desc.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC(((depth>>1)&7)+1);

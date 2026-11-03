@@ -58,3 +58,10 @@ int main() {
     bad=a; bad[68]=32; CHECK(!uc::valid_pipeline_key(bad,false));
     bad=a; bad[0]=2; CHECK(!uc::valid_pipeline_key(bad,false) && uc::valid_pipeline_key(bad,true));
 }
+    // Decals (bullet holes): depth tested, not written, blended. Opaque draws, depth-writing blended draws and untested draws get no bias.
+    uc::PipelineKey decal=a; decal[0]=1; decal[68]=1|(3<<1);
+    CHECK(uc::decal_depth_bias(decal));
+    auto opaque=decal; opaque[0]=0; CHECK(!uc::decal_depth_bias(opaque));
+    auto writes=decal; writes[68]|=16; CHECK(!uc::decal_depth_bias(writes));
+    auto untested=decal; untested[68]=0; CHECK(!uc::decal_depth_bias(untested));
+

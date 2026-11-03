@@ -1180,7 +1180,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     std::exception_ptr watch_error;
     bool in_render = false;
-    struct Watch { std::function<void()>* render; std::function<void(uint32_t,uint32_t)>* resize; } watch_state;
+    struct Watch { std::function<void()>* render; std::function<void(uint32_t,uint32_t)>* resize; SDL_WindowID window; } watch_state;
     // A guest frame is ~2.4 packets (scene passes + copies), 72 packets/s at 30 fps, and the modal loop's timer ticks only 64-100 times a second:
     // one packet per tick starves the guest. So each tick keeps servicing while packets are waiting, for at most 12 ms.
     std::function<void()> render_step = [&] {
@@ -1198,10 +1198,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         in_render = false;
     };
     std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); view_for_output(int(w),int(h)); } catch (...) { watch_error = std::current_exception(); } };
-    watch_state = {&render_step, &resize_step};
+    watch_state = {&render_step, &resize_step, window ? SDL_GetWindowID(window.get()) : 0};
     const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the main thread, also inside the modal resize loop
         auto& state = *static_cast<Watch*>(user);
-        if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) (*state.resize)(uint32_t(std::max(0, event->window.data1)), uint32_t(std::max(0, event->window.data2)));
+        if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event->window.windowID == state.window) (*state.resize)(uint32_t(std::max(0, event->window.data1)), uint32_t(std::max(0, event->window.data2)));
         else if (event->type == SDL_EVENT_WINDOW_EXPOSED) (*state.render)();
         return true;
     };
@@ -1226,7 +1226,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             while (SDL_PollEvent(&event)) {
                 ++frame_events;
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
-                if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
+                if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event.window.windowID == SDL_GetWindowID(window.get())) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
                 if(controlled) continue;
 #ifndef _WIN32
