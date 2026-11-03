@@ -2,6 +2,7 @@
 # Installs Resident Evil: The Umbrella Chronicles on a Steam Deck (run it in Desktop Mode, in Konsole):
 #   curl -fsSL https://raw.githubusercontent.com/solleo95/reuc-recomp/main/scripts/linux/install-steamdeck.sh | bash
 # or download this file and run `bash install-steamdeck.sh`. Run it again to update; saves, mods and the game folder are never touched.
+# Started without a terminal (a double click in the file manager) it shows a progress window and an error dialog (zenity) instead of text.
 #
 # It downloads the newest UC-Linux-X.Y.Z.zip release into ~/Games/UmbrellaChronicles, adds uc-launcher.sh to Steam as a non-Steam game with
 # its artwork, switches Steam Input off for it and gives it a gamepad layout (right trackpad as a mouse, its haptic feedback and trackball mode off) without gyro. Steam is closed for a moment (it rewrites its
@@ -39,8 +40,47 @@ class Fail(Exception):
     pass
 
 
-def fetch(source: str, target: Path) -> None:
-    """Copies a local file or downloads a URL, with a progress line for big files."""
+dialog = None   # the zenity progress window; set only when the script runs without a terminal
+
+
+def open_dialog() -> None:
+    """Started without a terminal (from the file manager, a shortcut): the messages also go to a window with a progress bar."""
+    global dialog
+    if sys.stdout.isatty() or not shutil.which("zenity") or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return
+    dialog = subprocess.Popen(["zenity", "--progress", "--no-markup", "--no-cancel", "--width=460", "--title", TITLE, "--text", "Starting..."],
+                              stdin=subprocess.PIPE, text=True)
+
+
+def say(text: str, percent: int | None = None, label: str | None = None, error: bool = False) -> None:
+    """Prints a line and, if there is a window, shows it as the window's text (or `label`) with the progress `percent`."""
+    global dialog
+    print(text, file=sys.stderr if error else sys.stdout, flush=True)
+    if dialog:
+        try:
+            dialog.stdin.write(f"# {label or text.strip()}\n" + (f"{percent}\n" if percent is not None else ""))
+            dialog.stdin.flush()
+        except OSError:   # the window was closed; the install goes on
+            dialog = None
+
+
+def close_dialog(failure: str | None = None) -> None:
+    """After success the window keeps its last text until the player presses OK; after a failure it becomes an error dialog."""
+    if not dialog:
+        return
+    if failure:
+        dialog.terminate()
+        subprocess.run(["zenity", "--error", "--no-markup", "--width=460", "--title", TITLE, "--text", failure])
+        return
+    try:
+        dialog.stdin.close()
+    except OSError:
+        pass
+    dialog.wait()
+
+
+def fetch(source: str, target: Path, span: tuple[int, int] | None = None) -> None:
+    """Copies a local file or downloads a URL; a big one (with `span`, its share of the window's progress) gets a progress line."""
     target.parent.mkdir(parents=True, exist_ok=True)
     if not source.startswith(("http://", "https://")):
         shutil.copyfile(source, target)
@@ -53,9 +93,10 @@ def fetch(source: str, target: Path) -> None:
         while chunk := response.read(1 << 20):
             output.write(chunk)
             done += len(chunk)
-            if total and done * 10 // total != shown:
+            if span and total and done * 10 // total != shown:
                 shown = done * 10 // total
-                print(f"  {done >> 20} of {total >> 20} MB", flush=True)
+                say(f"  {done >> 20} of {total >> 20} MB", span[0] + (span[1] - span[0]) * done // total,
+                    f"Downloading the game: {done >> 20} of {total >> 20} MB")
 
 
 def latest_linux_release() -> dict:
@@ -100,7 +141,7 @@ def stop_steam() -> bool:
     """Closes Steam if it runs (it rewrites shortcuts.vdf and localconfig.vdf when it exits); True if it did."""
     if not running("steam"):
         return False
-    print("Closing Steam (in Game Mode the session restarts by itself)...")
+    say("Closing Steam (in Game Mode the session restarts by itself)...", 90)
     subprocess.run(["steam", "-shutdown"], capture_output=True)
     for _ in range(120):
         if not running("steam") and not running("steamwebhelper"):
@@ -230,25 +271,26 @@ def main() -> int:
         else:
             asset = latest_linux_release()
             source = asset["browser_download_url"]
-            print(f"Latest release: {asset['name']}")
+            say(f"Latest release: {asset['name']}", 2)
         archive = work / "game.zip"
-        print("Downloading the game...")
-        fetch(source, archive)
+        say("Downloading the game...", 5)
+        fetch(source, archive, (5, 75))
         digest = (asset.get("digest") or "") if not args.zip else ""
         if digest.startswith("sha256:") and sha256(archive) != digest[7:]:
             raise Fail("the downloaded archive is damaged (checksum mismatch); run the installer again")
-        print(f"Unpacking into {dest} ...")
+        say(f"Unpacking into {dest} ...", 78)
         install_game(archive, dest)
         exe, start = f'"{dest / ENTRY}"', f'"{dest}/"'
         appid = zlib.crc32((exe + TITLE).encode()) | 0x80000000   # how Steam numbers a non-Steam game
         grid = config / "grid"
+        say("Adding the game to Steam...", 85)
         for name, target in ART:
             try:
                 fetch(args.art.rstrip("/") + "/" + name if args.art.startswith("http") else str(Path(args.art) / name), work / name)
                 grid.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(work / name, grid / target.format(id=appid))
             except OSError as error:   # a missing picture must not stop the install
-                print(f"warning: {name} not set: {error}", file=sys.stderr)
+                say(f"warning: {name} not set: {error}", error=True)
         restart = stop_steam()
         added = add_shortcut(config / "shortcuts.vdf", appid, exe, start, str(grid / f"{appid}_icon.png"))
         disable_steam_input(config / "localconfig.vdf", {str(appid), str(appid - (1 << 32))})   # Steam writes the key unsigned or signed
@@ -257,13 +299,17 @@ def main() -> int:
         shutil.rmtree(work, ignore_errors=True)
         if restart and not running("gamescope-wl"):   # in Game Mode the session starts Steam again by itself
             subprocess.Popen(["steam"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    print(f"Done: {TITLE} {'added to' if added else 'was already in'} Steam (installed in {dest}).")
+    say(f"Done: {TITLE} {'added to' if added else 'was already in'} Steam (installed in {dest}).", 100)
     return 0
 
 
+open_dialog()
 try:
-    sys.exit(main())
+    code = main()
+    close_dialog()
+    sys.exit(code)
 except (Fail, OSError, zipfile.BadZipFile) as error:
     print(f"error: {error}", file=sys.stderr)
+    close_dialog(f"Installation failed: {error}")
     sys.exit(1)
 PY

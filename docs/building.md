@@ -120,6 +120,20 @@ The harness copies your saves into `build\autotest\<run>\saves` and never plays 
 | `tests` | Unit, integration and end-to-end tests |
 | `docs` | Documentation, design notes and measurements |
 
+## What makes the build long, and how it is kept short
+
+A build is limited by its longest file. Three translated functions take 20, 11 and 9 seconds of register allocation each (clang `-ftime-trace`); everything else is below 1.5 seconds per function.
+`project/uc.cfg` lists them as `isolate <address>`: the translator puts each in a file of its own and numbers those files first, so the build starts them in the first second. A clean Linux
+build of a new translation went from 94 s to 43 s. After the translation changes a lot, `python scripts/compile_hotspots.py` lists the functions that are slow now.
+
+## Compiler cache (ccache)
+
+The translated game is 108 files that take about 25 CPU minutes to compile, so a clean tree or a switch back to an earlier state is slow without a cache. If ccache is installed
+(`winget install Ccache.Ccache`), CMake uses it automatically for every build folder (Windows and Linux; `-DUC_CCACHE=OFF` turns it off). The first build of a state fills the cache
+and is as slow as before; the same state again (a revert, another folder, a clean build) takes seconds: a full rebuild of the Linux tree measured 19 s instead of minutes.
+Check it with `ccache -s`. The settings (`CCACHE_SLOPPINESS=pch_defines,time_macros`, needed for the precompiled headers) travel with the compiler call, so they do not depend on the
+shell. On Windows with `clang-cl` a build that uses a shared PDB (`/Zi`) is not cached; `/Z7` is. This has not been tried on the Windows build yet.
+
 ## Building for Linux (the Steam Deck)
 
 The Linux build is cross-compiled on Windows (clang against the Steam Runtime "sniper" sysroot) and runs on the Steam Deck. It needs the translated game like the Windows build (`generated\`), plus:
@@ -137,7 +151,7 @@ How to install and run it on the Deck: [steamdeck-install.md](steamdeck-install.
 
 ## Making a release archive
 
-`build-release.bat` asks for a version `X.Y.Z`, runs `build.bat --no-install`, installs into a clean temporary folder and writes `UC-Windows-X.Y.Z.zip` and `dist-release\` (with `release.json`, the update manifest). Details and the GitHub release steps: [docs/releasing.md](releasing.md) (in Russian).
+`build-release.bat` asks for a version `X.Y.Z`, runs `build.bat --no-install`, installs into a clean temporary folder and writes `UC-Windows-X.Y.Z.zip` and `dist-release\` (with `release.json`, the update manifest). It then builds the Steam Deck archive too and writes `UC-Linux-X.Y.Z.zip` (`--skip-linux` for the Windows archive only): `scripts/linux/build.ps1 -ThinLTO` in `build-linux-lto`, with the optimizer profile `project/pgo/uc-linux.profdata` if there is one. **Both archives are always built with ThinLTO** (the script refuses a build without it); record the optimizer profiles first with `pgo.bat` (see [performance-measurement.md](testing/performance-measurement.md), section PGO). The development builds compared during optimisation work have neither ThinLTO nor the profile. Details and the GitHub release steps: [docs/releasing.md](releasing.md) (in Russian).
 
 ## Troubleshooting
 

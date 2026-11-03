@@ -31,7 +31,7 @@ static void pad_prompts() {
     auto reload=primary_prompt(pad,{Action::reload},xbox);
     CHECK(reload.action==Action::reload && reload.alternatives.size()==1 && reload.alternatives[0].choices[0].bindings[0].input==button(2) && reload.device.gamepad && reload.device.family==PadFamily::xbox);
     auto weapons=primary_prompt(pad,{Action::weapon_previous,Action::weapon_next},xbox);
-    CHECK(weapons.alternatives.size()==2 && weapons.alternatives[0].choices[0].bindings[0].input==button(9) && weapons.alternatives[1].choices[0].bindings[0].input==button(10));
+    CHECK(weapons.alternatives.size()==2 && weapons.alternatives[0].choices[0].bindings[0].input==button(11) && weapons.alternatives[1].choices[0].bindings[0].input==button(12));   // the D-pad, up and down
     auto fire_grenade=chord_prompt(pad,Action::interact,Action::fire,xbox);
     CHECK(fire_grenade.alternatives.size()==1 && fire_grenade.alternatives[0].choices.size()==2 && fire_grenade.alternatives[0].choices[1].bindings[0].input==axis(11));
     CHECK(!describe_prompt(default_bindings(),Action::reload).device.gamepad);                    // the keyboard device is the default and unchanged

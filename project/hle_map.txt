@@ -256,6 +256,7 @@ WPADControlMotor
 @80265810 PSVECCrossProduct
 @801316C8 BoundsRecordInit   # 10-store init of a bounds record, called ~66 times per hit buffer
 @800462E8 HitBufferConstruct   # constructor of the collision hit buffer (32+1 bounds records)
+@80046394 HitBufferDestruct   # destructor of the collision hit buffer (33 empty element destructors: dead frames and polls only)
 @80137BC4 Leaf_80137BC4   # tools/leaf_hle.py: generated native leaf functions (4x4 matrix product, vec4 helpers, ...)
 @80139368 Leaf_80139368
 @801394B8 Leaf_801394B8

@@ -402,6 +402,37 @@ CrLive analyze_cr(const Program& p) {
     return live;
 }
 
+// ---- store groups ----
+// Several plain stores through one base register in a straight line (no label, call or branch between them) touch at most two pages, so their write barrier (the page marks of
+// gx_write_watch.h and rollback_memory.h) is noted once, before the first of them, by ppc::note_stores; the stores themselves are the op_<name>_nb forms (everything but the marks).
+// Marking earlier than the store only makes the marks conservative: nothing between the marks and the stores can look at them, and a page marked without a store changes no result.
+// Exact when no instruction in between changes the base register: only instructions of known effect are allowed to pass (passes_store_group).
+struct PlainStore { bool ok = false; uint32_t base = 0; int32_t offset = 0; uint32_t size = 0; };
+static PlainStore plain_store(const ppc::OpInfo* op, uint32_t w) {
+    PlainStore s;
+    if (!op || op->kind != ppc::Kind::RRS) return s;
+    const std::string n = op->name;
+    const uint32_t size = n == "stw" || n == "stfs" ? 4 : n == "stb" ? 1 : n == "sth" ? 2 : n == "stfd" ? 8 : 0;
+    if (!size || ppc::a(w) == 0 || ppc::a(w) == 1) return s;   // r0 as a base is the literal 0; r1 is the stack, which has its own cheaper stores
+    s.ok = true; s.base = ppc::a(w); s.offset = ppc::simm(w); s.size = size;
+    return s;
+}
+// Can the instruction run between the grouped stores? It must leave the base register alone and leave the straight line alone.
+static bool passes_store_group(const ppc::OpInfo* op, uint32_t w, uint32_t base) {
+    if (!op) return false;
+    static const std::set<std::string> dest_rt = {"mulli", "addi", "addis", "addic", "addic_", "subfic", "lwz", "lbz", "lhz", "lha", "lwzx", "lbzx", "lhzx", "lhax", "mfspr", "mftb", "mfcr",
+                                                  "add", "subf", "addc", "subfc", "neg", "mullw", "mulhw", "mulhwu", "divw", "divwu", "adde", "subfe"};
+    static const std::set<std::string> dest_ra = {"ori", "oris", "xori", "xoris", "andi_", "andis_", "rlwimi", "rlwinm", "rlwnm", "slw", "srw", "sraw", "srawi", "cntlzw", "extsb", "extsh",
+                                                  "and", "andc", "nor", "or", "orc", "nand", "xor", "eqv"};
+    static const std::set<std::string> no_gpr = {"cmp", "cmpl", "cmpi", "cmpli", "mtspr", "mtcrf", "mcrf", "crnor", "crandc", "crxor", "crnand", "crand", "creqv", "crorc", "cror",
+                                                 "lfs", "lfd", "lfsx", "lfdx", "psq_l", "psq_st", "stw", "stb", "sth", "stfs", "stfd", "stwx", "stbx", "sthx", "stfsx", "stfdx"};
+    const std::string n = op->name;
+    if (dest_rt.count(n)) return ppc::t(w) != base;
+    if (dest_ra.count(n)) return ppc::a(w) != base;
+    if (no_gpr.count(n)) return true;
+    return n[0] == 'f' || n.compare(0, 3, "ps_") == 0;   // floating-point arithmetic and paired-single operations write no general register
+}
+
 std::string emit_function(const Program& p, const Function& f, EmitStats& st, const CrLive* live) {
     std::set<uint32_t> labels{f.entry};
     for (uint32_t pc = f.entry; pc < f.end; pc += 4) {
@@ -422,12 +453,14 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
     if (has_sec) for (uint32_t t : sit->second) labels.insert(t);
 
     std::ostringstream o;
+    // noopt: cold functions with huge control flow (a state machine of the Bluetooth stack) take clang's register allocator tens of seconds; without optimisation they compile in a moment.
+    const char* const cold = p.cfg.noopt.count(f.entry) ? "__attribute__((optnone, noinline)) " : "";
     if (has_sec) {
-        o << "static void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n  switch (at) { ";
+        o << "static " << cold << "void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n  switch (at) { ";
         for (uint32_t t : sit->second) o << "case 0x" << hex8(t) << "u: goto L_" << hex8(t) << "; ";
         o << "default: break; }\n";
     } else {
-        o << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n";
+        o << cold << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n";
     }
     const std::vector<uint8_t>* after = nullptr;   // CR fields still readable after each instruction
     if (live) { auto it = live->out.find(f.entry); if (it != live->out.end()) after = &it->second; }
@@ -450,12 +483,38 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
         }
         return 0;
     };
+    std::set<uint32_t> group_members;                  // stores that use the _nb form
+    std::map<uint32_t, std::string> group_note;        // first store of a group -> the statement that marks its pages
     bool fuse_next = false;   // the previous compare was folded into this instruction's branch
     std::deque<std::pair<std::string, bool>> queued;   // code (and whether the branch after it tests `fused`) for the next instructions, which an earlier fcmp already folded
     for (uint32_t pc = f.entry; pc < f.end; pc += 4) {
         uint32_t w = 0;
         p.img.word(pc, w);
         if (labels.count(pc)) o << "L_" << hex8(pc) << ":;\n";
+        if (!group_members.count(pc)) {
+            const PlainStore first = plain_store(ppc::decode(w), w);
+            if (first.ok) {
+                std::vector<uint32_t> members{pc};
+                int32_t lo = first.offset, hi = first.offset + int32_t(first.size);
+                for (uint32_t at = pc + 4; at < f.end && !labels.count(at) && at - pc <= 4 * 32; at += 4) {
+                    uint32_t word = 0;
+                    if (!p.img.word(at, word)) break;
+                    const ppc::OpInfo* o2 = ppc::decode(word);
+                    if (!o2 || o2->kind == ppc::Kind::UNSUP) break;
+                    const PlainStore s = plain_store(o2, word);
+                    if (s.ok && s.base == first.base) {
+                        const int32_t nlo = std::min(lo, s.offset), nhi = std::max(hi, s.offset + int32_t(s.size));
+                        if (nhi - nlo > 4096) break;   // two pages at most: both ends are touched, so the two marks are exactly the pages the stores touch
+                        lo = nlo; hi = nhi; members.push_back(at);
+                    } else if (!passes_store_group(o2, word, first.base)) break;
+                }
+                if (members.size() >= 2) {
+                    for (uint32_t m : members) group_members.insert(m);
+                    group_note[pc] = "ppc::note_stores(c, " + num(first.base) + ", " + num(lo) + ", " + num(hi - lo) + "u); ";
+                    ++st.store_groups; st.grouped_stores += members.size();
+                }
+            }
+        }
         CrHints hints;
         if (fuse_next) { hints.fused = &fused; fuse_next = false; }
         else if (const auto pf = pending_fuse.find(pc); pf != pending_fuse.end()) hints.fused = &pf->second;
@@ -573,6 +632,11 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
         }
         if (code.empty()) code = emit_insn(p, f, pc, w, st, &hints);
         else ++st.instructions;
+        if (group_members.count(pc)) {   // the plain store without its write barrier, the marks of the group before its first store
+            const std::string name = ppc::decode(w)->name, plain = "ppc::op_" + name + "(";
+            if (code.compare(0, plain.size(), plain) == 0) code = "ppc::op_" + name + "_nb(" + code.substr(plain.size());
+            if (const auto note = group_note.find(pc); note != group_note.end()) code = note->second + code;
+        }
         o << "  /*" << hex8(pc) << "*/ { " << code << " }\n";
     }
     uint32_t last = 0;
@@ -624,8 +688,15 @@ Output emit_program(const Program& p, size_t shard, EmitStats& st) {
         cur.clear(); in_cur = 0;
     };
     const CrLive live = p.cr_opt ? analyze_cr(p) : CrLive{};
+    // A function whose compile time is tens of seconds gets a file of its own, and those files come first: the build starts the files in this order, so they run next to the others
+    // from the first second instead of after them.
     for (const auto& f : p.an.functions) {
-        if (p.cfg.hle.count(f.entry)) continue;
+        if (p.cfg.hle.count(f.entry) || !p.cfg.isolate.count(f.entry)) continue;
+        cur += emit_function(p, f, st, p.cr_opt ? &live : nullptr);
+        flush();
+    }
+    for (const auto& f : p.an.functions) {
+        if (p.cfg.hle.count(f.entry) || p.cfg.isolate.count(f.entry)) continue;
         cur += emit_function(p, f, st, p.cr_opt ? &live : nullptr);
         if (++in_cur >= shard) flush();
     }

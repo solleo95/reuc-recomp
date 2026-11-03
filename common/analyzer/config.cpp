@@ -28,9 +28,9 @@ bool parse_config(const std::string& text, Config& out, std::string& error) {
         for (std::string t; ts >> t;) tok.push_back(t);
         if (tok.empty()) continue;
         uint32_t a = 0;
-        if (tok[0] == "entry" || tok[0] == "nofunc") {
+        if (tok[0] == "entry" || tok[0] == "nofunc" || tok[0] == "isolate" || tok[0] == "noopt") {
             if (tok.size() != 2 || !hex32(tok[1], a)) return fail("expected: " + tok[0] + " <hex address>");
-            (tok[0] == "entry" ? out.extra_entries : out.no_functions).insert(a);
+            (tok[0] == "entry" ? out.extra_entries : tok[0] == "nofunc" ? out.no_functions : tok[0] == "isolate" ? out.isolate : out.noopt).insert(a);
         } else if (tok[0] == "hle") {
             if (tok.size() != 3 || !hex32(tok[1], a)) return fail("expected: hle <hex address> <Name>");
             for (char ch : tok[2]) if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') return fail("invalid HLE name '" + tok[2] + "'");

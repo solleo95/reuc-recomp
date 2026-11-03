@@ -237,5 +237,37 @@ int main() {
     state.arrays[0]={0x800000FF,2};
     discarded.begin(state,0xB8,0,1,7,0,true);
     rejects(gx::ErrorCode::array_bounds,[&] { discarded.write_attribute(7,bytes(index)); });
+    {   // FIFO writes of 1, 2 and 4 bytes: append_partial plus write_attribute for the rest give the draw write_attribute gives for the whole input
+        gx::State direct;
+        direct.descriptors[9]=direct.descriptors[11]=gx::Mode::direct;
+        direct.formats[0][9]={gx::Type::f32,3,0};
+        std::vector<uint8_t> input;
+        for (unsigned i=0;i<6*16;++i) input.push_back(uint8_t(i*37+11));
+        gx::Vertices whole({{},{},{}});
+        whole.begin(direct,0x90,0,6,7,0);
+        whole.write_attribute(7,bytes(input));
+        const auto want=whole.take_draw();
+        gx::Vertices pieces({{},{},{}});
+        pieces.begin(direct,0x90,0,6,7,0);
+        CHECK(!pieces.append_partial(8,1,1));   // another producer: nothing taken
+        unsigned partial=0;
+        for (size_t at=0,step=0;at<input.size();++step) {
+            const unsigned size=std::min<size_t>(input.size()-at,step%3==0 ? 4 : step%3==1 ? 2 : 1);
+            uint32_t value=0; for (unsigned b=0;b<size;++b) value=value<<8|input[at+b];
+            if (pieces.append_partial(7,value,size)) ++partial;
+            else pieces.write_attribute(7,bytes(input).subspan(at,size));
+            at+=size;
+        }
+        CHECK(partial>20 && !pieces.active());
+        CHECK(!pieces.append_partial(7,1,1));   // not active any more
+        const auto got=pieces.take_draw();
+        CHECK(got.vertices.size()==want.vertices.size());
+        for (size_t v=0;v<want.vertices.size();++v) {   // field by field: the struct's tail padding is not initialised
+            const auto& a=got.vertices[v]; const auto& b=want.vertices[v];
+            CHECK(std::memcmp(a.position.data(),b.position.data(),sizeof a.position)==0 && std::memcmp(a.normal.data(),b.normal.data(),sizeof a.normal)==0);
+            CHECK(a.color==b.color && std::memcmp(a.texcoord.data(),b.texcoord.data(),sizeof a.texcoord)==0);
+            CHECK(a.position_matrix==b.position_matrix && a.texture_matrix==b.texture_matrix);
+        }
+    }
     return 0;
 }

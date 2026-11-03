@@ -72,11 +72,11 @@ Every release carries **both** archives and is published as the **latest** relea
 Building the Steam Deck archive:
 
 ```bash
-pwsh scripts/linux/build.ps1 -Target uc_launcher,uc
-python scripts/linux/deck.py package build/deck-release
+pwsh scripts/linux/build.ps1 -ThinLTO -Target uc_launcher,uc     # build-linux-lto: a release is always built with ThinLTO
+python scripts/linux/deck.py package build/deck-release --build build-linux-lto
 python scripts/build_release_deck.py --version 0.0.2 --stage build/deck-release
 ```
 
-The result is `UC-Linux-0.0.2.zip` in the repository folder, and the script prints the publishing checklist.
+The result is `UC-Linux-0.0.2.zip` in the repository folder, and the script prints the publishing checklist. `build-release.bat` does all of this after the Windows archive (record the optimizer profile first with `pgo.bat linux`).
 
 Renaming note: launchers released before the `UC-Linux-` name look for `UC-SteamDeck-<version>.zip` and cannot see a release that only has `UC-Linux-` archives. To let them update once, attach the same archive under both names to the first release with the new name (the second name can be dropped later).

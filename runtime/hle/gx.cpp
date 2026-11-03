@@ -839,8 +839,7 @@ static void raw_display_list(uint32_t address,uint32_t length) {
         return;
     }
 }
-[[clang::noinline]] static void gx_fifo_write_other(int size, uint32_t value);
-// The recording write (millions a second while the game builds display lists) stays a small function; everything else, with its large frame, is the call below.
+[[clang::noinline]] static void gx_fifo_write_other(int size, uint32_t value);// The recording write (millions a second while the game builds display lists) stays a small function; everything else, with its large frame, is the call below.
 void gx_fifo_write(int size, uint32_t value) {
     if (recording && (size==1 || size==2 || size==4)) {
         auto& list=*recording;
@@ -855,7 +854,7 @@ void gx_fifo_write(int size, uint32_t value) {
             if (in_primitive) list.open_left-=size_t(size);
             return;
         }
-    }
+    } else if (capture && (size==1 || size==2 || size==4) && capture->append_partial(producer(),value,unsigned(size))) return;   // the common immediate-mode vertex write: part of a vertex
     gx_fifo_write_other(size,value);
 }
 static void gx_fifo_write_other(int size, uint32_t value) {
@@ -1417,13 +1416,24 @@ void hle_ResTevApply(ppc::Ctx& c) {
         ppc::wr32(c,selector,(read32(selector)&~(1023u<<bits))|(stage.konst<<bits));
     }
 }
+namespace {
+// import_color_material is a pure function of its 128 bytes (it also throws on bad bytes, and then nothing is kept): the models of a fight apply the same colour block
+// again and again, so the last result is reused while the bytes are the same. Guest baton only.
+const gx::ColorMaterial& color_material(std::span<const std::byte> bytes) {
+    static std::array<std::byte,128> last; static gx::ColorMaterial parsed; static bool valid=false;
+    if(!(valid && bytes.size()==last.size() && std::memcmp(bytes.data(),last.data(),last.size())==0)) {
+        valid=false; parsed=gx::import_color_material(bytes); std::memcpy(last.data(),bytes.data(),last.size()); valid=true;
+    }
+    return parsed;
+}
+}
 void hle_ResColorApply(ppc::Ctx& c) {
     matrix_boundary(0x80367024);
     const auto bytes=memory.read(read32(c.r[3]),128);
     const auto sdk=read32(c.r[2]-8968);
     memory.read(sdk,4);
     gx::ColorMaterial parsed;
-    try { parsed=gx::import_color_material(bytes); }
+    try { parsed=color_material(bytes); }
     catch(const std::invalid_argument&) {
         std::fprintf(stderr,"[native-color-invalid] hex");
         for(auto byte:bytes) std::fprintf(stderr," %02X",std::to_integer<unsigned>(byte));

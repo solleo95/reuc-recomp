@@ -97,18 +97,9 @@ Bindings default_pad_bindings() {
     result[size_t(Action::interact)]={pad_button(0),pad_button(kPadTrackpadPress+1)};   // Steam Deck: A, and a firm press of the right trackpad
 #endif
     result[size_t(Action::fire)]={pad_axis(11)};
-#ifdef _WIN32
-    result[size_t(Action::weapon_previous)]={pad_button(9)};
-    result[size_t(Action::weapon_next)]={pad_button(10)};
-#else
-    result[size_t(Action::weapon_previous)]={pad_button(11)};   // Steam Deck: the D-pad, up (SDL dpup 11) and down (dpdown 12); the shoulders stay free
+    result[size_t(Action::weapon_previous)]={pad_button(11)};   // the D-pad, up (SDL dpup 11) and down (dpdown 12); the shoulders stay free
     result[size_t(Action::weapon_next)]={pad_button(12)};
-#endif
-#ifdef _WIN32
-    result[size_t(Action::reload)]={pad_button(2)};
-#else
-    result[size_t(Action::reload)]={pad_axis(9)};   // Steam Deck: the left trigger (L2); X stays free
-#endif
+    result[size_t(Action::reload)]={pad_button(2),pad_axis(9)};   // X and the left trigger (L2)
     // No special kinds here: the interact+fire throw, the swing and the shake are switched by the keyboard table's entries for them, for every device (the gyro swings and shakes like a mouse).
     result[size_t(Action::grenade)]={pad_button(3)};
     result[size_t(Action::knife)]={pad_button(1)};

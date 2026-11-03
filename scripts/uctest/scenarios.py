@@ -444,7 +444,13 @@ def fight(g, args):
     flag = os.environ.get("UC_CPU_SAMPLE_FLAG")
     if flag:
         Path(flag).write_text("go")
-    result = {"marked": marked, "capture": g.capture()}
+    try:
+        shot = g.capture()
+    except Exception:
+        if not os.environ.get("UC_DECK"):
+            raise
+        shot = None   # Game Mode runs in HDR, where the game gives no capture; the measurement below does not need it
+    result = {"marked": marked, "capture": shot}
     window_from = g.frame.get("retraces", 0)
     with g.step("measure_fps"):
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
@@ -461,7 +467,12 @@ def fight(g, args):
 def autoplay(g, args):
     """Play from the train chapter start as far as the bot gets; the report says where and why it stopped."""
     from .autoplay import Autoplay
+    if args.speed < 8: g.set_speed(8)   # menus and loading at 8x, the bot plays at the requested speed (like perf)
     reach_gameplay(g, args.chapter)
+    if args.speed < 8:
+        with g.step("normal_speed"):
+            g.set_speed(args.speed)
+            g.wait(lambda f: f.get("speed") == args.speed and f.get("context") == "gameplay", seconds=10, awaited=f"speed {args.speed} in gameplay")
     bot = Autoplay(g, g.run_dir / "autoplay.jsonl", speed=args.speed, god=args.god)
     with g.step("autoplay"):
         report = bot.run(args.max_minutes)

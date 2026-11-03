@@ -38,8 +38,7 @@ inline double ldd(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); v = _by
 inline void std_(uint8_t* p, double d) { uc::rollback_note_pointer(p,8); uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
 // Straight leaves use these only after noting every output and stack range.
 namespace noted {
-// Keep a same-binary control for performance checks and regression bisection.
-const bool per_store=std::getenv("UC_LEAF_BATCH_OFF")!=nullptr;
+constexpr bool per_store=false;   // the stores of straight leaves are noted by range before they run; the per-store control (UC_LEAF_BATCH_OFF) cost a load and a branch in every store
 inline void st32(uint8_t* p, uint32_t v) { if(per_store) uc::rollback_note_pointer(p,4); v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
 inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }
 inline void std_(uint8_t* p, double d) { if(per_store) uc::rollback_note_pointer(p,8); uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }

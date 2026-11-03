@@ -152,6 +152,7 @@ private:
     struct IdleEvent { uint64_t end_ns, duration_ns; bool by_event; std::string key; };
     std::vector<IdleEvent> idle_events_;   // the first waits of 2 ms or more, with the time they ended
     mutable std::mutex idle_report_m_;
+    std::map<std::string, uint64_t> switch_pairs_;   // guarded by idle_report_m_
 public:
     struct SwitchStats { uint64_t switches, wake_ns; };
     SwitchStats switch_stats() const { return {switches_.load(), wake_ns_.load()}; }
@@ -167,6 +168,8 @@ public:
     uint64_t guest_cycles() const { uint64_t sum = 0; for (const auto& c : run_cycles_) sum += c.load(); return sum; }
     uint64_t idle_ns() const { return idle_ns_.load(); }   // time every guest thread was blocked and the scheduler waited for an event
     uint64_t thread_run_ns(int id) const { return id > 0 && id < 32 ? run_ns_[id].load() : 0; }
+    // --profile: the thread switches since the last call by "from->to cause" (cause: the wait key the leaving thread blocks on, or preempted/yield/suspended), most frequent first.
+    std::string switch_report(size_t limit = 8);
     std::string idle_report() const;   // idle waits of 1 ms or more, grouped by the blocked threads and the wait keys they sat on (frame-log notes)
     uint32_t thread_entry(int id) const { return id > 0 && id < 32 ? entry_[id].load() : 0; }
 };

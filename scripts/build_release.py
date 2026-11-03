@@ -171,6 +171,7 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
     try:
         # UC_ALL_TESTS makes scripts/tests-run.ps1 run every test, not only the ones changed since their last pass.
         runner([str(repo / "build.bat"), "--no-install"], cwd=repo, check=True, env={**os.environ, "UC_ALL_TESTS": "1"})
+        require_thinlto(repo / "build" / "CMakeCache.txt")
         runner(["cmake", "--install", str(repo / "build"), "--prefix", str(stage)], cwd=repo, check=True)
         actual = {path.resolve() for path in files_in(stage)}
         listed = {Path(line).resolve() for line in (repo / "build/install_manifest.txt").read_text(encoding="utf-8").splitlines() if line}
@@ -212,13 +213,40 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
                 print(f"Cleanup deferred: {work}: {error}", file=sys.stderr)
 
 
+def require_thinlto(cache: Path) -> None:
+    """A release is always built with ThinLTO (whole-program inlining; about 1% fewer instructions on the Deck): refuse an archive from a build without it.
+    A missing cache (the tests' fake build) is not checked."""
+    if cache.is_file() and not re.search(r"^UC_THINLTO:BOOL=ON\s*$", cache.read_text(encoding="utf-8", errors="replace"), re.M):
+        raise ValueError(f"The release build has no ThinLTO (UC_THINLTO is not ON in {cache}): build it with build.bat")
+
+
+def build_linux_release(repo: Path, version: str) -> Path:
+    """UC-Linux-X.Y.Z.zip for the Steam Deck: cross-built on Windows with ThinLTO (folder build-linux-lto, scripts/linux/build.ps1 -ThinLTO) and with the optimizer
+    profile project/pgo/uc-linux.profdata when it exists (record it first with pgo.bat linux). Needs the Linux sysroot (docs/building.md)."""
+    from build_release_deck import build_deck_release
+    repo = repo.resolve(strict=True)
+    folder = repo / "build-linux-lto"
+    subprocess.run(["pwsh", "-NoProfile", "-File", str(repo / "scripts" / "linux" / "build.ps1"), "-ThinLTO", "-Target", "uc_launcher,uc"], cwd=repo, check=True)
+    require_thinlto(folder / "CMakeCache.txt")
+    stage = repo / "build" / "deck-release"
+    shutil.rmtree(stage, ignore_errors=True)
+    subprocess.run([sys.executable, "-I", str(repo / "scripts" / "linux" / "deck.py"), "package", str(stage), "--build", str(folder)], cwd=repo, check=True)
+    if not (repo / "project" / "pgo" / "uc-linux.profdata").is_file():
+        print("WARNING: no optimizer profile for the Linux build (project/pgo/uc-linux.profdata): run pgo.bat linux first for the full speed.")
+    return build_deck_release(repo, version, stage)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", help="X.Y.Z; otherwise asks interactively")
+    parser.add_argument("--skip-linux", action="store_true", help="only UC-Windows-X.Y.Z.zip (the Steam Deck archive is built by default, with ThinLTO)")
     args = parser.parse_args()
     try:
         version = args.version if args.version is not None else input("Версия релиза (например, 0.0.1): ")
-        build_release(Path(__file__).resolve().parent.parent, version)
+        repo = Path(__file__).resolve().parent.parent
+        build_release(repo, version)
+        if not args.skip_linux:
+            build_linux_release(repo, version)
         return 0
     except (OSError, ValueError, subprocess.CalledProcessError, EOFError) as error:
         print(f"Release failed: {error}", file=sys.stderr)

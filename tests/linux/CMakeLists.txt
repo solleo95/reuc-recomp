@@ -52,7 +52,7 @@ target_include_directories(test_diagnostic_log_posix PRIVATE ${CMAKE_CURRENT_SOU
 add_library(test_support STATIC ${CMAKE_CURRENT_SOURCE_DIR}/../mmio_stub.cpp)   # the same stubs the Windows tests use
 target_link_libraries(test_support PUBLIC uc_runtime)
 foreach(t test_ppc_int test_ppc_mem test_ppc_float test_mmio test_lowmem test_sched test_sched_restore test_os_hle test_dvd test_vi test_exi test_ios test_dsp
-          test_gx_audit test_gx_hle test_texture_matrix_hle test_mesh_hle test_sdk_math_hle test_sdk_regs_hle test_leaf_hle test_save_hle test_rollback_memory)
+          test_gx_audit test_gx_hle test_texture_matrix_hle test_mesh_hle test_sdk_math_hle test_sdk_regs_hle test_leaf_hle test_save_hle test_rollback_memory test_ax_audio_fast)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../${t}.cpp)
     uc_linux_test(${t} test_support)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h

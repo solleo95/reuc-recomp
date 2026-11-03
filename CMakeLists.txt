@@ -9,6 +9,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Compiler cache: the 108 generated game files take about 25 CPU minutes, and a revert, a switch between two states or a clean tree finds them in the cache.
+# Used when ccache is installed (winget install Ccache.Ccache); -DUC_CCACHE=OFF turns it off. MSVC-style /Zi debug info (a shared PDB) cannot be cached: the build then compiles as before.
+option(UC_CCACHE "use ccache as the compiler launcher when it is installed" ON)
+if(UC_CCACHE)
+  file(GLOB uc_ccache_hints "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Packages/Ccache.Ccache_*/ccache-*")   # where winget unpacks it: a shell started before the install does not have it on PATH
+  find_program(UC_CCACHE_PROGRAM ccache HINTS ${uc_ccache_hints} "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Links")
+  if(UC_CCACHE_PROGRAM)
+    # pch_defines,time_macros: lets ccache use the precompiled headers of the game/runtime targets (without it it reports "could not use precompiled header" and compiles those files uncached).
+    # The settings go with the call, so a shell that does not have the user's ccache configuration (PowerShell and Git Bash read different ones) behaves the same.
+    set(CMAKE_C_COMPILER_LAUNCHER "${CMAKE_COMMAND}" -E env CCACHE_SLOPPINESS=pch_defines,time_macros "${UC_CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CMAKE_COMMAND}" -E env CCACHE_SLOPPINESS=pch_defines,time_macros "${UC_CCACHE_PROGRAM}")
+    message(STATUS "ccache: ${UC_CCACHE_PROGRAM}")
+  endif()
+endif()
 if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   add_compile_options(/clang:-march=x86-64-v3)
 endif()

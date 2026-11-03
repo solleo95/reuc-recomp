@@ -91,6 +91,15 @@ public:
     void begin(const State& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard=false) { begin(Shared<State>(state), primitive, vat, count, producer, callsite, discard); }
     void begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard=false);   // shares the block with the draw
     void write_attribute(uint32_t producer, std::span<const std::byte> bytes);
+    // One FIFO write of 1, 2 or 4 bytes (big-endian, the low `size` bytes of `value`) that leaves the current vertex unfinished: the same state change as write_attribute
+    // for that case without its checks. False (nothing done) for every other case, which write_attribute then handles or reports.
+    bool append_partial(uint32_t producer, uint32_t value, unsigned size) {
+        if (!active_ || producer != producer_ || vertex_bytes_used_ + size >= vertex_size_) return false;
+        std::byte* out = vertex_bytes_.data() + vertex_bytes_used_;
+        for (unsigned i = 0; i < size; ++i) out[i] = std::byte(uint8_t(value >> ((size - 1 - i) * 8)));
+        vertex_bytes_used_ += size;
+        return true;
+    }
     DrawPacket take_draw();
     void finish() const;
     bool active() const { return active_; }

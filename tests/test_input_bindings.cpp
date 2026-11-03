@@ -254,7 +254,8 @@ static void pad_tables_validate_and_stay_separate() {
     const auto defaults=default_pad_bindings();
     CHECK(defaults[size_t(Action::fire)].size()==1 && defaults[size_t(Action::fire)][0].input==axis(11));
     CHECK(defaults[size_t(Action::interact)][0].input==pad(0) && defaults[size_t(Action::reload)][0].input==pad(2));
-    CHECK(defaults[size_t(Action::weapon_previous)][0].input==pad(9) && defaults[size_t(Action::weapon_next)][0].input==pad(10));
+    CHECK(defaults[size_t(Action::weapon_previous)][0].input==pad(11) && defaults[size_t(Action::weapon_next)][0].input==pad(12));   // the D-pad, up and down, on every platform
+    CHECK(defaults[size_t(Action::reload)].size()==2 && defaults[size_t(Action::reload)][1].input==axis(9));                           // X, and the left trigger (L2)
     CHECK(defaults[size_t(Action::recenter)][0].input==pad(7) && defaults[size_t(Action::screenshot)][0].input==pad(4));
     CHECK(defaults[size_t(Action::release_cursor)].empty() && defaults[size_t(Action::camera_up)].empty());
     CHECK(defaults[size_t(Action::menu)].empty());   // the menu is a key of the keyboard table
@@ -291,8 +292,8 @@ static void pad_buttons_drive_actions_by_context() {
     auto r=pad_game(); r.button(axis(11),true); auto f=r.consume(); CHECK(f.held==bit(Action::fire) && downs(f,Action::fire)==1);
     r.button(axis(11),false); r.consume();
     r.button(pad(2),true); CHECK(downs(r.consume(),Action::reload)==1);
-    r.button(pad(9),true); CHECK(downs(r.consume(),Action::weapon_previous)==1);
-    r.button(pad(10),true); CHECK(downs(r.consume(),Action::weapon_next)==1);
+    r.button(pad(11),true); CHECK(downs(r.consume(),Action::weapon_previous)==1);   // the D-pad, up
+    r.button(pad(12),true); CHECK(downs(r.consume(),Action::weapon_next)==1);       // and down
     r.button(pad(6),true); CHECK(downs(r.consume(),Action::pause)==1);
     r.button(pad(4),true); CHECK(downs(r.consume(),Action::screenshot)==1);
     r.button(pad(7),true); CHECK(downs(r.consume(),Action::recenter)==1);

@@ -32,6 +32,7 @@
 #include "lowmem.h"
 #include "mmio.h"
 #include "sched.h"
+#include "perf_counters.h"
 #include "trace.h"
 #include "vi.h"
 #include "options.h"
@@ -495,7 +496,19 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if (deterministic && retraces % 60 == 0) {   // identical work per game second: the wall time and guest cycles between marks are what builds are compared on
             static auto last = std::chrono::steady_clock::now(); static uint64_t last_draws = 0, last_cycles = 0;
             const auto now = std::chrono::steady_clock::now(); const uint64_t draws = uc::gx_stats().draws, cycles = sched.guest_cycles();
-            std::fprintf(stderr, "[detbench] retrace %llu draws %llu guest_mcycles %.2f wall_ms %.2f\n", (unsigned long long)retraces, (unsigned long long)(draws - last_draws), (cycles - last_cycles) / 1e6, std::chrono::duration<double, std::milli>(now - last).count());
+            std::fprintf(stderr, "[detbench] retrace %llu draws %llu guest_mcycles %.2f wall_ms %.2f", (unsigned long long)retraces, (unsigned long long)(draws - last_draws), (cycles - last_cycles) / 1e6, std::chrono::duration<double, std::milli>(now - last).count());
+            if (const uc::PerfTotals hw = uc::perf_totals(); hw.enabled) {   // UC_PERF_COUNTERS=1: user-space instructions and cycles of the guest threads since the previous mark
+                static uint64_t last_instructions = 0, last_hw_cycles = 0;
+                std::fprintf(stderr, " guest_minstr %.4f guest_hw_mcycles %.4f", (hw.instructions - last_instructions) / 1e6, (hw.cycles - last_hw_cycles) / 1e6);
+                last_instructions = hw.instructions; last_hw_cycles = hw.cycles;
+            }
+            {   // the wall time the baton was held since the previous mark: the serial time of the guest, which work moved to helper threads shortens (hw counters do not see it)
+                static uint64_t last_serial = 0; uint64_t serial = 0;
+                for (int id = 1; id < 32; ++id) serial += sched.thread_run_ns(id);
+                std::fprintf(stderr, " guest_serial_ms %.3f", (serial - last_serial) / 1e6);
+                last_serial = serial;
+            }
+            std::fprintf(stderr, "\n");
             last = now; last_draws = draws; last_cycles = cycles;
         }
         if (options.stop_retrace && retraces >= options.stop_retrace) det_stop = true;
@@ -1411,6 +1424,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 const auto pacing=uc::game_pacing_stats();
                 std::fprintf(stderr,"[window] input focus %u\n",window ? unsigned((SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0) : 0u);
                 { const auto sw=sched.switch_stats(); static uint64_t last_switches=0,last_wake=0,last_run[32]={}; std::fprintf(stderr,"[sched] switches %llu avg wake %.1f us, run ms:",(unsigned long long)(sw.switches-last_switches),(sw.switches-last_switches) ? (sw.wake_ns-last_wake)/1e3/double(sw.switches-last_switches) : 0.0); last_switches=sw.switches; last_wake=sw.wake_ns; for(int id=1;id<32;++id) { const auto ns=sched.thread_run_ns(id); if(ns-last_run[id]) std::fprintf(stderr," #%d(%08X) %.0f",id,sched.thread_entry(id),(ns-last_run[id])/1e6); last_run[id]=ns; } std::fputc(10,stderr); }
+                std::fprintf(stderr,"[sched-switches]%s\n",sched.switch_report().c_str());
                 { const auto depth=packets.depth(); std::fprintf(stderr,"[packets] queued %zu outstanding %zu presenting in flight %zu\n",depth.queued,depth.outstanding,depth.frames_in_flight); }   // outstanding must stay near the guest lead (tens), never creep to kMaxOutstandingPackets
                 std::fprintf(stderr,"[guest-blocked] renderer wait %.2f ms total (window %.2f, packets %llu),main loop waited %.2f ms this second, GPU busy %.2f ms total, frame latency avg %.2f max %.2f ms over %llu frames\n",gx::seal_wait_ns()/1e6,gx::seal_window_wait_ns()/1e6,(unsigned long long)gx::seal_count(),loop_wait_ns/1e6,renderer.gpu_busy_ns()/1e6,gx::frame_latency().total_ns/1e6/std::max<uint64_t>(gx::frame_latency().frames,1),gx::frame_latency().max_ns/1e6,(unsigned long long)gx::frame_latency().frames); loop_wait_ns=0;
                 std::fprintf(stderr,"[game-pacing] calls %llu retraces %llu timestep %.6f sec threshold2 %llu adjusted %llu wait %.2f ms\n",(unsigned long long)pacing.calls,(unsigned long long)pacing.retraces,pacing.timestep_ns/1e9,(unsigned long long)pacing.threshold_two,(unsigned long long)pacing.adjusted,pacing.wait_ns/1e6);

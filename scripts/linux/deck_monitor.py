@@ -34,6 +34,21 @@ def thread_times(pid):
     return times
 
 
+def thread_waits(pid):
+    """tid -> (ns the thread sat runnable on a run queue without a CPU, involuntary context switches, voluntary context switches)."""
+    waits = {}
+    for path in glob.glob(f"/proc/{pid}/task/*/schedstat"):
+        tid = path.split("/")[4]
+        try:
+            delay = int(open(path).read().split()[1])
+            status = open(f"/proc/{pid}/task/{tid}/status").read()
+        except (OSError, IndexError, ValueError):
+            continue
+        fields = {line.split(":")[0]: line.split(":")[1].strip() for line in status.splitlines() if ":" in line}
+        waits[tid] = (delay, int(fields.get("nonvoluntary_ctxt_switches", 0)), int(fields.get("voluntary_ctxt_switches", 0)))
+    return waits
+
+
 def read(path, default=None):
     try:
         return open(path).read().strip()
@@ -50,7 +65,7 @@ def gpu_paths():
 
 def main():
     out = open(sys.argv[1], "w")
-    out.write("t,cpu_pct,top1,top1_pct,top2,top2_pct,top3,top3_pct,cpu_mean_mhz,cpu_max_mhz,gpu_busy_pct,gpu_sclk_mhz,power_w\n")
+    out.write("t,cpu_pct,top1,top1_pct,top2,top2_pct,top3,top3_pct,cpu_mean_mhz,cpu_max_mhz,gpu_busy_pct,gpu_sclk_mhz,power_w,top1_runqueue_pct,top1_involuntary_per_s,top1_voluntary_per_s\n")
     card = gpu_paths()
     hwmon = glob.glob(f"{card}/hwmon/hwmon*/power1_average") if card else []
     pid = None
@@ -62,6 +77,7 @@ def main():
         return
     start = time.monotonic()
     previous, previous_t = thread_times(pid), time.monotonic()
+    previous_waits = thread_waits(pid)
     gone = 0
     while True:
         time.sleep(0.25)
@@ -73,9 +89,16 @@ def main():
         now = time.monotonic()
         current = thread_times(pid)
         dt = now - previous_t
-        usage = sorted(((current[t][1] - previous[t][1]) / dt * 100, current[t][0]) for t in current if t in previous)[::-1]
-        total = sum(u for u, _ in usage)
-        previous, previous_t = current, now
+        usage = sorted(((current[t][1] - previous[t][1]) / dt * 100, current[t][0], t) for t in current if t in previous)[::-1]
+        total = sum(u[0] for u in usage)
+        waits = thread_waits(pid)
+        busiest = usage[0][2] if usage else None
+        if busiest in waits and busiest in previous_waits:
+            wait_cols = (f"{(waits[busiest][0] - previous_waits[busiest][0]) / (dt * 1e9) * 100:.1f}", f"{(waits[busiest][1] - previous_waits[busiest][1]) / dt:.0f}", f"{(waits[busiest][2] - previous_waits[busiest][2]) / dt:.0f}")
+        else:
+            wait_cols = ("", "", "")
+        usage = [(u, n) for u, n, _ in usage]
+        previous, previous_t, previous_waits = current, now, waits
         clocks = [int(read(p, "0")) / 1000 for p in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")]
         busy = read(f"{card}/gpu_busy_percent", "") if card else ""
         sclk = ""
@@ -89,7 +112,7 @@ def main():
             power = f"{int(raw) / 1e6:.1f}" if raw else ""
         tops = (usage + [(0, ""), (0, ""), (0, "")])[:3]
         out.write(f"{now - start:.2f},{total:.0f},{tops[0][1]},{tops[0][0]:.0f},{tops[1][1]},{tops[1][0]:.0f},{tops[2][1]},{tops[2][0]:.0f},"
-                  f"{sum(clocks) / max(1, len(clocks)):.0f},{max(clocks, default=0):.0f},{busy},{sclk},{power}\n")
+                  f"{sum(clocks) / max(1, len(clocks)):.0f},{max(clocks, default=0):.0f},{busy},{sclk},{power},{','.join(wait_cols)}\n")
         out.flush()
     out.close()
 

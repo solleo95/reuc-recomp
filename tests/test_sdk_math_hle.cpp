@@ -9,6 +9,7 @@
 #include <tuple>
 #include <vector>
 using namespace ppc;
+void hit_buffer_destruct(Ctx&, void (*)(Ctx&));
 
 void hle_PSMTXIdentity(Ctx&); void hle_PSMTXCopy(Ctx&); void hle_PSMTXConcat(Ctx&); void hle_PSMTXTransApply(Ctx&); void hle_PSMTXScaleApply(Ctx&);
 void hle_PSMTXMultVec(Ctx&); void hle_PSVECAdd(Ctx&); void hle_PSVECSubtract(Ctx&); void hle_PSVECScale(Ctx&); void hle_PSVECNormalize(Ctx&);
@@ -367,6 +368,80 @@ void compare_hit_buffer(int iterations = 3000) {
     CHECK(mismatches == 0);
 }
 
+// The hit buffer destructor (80046394) with __destroy_arr (80289C2C) and the element destructor (80131688), op for op; `delete this` is a stub both sides call.
+void delete_stub(Ctx& c) {   // stands for operator delete (802896EC): a frame of its own, a result in r3, the volatile registers touched
+    const uint32_t sp = c.r[1];
+    wr32(c, sp - 32, sp); wr32(c, sp - 12, c.lr); wr32(c, sp - 20, c.r[3]);
+    c.r[0] = 0x0DEC0DE0u; c.r[3] = 0x12340000u | (c.r[3] & 0xFFFF); c.r[4] = 0x7777; c.r[5] = 0x8888; c.r[6] = 0x9999; c.ctr = 0x4242; c.cr[0] = 2;
+}
+void ref_ElementDestructor(Ctx& c) {
+    op_stwu(c, 1, 1, -16); op_mfspr(c, 0, 8); op_cmpi(c, 0, 3, 0); op_stw(c, 0, 1, 20); op_stw(c, 31, 1, 12); op_or(c, 3, 31, 3, false);
+    if (crbit(c, 2) == true) goto L_801316B0;
+    op_cmpi(c, 0, 4, 0);
+    if (crbit(c, 1) == false) goto L_801316B0;
+    c.lr = 0x801316B0u; delete_stub(c);
+L_801316B0:;
+    op_or(c, 31, 3, 31, false); op_lwz(c, 31, 1, 12); op_lwz(c, 0, 1, 20); op_mtspr(c, 0, 8); op_addi(c, 1, 1, 16);
+}
+void ref_DestroyArray(Ctx& c) {
+    op_stwu(c, 1, 1, -32); op_mfspr(c, 0, 8); op_stw(c, 0, 1, 36); op_mullw(c, 0, 5, 6, false); op_stw(c, 31, 1, 28); op_stw(c, 30, 1, 24); op_or(c, 6, 30, 6, false);
+    op_add(c, 31, 3, 0, false); op_stw(c, 29, 1, 20); op_or(c, 5, 29, 5, false); op_stw(c, 28, 1, 16); op_or(c, 4, 28, 4, false);
+    goto L_80289C7C;
+L_80289C60:;
+    op_subf(c, 31, 29, 31, false); op_or(c, 28, 12, 28, false); op_or(c, 31, 3, 31, false); op_addi(c, 4, 0, -1); op_mtspr(c, 12, 9);
+    c.lr = 0x80289C78u; ref_ElementDestructor(c);
+    op_addi(c, 30, 30, -1);
+L_80289C7C:;
+    op_cmpi(c, 0, 30, 0);
+    if (crbit(c, 2) == false) { ppc::poll(c); goto L_80289C60; }
+    op_lwz(c, 0, 1, 36); op_lwz(c, 31, 1, 28); op_lwz(c, 30, 1, 24); op_lwz(c, 29, 1, 20); op_lwz(c, 28, 1, 16); op_mtspr(c, 0, 8); op_addi(c, 1, 1, 32);
+}
+void ref_HitBufferDestruct(Ctx& c) {
+    op_stwu(c, 1, 1, -16); op_mfspr(c, 0, 8); op_cmpi(c, 0, 3, 0); op_stw(c, 0, 1, 20); op_stw(c, 31, 1, 12); op_or(c, 4, 31, 4, false); op_stw(c, 30, 1, 8);
+    op_or(c, 3, 30, 3, false);
+    if (crbit(c, 2) == true) goto L_800463EC;
+    op_addi(c, 4, 0, -1); op_addi(c, 3, 3, 3464); c.lr = 0x800463C4u; ref_ElementDestructor(c);
+    op_addis(c, 4, 0, -32749); op_addi(c, 3, 30, 8); op_addi(c, 4, 4, 5768); op_addi(c, 5, 0, 108); op_addi(c, 6, 0, 32); c.lr = 0x800463DCu; ref_DestroyArray(c);
+    op_cmpi(c, 0, 31, 0);
+    if (crbit(c, 1) == false) goto L_800463EC;
+    op_or(c, 30, 3, 30, false); c.lr = 0x800463ECu; delete_stub(c);
+L_800463EC:;
+    op_or(c, 30, 3, 30, false); op_lwz(c, 31, 1, 12); op_lwz(c, 30, 1, 8); op_lwz(c, 0, 1, 20); op_mtspr(c, 0, 8); op_addi(c, 1, 1, 16);
+}
+void compare_hit_buffer_destruct(int iterations = 6000) {
+    int mismatches = 0, deletes = 0, slow_polls = 0;
+    for (int n = 0; n < iterations; ++n) {
+        const uint32_t flags[] = {0xFFFFFFFFu, 0, 1, 3, 0x80000000u, 0x7FFFFFFFu};
+        const uint32_t this_ptrs[] = {kBase + 0x40, kBase + 0x44, 0, 0xFFFFF278u, 0xFFFFFF00u, kBase + 0x7F8};
+        const uint32_t flag = flags[n % 6], self = this_ptrs[(n / 6) % 6];
+        const uint32_t polls = n % 3 == 0 ? 0x7E0u + uint32_t(n % 32) + 0x800u * uint32_t(n % 5) : uint32_t(n) * 13u;
+        auto go = [&](Fix& f, void (*fn)(Ctx&)) {
+            Ctx& c = f.c;
+            const uint32_t sp = kBase + 0x3000;
+            for (uint32_t a = sp - 0x100; a < sp + 0x40; a += 4) wr32(c, a, 0xDEAD0000u + (a & 0xFFFFu));
+            c.r[1] = sp; c.r[3] = self; c.r[4] = flag; c.lr = 0x80012345u; c.ctr = 0x1111; c.cr[0] = 4;
+            for (int i = 5; i <= 12; ++i) c.r[i] = 0xA0A00000u + uint32_t(i);
+            c.r[0] = 0xA0A00000u; c.r[28] = 0xAAAA0028; c.r[29] = 0xAAAA0029; c.r[30] = 0xAAAA0030; c.r[31] = 0xAAAA0031;
+            c.poll_count = polls;
+            fn(c);
+            std::vector<uint8_t> memory(c.mem + ((sp - 0x100) & 0x3FFFFFFF), c.mem + ((sp + 0x40) & 0x3FFFFFFF));
+            return std::make_tuple(memory, std::vector<uint32_t>{c.r[0], c.r[1], c.r[3], c.r[4], c.r[5], c.r[6], c.r[7], c.r[8], c.r[9], c.r[10], c.r[11], c.r[12], c.r[28], c.r[29], c.r[30], c.r[31], c.lr, c.ctr, c.cr[0], c.poll_count});
+        };
+        Fix a, b;
+        const auto want = go(a, ref_HitBufferDestruct);
+        const auto have = go(b, [](Ctx& c) { hit_buffer_destruct(c, delete_stub); });
+        deletes += self != 0 && int32_t(flag) > 0; slow_polls += (polls & 0x7FF) >= 0x7E0;
+        if (!(std::get<0>(want) == std::get<0>(have) && std::get<1>(want) == std::get<1>(have)) && ++mismatches <= 3) {
+            std::printf("HitBufferDestruct differs at iteration %d (this %08X flag %08X polls %u)\n", n, self, flag, polls);
+            for (size_t i = 0; i < std::get<1>(want).size(); ++i) if (std::get<1>(want)[i] != std::get<1>(have)[i]) std::printf("  register slot %zu: %08X / %08X\n", i, std::get<1>(want)[i], std::get<1>(have)[i]);
+            const auto& x = std::get<0>(want); const auto& y = std::get<0>(have);
+            for (size_t i = 0; i < x.size(); ++i) if (x[i] != y[i]) { std::printf("  stack byte %zu (sp%+d): %02X / %02X\n", i, int(i) - 0x100, x[i], y[i]); break; }
+        }
+    }
+    std::printf("HitBufferDestruct: %d mismatches in %d randomised runs (%d with delete, %d on the slow poll path)\n", mismatches, iterations, deletes, slow_polls);
+    CHECK(mismatches == 0);
+}
+
 // The loop of the segment-against-mesh function (800A4904): per triangle the translated code copies three vertices to the frame, calls SegmentTriangleHit
 // (return address 800A49E8) and, after a miss, bumps four counters and tests the count. The reference below is that code, op for op, around the translated
 // SegmentTriangleHit; the native path is the same caller around the HLE, which may run several triangles per call. Both must end in the same state.
@@ -388,8 +463,10 @@ void ref_collision_loop(Ctx& c) {
     do {
         loop_iteration_body(c);
         uint32_t saved[5]; for (int i = 0; i < 5; ++i) saved[i] = c.r[27 + i];
+        const double f30 = c.f[30], f31 = c.f[31], ps30 = c.ps1[30], ps31 = c.ps1[31];
         ref_SegmentTriangleHit(c);
         for (int i = 0; i < 5; ++i) c.r[27 + i] = saved[i];   // the translated callee restores its callee-saved registers
+        c.f[30] = f30; c.f[31] = f31; c.ps1[30] = double(float(ps30)); c.ps1[31] = double(float(ps31));   // psq_l then lfd: the double back, ps1 as a single
         if (c.r[3] != 0) return;
     } while (loop_continues(c));
 }
@@ -421,6 +498,7 @@ void compare_collision_loop(int iterations = 6000) {
             fill_region(f, words);
             wr32(c, kSda - 32296, k[0]); wr32(c, kSda - 32304, k[1]); wr32(c, kSda - 32300, k[2]);
             c.r[2] = kSda; c.r[1] = sp; fill_stack(f, sp); c.gqr[0] = 0;
+            for (uint32_t a = sp + 0x20; a < sp + 0x80; a += 4) wr32(c, a, 0xBEEF0000u + (a & 0xFFFFu));   // the caller's frame, where the loop keeps the vertex copies
             c.r[22] = verts; c.r[23] = mesh; c.r[24] = p0; c.r[25] = p1; c.r[26] = 0; c.r[27] = 0; c.r[28] = 0; c.r[29] = kBase + 0x700; c.r[30] = 0; c.r[31] = index;
             c.r[4] = p0; c.r[5] = p1;
             for (int i = 0; i < 32; ++i) { c.f[i] = 123.0 + i; c.ps1[i] = -7.0 - i; }
@@ -431,18 +509,26 @@ void compare_collision_loop(int iterations = 6000) {
             Ctx& c = f.c;
             std::vector<uint8_t> memory(c.mem + (kBase & 0x3FFFFFFF), c.mem + (kBase & 0x3FFFFFFF) + 0x1000);
             append_stack(memory, f, sp);
+            memory.insert(memory.end(), c.mem + ((sp + 0x20) & 0x3FFFFFFF), c.mem + ((sp + 0x80) & 0x3FFFFFFF));
             return std::make_tuple(memory, c.r[3], c.r[27], c.r[28], c.r[30], c.r[31], c.lr, c.poll_count);
         };
         Fix expected, got;
-        setup(expected); setup(got);
+        // The two contexts share the one guest memory: each run starts from its own fresh setup and is read before the other begins.
+        setup(expected);
         ref_collision_loop(expected.c);
+        const auto want = result(expected);
+        setup(got);
         native_collision_loop(got.c);
-        const auto want = result(expected), have = result(got);
+        const auto have = result(got);
         hits += std::get<1>(want) == 1; ended += std::get<1>(want) == 0; long_runs += std::get<3>(want) > 6;
         const bool same = same_memory(std::get<0>(want), std::get<0>(have)) && std::get<1>(want) == std::get<1>(have) && std::get<2>(want) == std::get<2>(have)
             && std::get<3>(want) == std::get<3>(have) && std::get<4>(want) == std::get<4>(have) && std::get<5>(want) == std::get<5>(have)
             && std::get<6>(want) == std::get<6>(have) && std::get<7>(want) == std::get<7>(have);
-        if (!same && ++mismatches <= 3) std::printf("collision loop differs at iteration %d (%u triangles; r3 %u/%u, r28 %u/%u, polls %u/%u)\n", n, triangles, std::get<1>(want), std::get<1>(have), std::get<3>(want), std::get<3>(have), std::get<7>(want), std::get<7>(have));
+        if (!same && ++mismatches <= 3) {
+            const auto& a = std::get<0>(want); const auto& b = std::get<0>(have);
+            size_t first = 0; while (first < a.size() && a[first] == b[first]) ++first;
+            std::printf("collision loop differs at iteration %d (%u triangles; r3 %u/%u, r28 %u/%u, polls %u/%u, first memory difference at byte %zu of %zu: %02X/%02X)\n", n, triangles, std::get<1>(want), std::get<1>(have), std::get<3>(want), std::get<3>(have), std::get<7>(want), std::get<7>(have), first, a.size(), first < a.size() ? a[first] : 0, first < a.size() ? b[first] : 0);
+        }
     }
     std::printf("collision loop: %d mismatches in %d randomised runs (%d ended on a hit, %d on the last triangle, %d past two triangles)\n", mismatches, iterations, hits, ended, long_runs);
     CHECK(mismatches == 0);
@@ -476,6 +562,7 @@ int main() {
     compare("PSVECCrossProduct", hle_PSVECCrossProduct, ref_PSVECCrossProduct, false);
     compare_segment_triangle();
     compare_hit_buffer();
+    compare_hit_buffer_destruct();
     compare_collision_loop();
     return 0;
 }

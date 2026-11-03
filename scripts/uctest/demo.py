@@ -215,7 +215,8 @@ def bench(args):
             peak_comparison = f"; peak FPS (1s): {max(base_peaks):.1f} -> {max(peaks):.1f} ({peak_change:+.1f}%)"
             if verdict == "SLOWER" and peak_change > 0:
                 peak_comparison += "; mixed result: retain for investigation"
-        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {"95% CI" if len(diffs) > 1 else "noise floor"} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%{peak_comparison}")
+        interval_name = "95% CI" if len(diffs) > 1 else "noise floor"
+        lines.append(f"{exe} vs {names[0]}: {mean:+.1f}% wall time, {interval_name} [{mean - half:+.1f}%, {mean + half:+.1f}%] over {len(diffs)} paired run(s) -> {verdict}; best run vs best run {best:+.1f}%{peak_comparison}")
     print("\n".join(lines))
     return 0
 

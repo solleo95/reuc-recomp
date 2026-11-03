@@ -176,6 +176,12 @@ int main() {
         CHECK(uc::parse_config("# comment\nentry 80001000\nnofunc 0x80002000\nhle 80003000 OSInit  # trailing\njumptable 80004000 80004010 80004020\n", c, err));
         CHECK(c.extra_entries.count(0x80001000) && c.no_functions.count(0x80002000));
         CHECK(c.hle.at(0x80003000) == "OSInit");
+        uc::Config iso;
+        CHECK(uc::parse_config("isolate 8030FEF4\nisolate 80309294  # heavy\n", iso, err) && iso.isolate.size() == 2 && iso.isolate.count(0x8030FEF4));
+        CHECK(!uc::parse_config("isolate\n", iso, err));
+        uc::Config no;
+        CHECK(uc::parse_config("noopt 8030FEF4  # cold\n", no, err) && no.noopt.size() == 1 && no.noopt.count(0x8030FEF4) && no.isolate.empty());
+        CHECK(!uc::parse_config("noopt zz\n", no, err));
         CHECK(c.jump_tables.size() == 1 && c.jump_tables[0].targets.size() == 2);
         uc::Config bad;
         CHECK(!uc::parse_config("entry 80001000\nbogus 1\n", bad, err));

@@ -59,6 +59,16 @@ class ReleaseTests(unittest.TestCase):
     def build(self):
         return release.build_release(self.root, "0.0.1", runner=self.runner)
 
+    def test_release_build_must_have_thinlto(self):
+        cache = Path(self.temp.name) / "CMakeCache.txt"
+        release.require_thinlto(cache)   # no cache (the tests' fake build): not checked
+        cache.write_text("CMAKE_BUILD_TYPE:STRING=Release\nUC_THINLTO:BOOL=ON\n", encoding="utf-8")
+        release.require_thinlto(cache)
+        for text in ("UC_THINLTO:BOOL=OFF\n", "CMAKE_BUILD_TYPE:STRING=Release\n", "XUC_THINLTO:BOOL=ON\n"):
+            cache.write_text(text, encoding="utf-8")
+            with self.assertRaises(ValueError):
+                release.require_thinlto(cache)
+
     def test_versions(self):
         self.assertEqual(release.parse_version("0.0.1"), "0.0.1")
         for value in ["v0.0.1", "00.0.1", "0.0", "1.2.65536", "0.0.1 & whoami", "0.0.1\n", "١.0.1"]:

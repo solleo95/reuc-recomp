@@ -85,6 +85,18 @@ int main() {
     op_cmp(c, 3, 3, 4);   CHECK(c.cr[3] == 2);
     op_cmpl(c, 3, 3, 4);  CHECK(c.cr[3] == 2);
     c.xer_so = 1; op_cmpi(c, 4, 3, 0); CHECK(c.cr[4] == (8 | 1)); c.xer_so = 0;
+    {   // all four compares against the definition (LT 8, GT 4, EQ 2, plus SO), for edge operands of both signs
+        const uint32_t edge[] = {0u, 1u, 2u, 0x7FFFFFFEu, 0x7FFFFFFFu, 0x80000000u, 0x80000001u, 0xFFFFFFFEu, 0xFFFFFFFFu, 0x12345678u, 0xDEADBEEFu};
+        const auto expect = [](bool lt, bool gt, int so) { return uint8_t((lt ? 8 : gt ? 4 : 2) | so); };
+        for (int so = 0; so < 2; ++so) for (uint32_t x : edge) for (uint32_t y : edge) {
+            c.xer_so = uint8_t(so); c.r[10] = x; c.r[11] = y;
+            op_cmp(c, 5, 10, 11);                  CHECK(c.cr[5] == expect(int32_t(x) < int32_t(y), int32_t(x) > int32_t(y), so));
+            op_cmpl(c, 6, 10, 11);                 CHECK(c.cr[6] == expect(x < y, x > y, so));
+            op_cmpi(c, 7, 10, int32_t(y));         CHECK(c.cr[7] == expect(int32_t(x) < int32_t(y), int32_t(x) > int32_t(y), so));
+            op_cmpli(c, 0, 10, y);                 CHECK(c.cr[0] == expect(x < y, x > y, so));
+        }
+        c.xer_so = 0;
+    }
     // CR moves and logic
     c.r[3] = 0x12345678; op_mtcrf(c, 0xFF, 3);
     CHECK(c.cr[0] == 1 && c.cr[1] == 2 && c.cr[2] == 3 && c.cr[3] == 4 && c.cr[4] == 5 && c.cr[7] == 8);

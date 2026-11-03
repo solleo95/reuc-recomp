@@ -525,3 +525,56 @@ void hle_HitBufferConstruct(ppc::Ctx& c) {
     }
     float f; std::memcpy(&f, &low, 4); c.f[1] = c.ps1[1] = f; std::memcpy(&f, &high, 4); c.f[0] = c.ps1[0] = f; c.r[0] = 0;
 }
+
+// The destructor of the hit buffer (80046394, r3 = this, r4 = delete flag): the destructor of the 33rd record (80131688 with r4 = -1), then __destroy_arr
+// (80289C2C) which calls that same destructor on the 32 records of 108 bytes from the last to the first, and `delete this` when the flag is positive. The
+// element destructor frees nothing for r4 = -1, so on memory the whole thing is dead stack frames (below the caller's stack pointer: this function's -16, the
+// element destructor's -16 in all its calls, __destroy_arr's -32) and the 32 backward-branch polls. Frames and registers end as the translated code leaves
+// them; when a safe point that runs guest code falls among the 32 polls the elements go one by one with the stack pointer where the translated code has it.
+namespace {
+constexpr uint32_t kElementDestructor = 0x80131688u;
+void element_destructor(Ctx& c, uint32_t pointer, uint32_t caller_sp, uint32_t return_address, uint32_t caller_r31) {   // 80131688 with r4 = -1
+    const uint32_t frame = caller_sp - 16;
+    ppc::wr32(c, frame, caller_sp); ppc::wr32(c, frame + 20, return_address); ppc::wr32(c, frame + 12, caller_r31);
+    c.r[3] = pointer; c.r[4] = 0xFFFFFFFFu;
+    ppc::op_cmpi(c, 0, 3, 0);
+    if (pointer != 0) ppc::op_cmpi(c, 0, 4, 0);
+    c.r[0] = return_address; c.lr = return_address;
+}
+}  // namespace
+void hit_buffer_destruct(Ctx& c, void (*delete_object)(Ctx&)) {
+    const uint32_t sp0 = c.r[1], entry_lr = c.lr, self = c.r[3], flag = c.r[4];
+    const uint32_t saved28 = c.r[28], saved29 = c.r[29], saved30 = c.r[30], saved31 = c.r[31];
+    const uint32_t frame = sp0 - 16;
+    ppc::wr32(c, frame, sp0); ppc::wr32(c, sp0 + 4, entry_lr); ppc::wr32(c, frame + 12, saved31); ppc::wr32(c, frame + 8, saved30);
+    ppc::op_cmpi(c, 0, 3, 0);
+    if (self != 0) {
+        element_destructor(c, self + 3464, frame, 0x800463C4u, flag);
+        const uint32_t destroy = frame - 32;   // __destroy_arr(this + 8, 80131688, 108, 32)
+        ppc::wr32(c, destroy, frame); ppc::wr32(c, destroy + 36, 0x800463DCu); ppc::wr32(c, destroy + 28, flag); ppc::wr32(c, destroy + 24, self);
+        ppc::wr32(c, destroy + 20, saved29); ppc::wr32(c, destroy + 16, saved28);
+        const uint32_t first = self + 8, last = first + 108 * 31;
+        if ((c.poll_count & 0x7FFu) + 32 < 0x800u) {   // none of the 32 polls reaches a safe point: only the last call's frame is left to write
+            c.poll_count += 32;
+            element_destructor(c, first, destroy, 0x80289C78u, first);
+        } else {
+            c.r[1] = destroy;
+            for (uint32_t k = 0; k < 32; ++k) {
+                c.r[28] = kElementDestructor; c.r[29] = 108; c.r[30] = 32 - k; c.r[31] = last + 108 - 108 * k; c.lr = k ? 0x80289C78u : 0x800463DCu;
+                ppc::poll(c);
+                element_destructor(c, last - 108 * k, destroy, 0x80289C78u, last - 108 * k);
+            }
+        }
+        c.r[4] = 0xFFFFFFFFu; c.r[5] = 108; c.r[6] = 32; c.r[12] = kElementDestructor; c.ctr = kElementDestructor;
+        c.r[30] = 0; ppc::op_cmpi(c, 0, 30, 0);   // the count test that ends the loop
+        c.r[3] = first; c.r[0] = 0x800463DCu; c.lr = 0x800463DCu; c.r[1] = frame;
+        c.r[28] = saved28; c.r[29] = saved29; c.r[30] = self; c.r[31] = flag;
+        ppc::op_cmpi(c, 0, 31, 0);
+        if (ppc::crbit(c, 1)) {   // a positive flag: delete this
+            c.r[3] = self; c.lr = 0x800463ECu;
+            delete_object(c);
+        }
+    }
+    c.r[3] = self; c.r[30] = saved30; c.r[31] = saved31; c.r[0] = entry_lr; c.lr = entry_lr; c.r[1] = sp0;
+}
+void hle_HitBufferDestruct(Ctx& c) { hit_buffer_destruct(c, [](Ctx& context) { uc::call_indirect(context, 0x802896ECu); }); }

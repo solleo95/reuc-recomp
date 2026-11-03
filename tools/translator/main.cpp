@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
                 st.functions, st.instructions, st.invalid, st.traps_midfunc, st.unresolved_bctr, st.indirect_tail);
     std::printf("secondary-entries %zu  fallthrough-tails %zu  OE-traps %zu  unsupported %zu  jump-tables %zu  files %zu\n",
                 st.secondary_entries, st.fallthrough_tail, st.oe_traps, st.unsupported, p.an.jump_tables.size(), out.files.size());
-    std::printf("cr-dead-compares %zu  cr-fused-branches %zu  cr-dropped-records %zu\n", st.cr_dead_compares, st.cr_fused_branches, st.cr_dropped_records);
+    std::printf("cr-dead-compares %zu  cr-fused-branches %zu  cr-dropped-records %zu  store-groups %zu  grouped-stores %zu\n", st.cr_dead_compares, st.cr_fused_branches, st.cr_dropped_records, st.store_groups, st.grouped_stores);
     if (verbose) for (uint32_t a : p.an.unresolved_bctr) std::printf("unresolved-switch-bctr %08X\n", a);
     return 0;
 }

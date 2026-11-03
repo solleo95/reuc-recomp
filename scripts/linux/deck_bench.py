@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from uctest.deck import REMOTE, RUNTIME, SHORTCUT_ID, SSH, _ssh, gamescope_test_limiter   # noqa: E402
 from uctest.client import SAVE_SOURCE   # noqa: E402
 
-DETBENCH = re.compile(r"^\[detbench\] retrace (\d+) draws (\d+) guest_mcycles ([0-9.]+) wall_ms ([0-9.]+)")
+DETBENCH = re.compile(r"^\[detbench\] retrace (\d+) draws (\d+) guest_mcycles ([0-9.]+) wall_ms ([0-9.]+)(?: guest_minstr ([0-9.]+) guest_hw_mcycles ([0-9.]+))?(?: guest_serial_ms ([0-9.]+))?")
 FPS = re.compile(r"^\[fps\] window_ms ([0-9.]+) retraces (\d+):(\d+) presents (\d+)", re.MULTILINE)
 BENCH = f"{REMOTE}/bench"
 
@@ -47,8 +47,12 @@ def prepare(demo, builds):
 
 def one_run(label, demo, window, extra, tag):
     remote = f"{BENCH}/run"
+    exports = [f"export {item[4:]}" for item in extra if item.startswith("env:")]   # LABEL|env:NAME=value sets an environment variable for that build's runs
+    extra = [item for item in extra if not item.startswith("env:")]
     script = "\n".join([
         f"export UC_EXE=./uc_{label}",
+        "export UC_PERF_COUNTERS=1",   # hardware counters of the guest threads (runtime/perf_counters.h): the [detbench] marks carry instructions and cycles
+        *exports,
         *([f"export UC_CPU_SAMPLE={os.environ['UC_CPU_SAMPLE']}", f"export UC_CPU_SAMPLE_OUT={BENCH}/cpu-samples.txt".replace("~", "$HOME")] if os.environ.get("UC_CPU_SAMPLE") else []),
         *([f"export UC_CPU_SAMPLE_STACKS={os.environ['UC_CPU_SAMPLE_STACKS']}"] if os.environ.get("UC_CPU_SAMPLE_STACKS") else []),
         *([f"export UC_SKIP_CALLSITES={os.environ['UC_SKIP_CALLSITES']}"] if os.environ.get("UC_SKIP_CALLSITES") else []),   # diagnostic: leave those guest callsites' draws out
@@ -77,7 +81,7 @@ def one_run(label, demo, window, extra, tag):
     for line in log.splitlines():
         m = DETBENCH.match(line)
         if m and window["from"] < int(m[1]) <= window["to"]:
-            rows.append((int(m[1]), int(m[2]), float(m[3]), float(m[4])))
+            rows.append((int(m[1]), int(m[2]), float(m[3]), float(m[4]), float(m[5] or 0), float(m[6] or 0), float(m[7] or 0)))   # retrace, draws, guest CPU ms, wall ms, user instructions (M), user cycles (M) of the guest threads, baton-held wall ms (the guest serial time)
     return rows, log
 
 
@@ -91,7 +95,7 @@ def main():
     args = parser.parse_args()
     builds, extras = {}, {}
     for spec in args.builds:
-        label, path = spec.split("=", 1)
+        label, path = spec.rsplit("=", 1)   # the path is the part after the last "=": LABEL|env:NAME=value=path
         label, *flags = label.split("|")
         builds[label], extras[label] = path, flags
     window = json.loads((ROOT / "build" / "demos" / f"{args.demo}.json").read_text())
@@ -114,7 +118,8 @@ def main():
             wall, cycles, draws = sum(r[3] for r in rows), sum(r[2] for r in rows), sum(r[1] for r in rows)
             peaks = [1000 * int(p) / float(ms) for ms, a, b, p in FPS.findall(log) if float(ms) >= 1000 and window["from"] <= int(a) <= int(b) <= window["to"]]
             results[label].append(wall)
-            print(f"round {round_ + 1}/{args.runs} {label}: {wall / 1000:.2f} s wall, {cycles:.0f} Mcycles, {draws} draws, peak FPS {max(peaks, default=0):.1f}", flush=True)
+            print(f"round {round_ + 1}/{args.runs} {label}: {wall / 1000:.2f} s wall, {cycles:.0f} Mcycles, {draws} draws, peak FPS {max(peaks, default=0):.1f}, "
+                  f"{sum(r[4] for r in rows):.1f} Minstr, {sum(r[5] for r in rows):.1f} hw Mcycles", flush=True)
     base = statistics.fmean(results[labels[0]])
     for label in labels:
         walls = results[label]
@@ -124,4 +129,5 @@ def main():
     return 0
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

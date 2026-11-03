@@ -1,6 +1,8 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <cstring>
 #include <bit>
@@ -53,6 +55,7 @@ inline void poll(Ctx& c) { if ((++c.poll_count & 0x7FFu) == 0) [[unlikely]] poll
 
 // ---- memory ----
 PPC_INLINE bool is_mmio(uint32_t ea) { return ea - 0xCC000000u < 0x02000000u; }
+PPC_INLINE bool is_mmio_pair(uint32_t ea) { return ea - 0xCBFFFFFCu < 0x02000004u; }   // is_mmio(ea) || is_mmio(ea + 4) in one test: the window widened by four bytes below
 // The guest address space is mapped 1:1 at c.mem (runtime/guest_mem.cpp: every alias of MEM1/MEM2/locked cache is a view), so no mask is needed.
 PPC_INLINE uint8_t* hp(Ctx& c, uint32_t ea) { return c.mem + ea; }
 // The base register of a plain load/store is a literal at every call site, so these fold at compile time. r1 (stack), r2 and r13 (small data)
@@ -98,6 +101,42 @@ PPC_INLINE void wr16_ram(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 2); 
 PPC_INLINE void wr8_ram(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 1); gx::note_write(ea); *hp(c, ea) = uint8_t(v); }
 PPC_INLINE void wr32_stack(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 4); uc::rollback_note_range(ea,4); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
 PPC_INLINE void wr16_stack(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 2); uc::rollback_note_range(ea,2); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+// The stores of a group (see the store groups in common/translator/emit.cpp) without their write barrier: ppc::note_stores marked the pages before the first of them.
+PPC_INLINE void wr32_nb(Ctx& c, uint32_t ea, uint32_t v) { if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, v); return; } UC_MT_WRITE(ea, 4); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
+PPC_INLINE void wr16_nb(Ctx& c, uint32_t ea, uint32_t v) { if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 2, v & 0xFFFF); return; } UC_MT_WRITE(ea, 2); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+PPC_INLINE void wr8_nb(Ctx& c, uint32_t ea, uint32_t v) { if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 1, v & 0xFF); return; } UC_MT_WRITE(ea, 1); *hp(c, ea) = uint8_t(v); }
+PPC_INLINE void wr32_ram_nb(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 4); v = _byteswap_ulong(v); std::memcpy(hp(c, ea), &v, 4); }
+PPC_INLINE void wr16_ram_nb(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 2); uint16_t h = _byteswap_ushort(uint16_t(v)); std::memcpy(hp(c, ea), &h, 2); }
+PPC_INLINE void wr8_ram_nb(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 1); *hp(c, ea) = uint8_t(v); }
+PPC_INLINE void wrf64_nb(Ctx& c, uint32_t ea, double v) {
+    uint64_t b; std::memcpy(&b, &v, 8);
+    if (is_mmio(ea)) [[unlikely]] { mmio_write(ea, 4, uint32_t(b >> 32)); mmio_write(ea + 4, 4, uint32_t(b)); return; }
+    UC_MT_WRITE(ea, 8); b = _byteswap_uint64(b); std::memcpy(hp(c, ea), &b, 8);
+}
+#ifdef UC_CHECK_STORE_GROUPS
+// Self-check build: every grouped store must lie inside one of the last 64 spans that note_stores marked (a group can have up to 31 other groups in its window), or the translator grouped stores it should not have.
+inline thread_local uint32_t g_group_lo[64], g_group_span[64]; inline thread_local unsigned g_group_next = 0;
+struct GroupSite { const char* file; int line; GroupSite(const char* f = __builtin_FILE(), int l = __builtin_LINE()) : file(f), line(l) {} };   // the generated line of the store
+inline void group_check(uint32_t ea, uint32_t size, const GroupSite& site) {
+    for (int i = 0; i < 64; ++i) if (g_group_span[i] >= size && ea - g_group_lo[i] <= g_group_span[i] - size) return;
+    std::fprintf(stderr, "[store-group] store of %u bytes at %08X is outside every marked span (%s:%d); marked: ", size, ea, site.file, site.line);
+    for (int i = 0; i < 8; ++i) std::fprintf(stderr, "%08X+%u ", g_group_lo[i], g_group_span[i]);
+    std::fprintf(stderr, "\n"); std::abort();
+}
+#define UC_SITE_PARAM , GroupSite site = GroupSite()
+#define UC_GROUP_CHECK(ea, size) group_check(ea, size, site)
+#else
+#define UC_SITE_PARAM
+#define UC_GROUP_CHECK(ea, size) ((void)0)
+#endif
+// 1 <= span <= 4096: the stores of the group touch the page of its first byte and the page of its last, which are the two marks.
+PPC_INLINE void note_stores(Ctx& c, int a, int32_t lo_offset, uint32_t span) {
+    const uint32_t lo = c.r[a] + uint32_t(lo_offset);
+    gx::note_write(lo); gx::note_write(lo + span - 1);
+#ifdef UC_CHECK_STORE_GROUPS
+    g_group_lo[g_group_next & 63] = lo; g_group_span[g_group_next & 63] = span; ++g_group_next;
+#endif
+}
 PPC_INLINE void wr8_stack(Ctx& c, uint32_t ea, uint32_t v) { UC_MT_WRITE(ea, 1); uc::rollback_note_write(ea); *hp(c, ea) = uint8_t(v); }
 PPC_INLINE float rdf32(Ctx& c, uint32_t ea) { uint32_t b = rd32(c, ea); float f; std::memcpy(&f, &b, 4); return f; }
 PPC_INLINE double rdf64(Ctx& c, uint32_t ea) {
@@ -241,10 +280,12 @@ PPC_INLINE void op_rlwimi(Ctx& c, int s, int a, int sh, int mb, int me, bool rc)
 // ---- compares ----
 PPC_INLINE void cmp_set(Ctx& c, int f, int cmp) { c.cr[f] = uint8_t((cmp < 0 ? 8 : cmp > 0 ? 4 : 2) | c.xer_so); }
 PPC_INLINE int cmp3(int64_t x, int64_t y) { return x < y ? -1 : x > y ? 1 : 0; }
-PPC_INLINE void op_cmp(Ctx& c, int f, int a, int b) { cmp_set(c, f, cmp3(int32_t(c.r[a]), int32_t(c.r[b]))); }
-PPC_INLINE void op_cmpl(Ctx& c, int f, int a, int b) { cmp_set(c, f, cmp3(c.r[a], c.r[b])); }
-PPC_INLINE void op_cmpi(Ctx& c, int f, int a, int32_t i) { cmp_set(c, f, cmp3(int32_t(c.r[a]), i)); }
-PPC_INLINE void op_cmpli(Ctx& c, int f, int a, uint32_t i) { cmp_set(c, f, cmp3(c.r[a], i)); }
+// LT = 8, GT = 4, EQ = 2 is 2 << (gt + 2 * lt): two flag reads and one shift instead of the selects of cmp_set (the result is the same value for every pair of operands).
+PPC_INLINE void cmp_flags(Ctx& c, int f, bool lt, bool gt) { c.cr[f] = uint8_t((2u << (unsigned(gt) + 2u * unsigned(lt))) | c.xer_so); }
+PPC_INLINE void op_cmp(Ctx& c, int f, int a, int b) { const int32_t x = int32_t(c.r[a]), y = int32_t(c.r[b]); cmp_flags(c, f, x < y, x > y); }
+PPC_INLINE void op_cmpl(Ctx& c, int f, int a, int b) { const uint32_t x = c.r[a], y = c.r[b]; cmp_flags(c, f, x < y, x > y); }
+PPC_INLINE void op_cmpi(Ctx& c, int f, int a, int32_t i) { const int32_t x = int32_t(c.r[a]); cmp_flags(c, f, x < i, x > i); }
+PPC_INLINE void op_cmpli(Ctx& c, int f, int a, uint32_t i) { const uint32_t x = c.r[a]; cmp_flags(c, f, x < i, x > i); }
 
 // ---- special registers ----
 PPC_INLINE uint32_t xer_get(Ctx& c) { return uint32_t(c.xer_so) << 31 | uint32_t(c.xer_ov) << 30 | uint32_t(c.xer_ca) << 29; }
@@ -297,19 +338,42 @@ PPC_LOAD_FAMILY(lha, rd16, rd16_ram, PPC_SX16)
 
 #define PPC_STORE_FAMILY(nm, WR, WRR, WRS) \
     PPC_INLINE void op_##nm(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (stack_base(a)) WRS(c, e, c.r[t]); else if (ram_base(a)) WRR(c, e, c.r[t]); else WR(c, e, c.r[t]); } \
-    PPC_INLINE void op_##nm##u(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); WR(c, e, c.r[t]); c.r[a] = e; } \
+    PPC_INLINE void op_##nm##u(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); if (stack_base(a)) WRS(c, e, c.r[t]); else WR(c, e, c.r[t]); c.r[a] = e; } /* stwu r1,-N(r1): the frame push of every call, a stack store like the others */ \
     PPC_INLINE void op_##nm##x(Ctx& c, int t, int a, int b) { WR(c, ea_x(c, a, b), c.r[t]); } \
     PPC_INLINE void op_##nm##ux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; WR(c, e, c.r[t]); c.r[a] = e; }
 PPC_STORE_FAMILY(stw, wr32, wr32_ram, wr32_stack)
 PPC_STORE_FAMILY(stb, wr8, wr8_ram, wr8_stack)
 PPC_STORE_FAMILY(sth, wr16, wr16_ram, wr16_stack)
+#define PPC_STORE_NB(nm, WR, WRR, SIZE) \
+    PPC_INLINE void op_##nm##_nb(Ctx& c, int t, int a, int32_t d UC_SITE_PARAM) { const uint32_t e = ea_d(c, a, d); UC_GROUP_CHECK(e, SIZE); if (ram_base(a)) WRR(c, e, c.r[t]); else WR(c, e, c.r[t]); }
+PPC_STORE_NB(stw, wr32_nb, wr32_ram_nb, 4)
+PPC_STORE_NB(stb, wr8_nb, wr8_ram_nb, 1)
+PPC_STORE_NB(sth, wr16_nb, wr16_ram_nb, 2)
 
 PPC_INLINE void op_lwbrx(Ctx& c, int t, int a, int b) { c.r[t] = _byteswap_ulong(rd32(c, ea_x(c, a, b))); }
 PPC_INLINE void op_lhbrx(Ctx& c, int t, int a, int b) { c.r[t] = _byteswap_ushort(uint16_t(rd16(c, ea_x(c, a, b)))); }
 PPC_INLINE void op_stwbrx(Ctx& c, int t, int a, int b) { wr32(c, ea_x(c, a, b), _byteswap_ulong(c.r[t])); }
 PPC_INLINE void op_sthbrx(Ctx& c, int t, int a, int b) { wr16(c, ea_x(c, a, b), _byteswap_ushort(uint16_t(c.r[t]))); }
-PPC_INLINE void op_lmw(Ctx& c, int t, int a, int32_t d) { uint32_t e = ea_d(c, a, d); for (int i = t; i < 32; ++i, e += 4) c.r[i] = rd32(c, e); }
-PPC_INLINE void op_stmw(Ctx& c, int t, int a, int32_t d) { uint32_t e = ea_d(c, a, d); for (int i = t; i < 32; ++i, e += 4) wr32(c, e, c.r[i]); }
+// A block of at most 32 words is outside the MMIO window when both of its ends are (the window is a million times wider than the block) and it does not wrap: it is then loaded or stored in one pass,
+// with one range mark for the pages that the word-by-word stores mark one by one (the pages from the first byte to the last). Anything else takes the word-by-word loop and its exact per-word behaviour.
+PPC_INLINE bool block_in_ram(uint32_t e, uint32_t bytes) { return !is_mmio(e) && !is_mmio(e + bytes - 1) && e + bytes > e; }
+PPC_INLINE void op_lmw(Ctx& c, int t, int a, int32_t d) {
+    uint32_t e = ea_d(c, a, d);
+    if (block_in_ram(e, 4u * uint32_t(32 - t))) [[likely]] {
+        for (int i = t; i < 32; ++i, e += 4) { UC_MT_READ(e, 4); uint32_t v; std::memcpy(&v, hp(c, e), 4); c.r[i] = _byteswap_ulong(v); }
+        return;
+    }
+    for (int i = t; i < 32; ++i, e += 4) c.r[i] = rd32(c, e);
+}
+PPC_INLINE void op_stmw(Ctx& c, int t, int a, int32_t d) {
+    uint32_t e = ea_d(c, a, d);
+    if (block_in_ram(e, 4u * uint32_t(32 - t))) [[likely]] {
+        gx::note_write_range(e, 4u * uint32_t(32 - t));
+        for (int i = t; i < 32; ++i, e += 4) { UC_MT_WRITE(e, 4); const uint32_t v = _byteswap_ulong(c.r[i]); std::memcpy(hp(c, e), &v, 4); }
+        return;
+    }
+    for (int i = t; i < 32; ++i, e += 4) wr32(c, e, c.r[i]);
+}
 // Single guest-visible reservation; guest threads never run truly concurrently with the scheduler lock held.
 PPC_INLINE void op_lwarx(Ctx& c, int t, int a, int b) { uint32_t e = ea_x(c, a, b); c.reserve_addr = e | 1u; c.r[t] = rd32(c, e); }
 PPC_INLINE void op_stwcx_(Ctx& c, int t, int a, int b) {
@@ -339,6 +403,8 @@ PPC_INLINE void op_stfsu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] 
 PPC_INLINE void op_stfsx(Ctx& c, int t, int a, int b) { wrf32(c, ea_x(c, a, b), float(c.f[t])); }
 PPC_INLINE void op_stfsux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf32(c, e, float(c.f[t])); c.r[a] = e; }
 PPC_INLINE void op_stfd(Ctx& c, int t, int a, int32_t d) { const uint32_t e = ea_d(c, a, d); if (ram_base(a)) { UC_MT_WRITE(e, 8); uint64_t v; std::memcpy(&v, &c.f[t], 8); v = _byteswap_uint64(v); if (!stack_base(a)) { gx::note_write(e); if ((e & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(e + 7); } else uc::rollback_note_range(e,8); std::memcpy(hp(c, e), &v, 8); } else wrf64(c, e, c.f[t]); }
+PPC_INLINE void op_stfs_nb(Ctx& c, int t, int a, int32_t d UC_SITE_PARAM) { const uint32_t e = ea_d(c, a, d); UC_GROUP_CHECK(e, 4); const float f = float(c.f[t]); uint32_t bits; std::memcpy(&bits, &f, 4); if (ram_base(a)) wr32_ram_nb(c, e, bits); else wr32_nb(c, e, bits); }
+PPC_INLINE void op_stfd_nb(Ctx& c, int t, int a, int32_t d UC_SITE_PARAM) { const uint32_t e = ea_d(c, a, d); UC_GROUP_CHECK(e, 8); wrf64_nb(c, e, c.f[t]); }
 PPC_INLINE void op_stfdu(Ctx& c, int t, int a, int32_t d) { uint32_t e = c.r[a] + uint32_t(d); wrf64(c, e, c.f[t]); c.r[a] = e; }
 PPC_INLINE void op_stfdx(Ctx& c, int t, int a, int b) { wrf64(c, ea_x(c, a, b), c.f[t]); }
 PPC_INLINE void op_stfdux(Ctx& c, int t, int a, int b) { uint32_t e = c.r[a] + c.r[b]; wrf64(c, e, c.f[t]); c.r[a] = e; }
@@ -473,7 +539,7 @@ PPC_INLINE void psq_load(Ctx& c, int t, uint32_t ea, int w, int i, bool ram = fa
         const uint32_t bits = rd32_ram(c, ea); float f; std::memcpy(&f, &bits, 4);
         c.f[t] = f; c.ps1[t] = 1.0; return;
     }
-    if (type < 4 && !w && (ram || (!is_mmio(ea) && !is_mmio(ea + 4)))) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
+    if (type < 4 && !w && (ram || !is_mmio_pair(ea))) [[likely]] {   // float pair: one 8-byte read instead of two 4-byte ones
         UC_MT_READ(ea, 8);
         uint64_t v; std::memcpy(&v, hp(c, ea), 8);
         const uint32_t b0 = _byteswap_ulong(uint32_t(v)), b1 = _byteswap_ulong(uint32_t(v >> 32)); float f0, f1; std::memcpy(&f0, &b0, 4); std::memcpy(&f1, &b1, 4);
@@ -489,7 +555,7 @@ PPC_INLINE void psq_store(Ctx& c, int t, uint32_t ea, int w, int i, bool stack =
         const float f = float(c.f[t]); uint32_t bits; std::memcpy(&bits, &f, 4);
         if (stack) wr32_stack(c, ea, bits); else wr32_ram(c, ea, bits); return;
     }
-    if (type < 4 && !w && (stack || (!is_mmio(ea) && !is_mmio(ea + 4)))) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
+    if (type < 4 && !w && (stack || !is_mmio_pair(ea))) [[likely]] {   // float pair: one 8-byte write, one barrier stamp per page
         const float f0 = float(c.f[t]), f1 = float(c.ps1[t]); uint32_t b0, b1; std::memcpy(&b0, &f0, 4); std::memcpy(&b1, &f1, 4);
         const uint64_t v = uint64_t(_byteswap_ulong(b0)) | uint64_t(_byteswap_ulong(b1)) << 32;
         if (!stack) { gx::note_write(ea); if ((ea & 0xFFFu) > 0xFF8u) [[unlikely]] gx::note_write(ea + 7); }

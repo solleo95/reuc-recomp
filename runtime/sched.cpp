@@ -3,6 +3,7 @@
 #include "crash_report.h"
 #include "fatal.h"
 #include "dispatch.h"
+#include "perf_counters.h"
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -458,6 +459,17 @@ std::string Sched::dump_threads() const {
     return s;
 }
 
+std::string Sched::switch_report(size_t limit) {
+    std::map<std::string, uint64_t> taken;
+    { std::lock_guard<std::mutex> lg(idle_report_m_); taken.swap(switch_pairs_); }
+    std::vector<std::pair<uint64_t, std::string>> order;
+    for (const auto& [key, count] : taken) order.emplace_back(count, key);
+    std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::string s;
+    for (size_t i = 0; i < order.size() && i < limit; ++i) { s += "; "; s += std::to_string(order[i].first); s += "x "; s += order[i].second; }
+    return s;
+}
+
 std::string Sched::idle_report() const {
     std::lock_guard<std::mutex> lg(idle_report_m_);
     std::string s; char b[160];
@@ -563,6 +575,13 @@ void Sched::handoff(Thread* self, Thread* next) {
     if (self->id < 32 && run_started_ns_) run_ns_[self->id] += now - run_started_ns_;
     if (self->id < 32 && cycle_started_) run_cycles_[self->id] += thread_cycles() - cycle_started_;
     ++switches_; notified_ns_ = now;
+    {   // what left the baton and why (read by switch_report; a map insert per switch, about a thousand a second)
+        char key[64];
+        if (self->state == Thread::State::Waiting) std::snprintf(key, sizeof key, "#%d->#%d blocked on %08X", self->id, next->id, self->wait_key);
+        else std::snprintf(key, sizeof key, "#%d->#%d %s", self->id, next->id, self->state == Thread::State::Ready ? "preempted/yield" : self->state == Thread::State::Dead ? "finished" : "suspended");
+        std::lock_guard<std::mutex> lg(idle_report_m_);
+        ++switch_pairs_[key];
+    }
     const bool self_finished = self->state == Thread::State::Dead;
     next->state = Thread::State::Running;
     ee_ = next->ee;
@@ -610,6 +629,7 @@ void Sched::thread_main(Thread* t) {
         Sched& s; Thread& t;
         ~HostExit() { std::lock_guard lock(s.baton_m_); t.host_alive=false; s.rewind_cv_.notify_all(); }
     } host_exit{*this,*t};
+    perf_register_thread();   // UC_PERF_COUNTERS: hardware counters of this guest thread (runtime/perf_counters.h)
     for(;;) {
         {
             std::unique_lock<std::mutex> lk(baton_m_);

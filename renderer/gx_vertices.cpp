@@ -1,5 +1,6 @@
 #include "gx_vertices.h"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -39,13 +40,18 @@ uint32_t be(std::span<const std::byte> data) {
     for (auto b : data) value = (value << 8) | std::to_integer<uint8_t>(b);
     return value;
 }
+// 2^-fraction for the fixed-point formats (the fraction field has five bits): exact in a float, so value * scale is what ldexp(value, -fraction) gives.
+constexpr std::array<float, 32> kFractionScale = [] { std::array<float, 32> table{}; for (unsigned i = 0; i < 32; ++i) table[i] = std::bit_cast<float>(uint32_t(127 - i) << 23); return table; }();
 float scalar(std::span<const std::byte> data, Type type, uint8_t fraction) {
-    uint32_t value = be(data);
+    // `data` holds exactly the bytes of the type (the callers cut it by scalar_size); read them directly instead of looping over a span.
+    const auto* p = reinterpret_cast<const uint8_t*>(data.data());
+    const float scale = fraction < 32 ? kFractionScale[fraction] : std::ldexp(1.0f, -int(fraction));
     switch (type) {
-    case Type::u8: case Type::u16: return std::ldexp(float(value), -int(fraction));
-    case Type::s8: return std::ldexp(float(std::bit_cast<int8_t>(uint8_t(value))), -int(fraction));
-    case Type::s16: return std::ldexp(float(std::bit_cast<int16_t>(uint16_t(value))), -int(fraction));
-    case Type::f32: return std::bit_cast<float>(value);
+    case Type::u8: return float(uint32_t(p[0])) * scale;
+    case Type::u16: return float(uint32_t(p[0]) << 8 | p[1]) * scale;
+    case Type::s8: return float(std::bit_cast<int8_t>(p[0])) * scale;
+    case Type::s16: return float(std::bit_cast<int16_t>(uint16_t(p[0] << 8 | p[1]))) * scale;
+    case Type::f32: return std::bit_cast<float>(uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]);
     }
     return 0;
 }

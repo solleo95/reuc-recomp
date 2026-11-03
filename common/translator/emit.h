@@ -11,6 +11,7 @@ namespace uc {
 struct EmitStats {
     size_t functions = 0, instructions = 0, invalid = 0, traps_midfunc = 0, unresolved_bctr = 0, oe_traps = 0, unsupported = 0;
     size_t indirect_tail = 0, secondary_entries = 0, fallthrough_tail = 0;
+    size_t store_groups = 0, grouped_stores = 0;   // runs of stores through one base register whose write barrier is noted once
     size_t cr_dead_compares = 0, cr_fused_branches = 0, cr_dropped_records = 0;   // condition-register writes that were never read
 };
 
