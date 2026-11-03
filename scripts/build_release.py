@@ -14,6 +14,8 @@ import tempfile
 import uuid
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # build-release.bat runs python -I, which leaves the script's folder off sys.path
+
 
 def parse_version(text: str) -> str:
     if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", text):
@@ -223,7 +225,7 @@ def require_thinlto(cache: Path) -> None:
 def build_linux_release(repo: Path, version: str) -> Path:
     """UC-Linux-X.Y.Z.zip for the Steam Deck: cross-built on Windows with ThinLTO (folder build-linux-lto, scripts/linux/build.ps1 -ThinLTO) and with the optimizer
     profile project/pgo/uc-linux.profdata when it exists (record it first with pgo.bat linux). Needs the Linux sysroot (docs/building.md)."""
-    from build_release_deck import build_deck_release
+    from build_release_deck import build_deck_release   # imports this module back, so not at the top
     repo = repo.resolve(strict=True)
     folder = repo / "build-linux-lto"
     subprocess.run(["pwsh", "-NoProfile", "-File", str(repo / "scripts" / "linux" / "build.ps1"), "-ThinLTO", "-Target", "uc_launcher,uc"], cwd=repo, check=True)

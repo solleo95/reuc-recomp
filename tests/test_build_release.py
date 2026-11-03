@@ -163,5 +163,13 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((outside / "user").read_bytes(), b"USER")
 
 
+class IsolatedLaunchTests(unittest.TestCase):
+    def test_script_loads_under_python_isolated_mode(self):
+        """build-release.bat runs `python -I`, which leaves the script's folder off sys.path: the Linux archive step must still import."""
+        code = "import runpy, sys; runpy.run_path(sys.argv[1], run_name='probe'); import build_release_deck; print(callable(build_release_deck.build_deck_release))"
+        result = subprocess.run([sys.executable, "-I", "-c", code, str(REPO / "scripts/build_release.py")], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "True"), result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
