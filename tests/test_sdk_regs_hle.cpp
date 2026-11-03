@@ -40,18 +40,18 @@ int main() {
         for (Fix* f : {&a, &b}) {
             Ctx& c = f->c;
             std::mt19937_64 fill(trial * 131 + first);   // the same memory and registers for both
-            for (uint32_t at = kBase; at < kBase + 0x1000; at += 4) wr32(c, at, uint32_t(fill()));
+            for (uint32_t at = kBase; at < kBase + 0x2000; at += 4) wr32(c, at, uint32_t(fill()));
             for (int i = 0; i < 32; ++i) { c.r[i] = uint32_t(fill()); uint64_t raw = fill(); if (trial % 5 == 0) raw = 0x7FF0000000000001ull ^ (uint64_t(i) << 3); std::memcpy(&c.f[i], &raw, 8); c.ps1[i] = double(i) * 0.5; }
-            c.r[11] = kSp + 4 * (trial % 4) * 8;   // varied, 4-byte aligned bases
+            c.r[11] = (trial & 1) ? kBase + 0x1000 + 4 * (trial % 7) : kSp + 4 * (trial % 4) * 8;   // varied, 4-byte aligned bases; odd trials put the block across a page boundary
             c.lr = 0x80012345u;
         }
         const auto stamp_a = gx::watch_stamp();
         ref_chain(a.c, family, first);
-        const bool wrote_a = gx::written_since(kBase, 0x1000, stamp_a);
+        const bool wrote_a = gx::written_since(kBase, 0x1000, stamp_a), wrote_a2 = gx::written_since(kBase + 0x1000, 0x1000, stamp_a);
         const auto stamp_b = gx::watch_stamp();
         entries[family](b.c);
-        const bool wrote_b = gx::written_since(kBase, 0x1000, stamp_b);
-        bool same = wrote_a == wrote_b && a.c.lr == b.c.lr && std::memcmp(a.c.mem + (kBase & 0x3FFFFFFF), b.c.mem + (kBase & 0x3FFFFFFF), 0x1000) == 0;
+        const bool wrote_b = gx::written_since(kBase, 0x1000, stamp_b), wrote_b2 = gx::written_since(kBase + 0x1000, 0x1000, stamp_b);
+        bool same = wrote_a == wrote_b && wrote_a2 == wrote_b2 && a.c.lr == b.c.lr && std::memcmp(a.c.mem + (kBase & 0x3FFFFFFF), b.c.mem + (kBase & 0x3FFFFFFF), 0x2000) == 0;
         for (int i = 0; i < 32 && same; ++i) same = a.c.r[i] == b.c.r[i] && bits(a.c.f[i]) == bits(b.c.f[i]) && bits(a.c.ps1[i]) == bits(b.c.ps1[i]);
         if (!same && ++mismatches <= 5) std::printf("family %d from r/f%d differs (trial %d)\n", family, first, trial);
     }

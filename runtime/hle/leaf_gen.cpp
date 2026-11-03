@@ -36,6 +36,14 @@ inline double ldf(const uint8_t* p) { const uint32_t b = ld32(p); float f; std::
 inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }
 inline double ldd(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); v = _byteswap_uint64(v); double d; std::memcpy(&d, &v, 8); return d; }
 inline void std_(uint8_t* p, double d) { uc::rollback_note_pointer(p,8); uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
+// Straight leaves use these only after noting every output and stack range.
+namespace noted {
+// Keep a same-binary control for performance checks and regression bisection.
+const bool per_store=std::getenv("UC_LEAF_BATCH_OFF")!=nullptr;
+inline void st32(uint8_t* p, uint32_t v) { if(per_store) uc::rollback_note_pointer(p,4); v = _byteswap_ulong(v); std::memcpy(p, &v, 4); }
+inline void stf(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); st32(p, b); }
+inline void std_(uint8_t* p, double d) { if(per_store) uc::rollback_note_pointer(p,8); uint64_t v; std::memcpy(&v, &d, 8); v = _byteswap_uint64(v); std::memcpy(p, &v, 8); }
+}
 }  // namespace
 
 namespace {
@@ -240,6 +248,9 @@ void hle_Leaf_80137BC4(ppc::Ctx& c) {   // fn_80137BC4
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(320));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 64);
+    // Output and frame ranges cover every store; this leaf has no intervening guest safe point.
+    if(!noted::per_store) uc::rollback_note_range(c.r[1] - 320, 320);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
@@ -525,6 +536,7 @@ void hle_Leaf_80139368(ppc::Ctx& c) {   // fn_80139368
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f0 = ldf((P4 + (0))); double p0 = f0;
@@ -579,6 +591,7 @@ void hle_Leaf_801394B8(ppc::Ctx& c) {   // fn_801394B8
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     uint32_t r5 = c.r[5];
@@ -652,6 +665,7 @@ void hle_Leaf_8013951C(ppc::Ctx& c) {   // fn_8013951C
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     uint32_t r5 = c.r[5];
@@ -708,6 +722,7 @@ void hle_Leaf_8013939C(ppc::Ctx& c) {   // fn_8013939C
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     uint32_t r7 = ld32((P4 + (0)));
@@ -749,6 +764,7 @@ void hle_Leaf_801393C0(ppc::Ctx& c) {   // fn_801393C0
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f3 = ldf((P3 + (0))); double p3 = f3;
@@ -795,6 +811,7 @@ void hle_Leaf_80139448(ppc::Ctx& c) {   // fn_80139448
     if (leaf_off(0x80139448) || !(in_ram(c.r[3] + uint32_t(0), 16))) { slow_Leaf_80139448(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     double f1 = c.f[1];
     double f0 = ldf((P3 + (0))); double p0 = f0;
@@ -836,6 +853,7 @@ void hle_Leaf_803947A4(ppc::Ctx& c) {   // fn_803947A4
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 36);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f0 = ldf((P4 + (0))); double p0 = ldf((P4 + (4)));
@@ -907,6 +925,8 @@ void hle_Leaf_80394B04(ppc::Ctx& c) {   // fn_80394B04
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
     uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(32));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
+    if(!noted::per_store) uc::rollback_note_range(c.r[1] - 32, 32);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
@@ -974,6 +994,7 @@ void hle_Leaf_80138AF8(ppc::Ctx& c) {   // fn_80138AF8
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(48), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f3 = ldf((P4 + (0))); double p3 = f3;
@@ -1067,6 +1088,8 @@ void hle_Leaf_80394CE4(ppc::Ctx& c) {   // fn_80394CE4
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
     uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(64));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    if(!noted::per_store) uc::rollback_note_range(c.r[1] - 64, 64);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
@@ -1173,6 +1196,7 @@ void hle_Leaf_80032FD8(ppc::Ctx& c) {   // fn_80032FD8
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f2 = ldf((P4 + (44))); double p2 = f2;
@@ -1209,6 +1233,7 @@ void hle_Leaf_80139610(ppc::Ctx& c) {   // fn_80139610
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const P5 = ppc::hp(c, c.r[5]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     uint32_t r5 = c.r[5];
@@ -1243,6 +1268,7 @@ void hle_Leaf_800521A0(ppc::Ctx& c) {   // fn_800521A0
     if (leaf_off(0x800521A0) || !(in_ram(c.r[3] + uint32_t(0), 12))) { slow_Leaf_800521A0(c); return; }
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     double f1 = c.f[1];
     double f2 = c.f[2];
@@ -1296,6 +1322,8 @@ void hle_Leaf_800AFCD8(ppc::Ctx& c) {   // fn_800AFCD8
     uint8_t* const P1c = ppc::hp(c, c.r[1]);   // the caller's frame: stack arguments and the link-register slot
     uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(48));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 64);
+    if(!noted::per_store) uc::rollback_note_range(c.r[1] - 48, 48);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
     double f1 = c.f[1];
@@ -3533,6 +3561,7 @@ void hle_Leaf_80139648(ppc::Ctx& c) {   // fn_80139648
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f1 = c.f[1];
@@ -3608,6 +3637,8 @@ void hle_Leaf_80032D70(ppc::Ctx& c) {   // fn_80032D70
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     uint8_t* const sp = ppc::hp(c, c.r[1] - uint32_t(32));   // the function's own frame in guest memory: the game reads stale stack slots, so the spills must land there
     gx::note_write_range(c.r[3] + uint32_t(0), 48);
+    if(!noted::per_store) uc::rollback_note_range(c.r[1] - 32, 32);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r1 = c.r[1];
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
@@ -3671,6 +3702,7 @@ void hle_Leaf_80032FF4(ppc::Ctx& c) {   // fn_80032FF4
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(12), 36);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f2 = ldf((P4 + (0))); double p2 = f2;
@@ -3928,6 +3960,7 @@ void hle_Leaf_8003F468(ppc::Ctx& c) {   // fn_8003F468
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 12);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f2 = ldf((P4 + (0))); double p2 = f2;
@@ -4765,6 +4798,7 @@ void hle_Leaf_80138B1C(ppc::Ctx& c) {   // fn_80138B1C
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(48), 16);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r2 = c.r[2];
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
@@ -5678,6 +5712,7 @@ void hle_Leaf_80394BC8(ppc::Ctx& c) {   // fn_80394BC8
     uint8_t* const P3 = ppc::hp(c, c.r[3]);
     uint8_t* const P4 = ppc::hp(c, c.r[4]);
     gx::note_write_range(c.r[3] + uint32_t(0), 64);
+    using noted::st32; using noted::stf; using noted::std_;
     uint32_t r3 = c.r[3];
     uint32_t r4 = c.r[4];
     double f0 = ldf((P4 + (0))); double p0 = ldf((P4 + (4)));

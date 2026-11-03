@@ -4,9 +4,10 @@
 #include <mutex>
 
 namespace uc {
+bool gx_gap_audit_on = false;
 namespace {
 std::mutex g_mutex;
-bool g_enabled = false;
+bool& g_enabled = gx_gap_audit_on;
 std::vector<uint8_t> g_stream;
 bool g_stream_recording = false;
 std::map<std::string, GapRow> g_rows;
@@ -45,7 +46,6 @@ void gx_gap_audit_enable(bool enabled) {
     std::lock_guard lock(g_mutex);
     g_enabled = enabled; g_stream.clear(); g_rows.clear();
 }
-bool gx_gap_audit_enabled() { return g_enabled; }
 
 void gx_gap_audit_write(int size, uint32_t value, bool in_primitive, bool recording, uint32_t (*attribute)()) {
     if (!g_enabled || in_primitive) return;

@@ -2283,12 +2283,16 @@ void compare(const char* name, void (*hle)(Ctx&), void (*ref)(Ctx&), const std::
         uint32_t ptr[6];
         for (auto& p : ptr) p = kBase + 0x80 + uint32_t(rng() % 0x60) * 16;
         if (n % 4 == 1) ptr[1] = ptr[0]; else if (n % 4 == 2) ptr[2] = ptr[0]; else if (n % 4 == 3) ptr[1] = ptr[2];
+        // These slots are counts, unlike the pointer arguments of the other leaves.
+        if (ref == ref_Leaf_802647AC) ptr[3] = 2 + uint32_t(n % 7);
+        if (ref == ref_Leaf_80374210) ptr[2] = uint32_t(n % 9) * 32;
         uint32_t ints[32]; for (auto& v : ints) v = loops ? uint32_t(rng() % 64) : uint32_t(rng());   // a function with a loop gets small counts and sane constants: random ones can make the original loop forever
         double fl[64]; for (auto& v : fl) v = loops ? std::uniform_real_distribution<double>(-50, 50)(rng) : random_double();
         for (int i = 32; i < 64; ++i) fl[i] = double(float(fl[i]));   // the second halves always hold single-precision values (psq_l after psq_st would round them)
         std::vector<std::pair<uint32_t, uint32_t>> sda; for (int off : sda_offsets) { float k = float(std::uniform_real_distribution<double>(0.5, 10)(rng)); uint32_t kb; std::memcpy(&kb, &k, 4); sda.push_back({kSda + uint32_t(off), loops ? kb : random_float_bits()}); }
         const uint32_t lr = uint32_t(rng());
         const State want = run(ref, words, ptr, ints, fl, lr, sda), have = run(hle, words, ptr, ints, fl, lr, sda);
+        if (ref == ref_Leaf_802647AC || ref == ref_Leaf_80374210) CHECK(!want.faulted && !have.faulted);
         std::string why;
         if (!same_state(want, have, why) && ++mismatches <= 3) std::printf("%s differs at iteration %d: %s\n", name, n, why.c_str());
     }

@@ -6,8 +6,9 @@
 #include <map>
 #include <mutex>
 
+namespace uc { std::atomic<bool> gx_audit_on{false}; }
 namespace {
-std::atomic<bool> enabled{false};
+std::atomic<bool>& enabled = uc::gx_audit_on;
 std::mutex mutex;
 std::map<uint32_t, uc::GxAuditEntry> entries;
 bool recording = false;

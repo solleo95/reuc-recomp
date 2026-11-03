@@ -35,7 +35,11 @@ struct CrLive {
 CrLive analyze_cr(const Program& p);
 
 // What the emitter may drop or fuse for one instruction (from CrLive); the default emits every CR write.
-struct FusedCmp { std::string lhs, rhs; };   // the compare feeding the next conditional branch, as C++ operands
+struct FusedCmp {   // the compare feeding the next conditional branch, as C++ operands
+    std::string lhs, rhs;
+    bool fp = false;                  // a floating-point compare: CR bit 3 is "unordered" (a NaN operand), not XER[SO]
+    const char* equal_op = nullptr;   // fcmp + cror (LT|EQ or GT|EQ) + branch on EQ: the operator that replaces bit 2 ("<=" or ">=")
+};
 struct CrHints {
     bool drop_rc = false;                 // the record form's CR write is never read
     const FusedCmp* fused = nullptr;      // a conditional branch tests this compare directly instead of reading CR

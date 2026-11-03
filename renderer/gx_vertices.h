@@ -100,7 +100,9 @@ private:
     void decode(std::span<const std::byte> data);
     Memory memory_;
     DrawPacket draw_;
-    std::vector<std::byte> vertex_bytes_;
+    // Maximum validated layout: 9 matrix indices + XYZ32 + NBT32 + 2 RGBA8 + 8 ST32.
+    std::array<std::byte,129> vertex_bytes_{};
+    size_t vertex_bytes_used_=0;
     size_t vertex_size_ = 0;
     uint16_t count_ = 0, decoded_ = 0;
     uint32_t producer_ = 0;

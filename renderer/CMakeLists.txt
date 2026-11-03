@@ -34,13 +34,15 @@ foreach(stage vert frag)
   if(stage STREQUAL "vert")
     set(entry vertexMain)
     set(shader_stage vertex)
+    set(lighting_args)
   else()
     set(entry fragmentMain)
     set(shader_stage fragment)
+    set(lighting_args -DUC_LIGHTING_SPEC -DUC_FOG_SPEC)
   endif()
   add_custom_command(OUTPUT ${shader_dir}/smoke.${stage}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -target spirv -profile spirv_1_5 -entry ${entry} -stage ${shader_stage} -fvk-use-entrypoint-name -o ${shader_dir}/smoke.${stage}.spv
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DUC_INDIRECT_SPEC ${lighting_args} -target spirv -profile spirv_1_5 -entry ${entry} -stage ${shader_stage} -fvk-use-entrypoint-name -o ${shader_dir}/smoke.${stage}.spv
     DEPENDS shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
 endforeach()
 # Ubershader: the fragment shader with its TEV state read from the draw uniforms; used while a specialized pipeline compiles.
@@ -53,13 +55,13 @@ foreach(stage vert frag uber)
   if(stage STREQUAL "vert")
     set(motion_args -entry vertexMain -stage vertex)
   elseif(stage STREQUAL "frag")
-    set(motion_args -entry fragmentMain -stage fragment)
+    set(motion_args -DUC_LIGHTING_SPEC -DUC_FOG_SPEC -entry fragmentMain -stage fragment)
   else()
     set(motion_args -DUBER -entry fragmentMain -stage fragment)
   endif()
   add_custom_command(OUTPUT ${shader_dir}/smoke.motion.${stage}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DMOTION ${motion_args} -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/smoke.motion.${stage}.spv
+    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang -DUC_INDIRECT_SPEC -DMOTION ${motion_args} -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/smoke.motion.${stage}.spv
     DEPENDS shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
 endforeach()
 # Shadow map vertex stage: the motion vertex shader without lighting and texture coordinates (depth only, no fragment stage).
@@ -131,10 +133,15 @@ foreach(bridge prepare resolve)
     COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/dlss5_bridge.slang -D${bridge_define} -entry main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/dlss5.${bridge}.spv
     DEPENDS shaders/dlss5_bridge.slang VERBATIM)
 endforeach()
-foreach(blur_pass tile blur)
+  # Bit-exact blur speedups for every Vulkan build; TILE_GROUP: motion_blur_pass.cpp dispatches a workgroup per tile. The sampling density (1 sample per pixel) changes the picture slightly and stays Linux only.
+  set(blur_args -DUC_BLUR_NATIVE_GRID -DUC_BLUR_TILE_GROUP -DUC_BLUR_IN_PLACE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND blur_args -DUC_BLUR_SAMPLES_PER_PIXEL=1.0)
+  endif()
+  foreach(blur_pass tile blur)
   add_custom_command(OUTPUT ${shader_dir}/motion_blur.${blur_pass}.spv
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/motion_blur.slang -entry ${blur_pass}Main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/motion_blur.${blur_pass}.spv
+      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/motion_blur.slang ${blur_args} -entry ${blur_pass}Main -stage compute -target spirv -profile spirv_1_5 -fvk-use-entrypoint-name -o ${shader_dir}/motion_blur.${blur_pass}.spv
     DEPENDS shaders/motion_blur.slang VERBATIM)
 endforeach()
 foreach(bloom_pass down_first down up composite)
@@ -164,7 +171,7 @@ set(UC_SHADER_FILES ${shader_dir}/hdr.vert.spv ${shader_dir}/hdr.frag.spv ${shad
   ${shader_dir}/smoke.motion.vert.spv ${shader_dir}/smoke.motion.frag.spv ${shader_dir}/smoke.motion.uber.spv ${shader_dir}/rcas.comp.spv
   ${shader_dir}/smaa.edges.spv ${shader_dir}/smaa.weights.spv ${shader_dir}/smaa.blend.spv
   ${shader_dir}/smoke.shadow.vert.spv ${shader_dir}/gtao.ao.spv ${shader_dir}/gtao.denoise.spv ${shader_dir}/gtao.contact.spv ${shader_dir}/gtao.composite.spv
-  ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/bloom.down_first.spv ${shader_dir}/bloom.down.spv ${shader_dir}/bloom.up.spv ${shader_dir}/bloom.composite.spv ${shader_dir}/rt_transform.spv
+    ${shader_dir}/motion_blur.tile.spv ${shader_dir}/motion_blur.blur.spv ${shader_dir}/bloom.down_first.spv ${shader_dir}/bloom.down.spv ${shader_dir}/bloom.up.spv ${shader_dir}/bloom.composite.spv ${shader_dir}/rt_transform.spv
   ${shader_dir}/rt_denoise.temporal.spv ${shader_dir}/rt_denoise.atrous.spv ${shader_dir}/rt_shadow.trace.spv ${shader_dir}/rt_shadow.composite.spv
   ${shader_dir}/rt_reflect.trace.spv ${shader_dir}/rt_reflect.composite.spv ${shader_dir}/rt_path.accumulate.spv ${shader_dir}/rt_path.list.spv ${shader_dir}/rt_path.trace.spv ${shader_dir}/rt_path.composite.spv ${shader_dir}/rr_inputs.spv ${shader_dir}/dlss5.prepare.spv ${shader_dir}/dlss5.resolve.spv CACHE INTERNAL "")
 add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})

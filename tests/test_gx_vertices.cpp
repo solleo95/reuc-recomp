@@ -59,8 +59,24 @@ static void scalar_cases() {
         }
     }
 }
+static void maximum_vertex() {
+    gx::State state;
+    state.descriptors.fill(gx::Mode::direct);
+    state.formats[0][9]={gx::Type::f32,3,0};
+    state.formats[0][10]={gx::Type::f32,9,0};
+    for(size_t a=13;a<21;++a) state.formats[0][a]={gx::Type::f32,2,0};
+    gx::Vertices capture({{},{},{}});
+    capture.begin(state,0xB8,0,1,7,0);
+    const std::array<std::byte,130> input{};
+    rejects(gx::ErrorCode::truncated,[&] { capture.write_attribute(7,input); });
+    for(size_t offset=0;offset<129;++offset) capture.write_attribute(7,std::span(input).subspan(offset,1));
+    const auto draw=capture.take_draw();
+    CHECK(draw.vertices.size()==1 && draw.indices==std::vector<uint32_t>{0});
+    CHECK((draw.vertices[0].normal==std::array<float,9>{}));
+}
 int main() {
     scalar_cases();
+    maximum_vertex();
     std::vector<std::byte> ram(256);
     gx::Vertices capture({ram, {}, {}});
     gx::State state;
@@ -98,6 +114,22 @@ int main() {
             CHECK(result.vertices[i].position == draw.vertices[i].position);
             CHECK(result.vertices[i].color == draw.vertices[i].color);
             CHECK(result.vertices[i].texcoord == draw.vertices[i].texcoord);
+        }
+    }
+    // FIFO components can arrive repeatedly in small chunks, across vertex boundaries and reused buffers.
+    for(size_t chunk : {1u,2u,3u,4u,7u,23u,24u,25u,71u}) {
+        gx::Vertices divided({ram,{},{}});
+        for(int repeat=0;repeat<2;++repeat) {
+            divided.begin(*draw.state,0x90,0,3,7,0x80029D84);
+            for(size_t offset=0;offset<input.size();offset+=chunk)
+                divided.write_attribute(7,input.subspan(offset,std::min(chunk,input.size()-offset)));
+            const auto result=divided.take_draw();
+            CHECK(result.indices==draw.indices && result.vertices.size()==draw.vertices.size());
+            for(size_t i=0;i<result.vertices.size();++i) {
+                CHECK(result.vertices[i].position==draw.vertices[i].position);
+                CHECK(result.vertices[i].color==draw.vertices[i].color);
+                CHECK(result.vertices[i].texcoord==draw.vertices[i].texcoord);
+            }
         }
     }
     rejects(gx::ErrorCode::sequence, [&] { capture.write_attribute(7, input.first(1)); });

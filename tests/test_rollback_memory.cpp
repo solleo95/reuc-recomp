@@ -6,6 +6,10 @@
 #include <thread>
 #include <utility>
 void hle_Leaf_80137BC4(ppc::Ctx&);
+void hle_Leaf_80394B04(ppc::Ctx&);
+void hle_Leaf_80394CE4(ppc::Ctx&);
+void hle_Leaf_800AFCD8(ppc::Ctx&);
+void hle_Leaf_80032D70(ppc::Ctx&);
 int main() {
     Fix f;
     auto tracker=std::make_unique<uc::RollbackMemory>(f.c.mem);
@@ -93,6 +97,25 @@ int main() {
         memory.capture();
     }
     const auto dirty_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-dirty_start).count();
+    // Every other batched stack leaf must retain all writes, including frames crossing a page boundary.
+    for(auto fn : {hle_Leaf_80394B04,hle_Leaf_80394CE4,hle_Leaf_800AFCD8,hle_Leaf_80032D70}) {
+        memory.restore(*initial);
+        f.c.r[1]=0x8003201E; f.c.r[3]=0x80041FF0; f.c.r[4]=0x80050FE0; f.c.r[5]=0x80061000; f.c.gqr[0]=0;
+        for(uint32_t i=0;i<32;++i) {
+            ppc::wr32(f.c,f.c.r[4]+i*4,0x3F800000u+i*0x10000);
+            ppc::wr32(f.c,f.c.r[5]+i*4,0x40000000u+i*0x10000);
+        }
+        for(uint32_t i=8;i<40;i+=4) ppc::wr32(f.c,f.c.r[1]+i,0x3F800000u);
+        for(int i=0;i<32;++i) { f.c.f[i]=i+0.25; f.c.ps1[i]=i+0.5; }
+        const auto before=memory.capture(true);
+        const auto stamp=gx::watch_stamp();
+        fn(f.c);
+        CHECK(uc::rollback_dirty[0x31] && uc::rollback_dirty[0x32]);
+        CHECK(!gx::written_since(f.c.r[1]-64,64,stamp));
+        CHECK(!uc::RollbackMemory::difference(*before,*memory.capture(true)).empty());
+        memory.restore(*before);
+        CHECK(uc::RollbackMemory::difference(*before,*memory.capture(true)).empty());
+    }
     // Native matrix outputs and spills cross pages; tracking must cover both without invalidating GPU caches for stack-only writes.
     for(uint32_t output : {0x80041FE0u,0x90041FE0u,0x80031FF0u}) {
         memory.restore(*initial);

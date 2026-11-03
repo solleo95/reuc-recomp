@@ -135,7 +135,7 @@ void MotionBlurPass::record(const MotionBlurInputs& in) {
     vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&set_,0,nullptr);
     vkCmdPushConstants(command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof params,&params);
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[0]);
-    vkCmdDispatch(command,(tiles.width+7)/8,(tiles.height+7)/8,1);
+    vkCmdDispatch(command,tiles.width,tiles.height,1);   // UC_BLUR_TILE_GROUP in motion_blur.slang: a workgroup per tile
     barrier_copy_and_tiles(command);   // the blur reads the copy and the tile maxima
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines_[1]);
     vkCmdDispatch(command,(in.output_size.width+7)/8,(in.output_size.height+7)/8,1);

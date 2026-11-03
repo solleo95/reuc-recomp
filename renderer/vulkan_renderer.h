@@ -197,7 +197,7 @@ private:
         bool bc7=false;   // a texture replacement: BC7 blocks, not RGBA8
         VkDeviceSize allocation_size=0;
         std::shared_ptr<const gx::TexturePixels> source;
-        bool initialized=false;
+        bool initialized=false,mips_ready=false;
         const void* uploader=nullptr;   // the slot whose command buffer copies `upload`; it frees the staging buffer once its fence retired
     };
     struct Slot {
@@ -241,6 +241,7 @@ private:
     Texture make_texture(const gx::TexturePixels* pixels, VkExtent2D physical_extent = {});
     Texture make_copy_texture(const std::shared_ptr<const gx::TexturePixels>& source);
     void record_texture_copy(VkCommandBuffer command, VkImage source, VkExtent2D extent, const std::array<uint32_t,4>& region, Texture& target, VkImageLayout before);
+    void record_copy_mips(VkCommandBuffer command,Texture& target);
     void recycle_copy_texture(Texture& texture);
     void destroy_texture(Texture& texture);
     void retire_textures(Slot& slot);
@@ -431,6 +432,7 @@ private:
     std::filesystem::path cache_dir_;
     std::set<PipelineKey> known_keys_;        // keys already in the seed or recorded file
     std::vector<PipelineKey> warm_keys_;
+    std::vector<PipelineKey> legacy_keys_;    // seed keys of an older, shorter format: only their blend, depth and topology words are used
     std::vector<std::thread> compilers_;
     std::map<const gx::TexturePixels*,Texture> copy_textures_;
     struct CopyAlias { std::weak_ptr<const gx::TexturePixels> requested; std::shared_ptr<const gx::TexturePixels> rendered; };

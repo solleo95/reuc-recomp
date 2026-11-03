@@ -234,6 +234,11 @@ KPADEnableMotor Nop
 # --- Dolphin SDK matrix/vector library (mtx.a, runtime/hle/sdk_math.cpp): bit-exact native versions of the translated paired-single code.
 # Mapped by address because identified_sdk.txt lists other, unrelated functions under the same names.
 @80264680 ModelHistoryIdentity
+# In-place game 4x4 transpose, including both resume entries.
+@80137F78 MatrixTranspose4
+@80137F9C MatrixTranspose4Resume
+@801380B4 MatrixTranspose4Return
+@80394A10 MatrixEulerFinish
 @802646AC PSMTXCopy
 @802646E0 PSMTXConcat
 @80264DE0 PSMTXTransApply
@@ -264,7 +269,7 @@ KPADEnableMotor Nop
 @80139610 Leaf_80139610
 @800521A0 Leaf_800521A0
 @800AFCD8 Leaf_800AFCD8
-@80394374 Leaf_80394374
+@80394374 SinCosFIdx
 @8003EDD0 Leaf_8003EDD0
 @80367314 Leaf_80367314
 @80365C7C Leaf_80365C7C

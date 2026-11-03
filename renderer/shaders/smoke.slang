@@ -61,11 +61,31 @@ struct Output {
 #endif
 };
 float4 clipOf(float4 rows[4], float4 v) { return float4(dot(rows[0], v), dot(rows[1], v), dot(rows[2], v), dot(rows[3], v)); }
-float4 lightControl(float4 base, uint channel, uint control, float3 position, float3 normal) {
+#if defined(UC_LIGHTING_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+TEV_CONST(87, lightControl0);
+TEV_CONST(88, lightControl1);
+TEV_CONST(89, lightControl2);
+TEV_CONST(90, lightControl3);
+TEV_CONST(91, lightChannelCount);
+uint channelControl(uint channel) {
+    switch(channel) {
+    case 0: return lightControl0;
+    case 1: return lightControl1;
+    case 2: return lightControl2;
+    case 3: return lightControl3;
+    }
+    return 0;
+}
+uint channelCount() { return lightChannelCount; }
+#else
+#define channelControl(channel) drawState.channels[channel]
+#define channelCount() drawState.pixel.w
+#endif
+uint lightMaskOf(uint control) { return ((control >> 2) & 15) | ((control >> 7) & 240); }   // renderer/pipeline_keys.h kLightMaskBits: the specialized control leaves these bits out, the draw has them
+float4 lightControl(float4 base, uint channel, uint control, uint mask, float3 position, float3 normal) {
     int4 material = int4(round(((control & 1) != 0 ? base : drawState.materials[channel]) * 255.0));
     if((control & 2) == 0) return float4(material) / 255.0;
     int4 energy = int4(round(((control & 64) != 0 ? base : drawState.ambient[channel]) * 255.0));
-    uint mask = ((control >> 2) & 15) | ((control >> 7) & 240);
     uint diffuse = (control >> 7) & 3;
     uint attenuation = (control >> 9) & 3;
     for(uint remaining = mask; remaining != 0; remaining &= remaining - 1) {   // the set bits only, lowest first
@@ -97,10 +117,11 @@ float4 lightControl(float4 base, uint channel, uint control, float3 position, fl
     return float4((material * (energy + (energy >> 7))) >> 8) / 255.0;
 }
 float4 shadeChannel(float4 base, uint channel, float3 position, float3 normal) {
-    if(channel>=drawState.pixel.w) return float4(0.0);
-    const uint colorControl = drawState.channels[channel], alphaControl = drawState.channels[channel+2];
-    float4 color = lightControl(base,channel,colorControl,position,normal);
-    if(alphaControl != colorControl) color.a = lightControl(base,channel,alphaControl,position,normal).a;   // equal controls give the same alpha lane
+    if(channel>=channelCount()) return float4(0.0);
+    const uint colorControl = channelControl(channel), alphaControl = channelControl(channel+2);
+    const uint colorMask = lightMaskOf(drawState.channels[channel]), alphaMask = lightMaskOf(drawState.channels[channel+2]);
+    float4 color = lightControl(base,channel,colorControl,colorMask,position,normal);
+    if(alphaControl != colorControl || alphaMask != colorMask) color.a = lightControl(base,channel,alphaControl,alphaMask,position,normal).a;   // equal controls and lights give the same alpha lane
     return color;
 }
 // GX regular texgen (XF 0x1040+n): source row, AB11/ABC1 input, ST/STQ through the texture matrix,
@@ -159,8 +180,8 @@ Output vertexMain(Input input) {
 #if defined(MOTION) || defined(UC_DIRECTX)
     // With per-pixel lighting the fragment stage lights a lit channel again from the raw colours (shadeFragment): the vertex result would be thrown away.
     const bool pixelLit = (projection.effects & 1u) != 0;
-    if(!(pixelLit && ((drawState.channels[0] | drawState.channels[2]) & 2u) != 0)) output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
-    if(!(pixelLit && ((drawState.channels[1] | drawState.channels[3]) & 2u) != 0)) output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
+    if(!(pixelLit && ((channelControl(0) | channelControl(2)) & 2u) != 0)) output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
+    if(!(pixelLit && ((channelControl(1) | channelControl(3)) & 2u) != 0)) output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
 #else
     output.color = shadeChannel(input.color,0,viewPosition.xyz,normal);
     output.color1 = shadeChannel(input.color1,1,viewPosition.xyz,normal);
@@ -189,13 +210,20 @@ bool alphaCompare(uint value, uint reference, uint operation) {
 }
 // GX BP fog float: 11-bit mantissa, 8-bit exponent, sign at bit 19.
 float fogFloat(uint v) { return asfloat(((v>>19)&1u)<<31 | ((v>>11)&255u)<<23 | (v&2047u)<<12); }
+#if defined(UC_FOG_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+TEV_CONST(92, specializedFogControl);
+TEV_CONST(93, discardZeroAlpha);
+uint fogControl() { return specializedFogControl; }
+#else
+#define fogControl() ((drawState.fog[0].w>>20)&15u)
+#endif
 // The GX fog amount at a pixel depth, 0 (clear) .. 1 (fully fogged); 0 with fog off.
 float fogAmount(float depth) {
-    uint fsel=(drawState.fog[0].w>>21)&7u;
+    uint control=fogControl(), fsel=(control>>1)&7u;
     if(fsel==0) return 0.0;
     uint z=uint(saturate(depth)*16777215.0);
     float a=fogFloat(drawState.fog[0].x), c=fogFloat(drawState.fog[0].w&0xFFFFFu);
-    float ze=((drawState.fog[0].w>>20)&1u)==0 ? a*16777216.0/float(int(drawState.fog[0].y)-int(z>>(drawState.fog[0].z&31u))) : a*float(z)/16777216.0;
+    float ze=(control&1u)==0 ? a*16777216.0/float(int(drawState.fog[0].y)-int(z>>(drawState.fog[0].z&31u))) : a*float(z)/16777216.0;
     float fog=saturate(ze-c);
     if(fsel==4) fog=1.0-exp2(-8.0*fog);
     else if(fsel==5) fog=1.0-exp2(-8.0*fog*fog);
@@ -204,7 +232,7 @@ float fogAmount(float depth) {
     return fog;
 }
 float3 applyFog(float3 color, float depth) {
-    if(((drawState.fog[0].w>>21)&7u)==0) return color;
+    if(((fogControl()>>1)&7u)==0) return color;
     int ifog=int(round(fogAmount(depth)*256.0));
     uint rgb=drawState.fog[1].x;
     int3 fogColor=int3((rgb>>16)&255u,(rgb>>8)&255u,rgb&255u);
@@ -276,12 +304,17 @@ float4 shadeFragment(Output input) {
 #if defined(MOTION) || defined(UC_DIRECTX)
     if((projection.effects&1u)!=0) {   // the lighting channels again, at the pixel: the same GX equations on the interpolated normal and position
         const float3 normal = dot(input.viewNormal,input.viewNormal)>0.0 ? normalize(input.viewNormal) : float3(0.0);
-        if(((drawState.channels[0]|drawState.channels[2])&2u)!=0) rasterColor0 = shadeChannel(input.rawColor0,0,input.viewPosition,normal);
-        if(((drawState.channels[1]|drawState.channels[3])&2u)!=0) rasterColor1 = shadeChannel(input.rawColor1,1,input.viewPosition,normal);
+        if(((channelControl(0)|channelControl(2))&2u)!=0) rasterColor0 = shadeChannel(input.rawColor0,0,input.viewPosition,normal);
+        if(((channelControl(1)|channelControl(3))&2u)!=0) rasterColor1 = shadeChannel(input.rawColor1,1,input.viewPosition,normal);
     }
 #endif
     float4 result=evaluateTev(uv,rasterColor0,rasterColor1);
-    uint alpha=uint(round(saturate(result.a)*255.0)), word=drawState.pixel.x;
+    uint alpha=uint(round(saturate(result.a)*255.0));
+#if defined(UC_INDIRECT_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+    uint word=specializedAlphaCompare;
+#else
+    uint word=drawState.pixel.x;
+#endif
     bool first=alphaCompare(alpha,word&255,(word>>16)&7);
     bool second=alphaCompare(alpha,(word>>8)&255,(word>>19)&7);
     uint operation=(word>>22)&3;
@@ -291,5 +324,9 @@ float4 shadeFragment(Output input) {
     const uint uiDim=(projection.effects>>8)&255u;   // kEffectUiDimShift: the HDR interface brightness of this draw
     if(uiDim!=0u) result.rgb*=float(uiDim)/255.0;
     if(destinationAlphaPass!=0) result.a=float(drawState.pixel.z&255)/255.0;
+#if defined(UC_FOG_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+    // Keep all implicit-derivative texture work before this discard.
+    if(discardZeroAlpha!=0 && result.a==0.0) discard;
+#endif
     return result;
 }

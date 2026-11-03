@@ -93,6 +93,12 @@ TEV_CONST(62, colorEnv15);
 TEV_CONST(63, alphaEnv15);
 TEV_CONST(64, order15);
 TEV_CONST(65, konst15);
+#if defined(UC_INDIRECT_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+TEV_CONST(83, indirectReference);
+TEV_CONST(84, indirectScale01);
+TEV_CONST(85, indirectScale23);
+TEV_CONST(86, specializedAlphaCompare);
+#endif
 
 #ifdef UC_SPEC
 // DirectX specialization (-DUBER -DUC_SPEC): the HLSL keeps UC_TEV(i); the renderer compiles it with a constant table of the draw's TEV words in front.
@@ -236,7 +242,14 @@ float2 imageSize(uint id) {
     }
     return float2(w, h);
 }
-uint indirectWord(uint index) { return drawState.indirect[index / 4][index % 4]; }
+uint indirectWord(uint index) {
+#if defined(UC_INDIRECT_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+    if (index == 9) return indirectReference;
+    if (index == 10) return indirectScale01;
+    if (index == 11) return indirectScale23;
+#endif
+    return drawState.indirect[index / 4][index % 4];
+}
 int signed11(uint value) { return int(value << 21) >> 21; }
 int indirectWrap(int coord, uint mode) { return mode == 0 ? coord : (mode < 6 ? (coord & int(0xFFFEu >> mode)) : 0); }
 // GX indirect texturing in hardware fixed point: texcoords are texels*128, matrices s.10, scale 2^(e-17).
@@ -274,10 +287,51 @@ float2 indirectCoord(uint map, float2 coord, float2 uv[8], uint command, inout i
     previous = result;
     return (float2(result) + 0.5) / (size * 128.0);
 }
+#if defined(UC_INDIRECT_SPEC) && !defined(UBER) && !defined(UC_SPEC)
+TEV_CONST(67, indirectCommand0);
+TEV_CONST(68, indirectCommand1);
+TEV_CONST(69, indirectCommand2);
+TEV_CONST(70, indirectCommand3);
+TEV_CONST(71, indirectCommand4);
+TEV_CONST(72, indirectCommand5);
+TEV_CONST(73, indirectCommand6);
+TEV_CONST(74, indirectCommand7);
+TEV_CONST(75, indirectCommand8);
+TEV_CONST(76, indirectCommand9);
+TEV_CONST(77, indirectCommand10);
+TEV_CONST(78, indirectCommand11);
+TEV_CONST(79, indirectCommand12);
+TEV_CONST(80, indirectCommand13);
+TEV_CONST(81, indirectCommand14);
+TEV_CONST(82, indirectCommand15);
+uint stageIndirectCommand(uint stage) {
+    switch (stage) {
+    case 0: return indirectCommand0;
+    case 1: return indirectCommand1;
+    case 2: return indirectCommand2;
+    case 3: return indirectCommand3;
+    case 4: return indirectCommand4;
+    case 5: return indirectCommand5;
+    case 6: return indirectCommand6;
+    case 7: return indirectCommand7;
+    case 8: return indirectCommand8;
+    case 9: return indirectCommand9;
+    case 10: return indirectCommand10;
+    case 11: return indirectCommand11;
+    case 12: return indirectCommand12;
+    case 13: return indirectCommand13;
+    case 14: return indirectCommand14;
+    case 15: return indirectCommand15;
+    }
+    return 0;
+}
+#else
+uint stageIndirectCommand(uint stage) { return drawState.indCmd[stage / 4][stage % 4]; }
+#endif
 void tevStage(inout float4 r[4], float2 uv[8], float4 vertexColor, float4 vertexColor1,
               uint ce, uint ae, uint order, uint konst, uint stageIndex, inout int2 previousCoord) {
     float4 tex = float4(1.0);
-    uint command = drawState.indCmd[stageIndex / 4][stageIndex % 4];
+    uint command = stageIndirectCommand(stageIndex);
     if ((order & 64) != 0) {
         float2 coord = uv[(order >> 3) & 7];
         if (command != 0) coord = indirectCoord(order & 7, coord, uv, command, previousCoord);

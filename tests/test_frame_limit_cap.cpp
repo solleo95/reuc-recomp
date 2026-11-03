@@ -7,6 +7,8 @@
 #include <optional>
 
 int main() {
+    CHECK(uc::pacing_for_limit(0,0,false,true).game_hz==uc::kUnpacedTestHz);
+    CHECK(uc::pacing_for_limit(0,90,false,true).game_hz==90u);
     using uc::clamp_frame_limit;
     CHECK(clamp_frame_limit(std::nullopt) == std::nullopt);   // unset keeps the previous behaviour on every platform
     CHECK(clamp_frame_limit(30) == 30u && clamp_frame_limit(60) == 60u && clamp_frame_limit(90) == 90u);

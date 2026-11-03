@@ -23,6 +23,7 @@ target_sources(uc_runtime PRIVATE ax_audio.cpp audio_gap_audit.cpp)
 target_sources(uc_runtime PRIVATE locked_copy.cpp)
 target_sources(uc_runtime PRIVATE rollback_memory.cpp)
 target_sources(uc_runtime PRIVATE ${uc_crash_report_source} gx_gap_audit.cpp)
+target_sources(uc_runtime PRIVATE hle/game_math.cpp)
 target_link_libraries(uc_runtime PUBLIC uc_gx uc_input uc_gamepad_config uc_wiimote_config PRIVATE uc_public_release uc_path_io)
 if(UNIX)
   target_link_libraries(uc_runtime PUBLIC ${CMAKE_DL_LIBS})   # dladdr in the crash report

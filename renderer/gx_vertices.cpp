@@ -151,11 +151,12 @@ size_t encoded_draw_size(const State& state,uint8_t primitive,uint8_t vat,uint16
 void Vertices::begin(const Shared<State>& state, uint8_t primitive, uint8_t vat, uint16_t count, uint32_t producer, uint32_t callsite, bool discard) {
     if (active_ || ready_) throw Error(ErrorCode::sequence, callsite, 0, count);
     const size_t vertex_size=encoded_draw_size(*state,primitive,vat,count,callsite)/count;
+    if(vertex_size>vertex_bytes_.size()) throw Error(ErrorCode::layout,callsite,vertex_bytes_.size(),vertex_size);
     draw_ = {callsite, primitive, vat, state, {}, {}};
     discard_=discard; decoded_=0;
     if(!discard_)draw_.vertices.reserve(count);
     vertex_size_ = vertex_size; count_ = count; producer_ = producer;
-    vertex_bytes_.clear(); vertex_bytes_.reserve(vertex_size);
+    vertex_bytes_used_=0;
     sources_={};
     active_ = true;
 }
@@ -211,22 +212,21 @@ void Vertices::decode(std::span<const std::byte> data) {
 void Vertices::write_attribute(uint32_t producer, std::span<const std::byte> bytes) {
     if (!active_) throw Error(ErrorCode::sequence, draw_.callsite, 0, bytes.size());
     if (producer != producer_) throw Error(ErrorCode::producer, draw_.callsite, producer_, producer);
-    size_t remaining = (count_ - decoded_) * vertex_size_ - vertex_bytes_.size();
+    size_t remaining = (count_ - decoded_) * vertex_size_ - vertex_bytes_used_;
     if (bytes.size() > remaining) throw Error(ErrorCode::truncated, draw_.callsite, remaining, bytes.size());
     while (!bytes.empty()) {
-        if (vertex_bytes_.empty() && bytes.size() >= vertex_size_) {
+        if (!vertex_bytes_used_ && bytes.size() >= vertex_size_) {
             decode(bytes.first(vertex_size_));
             bytes = bytes.subspan(vertex_size_);
             continue;
         }
-        size_t n = std::min(bytes.size(), vertex_size_ - vertex_bytes_.size());
-        const size_t old = vertex_bytes_.size();
-        vertex_bytes_.resize(old + n);
-        std::memcpy(vertex_bytes_.data() + old, bytes.data(), n);
+        size_t n = std::min(bytes.size(), vertex_size_ - vertex_bytes_used_);
+        std::memcpy(vertex_bytes_.data()+vertex_bytes_used_,bytes.data(),n);
+        vertex_bytes_used_+=n;
         bytes = bytes.subspan(n);
-        if (vertex_bytes_.size() == vertex_size_) {
-            decode(vertex_bytes_);
-            vertex_bytes_.clear();
+        if (vertex_bytes_used_ == vertex_size_) {
+            decode(std::span(vertex_bytes_).first(vertex_bytes_used_));
+            vertex_bytes_used_=0;
         }
     }
     if (decoded_ == count_) { if(!discard_)indices(draw_); active_ = false; ready_ = true; }
@@ -238,7 +238,7 @@ DrawPacket Vertices::take_draw() {
     return std::move(draw_);
 }
 void Vertices::finish() const {
-    if (active_) throw Error(ErrorCode::truncated, draw_.callsite, count_ * vertex_size_, decoded_ * vertex_size_ + vertex_bytes_.size());
+    if (active_) throw Error(ErrorCode::truncated, draw_.callsite, count_ * vertex_size_, decoded_ * vertex_size_ + vertex_bytes_used_);
 }
 
 } // namespace gx

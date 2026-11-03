@@ -3,6 +3,8 @@
 #include "ppc/isa.h"
 #include <algorithm>
 #include <cstdio>
+#include <deque>
+#include <map>
 #include <set>
 #include <sstream>
 
@@ -112,7 +114,10 @@ static std::string branch_action(const Program& p, const Function& f, uint32_t p
 // Branch condition from a compare that was not written to CR: bit 0..3 of BI = LT GT EQ SO of that compare.
 static std::string fused_cond(const FusedCmp& cmp, uint32_t bo, uint32_t bi) {
     const unsigned bit = bi & 3;
-    std::string e = bit == 3 ? "c.xer_so != 0" : "(" + cmp.lhs + (bit == 0 ? " < " : bit == 1 ? " > " : " == ") + cmp.rhs + ")";
+    std::string e;
+    if (cmp.equal_op) e = "(" + cmp.lhs + " " + cmp.equal_op + " " + cmp.rhs + ")";   // false for a NaN operand, as the CR the instruction pair would build
+    else if (bit == 3) e = cmp.fp ? "(" + cmp.lhs + " != " + cmp.lhs + " || " + cmp.rhs + " != " + cmp.rhs + ")" : "c.xer_so != 0";
+    else e = "(" + cmp.lhs + (bit == 0 ? " < " : bit == 1 ? " > " : " == ") + cmp.rhs + ")";
     return (bo & 8) ? e : "!(" + e + ")";
 }
 
@@ -190,6 +195,15 @@ constexpr uint8_t kAllCr = 0xFF;
 uint8_t fld(uint32_t f) { return uint8_t(1u << (f & 7)); }
 bool fp_name(const std::string& n) { return n[0] == 'f' || n == "mffs" || n.compare(0, 3, "ps_") == 0 || n.compare(0, 4, "mtfs") == 0; }
 
+// The register an integer record-form instruction compares with zero (cr0 = sign of it), -1 for forms this does not know.
+int rc_dest(const std::string& n, uint32_t w) {
+    static const std::set<std::string> arithmetic{"add", "addc", "adde", "addze", "addme", "subf", "subfc", "subfe", "subfze", "subfme", "neg", "mullw", "mulhw", "mulhwu", "divw", "divwu"};
+    static const std::set<std::string> logical{"and", "andc", "or", "orc", "xor", "nor", "nand", "eqv", "slw", "srw", "sraw", "srawi", "cntlzw", "extsb", "extsh", "rlwinm", "rlwnm", "rlwimi"};
+    if (arithmetic.count(n)) return int(ppc::t(w));   // rD
+    if (logical.count(n)) return int(ppc::a(w));      // rA
+    return -1;
+}
+
 struct CrEffect { uint8_t use = 0, def = 0; };   // fields read, fields fully overwritten
 CrEffect cr_effect(const ppc::OpInfo& op, uint32_t w) {
     using ppc::Kind;
@@ -251,6 +265,20 @@ std::vector<CrNode> cr_nodes(const Program& p, const Function& f) {
         if (((name == "twi" || name == "tw") && ppc::t(w) == 31) || (op->sub == ppc::Sub::X9 && ppc::oe(w)) || op->kind == Kind::UNSUP) { nd.fall = false; continue; }
         const CrEffect fx = cr_effect(*op, w);
         nd.use = fx.use; nd.def = fx.def;
+        if (name == "mfcr") {
+            // mfcr rT; rlwinm rT,rT,sh,mb,me: the whole CR word dies in the rotate and mask, so only the fields under the mask are read
+            uint32_t next = 0;
+            const ppc::OpInfo* nop = p.img.word(pc + 4, next) ? ppc::decode(next) : nullptr;
+            if (nop && std::string(nop->name) == "rlwinm" && ppc::t(next) == ppc::t(w) && ppc::a(next) == ppc::t(w)) {
+                const uint32_t mb = ppc::mb(next), me = ppc::me(next);
+                const uint32_t mask = mb <= me ? (0xFFFFFFFFu >> mb) & (0xFFFFFFFFu << (31 - me)) : ((0xFFFFFFFFu >> mb) | (0xFFFFFFFFu << (31 - me)));
+                const uint32_t sh = ppc::sh(next) & 31;
+                const uint32_t bits = sh ? (mask >> sh) | (mask << (32 - sh)) : mask;   // the CR word bits that survive the rotate and mask
+                uint8_t used = 0;
+                for (unsigned i = 0; i < 8; ++i) if (bits & (0xFu << (28 - 4 * i))) used |= fld(i);
+                nd.use = used;
+            }
+        }
         switch (op->kind) {
             case Kind::SC: nd.call = {Callee::Hle, 0, 0}; break;
             case Kind::BR: case Kind::BC: {
@@ -395,25 +423,47 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
 
     std::ostringstream o;
     if (has_sec) {
-        o << "static void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  switch (at) { ";
+        o << "static void body_" << hex8(f.entry) << "(ppc::Ctx& c, uint32_t at) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n  switch (at) { ";
         for (uint32_t t : sit->second) o << "case 0x" << hex8(t) << "u: goto L_" << hex8(t) << "; ";
         o << "default: break; }\n";
     } else {
-        o << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n";
+        o << "void " << fn_name(f.entry) << "(ppc::Ctx& c) {\n  UC_ENTER(0x" << hex8(f.entry) << "u);\n  /*CFDECL*/\n";
     }
     const std::vector<uint8_t>* after = nullptr;   // CR fields still readable after each instruction
     if (live) { auto it = live->out.find(f.entry); if (it != live->out.end()) after = &it->second; }
     FusedCmp fused;
+    std::map<uint32_t, FusedCmp> pending_fuse;   // branch address -> the earlier compare (operands kept in cf<field>a/b) it tests
+    uint8_t cf_used = 0;                         // CR fields that have cf<field>a/b locals
+    // The branch (at most 8 instructions on, none of them a label, another branch, a call, or a reader or writer of the field) that is the last reader of a compare's CR field.
+    const auto find_reader = [&](uint32_t from, uint32_t field) -> uint32_t {
+        uint32_t at = from + 4;
+        for (unsigned n = 0; n < 8 && at < f.end && !labels.count(at); at += 4, ++n) {
+            uint32_t word = 0;
+            if (!p.img.word(at, word)) return 0;
+            const ppc::OpInfo* o2 = ppc::decode(word);
+            if (!o2 || o2->kind == ppc::Kind::UNSUP) return 0;
+            if (o2->kind == ppc::Kind::BC || o2->kind == ppc::Kind::BCLR)
+                return !ppc::lk(word) && (ppc::bo(word) & 4) && !(ppc::bo(word) & 16) && (ppc::bi(word) >> 2) == field && !((*after)[(at - f.entry) / 4] & fld(field)) ? at : 0;
+            if (o2->kind == ppc::Kind::BR || o2->kind == ppc::Kind::BCCTR || o2->kind == ppc::Kind::SC) return 0;
+            const CrEffect fx = cr_effect(*o2, word);
+            if ((fx.use | fx.def) & fld(field)) return 0;
+        }
+        return 0;
+    };
     bool fuse_next = false;   // the previous compare was folded into this instruction's branch
+    std::deque<std::pair<std::string, bool>> queued;   // code (and whether the branch after it tests `fused`) for the next instructions, which an earlier fcmp already folded
     for (uint32_t pc = f.entry; pc < f.end; pc += 4) {
         uint32_t w = 0;
         p.img.word(pc, w);
         if (labels.count(pc)) o << "L_" << hex8(pc) << ":;\n";
         CrHints hints;
         if (fuse_next) { hints.fused = &fused; fuse_next = false; }
+        else if (const auto pf = pending_fuse.find(pc); pf != pending_fuse.end()) hints.fused = &pf->second;
         std::string code;
         const ppc::OpInfo* op = after ? ppc::decode(w) : nullptr;
-        if (op && op->kind != ppc::Kind::UNSUP && !(op->sub == ppc::Sub::X9 && ppc::oe(w)) && !((std::string(op->name) == "twi" || std::string(op->name) == "tw") && ppc::t(w) == 31)) {
+        if (!queued.empty()) {   // an instruction of a folded fcmp sequence
+            code = std::move(queued.front().first); fuse_next = queued.front().second; queued.pop_front();
+        } else if (op && op->kind != ppc::Kind::UNSUP && !(op->sub == ppc::Sub::X9 && ppc::oe(w)) && !((std::string(op->name) == "twi" || std::string(op->name) == "tw") && ppc::t(w) == 31)) {
             const uint8_t live_after = (*after)[(pc - f.entry) / 4];
             const std::string name = op->name;
             if (name == "cmp" || name == "cmpl" || name == "cmpi" || name == "cmpli") {
@@ -434,7 +484,88 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
                     fuse_next = true;
                     code = "/* cr" + num(field) + " compare is folded into the next branch */";
                     ++st.cr_fused_branches;
+                } else if (const uint32_t reader = find_reader(pc, field)) {
+                    // the compare feeds a branch a few instructions later (the scheduler moved work in between): keep the operands in locals
+                    const bool is_signed = name == "cmp" || name == "cmpi";
+                    const std::string var = "cf" + num(field), a = var + "a", b = var + "b";
+                    std::string rhs;
+                    if (name == "cmp" || name == "cmpl") rhs = "c.r[" + num(ppc::b(w)) + "]";
+                    else rhs = is_signed ? "uint32_t(" + num(ppc::simm(w)) + ")" : num(ppc::uimm(w)) + "u";
+                    cf_used |= fld(field);
+                    pending_fuse[reader] = is_signed ? FusedCmp{"int32_t(" + a + ")", "int32_t(" + b + ")"} : FusedCmp{a, b};
+                    code = a + " = c.r[" + num(ppc::a(w)) + "]; " + b + " = " + rhs + ";";
+                    ++st.cr_fused_branches;
                 }
+            } else if (name == "fcmpu" || name == "fcmpo") {
+                const uint32_t field = ppc::crfd(w);
+                uint32_t n1 = 0, n2 = 0;
+                const auto next_op = [&](uint32_t at, uint32_t& word) { return at < f.end && !labels.count(at) && p.img.word(at, word) ? ppc::decode(word) : nullptr; };
+                // a plain conditional branch on this field that is its last reader
+                const auto last_reader = [&](const ppc::OpInfo* b, uint32_t word, uint32_t at) {
+                    return b && (b->kind == ppc::Kind::BC || b->kind == ppc::Kind::BCLR) && !ppc::lk(word) && (ppc::bo(word) & 4) && !(ppc::bo(word) & 16) &&
+                           (ppc::bi(word) >> 2) == field && !((*after)[(at - f.entry) / 4] & fld(field));
+                };
+                const std::string lhs = "c.f[" + num(ppc::a(w)) + "]", rhs = "c.f[" + num(ppc::b(w)) + "]";
+                const ppc::OpInfo* o1 = next_op(pc + 4, n1);
+                const bool is_cror = o1 && std::string(o1->name) == "cror" && ppc::t(n1) == 4 * field + 2 && ppc::b(n1) == 4 * field + 2 && (ppc::a(n1) == 4 * field || ppc::a(n1) == 4 * field + 1);
+                const char* const cror_op = is_cror ? (ppc::a(n1) == 4 * field ? "<=" : ">=") : nullptr;
+                // [cror] mfcr rT; rlwinm[.] rT,rT,sh,31,31: the GPR gets one bit of the compare (the whole CR word is dead, rT is overwritten)
+                const uint32_t mfcr_at = pc + (is_cror ? 8 : 4);
+                uint32_t n3 = 0, n4 = 0;
+                const ppc::OpInfo* o3 = next_op(mfcr_at, n3);
+                const ppc::OpInfo* o4 = o3 && std::string(o3->name) == "mfcr" ? next_op(mfcr_at + 4, n4) : nullptr;
+                const uint32_t bit = (ppc::sh(n4) + 31) & 31;
+                const char* bit_op = nullptr;   // the comparison that bit holds
+                if (o4 && std::string(o4->name) == "rlwinm" && ppc::t(n3) == ppc::t(n4) && ppc::a(n4) == ppc::t(n3) && ppc::mb(n4) == 31 && ppc::me(n4) == 31 && bit / 4 == field) {
+                    if (cror_op) { if (bit == 4 * field + 2) bit_op = cror_op; }
+                    else if (bit % 4 == 0) bit_op = "<"; else if (bit % 4 == 1) bit_op = ">"; else if (bit % 4 == 2) bit_op = "==";
+                }
+                const bool bit_rc = bit_op && ppc::rc(n4);
+                const uint32_t last_at = mfcr_at + 4;   // the rlwinm
+                const bool field_dead = bit_op && ((bit_rc && field == 0) || !((*after)[(last_at - f.entry) / 4] & fld(field)));   // rlwinm. rewrites cr0 as a whole
+                if (!(live_after & fld(field))) { code = "/* cr" + num(field) + " is never read */"; ++st.cr_dead_compares; }
+                else if (bit_op && field_dead) {
+                    const std::string reg = "c.r[" + num(ppc::t(n3)) + "]";
+                    uint32_t nb = 0;
+                    const ppc::OpInfo* ob = bit_rc ? next_op(last_at + 4, nb) : nullptr;
+                    const bool cr0_live = (*after)[(last_at - f.entry) / 4] & fld(0);
+                    // the record form's only reader is the next branch: it tests the register directly
+                    const bool cr0_branch = ob && (ob->kind == ppc::Kind::BC || ob->kind == ppc::Kind::BCLR) && !ppc::lk(nb) && (ppc::bo(nb) & 4) && !(ppc::bo(nb) & 16) &&
+                                            (ppc::bi(nb) >> 2) == 0 && !((*after)[(last_at + 4 - f.entry) / 4] & fld(0));
+                    std::string tail = reg + " = uint32_t(" + lhs + " " + bit_op + " " + rhs + ");";
+                    if (bit_rc && !cr0_branch && cr0_live) tail += " ppc::cr0(c, " + reg + ");";
+                    if (cr0_branch) fused = {"int32_t(" + reg + ")", "0"};
+                    code = "/* cr" + num(field) + " compare is folded into the bit test below */";
+                    if (is_cror) queued.push_back({"/* cror is folded into the bit test below */", false});
+                    queued.push_back({"/* mfcr is folded into the bit test below */", false});
+                    queued.push_back({tail, cr0_branch});
+                    ++st.cr_fused_branches;
+                } else if (last_reader(o1, n1, pc + 4)) {
+                    fused = {lhs, rhs, true, nullptr};
+                    fuse_next = true;
+                    code = "/* cr" + num(field) + " compare is folded into the next branch */";
+                    ++st.cr_fused_branches;
+                } else if (is_cror) {
+                    // fcmp, cror EQ = LT|EQ (or GT|EQ), branch on EQ: one <= (or >=) test; the CR field is dead after the branch
+                    const ppc::OpInfo* o2 = next_op(pc + 8, n2);
+                    if (last_reader(o2, n2, pc + 8) && (ppc::bi(n2) & 3) == 2) {
+                        fused = {lhs, rhs, true, cror_op};
+                        queued.push_back({"/* cror is folded into the next branch */", true});
+                        code = "/* cr" + num(field) + " compare, cror and branch are folded into one test */";
+                        ++st.cr_fused_branches;
+                    }
+                }
+            } else if (op->rc && ppc::rc(w) && !fp_name(name) && (live_after & fld(0)) && rc_dest(name, w) >= 0 &&
+                       [&] {   // the record form's only reader is the next branch: it tests the result register directly
+                           uint32_t nb = 0;
+                           const ppc::OpInfo* ob = pc + 4 < f.end && !labels.count(pc + 4) && p.img.word(pc + 4, nb) ? ppc::decode(nb) : nullptr;
+                           return ob && (ob->kind == ppc::Kind::BC || ob->kind == ppc::Kind::BCLR) && !ppc::lk(nb) && (ppc::bo(nb) & 4) && !(ppc::bo(nb) & 16) &&
+                                  (ppc::bi(nb) >> 2) == 0 && !((*after)[(pc + 4 - f.entry) / 4] & fld(0));
+                       }()) {
+                hints.drop_rc = true;
+                fused = {"int32_t(c.r[" + num(rc_dest(name, w)) + "])", "0"};
+                fuse_next = true;
+                ++st.cr_dropped_records; ++st.cr_fused_branches;
             } else if (op->rc && ppc::rc(w) && !(live_after & fld(fp_name(name) ? 1 : 0))) {
                 hints.drop_rc = true;
                 ++st.cr_dropped_records;
@@ -460,7 +591,13 @@ std::string emit_function(const Program& p, const Function& f, EmitStats& st, co
         }
     }
     ++st.functions;
-    return o.str();
+    std::string text = o.str();
+    std::string decl;
+    for (uint32_t field = 0; field < 8; ++field)
+        if (cf_used & fld(field)) decl += "uint32_t cf" + num(field) + "a, cf" + num(field) + "b;";   // compare operands waiting for a later branch
+    const size_t marker = text.find("  /*CFDECL*/\n");
+    text.replace(marker, 13, decl.empty() ? "" : "  " + decl + "\n");
+    return text;
 }
 
 Output emit_program(const Program& p, size_t shard, EmitStats& st) {

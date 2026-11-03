@@ -4,6 +4,8 @@
 // tests/test_sdk_math_hle.cpp runs the original op sequences against these. Only the registers that carry results (f1) are written back;
 // the other floating-point scratch registers are caller-saved by the calling convention.
 #include "ppc_rt.h"
+#include "dispatch.h"
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -77,6 +79,84 @@ SDK_INLINE void put32(uint8_t* p, uint32_t v) { v = _byteswap_ulong(v); std::mem
 SDK_INLINE void put_f32(uint8_t* p, double v) { const float f = float(v); uint32_t b; std::memcpy(&b, &f, 4); put32(p, b); }   // stfs / one half of psq_st
 SDK_INLINE void put_f64(uint8_t* p, double v) { uint64_t b; std::memcpy(&b, &v, 8); b = _byteswap_uint64(b); std::memcpy(p, &b, 8); }   // stfd
 }  // namespace
+
+
+void hle_SaveGpr26(ppc::Ctx&);
+void hle_RestGpr26(ppc::Ctx&);
+namespace {
+const bool transpose4_off=std::getenv("UC_TRANSPOSE4_OFF")!=nullptr;
+#ifndef UC_TRACE_MEM
+bool transpose4_fast(Ctx& c) {
+    const uint32_t source=c.r[3],scratch=c.r[1]+8;
+    const auto ram64=[](uint32_t p) {
+        return p-0x80000000u<=0x01800000u-64 || p-0x90000000u<=0x04000000u-64;
+    };
+    if(transpose4_off || !ram64(source) || !ram64(scratch)
+        || (source<scratch+64 && scratch<source+64)) return false;
+    uint32_t words[16],transposed[16];
+    for(unsigned i=0;i<16;++i) {
+        words[i]=ppc::rd32_ram(c,source+4*i);
+        const uint32_t magnitude=words[i]&0x7FFFFFFFu;
+        // Preserve unusual float conversions through the original instruction path.
+        if(magnitude && (magnitude<0x00800000u || magnitude>=0x7F800000u)) return false;
+    }
+    constexpr unsigned registers[16]={26,27,28,29,30,31,12,11,10,9,8,7,6,5,4,0};
+    for(unsigned i=0;i<16;++i) {
+        transposed[i]=words[(i%4)*4+i/4];
+        float value; std::memcpy(&value,&transposed[i],4);
+        const unsigned reg=i==14?31:i==15?30:i;
+        c.f[reg]=value; c.ps1[reg]=value;
+    }
+    // This bounded core has no guest safe point; both complete store ranges are known.
+    uc::rollback_note_range(scratch,64);
+    gx::note_write_range(source,64);
+    for(unsigned i=0;i<16;++i) put32(ppc::hp(c,scratch)+4*i,transposed[i]);
+    for(unsigned i=0;i<16;++i) c.r[registers[i]]=transposed[i];
+    for(unsigned i=0;i<16;++i) put32(ppc::hp(c,source)+4*i,transposed[i]);
+    return true;
+}
+#endif
+void transpose4_core(Ctx& c) {
+#ifndef UC_TRACE_MEM
+    if(transpose4_fast(c)) return;
+#endif
+    op_lfs(c,30,3,60); op_lfs(c,31,3,44); op_lfs(c,13,3,28); op_lfs(c,12,3,12);
+    op_lfs(c,11,3,56); op_lfs(c,10,3,40); op_lfs(c,9,3,24); op_lfs(c,8,3,8);
+    op_lfs(c,7,3,52); op_lfs(c,6,3,36); op_lfs(c,5,3,20); op_lfs(c,4,3,4);
+    op_lfs(c,3,3,48); op_lfs(c,2,3,32); op_lfs(c,1,3,16); op_lfs(c,0,3,0);
+    op_stfs(c,1,1,12); op_stfs(c,0,1,8); op_lwz(c,27,1,12); op_stfs(c,2,1,16);
+    op_lwz(c,26,1,8); op_stfs(c,3,1,20); op_lwz(c,28,1,16); op_stfs(c,4,1,24);
+    op_lwz(c,29,1,20); op_stfs(c,5,1,28); op_lwz(c,30,1,24); op_stfs(c,6,1,32);
+    op_lwz(c,31,1,28); op_stfs(c,7,1,36); op_lwz(c,12,1,32); op_stfs(c,8,1,40);
+    op_lwz(c,11,1,36); op_stfs(c,9,1,44); op_lwz(c,10,1,40); op_stfs(c,10,1,48);
+    op_lwz(c,9,1,44); op_stfs(c,11,1,52); op_lwz(c,8,1,48); op_stfs(c,12,1,56);
+    op_lwz(c,7,1,52); op_stfs(c,13,1,60); op_lwz(c,6,1,56); op_stfs(c,31,1,64);
+    op_lwz(c,5,1,60); op_stfs(c,30,1,68); op_lwz(c,4,1,64); op_lwz(c,0,1,68);
+    op_stw(c,26,3,0); op_stw(c,27,3,4); op_stw(c,28,3,8); op_stw(c,29,3,12);
+    op_stw(c,30,3,16); op_stw(c,31,3,20); op_stw(c,12,3,24); op_stw(c,11,3,28);
+    op_stw(c,10,3,32); op_stw(c,9,3,36); op_stw(c,8,3,40); op_stw(c,7,3,44);
+    op_stw(c,6,3,48); op_stw(c,5,3,52); op_stw(c,4,3,56); op_stw(c,0,3,60);
+}
+}
+void hle_MatrixTranspose4Return(Ctx& c) {
+    ppc::op_lwz(c,0,1,132); ppc::op_mtspr(c,0,8); ppc::op_addi(c,1,1,128);
+}
+void hle_MatrixTranspose4Resume(Ctx& c) {
+    transpose4_core(c);
+    ppc::op_psq_l(c,31,1,120,0,0); ppc::op_lfd(c,31,1,112);
+    ppc::op_psq_l(c,30,1,104,0,0); ppc::op_lfd(c,30,1,96); ppc::op_addi(c,11,1,96);
+    c.lr=0x801380B4;
+    uc::invoke_hle<hle_RestGpr26>(c);
+    hle_MatrixTranspose4Return(c);
+}
+void hle_MatrixTranspose4(Ctx& c) {
+    ppc::op_stwu(c,1,1,-128); ppc::op_mfspr(c,0,8); ppc::op_stw(c,0,1,132);
+    ppc::op_stfd(c,31,1,112); ppc::op_psq_st(c,31,1,120,0,0);
+    ppc::op_stfd(c,30,1,96); ppc::op_psq_st(c,30,1,104,0,0); ppc::op_addi(c,11,1,96);
+    c.lr=0x80137F9C;
+    uc::invoke_hle<hle_SaveGpr26>(c);
+    hle_MatrixTranspose4Resume(c);
+}
 
 // void PSMTXIdentity(Mtx m)                          r3
 void hle_PSMTXIdentity(ppc::Ctx& c) {

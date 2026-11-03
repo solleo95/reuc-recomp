@@ -89,6 +89,53 @@ int main() {
         CHECK(t.find("UC_ENTER(0x80003100u);") != std::string::npos);
         CHECK(t.find("UC_ENTER") < t.find("L_80003100:;"));
     }
+    {   // fcmp + cror (LT|EQ or GT|EQ) + branch on EQ becomes one comparison when the branch is the last reader of the CR field
+        const uint32_t fcmpu = 0xFC011000u, cror_le = 0x4C401382u, cror_ge = 0x4C411382u, bne = 0x4082000Cu, beq = 0x4182000Cu;
+        auto fused = make_prog({fcmpu, cror_le, bne, li(3, 1), blr, li(3, 2), blr});
+        std::string t = uc::emit_function(fused, fused.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(fused));
+        CHECK(t.find("if (!((c.f[1] <= c.f[2])))") != std::string::npos);
+        CHECK(t.find("op_fcmpu") == std::string::npos && t.find("op_cror") == std::string::npos);
+        auto ge = make_prog({fcmpu, cror_ge, beq, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(ge, ge.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(ge));
+        CHECK(t.find("if ((c.f[1] >= c.f[2]))") != std::string::npos);
+        // a second reader of the field keeps the CR write
+        auto twice = make_prog({fcmpu, cror_le, bne, beq, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(twice, twice.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(twice));
+        CHECK(t.find("op_fcmpu") != std::string::npos && t.find("op_cror") != std::string::npos);
+        // a plain branch on LT/GT/EQ/unordered tests the operands directly
+        auto lt = make_prog({fcmpu, 0x4180000Cu /* blt cr0 */, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(lt, lt.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(lt));
+        CHECK(t.find("if ((c.f[1] < c.f[2]))") != std::string::npos && t.find("op_fcmpu") == std::string::npos);
+        // fcmp, cror, mfcr, rlwinm. (one bit of the compare as a 0/1 value), branch on that value
+        const uint32_t fcmpo = 0xFC010040u, mfcr0 = 0x7C000026u, rlwinm_dot = 0x54001FFFu;
+        auto bit = make_prog({fcmpo, cror_ge, mfcr0, rlwinm_dot, bne, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(bit, bit.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(bit));
+        CHECK(t.find("c.r[0] = uint32_t(c.f[1] >= c.f[0]);") != std::string::npos);
+        CHECK(t.find("!((int32_t(c.r[0]) == 0))") != std::string::npos);
+        CHECK(t.find("op_mfcr") == std::string::npos && t.find("op_rlwinm") == std::string::npos && t.find("cr0(") == std::string::npos);
+        // a second reader of cr0 keeps the record-form CR write
+        auto bit2 = make_prog({fcmpo, cror_ge, mfcr0, rlwinm_dot, 0x40820010u /* bne +16 */, 0x4182000Cu /* beq +12 */, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(bit2, bit2.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(bit2));
+        CHECK(t.find("c.r[0] = uint32_t(c.f[1] >= c.f[0]); ppc::cr0(c, c.r[0]);") != std::string::npos);
+        // an integer record form whose only reader is the next branch: the branch tests the result register, the CR write is gone
+        auto rec = make_prog({0x5460063Fu /* rlwinm. r0,r3,0,24,31 */, 0x4182000Cu /* beq cr0 */, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(rec, rec.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(rec));
+        CHECK(t.find("ppc::op_rlwinm(c, 3, 0, 0, 24, 31, false);") != std::string::npos);
+        CHECK(t.find("if ((int32_t(c.r[0]) == 0))") != std::string::npos);
+        // a compare whose branch comes a few instructions later keeps its operands in locals
+        const uint32_t cmpwi0 = 0x2C030000u /* cmpwi r3,0 */, stw0 = 0x90850000u /* stw r4,0(r5) */;
+        auto far = make_prog({cmpwi0, stw0, beq, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(far, far.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(far));
+        CHECK(t.find("uint32_t cf0a, cf0b;") != std::string::npos);
+        CHECK(t.find("cf0a = c.r[3]; cf0b = uint32_t(0);") != std::string::npos);
+        CHECK(t.find("(int32_t(cf0a) == int32_t(cf0b))") != std::string::npos && t.find("op_cmpi") == std::string::npos);
+        auto far2 = make_prog({cmpwi0, stw0, 0x40820010u /* bne +16 */, beq, li(3, 1), blr, li(3, 2), blr});   // a second reader of cr0
+        t = uc::emit_function(far2, far2.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(far2));
+        CHECK(t.find("op_cmpi") != std::string::npos && t.find("cf0a") == std::string::npos);
+        auto un = make_prog({fcmpu, 0x4183000Cu /* bso cr0: unordered */, li(3, 1), blr, li(3, 2), blr});
+        t = uc::emit_function(un, un.an.functions[0], st, &(const uc::CrLive&)uc::analyze_cr(un));
+        CHECK(t.find("c.f[1] != c.f[1] || c.f[2] != c.f[2]") != std::string::npos);
+    }
     {   // Resume after direct/indirect calls without splitting the original function.
         Asm a;
         const auto direct=a.emit(0);

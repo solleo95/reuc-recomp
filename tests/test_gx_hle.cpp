@@ -117,6 +117,7 @@ static void deterministic_detached(ppc::Ctx& initial,bool recorded) {
         CHECK(packets.depth().queued==0 && packets.depth().outstanding==0);
         const auto scene=packets.checkpoint();
         CHECK(scene && scene->state && scene->state->command->draws.size()==1);
+        const auto uniform_block=scene->state->command->draws.back().uniforms.block();
         const auto guest=scheduler.checkpoint();
         const auto gx=uc::gx_checkpoint();
         CHECK(guest && gx);
@@ -124,6 +125,7 @@ static void deterministic_detached(ppc::Ctx& initial,bool recorded) {
         const auto tick=uc::det_clock_checkpoint();
         scheduler.sleep_ticks(6075); draw_done();
         CHECK(calls==before+2 && packets.checkpoint()->state!=scene->state);
+        CHECK(packets.checkpoint()->state->command->draws.back().uniforms.block()==uniform_block);
         const auto advanced=uc::det_clock_checkpoint();
         scheduler.restore(*guest); uc::gx_restore(*gx);
         CHECK(uc::det_clock_checkpoint()==tick && packets.checkpoint()->state==scene->state);

@@ -34,6 +34,7 @@ uint64_t network_period_ticks=0; // Guest baton owns network updates.
 // Experimental --game-hz: the game clock waits for a wall-clock (virtual clock) deadline instead of a VI retrace and gets the real elapsed time as its timestep.
 // shortcut: coarse scheduler sleep (1 ms granularity) plus a 2 ms spin; replace with a waitable timer if the spin shows up in CPU use.
 void timed_wait() {
+    if(game_hz==uc::kUnpacedTestHz)return;
     uint64_t period=uc::kTimebaseHz/game_hz;
     // Deterministic runs have a virtual clock that cannot run faster: the test speed factor (x8 to skip to a scene) gives each step a longer timestep instead, i.e. fewer steps per game second (at most 50 ms, the clamp of timed_step).
     if(uc::deterministic_clock()) period=std::min<uint64_t>(period*uc::input_demo_speed(uc::clock_speed()),uc::ms_to_ticks(50));
@@ -94,8 +95,9 @@ void game_pacing_init(bool unlock,uint32_t hz) {
     step_scale=1.f; nominal_phase=0; nominal_ticks=1; owed_frames.clear(); sleep_carry.clear(); requested_mode=0;
     home_object=0; home_input={};
 }
-PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit,uint32_t game_hz_override,bool unlock_60fps) {
+PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit,uint32_t game_hz_override,bool unlock_60fps,bool test_unlimited) {
     if(game_hz_override) return {unlock_60fps,game_hz_override};
+    if(test_unlimited && fps_limit && *fps_limit==0)return {unlock_60fps,kUnpacedTestHz};
     if(!fps_limit) return {unlock_60fps,0};
     const uint32_t limit=*fps_limit;
     const uint32_t ceiling=kMaxFrameLimit ? kMaxFrameLimit : 480u;   // Linux: 90 (frame_limit_cap.h)

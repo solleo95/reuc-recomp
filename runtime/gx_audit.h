@@ -1,6 +1,7 @@
 #pragma once
 #include "ppc_rt.h"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <span>
 #include <vector>
@@ -23,6 +24,7 @@ struct GxAuditEntry {
     std::array<uint32_t, 8> first_gpr{};
     std::array<double, 6> first_fpr{};
 };
+extern std::atomic<bool> gx_audit_on;   // set by gx_audit_enable: the FIFO sink checks it inline instead of calling gx_audit_fifo_write for every write
 void gx_audit_enable();
 void gx_audit_enter(uint32_t address, const ppc::Ctx& ctx);
 void gx_audit_fifo_write(int size, uint32_t value);

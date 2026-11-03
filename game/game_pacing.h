@@ -4,9 +4,10 @@
 #include <memory>
 namespace uc {
 struct PacingMode { bool unlock_60=false; uint32_t game_hz=0; };
+inline constexpr uint32_t kUnpacedTestHz=UINT32_MAX; // Test-server only: timer stepping without a frame-wait deadline.
 // The game update rate a frame rate limit chooses (Options::fps_limit): 30 or less the original 30 Hz, 31..60 the retrace-locked 60 Hz,
 // above 60 or unlimited (0) a timer step at the limit (480 Hz ceiling); game_hz_override (--game-hz) wins.
-PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit, uint32_t game_hz_override, bool unlock_60fps);
+PacingMode pacing_for_limit(std::optional<uint32_t> fps_limit, uint32_t game_hz_override, bool unlock_60fps, bool test_unlimited=false);
 void game_pacing_set_mode(PacingMode);   // any thread; the guest picks it up at its next frame wait
 // Pause: the game clock steps by zero (its step and step_scale are 0), the game keeps looping and rendering. Any thread.
 void game_pacing_set_paused(bool);

@@ -98,6 +98,42 @@ class RegenerationNoticesTest(unittest.TestCase):
         self.assertTrue(leaf_hle.header_differs(old, old.replace("v1", "v2")))
 
 
+class NativeStoreBatchTest(unittest.TestCase):
+    def emit(self, stack_offset):
+        return leaf_hle.emit_native("80000010", "Leaf_80000010", [
+            ("stwu", ["1", "1", "-32"]),
+            ("stfs", ["0", "1", str(stack_offset)]),
+            ("stfs", ["0", "3", "0"]),
+        ], [])
+
+    def test_guarded_frame_and_output_are_noted_before_raw_stores(self):
+        text = self.emit(8)
+        self.assertIn("in_ram(c.r[1] - uint32_t(32), 32)", text)
+        self.assertLess(text.index("gx::note_write_range(c.r[3]"), text.index("using noted::st32"))
+        self.assertLess(text.index("if(!noted::per_store) uc::rollback_note_range(c.r[1] - 32, 32)"), text.index("st32(sp + 0"))
+        self.assertIn("using noted::std_", text)
+
+    def test_caller_frame_or_negative_stack_access_keeps_per_store_tracking(self):
+        for offset in (-4, 32):
+            with self.subTest(offset=offset):
+                self.assertNotIn("using noted::st32", self.emit(offset))
+
+    def test_caller_frame_reads_leave_own_frame_stores_eligible(self):
+        text = leaf_hle.emit_native("80000010", "Leaf_80000010", [
+            ("stwu", ["1", "1", "-32"]),
+            ("lfs", ["0", "1", "40"]),
+            ("stfs", ["0", "1", "8"]),
+            ("stfs", ["0", "3", "0"]),
+        ], [])
+        self.assertIn("using noted::st32", text)
+        self.assertIn("uc::rollback_note_range(c.r[1] - 32, 32)", text)
+
+    def test_output_only_leaf_needs_no_stack_note(self):
+        text = leaf_hle.emit_native("80000010", "Leaf_80000010", [("stfs", ["0", "3", "0"])], [])
+        self.assertIn("using noted::st32", text)
+        self.assertNotIn("uc::rollback_note_range", text)
+
+
 class NewAddressesTest(unittest.TestCase):
     def test_only_functions_missing_from_the_generated_file_are_new(self):
         generated = "void hle_Leaf_80064C34(ppc::Ctx& c) {\n}\nvoid hle_Leaf_80137BC4(ppc::Ctx& c) {\n}\n"

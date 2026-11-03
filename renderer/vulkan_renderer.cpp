@@ -469,7 +469,7 @@ VulkanRenderer::Texture VulkanRenderer::make_copy_texture(const std::shared_ptr<
         if(found!=recycled_copies_.end()-1) *found=std::move(recycled_copies_.back());
         recycled_copies_.pop_back();
     }
-    result.source=source; result.initialized=false;
+    result.source=source; result.initialized=false; result.mips_ready=false;
     return result;
 }
 void VulkanRenderer::record_texture_copy(VkCommandBuffer command, VkImage source, VkExtent2D extent, const std::array<uint32_t,4>& region, Texture& target, VkImageLayout before) {
@@ -482,6 +482,17 @@ void VulkanRenderer::record_texture_copy(VkCommandBuffer command, VkImage source
     copy.srcOffsets[1]={std::max(copy.srcOffsets[0].x+1,int32_t(uint64_t(x+width)*extent.width/640)),std::max(copy.srcOffsets[0].y+1,int32_t(uint64_t(y+height)*extent.height/480)),1};
     copy.dstOffsets[1]={int32_t(target.extent.width),int32_t(target.extent.height),1};
     vkCmdBlitImage(command,source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy,VK_FILTER_LINEAR);
+    barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels);
+    target.mips_ready=target.mip_levels==1;
+}
+void VulkanRenderer::record_copy_mips(VkCommandBuffer command,Texture& target) {
+    if(target.mips_ready) return;
+    // A copy may be read at LOD0 for many packets before a mip-filtered draw first needs its chain.
+    barrier(command,target.image,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT|VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,target.mip_levels);
     for(uint32_t i=1;i<target.mip_levels;++i) {
         barrier(command,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_TRANSFER_BIT,VK_ACCESS_2_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1,i-1);
         VkImageBlit mip{}; mip.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i-1,0,1}; mip.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,i,0,1};
@@ -504,6 +515,7 @@ void VulkanRenderer::record_texture_copy(VkCommandBuffer command, VkImage source
     }
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dependency.imageMemoryBarrierCount=count; dependency.pImageMemoryBarriers=ready;
     vkCmdPipelineBarrier2(command,&dependency);
+    target.mips_ready=true;
 }
 void VulkanRenderer::recycle_copy_texture(Texture& texture) {
     const double factor=std::max(efb_extent_.width/640.0,efb_extent_.height/480.0);
@@ -561,7 +573,14 @@ PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_p
     for(size_t i=0;i<material.stages;++i) {
         const auto& stage=material.stage[i];
         key[3+i*4]=stage.color; key[4+i*4]=stage.alpha; key[5+i*4]=stage.order; key[6+i*4]=stage.konst;
+        key[70+i]=draw.uniforms->ind_cmd[i];
     }
+    if (std::any_of(key.begin()+70,key.begin()+86,[](uint32_t word){return word!=0;}))
+        std::copy(draw.uniforms->indirect.begin()+9,draw.uniforms->indirect.end(),key.begin()+86);
+    key[89]=draw.uniforms->pixel[0];
+    std::copy(draw.uniforms->channels.begin(),draw.uniforms->channels.end(),key.begin()+90);
+    key[94]=draw.uniforms->pixel[3];
+    key[95]=fog_control(draw.uniforms->fog[3]);
     return key;
 }
 VulkanRenderer::PipelineChoice VulkanRenderer::pipeline_for(const PipelineKey& requested) {
@@ -743,9 +762,18 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
         stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vertex; stages[0].pName = "vertexMain";
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragment; stages[1].pName = "fragmentMain";
-        std::array<VkSpecializationMapEntry,67> spec_entries{};
-        for(uint32_t i=0;i<spec_entries.size();++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
-        VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),67*sizeof(uint32_t),key.data()+1};
+        std::array<VkSpecializationMapEntry,94> spec_entries{};
+        for(uint32_t i=0;i<67;++i) spec_entries[i]={i,i*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        for(uint32_t i=0;i<16;++i) spec_entries[67+i]={67+i,(69+i)*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        for(uint32_t i=0;i<3;++i) spec_entries[83+i]={83+i,(85+i)*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        spec_entries[86]={86,88*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        for(uint32_t i=0;i<5;++i) spec_entries[87+i]={87+i,(89+i)*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        spec_entries[92]={92,94*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        spec_entries[93]={93,95*uint32_t(sizeof(uint32_t)),sizeof(uint32_t)};
+        std::array<uint32_t,96> spec_words{};
+        std::copy(key.begin()+1,key.end(),spec_words.begin());
+        spec_words.back()=discard_zero_alpha(key);
+        VkSpecializationInfo specialization{uint32_t(spec_entries.size()),spec_entries.data(),sizeof(spec_words),spec_words.data()};
         if (!uber) stages[1].pSpecializationInfo=&specialization;
         static_assert(sizeof(gx::GpuMeshVertex)==108 && sizeof(gx::Projection)==64);
         VkVertexInputBindingDescription binding; std::array<VkVertexInputAttributeDescription,14> attributes;
@@ -798,10 +826,18 @@ void VulkanRenderer::load_pipeline_cache() {
     vk_check(vkCreatePipelineCache(device,&info,nullptr,&pipeline_cache_),"pipeline cache");   // the driver ignores data from another driver or version
     pipeline_cache_loaded_=data.size();
     std::fprintf(stderr,"[pipeline] disk cache bytes=%zu\n",data.size());
-    for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"})
-        for (const auto& recorded:load_pipeline_keys(cache_dir_/name))
-            if (const auto key=static_key(recorded); valid_pipeline_key(key,logic_ops_) && known_keys_.insert(key).second) warm_keys_.push_back(key);
-    std::fprintf(stderr,"[pipeline] known pipeline keys=%zu\n",warm_keys_.size());
+    for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"}) {
+        bool legacy=false;
+        for (const auto& recorded:load_pipeline_keys(cache_dir_/name,&legacy)) {
+            const auto key=static_key(recorded);
+            if (!valid_pipeline_key(key,logic_ops_)) continue;
+            // A shorter-record file lacks the specialization words (alpha compare, lighting, fog, indirect): its zero-extended keys match no real draw, so compiling them only
+            // doubles the loading screen. They still tell the ubershader closure which blend, depth and topology states exist.
+            if (legacy) legacy_keys_.push_back(key);
+            else if (known_keys_.insert(key).second) warm_keys_.push_back(key);
+        }
+    }
+    std::fprintf(stderr,"[pipeline] known pipeline keys=%zu (legacy seed keys kept for the ubershader closure only: %zu)\n",warm_keys_.size(),legacy_keys_.size());
 }
 void VulkanRenderer::save_pipeline_cache() {
     static std::mutex saving;   // compile threads and shutdown may save concurrently
@@ -861,7 +897,8 @@ void VulkanRenderer::warm_pipelines(const std::function<void(size_t,size_t)>& pr
     const auto begin=std::chrono::steady_clock::now();
     std::unique_lock lock(pipelines_mutex_);
     compile_limit_=compilers_.size(); compile_cv_.notify_all();   // nothing else runs on the loading screen: every thread compiles
-    for (const auto& key:uber_key_closure(warm_keys_)) queue_pipeline(key,true);   // the ubershader variants first: they cover any key still missing
+    auto closure_keys=warm_keys_; closure_keys.insert(closure_keys.end(),legacy_keys_.begin(),legacy_keys_.end());
+    for (const auto& key:uber_key_closure(closure_keys)) queue_pipeline(key,true);   // the ubershader variants first: they cover any key still missing
     for (const auto& key:warm_keys_) queue_pipeline(key,false);
     const size_t base=jobs_done_, total=compile_queue_.size()+compiling_;
     while (!compile_queue_.empty() || compiling_) {
@@ -2028,6 +2065,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         for (size_t i=0;i<record_uniforms.size();++i) std::memcpy(lights+i*kLightsBytes,record_uniforms[i]->lights.data(),kLightsBytes);
         rt_record_count_=uint32_t(total);
     }
+    std::vector<Texture*> mip_copies;
     if (!packet.draws.empty()) {
         if (packet.draws.size()>UINT32_MAX) throw std::invalid_argument("too many native texture descriptors");
         if(packet.draws.size()>UINT32_MAX/8) throw std::invalid_argument("native texture descriptor count overflows");
@@ -2058,6 +2096,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 if(*chosen && (*chosen)->gpu_only) {
                     auto copied=copy_textures_.find(chosen->get());
                     if(copied!=copy_textures_.end() && copied->second.initialized) {
+                        if(((packet.draws[i].texture_wrap[map]>>5)&3)!=0 &&
+                           std::find(mip_copies.begin(),mip_copies.end(),&copied->second)==mip_copies.end()) mip_copies.push_back(&copied->second);
                         slot.copy_sources.push_back(*chosen);
                         image[map]={VK_NULL_HANDLE,copied->second.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                         continue;
@@ -2184,6 +2224,8 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         return sites;
     }();
     auto record_pass=[&](const PassTarget& target, size_t first, size_t last, bool scene) {
+    // Recheck after the scene upscale: restoring the scene copy rewrites its base level.
+    for(auto* texture:mip_copies) record_copy_mips(slot.command,*texture);
     const bool initialized=*target.initialized;
     barrier(slot.command, target.color, initialized ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             initialized ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE, initialized ? VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT : 0,
@@ -2255,6 +2297,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             const uint32_t state=((key[0]>>14)&3)|((key[68]&31)<<2)|(decal<<7);
             if (state==bound_state) return;
             bound_state=state;
+            vkCmdSetDepthBias(slot.command,decal ? float(kDecalDepthBias) : 0.f,0.f,decal ? kDecalSlopeBias : 0.f);
             vkCmdSetCullMode(slot.command,cull_mode(key));
             vkCmdSetDepthTestEnable(slot.command,key[68]&1);
             vkCmdSetDepthWriteEnable(slot.command,(key[68]>>4)&1);
@@ -2297,7 +2340,6 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 static const bool log_aim=std::getenv("UC_AIM_LOG")!=nullptr;   // diagnostics: one line per shifted reticle draw (consumed, latest, shift in aim units)
                 if (log_aim) std::fprintf(stderr,"[aim] t=%.4f consumed %.4f %.4f latest %.4f %.4f callsite %08X\n",std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),from[0],from[1],latest[0],latest[1],draw.callsite);
                 if (dx!=0 || dy!=0) { late_shift[0]=dx*2/draw_viewport.width; late_shift[1]=dy*2/draw_viewport.height; draw_scissor=scissor; ++late_aim_draws_; }
-            vkCmdSetDepthBias(slot.command,decal ? float(kDecalDepthBias) : 0.f,0.f,decal ? kDecalSlopeBias : 0.f);
             }
             vkCmdSetViewport(slot.command,0,1,&draw_viewport); vkCmdSetScissor(slot.command,0,1,&draw_scissor);
             const Buffer& vertex_buffer=info.vertices ? *info.vertices : slot.vertices;
