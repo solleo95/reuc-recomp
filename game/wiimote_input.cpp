@@ -27,13 +27,18 @@ void WiimoteInput::set_link(bool connected,const std::string& error) {
     connected_=connected; error_=error;
     if(!connected) { events_.clear(); state_=WiiState{}; }
 }
+bool WiimoteInput::send(WiiTransport& link,std::span<const uint8_t> report) {
+    std::vector<uint8_t> copy(report.begin(),report.end());
+    if(copy.size()>1 && rumble_) copy[1]|=1;   // every output report carries the motor in bit 0 of its first byte: one that leaves it clear would stop the motor
+    return link.write(copy);
+}
 bool WiimoteInput::handshake(WiiTransport& link) {
     for(const auto& step:wii_init_sequence()) {
-        if(!link.write(step.report)) return false;
+        if(!send(link,step.report)) return false;
         if(!nap(step.delay_ms)) return false;
     }
     const auto request=wii_status_request();
-    return link.write(request);   // the answer says whether a nunchuk is plugged in
+    return send(link,request);   // the answer says whether a nunchuk is plugged in
 }
 void WiimoteInput::publish(WiiState state,bool extension,WiiState& previous,WiiSwing& swing) {
     if(!extension) {   // the remote did not say a nunchuk is plugged in: bytes that look like one are not
@@ -60,7 +65,7 @@ void WiimoteInput::run() {
     auto next_try=std::chrono::steady_clock::now();
     WiiState previous;
     WiiSwing swing;
-    bool extension=false,announced=false;
+    bool extension=false,announced=false,motor=false;   // motor: what the remote was last told
     auto last_report=std::chrono::steady_clock::now();
     while(!stop_) {
         if(!link) {
@@ -69,6 +74,7 @@ void WiimoteInput::run() {
             std::string error;
             try { link=opener_(error); } catch(const std::exception& failure) { error=failure.what(); link.reset(); }
             if(!link) { set_link(false,error); continue; }
+            motor=rumble_;   // the set-up reports carry the wish of this moment; a change since is sent by the loop below
             if(!handshake(*link)) {
                 link.reset();
                 if(!stop_) set_link(false,"The Wii Remote did not accept its set-up (another program may be using it)");
@@ -78,6 +84,11 @@ void WiimoteInput::run() {
             last_report=std::chrono::steady_clock::now();
         }
         if(!enabled_) { link.reset(); set_link(false,""); continue; }
+        if(rumble_!=motor) {
+            motor=rumble_;
+            const std::array<uint8_t,2> report{0x10,uint8_t(motor)};
+            if(!send(*link,report)) { link.reset(); set_link(false,"The Wii Remote connection was lost"); continue; }
+        }
         std::vector<uint8_t> input;
         if(!link->read(input,20)) { link.reset(); set_link(false,"The Wii Remote connection was lost"); continue; }
         if(input.empty()) {
@@ -91,16 +102,17 @@ void WiimoteInput::run() {
         if(!announced) { announced=true; set_link(true,""); }   // connected is what has been heard, not what has been opened
         if(const auto status=wii_parse_status(input)) {   // a plugged or unplugged extension reverts the data mode: set it again
             bool sent=true;
-            if(status->extension && !extension) for(const auto& step:wii_extension_steps()) { sent=sent && link->write(step.report); nap(step.delay_ms); }
+            if(status->extension && !extension) for(const auto& step:wii_extension_steps()) { sent=sent && send(*link,step.report); nap(step.delay_ms); }
             extension=status->extension;
             const auto mode=wii_reporting_report(0x37);
-            sent=sent && link->write(mode);
+            sent=sent && send(*link,mode);
             if(!sent) { link.reset(); set_link(false,"The Wii Remote connection was lost"); }
             continue;
         }
         WiiState state;
         if(wii_parse_report(input,state)) publish(state,extension,previous,swing);
     }
+    if(link && motor) { rumble_=false; const std::array<uint8_t,2> off{0x10,0}; send(*link,off); }   // the motor of a remote that outlives the game must not stay on
 }
 void WiimoteInput::capture_sink(std::function<void(PhysicalInput,bool)> sink) {
     std::lock_guard lock(mutex_);

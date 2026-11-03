@@ -231,6 +231,29 @@ static void the_capture_sink_hears_buttons_even_when_inactive() {
     CHECK(wait_for([&]{ rig.update(false); return !heard.empty(); }));
     CHECK(heard[0].first==wii(WiiButton::plus) && heard[0].second && rig.calls.buttons.empty());
 }
+static void the_motor_follows_rumble_and_survives_later_reports() {
+    Rig rig;
+    CHECK(wait_for([&]{ return rig.connected(); }));
+    const auto last_write=[&] { std::lock_guard lock(rig.remote->m); return rig.remote->written.back(); };
+    rig.input->rumble(true);
+    CHECK(wait_for([&]{ return last_write()==std::vector<uint8_t>{0x10,0x01}; }));
+    rig.input->rumble(true); std::this_thread::sleep_for(50ms);
+    const auto before=rig.remote->writes();
+    rig.remote->push({0x20,0,0,0x02,0,0,0xC0});                                  // a status report makes the thread set the data mode again: that write must not stop the motor
+    CHECK(wait_for([&]{ return last_write()==std::vector<uint8_t>{0x12,0x05,0x37}; }));
+    CHECK(rig.remote->writes()>before);
+    rig.input->rumble(false);
+    CHECK(wait_for([&]{ return last_write()==std::vector<uint8_t>{0x10,0x00}; }));
+}
+static void a_remote_found_while_rumbling_starts_with_the_motor_on() {
+    Rig rig(false);
+    rig.input->rumble(true);
+    { std::lock_guard lock(rig.opener.m); rig.opener.remotes.push_back(rig.remote); }
+    CHECK(wait_for([&]{ std::lock_guard lock(rig.remote->m); return !rig.remote->written.empty(); }));
+    CHECK(wait_for([&]{ std::lock_guard lock(rig.remote->m); return rig.remote->written.back()[1]&1; }));   // every report it was sent has the motor bit, the last one included
+    std::lock_guard lock(rig.remote->m);
+    for(const auto& sent:rig.remote->written) CHECK(sent[1]&1);
+}
 static void the_windows_enumeration_survives_whatever_is_plugged_in() {
     // Whatever this machine has: no remote (null, no error), a remote (a transport), or one that will not open (null and a reason). Never a crash or a hang.
     std::string error;
@@ -256,4 +279,6 @@ int main() {
     inactive_and_disabled_let_go_once();
     a_disabled_remote_is_not_looked_for();
     the_capture_sink_hears_buttons_even_when_inactive();
+    the_motor_follows_rumble_and_survives_later_reports();
+    a_remote_found_while_rumbling_starts_with_the_motor_on();
 }

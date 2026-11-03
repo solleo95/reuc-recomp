@@ -30,6 +30,7 @@ inline EffectLevel platform_ambient_occlusion(EffectLevel level) { return level;
 inline EffectLevel platform_ambient_occlusion(EffectLevel) { return EffectLevel::off; }
 #endif
 constexpr uint32_t kMouseSensitivityMin=10, kMouseSensitivityMax=300;
+constexpr uint32_t kRumbleMax=100;
 constexpr uint32_t kReticleDotMin=25, kReticleDotMax=300, kReticleTailMin=25, kReticleTailMax=400;   // percent
 // How the aim reticle looks (the in-game menu's Reticle tab; graphics.reticle_* in config.json). The size slider stays graphics.crosshair_scale.
 struct ReticleOptions {
@@ -56,6 +57,7 @@ struct Options {
     uint32_t bloom_strength=100;   // percent of the base mix, 0..200 (graphics.bloom_strength); 0 equals off
     BloomSettings bloom_settings() const { return {bloom,bloom_strength}; }
     uint32_t mouse_sensitivity=100;   // percent of the raw mouse motion the aim follows, kMouseSensitivityMin..Max (config mouse_sensitivity)
+    uint32_t rumble=100;              // percent of full strength the pads vibrate with, 0..kRumbleMax (config rumble); 0 is off (the Wii Remote's motor has no strength: it runs unless this is 0)
 #ifdef _WIN32
     PointerMode pointer=PointerMode::relative;
 #else

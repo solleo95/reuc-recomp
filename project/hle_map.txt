@@ -224,6 +224,8 @@ KPADRead
 @802882C4 GXSetColorUpdate
 @802882F0 GXSetAlphaUpdate
 KPADEnableMotor Nop
+# The game's rumble (WPADControlMotor, called by the rumble step and the home menu): the host plays it on the pads and the Wii Remote (runtime/native_input.cpp).
+WPADControlMotor
 
 # Native action binding getter; exact scoped Grenade recognition belongs to host actions.
 @8003FB98 GameActionMask

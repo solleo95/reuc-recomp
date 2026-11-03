@@ -170,7 +170,7 @@ std::string binding_name(const uc::Binding& binding) {
     return text+physical_name(binding.input);
 }
 bool same_options(const uc::Options& a,const uc::Options& b) {
-    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity && a.pointer==b.pointer && a.pointer_smoothing==b.pointer_smoothing && a.reload_zone==b.reload_zone && a.reload_zone_size==b.reload_zone_size && a.hud_position==b.hud_position
+    return a.game==b.game && a.renderer_backend==b.renderer_backend && a.render_scale==b.render_scale && a.window_mode==b.window_mode && a.width==b.width && a.height==b.height && a.skip_intro==b.skip_intro && a.skip_tutorials==b.skip_tutorials && a.logs==b.logs && a.fps_limit==b.fps_limit && a.prompt_style==b.prompt_style && a.bloom==b.bloom && a.bloom_strength==b.bloom_strength && a.mouse_sensitivity==b.mouse_sensitivity && a.rumble==b.rumble && a.pointer==b.pointer && a.pointer_smoothing==b.pointer_smoothing && a.reload_zone==b.reload_zone && a.reload_zone_size==b.reload_zone_size && a.hud_position==b.hud_position
         && a.upscaler==b.upscaler && a.upscale_mode==b.upscale_mode && a.sharpening==b.sharpening && a.sharpness==b.sharpness
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad && a.wiimote==b.wiimote;
 }
@@ -1030,7 +1030,7 @@ int run(int argc,wchar_t** argv,ResumeStartup* resume) {
         } else if(page==3) {
             push_font(ui.sans,22);
             pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;pad_panel.combo_unit=unit;
-            if(shown("pad_panel"))uc::gamepad_tab(pad_panel,options.gamepad,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
+            if(shown("pad_panel"))uc::gamepad_tab(pad_panel,options.gamepad,options.rumble,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
             wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
             if(shown("wiimote"))uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
             ImGui::Dummy({0,20*unit});ImGui::PopFont();

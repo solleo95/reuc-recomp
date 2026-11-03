@@ -46,7 +46,9 @@ The game also talks to a Wii Remote directly: the pointer from its infrared came
 
 **Layout by default.** Point to aim; **B** (the trigger) fires, **A** interacts, **1** reloads, **2** throws a grenade, **+** and **-** (or the D-pad left and right) change weapon, **Home** pauses; with a Nunchuk the stick moves the camera, **Z** is the knife and **C** reloads. Hold **A** and swing the remote for the knife, shake the remote for the shake prompts. In the game's menus **A** confirms and **B** goes back.
 
-**Not supported:** the Motion Plus gyro, rumble, the speaker, a second remote, the Classic Controller.
+**Rumble:** the game's vibration runs the remote's motor while you play with the remote (the Vibration setting at 0% turns it off; the motor has no strength).
+
+**Not supported:** the Motion Plus gyro, the speaker, a second remote, the Classic Controller.
 
 The Wii Remote code was written from the Wii Remote's published protocol and tested with a simulated remote only, not with real hardware. The signs of the swing directions and the pointer range may need a small correction: please report what you see.
 

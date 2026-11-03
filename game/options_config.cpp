@@ -33,6 +33,11 @@ Options options_from_config(const ConfigDocument& document) {
         if(!value.is_number_unsigned() || value.get<uint64_t>()<kMouseSensitivityMin || value.get<uint64_t>()>kMouseSensitivityMax)invalid("mouse_sensitivity must be 10..300");
         options.mouse_sensitivity=value.get<uint32_t>();
     }
+    if(root.contains("rumble")) {
+        const auto& value=root["rumble"];
+        if(!value.is_number_unsigned() || value.get<uint64_t>()>kRumbleMax)invalid("rumble must be 0..100");
+        options.rumble=value.get<uint32_t>();
+    }
     if(root.contains("pointer")) {
         const auto& value=root["pointer"];
         if(!value.is_string() || (value.get<std::string>()!="relative" && value.get<std::string>()!="absolute"))invalid("pointer must be relative or absolute");
@@ -232,6 +237,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     replacement.properties["skip_tutorials"]=options.skip_tutorials;
     replacement.properties["logs"]=options.logs;
     replacement.properties["mouse_sensitivity"]=options.mouse_sensitivity;
+    replacement.properties["rumble"]=options.rumble;
     replacement.properties["pointer"]=options.pointer==PointerMode::absolute ? "absolute" : "relative";
     replacement.properties["pointer_smoothing"]=options.pointer_smoothing;
     replacement.properties["reload_zone"]=options.reload_zone==ReloadZone::corner ? "corner" : options.reload_zone==ReloadZone::edge ? "edge" : "off";

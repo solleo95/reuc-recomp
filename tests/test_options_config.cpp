@@ -58,6 +58,10 @@ int main() {
     options.mouse_sensitivity=250;uc::store_options(document,options);
     CHECK(document.properties["mouse_sensitivity"]==250 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).mouse_sensitivity==250);
     options.mouse_sensitivity=100;uc::store_options(document,options);
+    CHECK(uc::options_from_config(uc::parse_config(R"({})")).rumble==100);   // absent: full strength
+    options.rumble=0;uc::store_options(document,options);
+    CHECK(document.properties["rumble"]==0 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).rumble==0);
+    options.rumble=100;uc::store_options(document,options);
     {   // the pointing device and the reload zone: absent means the relative mouse and no zone
         const auto defaults=uc::options_from_config(uc::parse_config(R"({})"));
         CHECK(defaults.pointer==uc::PointerMode::relative && defaults.pointer_smoothing==0);
@@ -242,6 +246,7 @@ int main() {
         R"({"graphics":{"frame_generation_multiplier":1}})",R"({"graphics":{"frame_generation_multiplier":7}})",R"({"graphics":{"frame_generation_multiplier":2.5}})",
         R"({"graphics":{"bloom_strength":201}})",R"({"graphics":{"bloom_strength":-1}})",R"({"graphics":{"bloom_strength":50.5}})",R"({"graphics":{"bloom_strength":"x"}})",
         R"({"mouse_sensitivity":9})",R"({"mouse_sensitivity":301})",R"({"mouse_sensitivity":-5})",R"({"mouse_sensitivity":99.5})",R"({"mouse_sensitivity":"x"})",
+        R"({"rumble":101})",R"({"rumble":-1})",R"({"rumble":50.5})",R"({"rumble":"x"})",R"({"rumble":true})",
         R"({"pointer":"tablet"})",R"({"pointer":1})",R"({"pointer_smoothing":91})",R"({"pointer_smoothing":-1})",R"({"pointer_smoothing":"x"})",
         R"({"reload_zone":"middle"})",R"({"reload_zone":true})",R"({"reload_zone_size":0})",R"({"reload_zone_size":21})",R"({"reload_zone_size":2.5})",
         R"({"graphics":{"crosshair_scale":101}})",R"({"graphics":{"crosshair_scale":-1}})",R"({"graphics":{"crosshair_scale":50.5}})",

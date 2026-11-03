@@ -20,7 +20,8 @@ void LiveSettings::apply(const Options& next) {
     }
     const bool wiimote=next.wiimote!=was.wiimote;
     const bool pointer=next.pointer!=was.pointer || next.pointer_smoothing!=was.pointer_smoothing, zone=next.reload_zone!=was.reload_zone || next.reload_zone_size!=was.reload_zone_size;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle && !pointer && !zone && !wiimote) return;
+    const bool rumble=next.rumble!=was.rumble;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle && !pointer && !zone && !wiimote && !rumble) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -31,6 +32,7 @@ void LiveSettings::apply(const Options& next) {
     if(crosshair) targets_.crosshair_scale(next.crosshair_scale);
     if(reticle) targets_.reticle(next.reticle);
     if(sensitivity) targets_.mouse_sensitivity(next.mouse_sensitivity);
+    if(rumble) targets_.rumble(next.rumble);
     if(pointer) targets_.pointer(next.pointer,next.pointer_smoothing);
     if(zone) targets_.reload_zone(next.reload_zone,next.reload_zone_size);
     if(hud) targets_.hud_position(next.hud_position);

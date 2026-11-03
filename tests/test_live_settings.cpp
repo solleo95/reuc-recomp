@@ -22,6 +22,8 @@ int main() {
     targets.crosshair_scale=[&](uint32_t){ calls.push_back("crosshair_scale"); };
     targets.reticle=[&](const uc::ReticleOptions&){ calls.push_back("reticle"); };
     targets.mouse_sensitivity=[&](uint32_t){ calls.push_back("mouse_sensitivity"); };
+    uint32_t last_rumble=0;
+    targets.rumble=[&](uint32_t percent){ calls.push_back("rumble"); last_rumble=percent; };
     targets.pointer=[&](uc::PointerMode,uint32_t){ calls.push_back("pointer"); };
     targets.reload_zone=[&](uc::ReloadZone,uint32_t){ calls.push_back("reload_zone"); };
     targets.hud_position=[&](uc::HudPosition){ calls.push_back("hud_position"); };
@@ -57,6 +59,10 @@ int main() {
     {   // the mouse sensitivity alone reaches only its target
         calls.clear(); auto next=live.options(); next.mouse_sensitivity=180; live.apply(next);
         CHECK((calls==std::vector<std::string>{"mouse_sensitivity"}) && saved().mouse_sensitivity==180 && !live.error());
+    }
+    {   // the vibration strength alone reaches only its target and is saved
+        calls.clear(); auto next=live.options(); next.rumble=40; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"rumble"}) && last_rumble==40 && saved().rumble==40 && !live.error());
     }
     {   // the pointing device and its smoothing reach only the pointer target, once; the reload zone only its own
         calls.clear(); auto next=live.options(); next.pointer=uc::PointerMode::absolute; next.pointer_smoothing=20; live.apply(next);

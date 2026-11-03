@@ -383,7 +383,7 @@ void SettingsMenu::controllers_tab(float unit) {
     pad_seen_=options.gamepad.bindings;
     pad_panel_.heading=fonts_.serif; pad_panel_.heading_size=heading_size_; pad_panel_.control_width=.75f;   // the menu's own title font and control width
     const PadStatus status=pad_status_ ? pad_status_() : PadStatus{};
-    if(gamepad_tab(pad_panel_,options.gamepad,pad_editor_,status,unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+    if(gamepad_tab(pad_panel_,options.gamepad,options.rumble,pad_editor_,status,unit,[this](std::string_view key) { return tr(key); })) pending_=options;
     if(!wii_editor_.capturing() && options.wiimote.bindings!=wii_editor_.bindings() && options.wiimote.bindings!=wii_seen_) wii_editor_=BindingEditor(options.wiimote.bindings,BindingTable::wiimote);
     wii_seen_=options.wiimote.bindings;
     wii_panel_.heading=fonts_.serif; wii_panel_.heading_size=heading_size_; wii_panel_.control_width=.75f;

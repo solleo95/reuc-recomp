@@ -14,7 +14,8 @@ struct SettingsTargets {
     std::function<void(uint32_t)> crosshair_scale;             // percent 0..100
     std::function<void(const ReticleOptions&)> reticle;        // the reticle's hidden parts, colours, dot size, wake length and partner opacity
     std::function<void(uint32_t)> mouse_sensitivity;           // percent kMouseSensitivityMin..Max
-    std::function<void(PointerMode,uint32_t)> pointer;         // the pointing device and its smoothing percent
+    std::function<void(uint32_t)> rumble;                      // percent 0..kRumbleMax
+    std::function<void(PointerMode,uint32_t)> pointer;        // the pointing device and its smoothing percent
     std::function<void(ReloadZone,uint32_t)> reload_zone;      // where a shot reloads, and its size in percent
     std::function<void(HudPosition)> hud_position;            // where the interface sits on a picture wider than 16:9
     std::function<void(const GraphicsEffects&)> effects;       // anisotropic filtering and the later effects

@@ -116,6 +116,19 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         tabs->NextSelectedTabId=tabs->Tabs[4].ID; frame(); frame();   // the last tab scrolls into view in a narrow menu (like the mod tabs): it is selected directly here
         CHECK(tabs->SelectedTabId==tabs->Tabs[4].ID);
         capture("controllers");
+        {   // the vibration slider sits in this tab, under the Gamepad button; a click near its left end lowers the strength
+            window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);
+            const auto rumble_slider=window->GetID("##rumble");
+            window->IDStack.pop_back(); window->IDStack.pop_back();
+            CHECK(live.options().rumble==100);
+            bool rumble_found=false;
+            for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
+                io.AddMousePosEvent(window->Pos.x+90,y); frame();
+                if(context.HoveredId==rumble_slider) {click(io.MousePos);rumble_found=true;break;}
+            }
+            CHECK(rumble_found);
+            menu.commit(); CHECK(live.options().rumble<100 && !live.error());
+        }
         window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);   // the tab bar and the selected tab are on the ID stack of the tab's widgets
         const auto gamepad_button=window->GetID(std::string(uc::launcher::text("ru","gamepad")).c_str());   // the menu runs in Russian here
         window->IDStack.pop_back(); window->IDStack.pop_back();
@@ -300,7 +313,7 @@ int main(int argc,char** argv) {    const bool gpu=argc==4 && std::string_view(a
     uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double){}; targets.upscaling=[](const uc::Options&){};
-    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.reticle=[](const uc::ReticleOptions&){}; targets.mouse_sensitivity=[](uint32_t){}; targets.pointer=[](uc::PointerMode,uint32_t){}; targets.reload_zone=[](uc::ReloadZone,uint32_t){}; targets.hud_position=[](uc::HudPosition){}; targets.effects=[](const uc::GraphicsEffects&){};
+    targets.fps_limit=[](std::optional<uint32_t>){}; targets.bloom=[](const uc::BloomSettings&){}; targets.crosshair_scale=[](uint32_t){}; targets.reticle=[](const uc::ReticleOptions&){}; targets.mouse_sensitivity=[](uint32_t){}; targets.rumble=[](uint32_t){}; targets.pointer=[](uc::PointerMode,uint32_t){}; targets.reload_zone=[](uc::ReloadZone,uint32_t){}; targets.hud_position=[](uc::HudPosition){}; targets.effects=[](const uc::GraphicsEffects&){};
     targets.dlss5=[](const uc::Dlss5Settings&){}; targets.prompt_style=[](uc::PromptStyle){}; targets.bindings=[](const uc::Bindings&){}; targets.gamepad=[](const uc::GamepadSettings&){}; targets.wiimote=[](const uc::WiimoteSettings&){};
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;

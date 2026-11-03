@@ -209,7 +209,7 @@ int main(int argc,char** argv) {
     uc::ConfigDocument document; uc::Options options; uc::store_options(document,options); uc::save_config(folder/"config.json",document);
     uc::SettingsTargets targets;
     targets.render_scale=[](double) {}; targets.upscaling=[](const uc::Options&) {}; targets.fps_limit=[](std::optional<uint32_t>) {}; targets.bloom=[](const uc::BloomSettings&) {};
-    targets.crosshair_scale=[](uint32_t) {}; targets.reticle=[](const uc::ReticleOptions&) {}; targets.mouse_sensitivity=[](uint32_t) {}; targets.pointer=[](uc::PointerMode,uint32_t) {};
+    targets.crosshair_scale=[](uint32_t) {}; targets.reticle=[](const uc::ReticleOptions&) {}; targets.mouse_sensitivity=[](uint32_t) {}; targets.rumble=[](uint32_t) {}; targets.pointer=[](uc::PointerMode,uint32_t) {};
     targets.reload_zone=[](uc::ReloadZone,uint32_t) {}; targets.hud_position=[](uc::HudPosition) {}; targets.effects=[](const uc::GraphicsEffects&) {}; targets.dlss5=[](const uc::Dlss5Settings&) {};
     targets.prompt_style=[](uc::PromptStyle) {}; targets.hdr=[](const uc::HdrSettings&) {}; targets.bindings=[](const uc::Bindings&) {}; targets.gamepad=[](const uc::GamepadSettings&) {}; targets.wiimote=[](const uc::WiimoteSettings&) {};
     uc::LiveSettings live(folder/"config.json",document,targets);

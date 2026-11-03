@@ -26,6 +26,7 @@
 #include "host_input.h"
 #include "gamepad_input.h"
 #include "wiimote_input.h"
+#include "rumble_hold.h"
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -1019,6 +1020,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
         targets.reticle=[&](const uc::ReticleOptions& reticle) { options.reticle=reticle; gx::set_reticle_style(reticle_style_of(reticle)); };
         targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); };
+        targets.rumble=[&](uint32_t percent) { options.rumble=percent; };
         targets.pointer=[&](uc::PointerMode mode,uint32_t smoothing) { options.pointer=mode; options.pointer_smoothing=smoothing; host_input.pointer(mode); input.pointer_smoothing(smoothing/100.f); capture_pointer(!host_keys.menu_open); };   // the in-game menu is open while it changes this, but the harness changes it during play: the cursor changes hands now
         targets.reload_zone=[&](uc::ReloadZone zone,uint32_t size) { options.reload_zone=zone; options.reload_zone_size=size; input.reload_zone(zone,size/100.f); };
         targets.hud_position=[&](uc::HudPosition position) { options.hud_position=position; view_for_output(view_width,view_height); };
@@ -1225,6 +1227,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
     uc::cpu_sampler_start_once("main");
+    uc::RumbleRouter rumble_router;
+    unsigned rumble_pad_starts=0,rumble_wii_starts=0; uint64_t rumble_game_starts=0,rumble_logged_ms=0;   // the diagnostics line of the vibration
     bool pad_back_held=false;   // View/Back held: with Start it opens and closes the settings menu from a gamepad (no keyboard on a Steam Deck)
     const auto pad_allowed=[&] { return !host_keys.menu_open && !host_keys.paused && !steam_overlay_open && (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0; };   // what the pads may hand to the game
     const auto sync_overlay=[&] {
@@ -1345,6 +1349,21 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     if(wiimote->changes()!=wii_changes || wii_last_used!=shown_wii_last) {wii_changes=wiimote->changes();shown_wii_last=wii_last_used;refresh_prompt_device();}   // the remote came or went, or the other device was used
                 }
                 if(gamepad && (gamepad->changes()!=pad_changes || pad_last_used!=shown_pad_last)) {pad_changes=gamepad->changes();shown_pad_last=pad_last_used;refresh_prompt_device();}   // a pad came or went, or the other device was used
+                {   // the game's motors run the device in use, and only while the game gets input (a menu, a pause or another window silences them)
+                    const uint64_t now_ms=SDL_GetTicks();
+                    const auto device=wii_last_used && wiimote && wiimote->status().connected ? uc::RumbleDevice::remote : pad_last_used ? uc::RumbleDevice::pad : uc::RumbleDevice::none;   // the device the player is using: a remote that is gone or a pad lying on the desk of a keyboard player get nothing
+                    const auto rumble=rumble_router.step(uc::input_rumble_local(),pad_allowed(),device,now_ms);   // input_rumble_local() every loop, allowed or not: it also takes the taps that came and went meanwhile
+                    rumble_pad_starts+=rumble.pad_starts; rumble_wii_starts+=rumble.wii_starts;
+                    if(now_ms-rumble_logged_ms>=2000) {   // diagnostics, only while something happens: the game's "motor on" commands against the taps the pad / the remote were given
+                        const uint64_t starts=uc::input_rumble_starts();
+                        if(starts!=rumble_game_starts || rumble_pad_starts || rumble_wii_starts)
+                            std::fprintf(stderr,"[rumble] last 2 s: game started the motor %llu times, pad taps %u, remote taps %u (input allowed=%d, strength %u%%, pad=%d, remote in use=%d)\n",
+                                         (unsigned long long)(starts-rumble_game_starts),rumble_pad_starts,rumble_wii_starts,int(pad_allowed()),options.rumble,int(gamepad && gamepad->status().connected),int(device==uc::RumbleDevice::remote));
+                        rumble_game_starts=starts; rumble_pad_starts=rumble_wii_starts=0; rumble_logged_ms=now_ms;
+                    }
+                    if(gamepad) gamepad->rumble(rumble.pad,options.rumble/100.f);
+                    if(wiimote) wiimote->rumble(rumble.wii && options.rumble>0);
+                }
             }
             if (watch_error) std::rethrow_exception(watch_error);
             service_frame();

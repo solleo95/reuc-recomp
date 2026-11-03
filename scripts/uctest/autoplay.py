@@ -58,6 +58,7 @@ class Autoplay:
         self.ignore_until = {}   # enemy id -> tick until which it is skipped (unreachable or already down)
         self.last_shot_n = self.last_tutorial_n = -10**9
         self.dead = False   # the game over page is up and its death was counted
+        self.last_damage = 0.0
 
     # logging ---------------------------------------------------------
     def event(self, kind, **fields):
@@ -99,6 +100,11 @@ class Autoplay:
             self.projection = self._fetch_projection()
         f = vision.enrich(f, self.projection)
         context = f.get("context")
+        damage = (f.get("player") or {}).get("damage")
+        if isinstance(damage, (int, float)) and damage >= 0:   # the damage meter rose: the player was hit (wall clock: lines up with the game's [rumble-tap] lines, UC_RUMBLE_LOG=1)
+            if damage > self.last_damage + 0.01:
+                self.event("hurt", damage=round(damage, 2), context=context, wall_ms=int(time.time() * 1000))
+            self.last_damage = damage
         self.dead &= screen == "game_over"
         if f.get("tutorial_loaded") and f.get("tutorial") not in (0, 0x100000):   # a tutorial page is up (the context may still read gameplay)
             if f["n"] - self.last_tutorial_n >= 8:

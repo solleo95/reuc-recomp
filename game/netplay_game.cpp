@@ -585,6 +585,7 @@ struct NetGame::Impl {
             }
             cpu_sampler_set_replaying(replay);
             audio_set_replaying(replay);
+            input_rumble_replay(replay);
             gx_set_replaying(replay);
             NativeInput* simulated[]={&pads[0],&pads[1]};
             auto& now=history[cursor];

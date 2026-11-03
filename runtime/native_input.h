@@ -167,8 +167,13 @@ std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel);   //
 bool input_demo_playing();   // a demo replays the recorded samples: the live pointer is not what the game consumed
 bool input_aim_exact();   // true once a network session set the aim channel
 unsigned input_aim_channel();   // the local player's pad (0 outside network play)
+unsigned input_rumble_motors();   // any thread: which players' motors the game has on (bit 0 first player, bit 1 second)
+void input_rumble_replay(bool replaying);   // network play: steps are being replayed after a rollback (motor commands are ignored, motors left on are let go)
+uint64_t input_rumble_starts();// how many "motor on" commands the game has given (diagnostics)
+unsigned input_rumble_local(); // the same for the pads here, and every motor switched on since the previous call, even if it is off again (call it once per loop): both players' motors, but in network play only the local player's, as bit 0
 void input_hle_set_aim_channel(unsigned channel);   // network play: the local player's pad (0 host, 1 client); reset to 0 by input_hle_init
 uint32_t input_demo_speed(uint32_t live);   // the clock speed factor the deterministic game pacing uses (recorded and replayed with the demo; live without input)
 }
 void hle_KPADRead(ppc::Ctx&);
 void hle_WPADProbe(ppc::Ctx&);
+void hle_WPADControlMotor(ppc::Ctx&);

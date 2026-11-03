@@ -187,6 +187,7 @@ const std::vector<Item>& table() {
             [](const Options&,const Env&,const Text& tr) { return std::vector<std::string>{tr("reload_zone_off"),tr("reload_zone_corner"),tr("reload_zone_edge")}; },
             [](const Options& o,const Env&) { return int(o.reload_zone); },[](Options& o,const Env&,int i) { o.reload_zone=ReloadZone(i); }));
         t.push_back(slider("reload_zone_size","reload_zone_size",P,kEverywhere,[](const Options& o) { return int(o.reload_zone_size); },[](Options& o,int v) { o.reload_zone_size=uint32_t(v); },int(kReloadZoneSizeMin),int(kReloadZoneSizeMax),1,"%d%%",zone_size_state));
+        t.push_back(slider("rumble","rumble",P,kEverywhere,[](const Options& o) { return int(o.rumble); },[](Options& o,int v) { o.rumble=uint32_t(v); },0,int(kRumbleMax),5,"%d%%"));   // 0 is off
         // Deck pages the menu draws itself: the gamepad's buttons and the mod manager
         t.push_back(custom("pad_bindings","bindings",Page::buttons,KM|KL));
         // Reticle: the in-game menus (the launchers have no reticle page)

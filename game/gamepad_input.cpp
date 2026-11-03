@@ -27,9 +27,28 @@ void enable_deck_imu(SDL_Gamepad* handle) {
     if(ioctl(fd,HIDIOCSFEATURE(sizeof report),report)!=int(sizeof report)) std::fprintf(stderr,"[gamepad] enabling the gyro of %s failed\n",path);
     ::close(fd);
 }
+// The motor command straight to the Deck controller's hidraw node (opened once, kept in `fd`). False: not a hidraw pad, not writable, or the node refused: the caller falls back to SDL.
+bool deck_rumble(int& fd,SDL_Gamepad* handle,uint16_t level) {
+    if(fd<0) {
+        const char* path=SDL_GetGamepadPath(handle);
+        if(!path || std::string_view(path).substr(0,11)!="/dev/hidraw") return false;
+        fd=::open(path,O_RDWR|O_CLOEXEC);
+        if(fd<0) return false;
+    }
+    auto report=deck_rumble_report(level);
+    return ioctl(fd,HIDIOCSFEATURE(65),report.data())==int(report.size());
+}
+void close_hid(int& fd) { if(fd>=0) ::close(fd); fd=-1; }
+#else
+bool deck_rumble(int&,SDL_Gamepad*,uint16_t) { return false; }
+void close_hid(int&) {}
 #endif
+constexpr uint64_t kDeckRumbleRefreshMs=60;   // the Deck's motor command is sent again this often while it runs
+constexpr int8_t kDeckGainDb=10;
 constexpr float kPress=.5f,kRelease=.4f;   // an axis counts as pressed from half and is released below 40%
 constexpr float kMoved=.3f;                // a stick push that makes a pad the one in use
+constexpr uint64_t kRumbleRefreshMs=200;   // a running motor is told again this often...
+constexpr uint32_t kRumbleDurationMs=500;  // ...and SDL stops it this long after the last time, when its event pump runs (a main thread that hangs keeps a motor on in drivers without a hardware timeout)
 }
 PadFamily pad_family_from_type(SDL_GamepadType type) {
     switch(type) {
@@ -40,9 +59,17 @@ PadFamily pad_family_from_type(SDL_GamepadType type) {
     default: return PadFamily::xbox;   // standard, unknown and clones (an XInput pad of any make): the Xbox layout; "generic" is only chosen by hand
     }
 }
+std::array<unsigned char,65> deck_rumble_report(uint16_t level) {
+    std::array<unsigned char,65> report{};
+    report[1]=0xEB;   // ID_TRIGGER_RUMBLE_CMD; the header's length stays 0 and the rumble type and intensity 0 (HAPTIC_INTENSITY_SYSTEM), as in SDL's driver
+    report[6]=report[8]=level&0xFF; report[7]=report[9]=level>>8;   // left and right motor speed
+    report[10]=report[11]=level ? kDeckGainDb : 0;                  // left and right gain in dB
+    return report;
+}
 GamepadInput::GamepadInput() { if(!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) throw std::runtime_error(SDL_GetError()); }
 GamepadInput::~GamepadInput() {
-    for(auto& [id,pad]:pads_) SDL_CloseGamepad(pad.handle);
+    rumble(0,0);
+    for(auto& [id,pad]:pads_) {close_hid(pad.hid); SDL_CloseGamepad(pad.handle);}
     SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
 void GamepadInput::capture_sink(std::function<void(PhysicalInput,bool)> sink) { sink_=std::move(sink); }
@@ -50,6 +77,21 @@ PadStatus GamepadInput::status() const {
     const auto at=pads_.find(last_);
     if(at==pads_.end()) return {};
     return {at->second.name,true,at->second.gyro,at->second.deck ? PadFamily::steam_deck : pad_family_from_type(at->second.type)};
+}
+void GamepadInput::rumble(unsigned motors,float strength,uint64_t now) {
+    const auto level=uint16_t(std::clamp(strength,0.f,1.f)*65535.f);
+    SDL_JoystickID other=0;
+    for(const auto& [id,pad]:pads_) if(id!=last_) {other=id;break;}
+    for(auto& [id,pad]:pads_) {
+        const bool on=(id==last_ ? motors&1 : id==other ? motors&2 : 0)!=0;
+        const uint16_t want=on ? level : 0;
+        if(want==pad.rumble && (!want || now-pad.rumble_ms<(pad.deck ? kDeckRumbleRefreshMs : kRumbleRefreshMs))) continue;
+        pad.flip=pad.deck && want && want==pad.rumble && !pad.flip;   // the Deck's repeated command differs by one, so that neither SDL nor the pad takes it for the same command
+        const uint16_t sent=pad.flip ? uint16_t(want-1) : want;
+        const bool played=(pad.deck && deck_rumble(pad.hid,pad.handle,sent)) || SDL_RumbleGamepad(pad.handle,sent,sent,sent ? kRumbleDurationMs : 0);   // false: no motor in this pad, or its driver is busy or refuses
+        if(played) {pad.rumble=want; pad.rumble_ms=now;}   // a refused command is sent again on the next pass: it must not be taken for done
+        if(want && played!=pad.rumble_worked) {pad.rumble_worked=played; std::fprintf(stderr,"[gamepad] %s: rumble %s%s%s\n",pad.name.c_str(),played ? "works" : "was refused: ",played ? "" : SDL_GetError(),"");}   // told once, and again if it changes
+    }
 }
 void GamepadInput::added(SDL_JoystickID id) {
     if(pads_.count(id) || !SDL_IsGamepad(id)) return;
@@ -88,7 +130,7 @@ void GamepadInput::removed(SDL_JoystickID id,GamepadTarget* input) {
         for(unsigned b=0;b<32;++b) if(pad.buttons&(1u<<b)) report({PhysicalKind::pad_button,uint16_t(b)},false,input);
         for(unsigned a=0;a<16;++a) if(pad.axis_down&(1u<<a)) report({PhysicalKind::pad_axis,uint16_t(a)},false,input);
     }
-    SDL_CloseGamepad(pad.handle);
+    close_hid(pad.hid); SDL_CloseGamepad(pad.handle);
     pads_.erase(at);
     if(last_==id) last_=pads_.empty() ? 0 : pads_.begin()->first;
     ++changes_;

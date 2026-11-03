@@ -32,7 +32,8 @@ int main() {
     {   // where things show
         for(const char* id:{"frame_generation","hdr_peak","hdr_paper_white","ray_tracing","dlss5","wiimote","pad_panel","key_bindings","renderer","window_mode","upscale_mode","sharpening"}) CHECK(!shown(id,deck_menu));   // nothing the Deck cannot do
         for(const char* id:{"hud_position","upscaling","ambient_occlusion","prompt_style","pointer_device","mouse_sensitivity"}) CHECK(!shown(id,deck_menu) && !shown(id,deck_launcher) && shown(id,desktop_menu));   // left out of the Deck on purpose
-        for(const char* id:{"render_scale","fps_limit","anisotropy","bloom","hdr","hdr_ui","gyro_mode","gyro_sens_x","crosshair_scale","reload_zone","reload_zone_size","pointer_smoothing"}) CHECK(shown(id,deck_menu));
+        for(const char* id:{"render_scale","fps_limit","anisotropy","bloom","hdr","hdr_ui","gyro_mode","gyro_sens_x","crosshair_scale","reload_zone","reload_zone_size","pointer_smoothing","rumble"}) CHECK(shown(id,deck_menu));
+        CHECK(shown("rumble",deck_launcher) && shown("rumble",desktop_menu) && shown("rumble",desktop_launcher));   // everywhere a pad can be used
         for(const char* id:{"render_scale","fps_limit","dlss5","frame_generation","hdr","key_bindings","pad_panel"}) CHECK(shown(id,desktop_menu) || shown(id,desktop_launcher));
         CHECK(shown("skip_intro",desktop_launcher) && !shown("skip_intro",desktop_menu) && !shown("skip_intro",deck_menu));   // the launcher's own page
         CHECK(!shown("gyro_mode",desktop_menu));   // the desktop reaches the gyro through the Controllers window

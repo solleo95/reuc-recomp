@@ -12,8 +12,12 @@ static bool near(float a,float b,float tolerance=2e-3f) { return std::fabs(a-b)<
 // A virtual SDL gamepad: the real SDL path (events, mapping, sensors) without a device.
 struct Virtual {
     SDL_JoystickID id=0; SDL_Joystick* joystick=nullptr;
-    explicit Virtual(const char* name="Test Pad") {
+    std::vector<int> rumbles;   // the strength of every rumble the pad was told to play, 0..65535
+    bool refuse=false;          // the pad's driver turns the rumble down (a busy device)
+    static bool rumble_to(void* self,Uint16 low,Uint16 high) { auto* pad=static_cast<Virtual*>(self); pad->rumbles.push_back(std::max(low,high)); return !pad->refuse; }
+    explicit Virtual(const char* name="Test Pad",uint16_t vendor=0,uint16_t product=0) {
         SDL_VirtualJoystickDesc desc; SDL_INIT_INTERFACE(&desc);
+        desc.userdata=this; desc.Rumble=rumble_to; desc.vendor_id=vendor; desc.product_id=product;
         const SDL_VirtualJoystickSensorDesc sensors[1]={{SDL_SENSOR_GYRO,250.f}};
         desc.type=SDL_JOYSTICK_TYPE_GAMEPAD; desc.naxes=SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
         desc.nsensors=1; desc.sensors=sensors; desc.name=name;
@@ -139,10 +143,60 @@ static void the_capture_sink_sees_every_input_even_while_inactive() {
     CHECK(seen.size()==3 && saw({PhysicalKind::pad_button,1}) && saw({PhysicalKind::pad_axis,11}) && saw({PhysicalKind::pad_axis,2}));   // east, the right trigger, and the left stick up (axis 1 negative: code 1*2+0)
     CHECK(rig.input.consume_actions().held==0);
 }
+static void the_motors_drive_the_pad_in_use_and_the_other_pad() {
+    Rig rig; rig.pads.rumble(1,1.f);                                   // no pad: nothing to do
+    Virtual first("Pad One"); rig.pump();
+    rig.pads.rumble(1,.5f); CHECK(first.rumbles.size()==1 && near(float(first.rumbles.back())/65535.f,.5f,.01f));
+    rig.pads.rumble(1,.5f); CHECK(first.rumbles.size()==1);            // unchanged: not sent again
+    rig.pads.rumble(0,.5f); CHECK(first.rumbles.size()==2 && first.rumbles.back()==0);
+    Virtual second("Pad Two"); rig.pump();                             // the newest pad is the one in use: player 1's
+    rig.pads.rumble(2,1.f);
+    CHECK(first.rumbles.size()==3 && first.rumbles.back()==65535 && second.rumbles.empty());   // player 2's motor drives the other pad
+    rig.pads.rumble(3,0.f);                                            // strength 0 is off
+    CHECK(first.rumbles.back()==0 && second.rumbles.empty());
+    rig.pads.rumble(1,1.f); CHECK(second.rumbles.size()==1 && second.rumbles.back()==65535);
+    rig.pads.rumble(1,7.f); CHECK(second.rumbles.size()==1);           // above full strength is full strength
+}
+static void a_refused_rumble_is_tried_again_on_the_next_pass() {   // a dropped command would leave the pad silent (or running) until the 200 ms refresh
+    Rig rig; Virtual pad; rig.pump();
+    pad.refuse=true; rig.pads.rumble(1,1.f); CHECK(pad.rumbles.size()==1);
+    rig.pads.rumble(1,1.f); CHECK(pad.rumbles.size()==2);              // tried again, not given up
+    pad.refuse=false; rig.pads.rumble(1,1.f); CHECK(pad.rumbles.size()==3 && pad.rumbles.back()==65535);
+    rig.pads.rumble(1,1.f); CHECK(pad.rumbles.size()==3);              // taken: not sent again
+    pad.refuse=true; rig.pads.rumble(0,1.f); CHECK(pad.rumbles.size()==4);   // the stop is refused too...
+    rig.pads.rumble(0,1.f); CHECK(pad.rumbles.size()==5);              // ...and sent again
+    pad.refuse=false; rig.pads.rumble(0,1.f); CHECK(pad.rumbles.size()==6 && pad.rumbles.back()==0);
+}
+static void the_deck_report_is_the_loud_simple_rumble_command() {   // what the Deck's hidraw node gets; +10 dB on both motors and a repeat every 60 ms felt best on the Deck (SDL's own: +2 / 0 dB, once)
+    const auto on=deck_rumble_report(65535), off=deck_rumble_report(0);
+    CHECK(on.size()==65 && on[0]==0 && on[1]==0xEB && on[2]==0);                               // report id 0, ID_TRIGGER_RUMBLE_CMD, length left 0 as SDL does
+    CHECK(on[3]==0 && on[4]==0 && on[5]==0);                                                    // rumble type 0, intensity HAPTIC_INTENSITY_SYSTEM
+    CHECK(on[6]==0xFF && on[7]==0xFF && on[8]==0xFF && on[9]==0xFF && on[10]==10 && on[11]==10);   // both motors full, +10 dB each
+    CHECK(deck_rumble_report(0x1234)[6]==0x34 && deck_rumble_report(0x1234)[7]==0x12 && deck_rumble_report(0x1234)[8]==0x34 && deck_rumble_report(0x1234)[9]==0x12);
+    CHECK(off[1]==0xEB && off[6]==0 && off[7]==0 && off[8]==0 && off[9]==0 && off[10]==0 && off[11]==0);   // stopping asks for no gain either
+}
+static void a_deck_pad_gets_its_motor_command_again_every_60_ms() {
+    Rig rig; Virtual deck("Steam Deck",0x28de,0x1205); rig.pump();
+    CHECK(rig.pads.status().family==PadFamily::steam_deck);
+    rig.pads.rumble(1,1.f,1000); CHECK(deck.rumbles.size()==1 && deck.rumbles.back()==65535);
+    rig.pads.rumble(1,1.f,1030); CHECK(deck.rumbles.size()==1);                 // too soon
+    rig.pads.rumble(1,1.f,1060); CHECK(deck.rumbles.size()==2 && deck.rumbles.back()==65534);   // the same command again, a hair different so that nothing drops it as unchanged
+    rig.pads.rumble(1,1.f,1120); CHECK(deck.rumbles.size()==3 && deck.rumbles.back()==65535);
+    rig.pads.rumble(0,1.f,1130); CHECK(deck.rumbles.size()==4 && deck.rumbles.back()==0);   // off at once
+    rig.pads.rumble(0,1.f,1500); CHECK(deck.rumbles.size()==4);                 // and nothing more while quiet
+}
+static void any_other_pad_keeps_its_200_ms_refresh() {
+    Rig rig; Virtual pad("Other Pad"); rig.pump();
+    rig.pads.rumble(1,1.f,1000); CHECK(pad.rumbles.size()==1);
+    rig.pads.rumble(1,1.f,1060); CHECK(pad.rumbles.size()==1);                  // SDL is not told again for nothing
+    rig.pads.rumble(1,1.f,1250); CHECK(pad.rumbles.size()==1);                  // (the refresh of an unchanged value only extends SDL's timer)
+}
 int main() {
     // Only the virtual pads of this test: a gamepad plugged into the PC must not take part.
     for(const char* hint:{SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_RAWINPUT,SDL_HINT_JOYSTICK_WGI,SDL_HINT_JOYSTICK_DIRECTINPUT,SDL_HINT_XINPUT_ENABLED}) SDL_SetHint(hint,"0");
     family_from_type_table(); a_pad_appears_and_its_buttons_reach_the_input(); a_firm_press_on_a_trackpad_is_a_button(); triggers_press_at_half_with_a_hysteresis();
     sticks_move_the_pointer_and_the_camera(); gyro_is_calibrated_and_moves_the_pointer(); a_removed_pad_is_released();
     an_inactive_gamepad_feeds_nothing_and_resumes_cleanly(); the_capture_sink_sees_every_input_even_while_inactive();
+    the_motors_drive_the_pad_in_use_and_the_other_pad(); a_refused_rumble_is_tried_again_on_the_next_pass();
+    the_deck_report_is_the_loud_simple_rumble_command(); a_deck_pad_gets_its_motor_command_again_every_60_ms(); any_other_pad_keeps_its_200_ms_refresh();
 }

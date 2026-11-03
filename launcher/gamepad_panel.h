@@ -14,8 +14,8 @@ struct GamepadPanelState { bool modal_open=false; ImFont* heading=nullptr; float
 // The Controllers tab (the same code in the launcher and in the in-game menu): control type and gamepad model, the connected pad, and the "Gamepad" button that
 // opens a window with the sticks, dead zones, gyro and the gamepad bindings (shown as the controller's own button pictures). `editor` is the gamepad table's
 // editor (BindingTable::gamepad); the settings' bindings follow it. A pad press for a pending capture comes from outside, through editor.event().
-// Returns true when `settings` changed. Call inside an ImGui window, with the host's style variables (frame padding, item spacing) already pushed.
-bool gamepad_tab(GamepadPanelState&,GamepadSettings&,BindingEditor& editor,const PadStatus&,float unit,const PanelText&);
+// `rumble` is the vibration strength in percent (Options::rumble), its slider is the last row. Returns true when `settings` or `rumble` changed. Call inside an ImGui window, with the host's style variables (frame padding, item spacing) already pushed.
+bool gamepad_tab(GamepadPanelState&,GamepadSettings&,uint32_t& rumble,BindingEditor& editor,const PadStatus&,float unit,const PanelText&);
 std::span<const Action> gamepad_panel_actions();   // the actions the gamepad table lists, in the panel's order (the Deck menu's Buttons page uses the same)
 // The family whose button names and pictures the tab shows: the chosen model, or the connected pad's (the Xbox look without a pad).
 PadFamily gamepad_panel_family(const GamepadSettings&,const PadStatus&);

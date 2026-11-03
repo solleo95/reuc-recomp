@@ -26,6 +26,8 @@ public:
     // Every remote button press and release goes to the sink, active or not: the binding capture of the menus.
     void capture_sink(std::function<void(PhysicalInput,bool)>);
     WiimoteStatus status() const;
+    // The remote's motor (it has no strength). Any thread; kept for a remote that connects later, and in every report the thread sends (the motor is bit 0 of each).
+    void rumble(bool on) { rumble_=on; }
     unsigned changes() const { return changes_; }   // counts connections made and lost: status() is worth asking again
     unsigned activity() const { return activity_; } // counts button presses that update() handed on: the player is using the remote (main thread)
 private:
@@ -35,6 +37,7 @@ private:
     void publish(WiiState,bool extension,WiiState& previous,WiiSwing&);
     void set_link(bool connected,const std::string& error);
     bool nap(unsigned ms);   // false when the thread must end
+    bool send(WiiTransport&,std::span<const uint8_t> report);   // write() with the motor bit of the report set while the motor is wanted
     Opener opener_;
     mutable std::mutex mutex_;
     std::deque<Event> events_;
@@ -43,7 +46,7 @@ private:
     bool connected_=false;
     std::string error_;
     std::function<void(PhysicalInput,bool)> sink_;
-    std::atomic<bool> stop_{false},enabled_{true};
+    std::atomic<bool> stop_{false},enabled_{true},rumble_{false};
     std::atomic<float> threshold_{1.5f};
     std::atomic<unsigned> changes_{0};
     bool engaged_=false;     // main thread: the target holds something of the remote

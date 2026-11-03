@@ -97,6 +97,7 @@
 {"reload_zone_off",{"Off","Выкл.","Aus","Désactivé","Desactivado","Disattivato","Desativado","Wył.","Вимк.","Kapalı","オフ","끔","关闭"}},
 {"reload_zone_corner",{"Corner","Угол","Ecke","Coin","Esquina","Angolo","Canto","Róg","Кут","Köşe","隅","모서리","角落"}},
 {"reload_zone_edge",{"Edge","Край","Rand","Bord","Borde","Bordo","Borda","Krawędź","Край","Kenar","端","가장자리","边缘"}},
+{"rumble",{"Vibration","Вибрация","Vibration","Vibration","Vibración","Vibrazione","Vibração","Wibracje","Вібрація","Titreşim","振動","진동","震动"}},
 {"reload_zone_size",{"Zone size","Размер зоны","Zonengröße","Taille de la zone","Tamaño de la zona","Dimensione della zona","Tamanho da zona","Rozmiar strefy","Розмір зони","Bölge boyutu","ゾーンの大きさ","영역 크기","区域大小"}},
 {"mouse_sensitivity",{"Mouse sensitivity","Чувствительность мыши","Mausempfindlichkeit","Sensibilité de la souris","Sensibilidad del ratón","Sensibilità del mouse","Sensibilidade do mouse","Czułość myszy","Чутливість миші","Fare hassasiyeti","マウス感度","마우스 감도","鼠标灵敏度"}},
 {"menu_main",{"Main","Основное","Allgemein","Général","General","Generale","Geral","Ogólne","Основне","Genel","基本","기본","常规"}},

@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <span>
 #include <string>
@@ -241,7 +242,7 @@ PadFamily gamepad_panel_family(const GamepadSettings& settings,const PadStatus& 
     }
     return status.connected ? status.family : PadFamily::xbox;
 }
-bool gamepad_tab(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,const PadStatus& status,float unit,const PanelText& tr) {
+bool gamepad_tab(GamepadPanelState& state,GamepadSettings& s,uint32_t& rumble,BindingEditor& editor,const PadStatus& status,float unit,const PanelText& tr) {
     bool changed=false;
     const float width=std::max(state.control_width,.9f);   // these two list long sentences in some languages
     ImGui::TextUnformatted(tr("control_type"));
@@ -262,6 +263,10 @@ bool gamepad_tab(GamepadPanelState& state,GamepadSettings& s,BindingEditor& edit
     gap(unit);
     if(ImGui::Button(tr("gamepad"),{ImGui::GetContentRegionAvail().x*.4f,0})) state.modal_open=true;
     changed|=modal(state,s,editor,status,unit,tr);
+    gap(unit);
+    ImGui::TextUnformatted(tr("rumble"));
+    float strength=float(rumble)/100;   // percent 0..100 (kRumbleMax in game/options.h): the pads' motors and the Wii Remote's, which only knows on and off
+    if(percent_slider("##rumble",strength,0,100,width)) {rumble=uint32_t(std::lround(strength*100));changed=true;}
     if(!editor.capturing() && s.bindings!=editor.bindings()) {s.bindings=editor.bindings();changed=true;}   // the editor holds the table the player is editing
     return changed;
 }

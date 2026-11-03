@@ -321,7 +321,34 @@ static void demo_records_the_converted_frame() {
     std::filesystem::remove(path);
 }
 
+static void the_games_motor_commands_are_kept_per_player() {
+    Fix fixture; auto& c=fixture.c;
+    CHECK(uc::input_rumble_motors()==0);
+    c.r[3]=0; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==1);          // player 1 starts
+    c.r[3]=1; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==3);          // player 2 starts too
+    c.r[3]=0; c.r[4]=0; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==2);          // player 1 stops
+    c.r[3]=2; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==2);          // there are only two players
+    c.r[3]=1; c.r[4]=2; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==0);          // any command but "start" is a stop
+    c.r[3]=1; c.r[4]=1; hle_WPADControlMotor(c); uc::input_rumble_local();                       // the pads have seen everything so far
+    CHECK(uc::input_rumble_local()==2);                                                         // local play: both players' motors
+    c.r[3]=0; c.r[4]=1; hle_WPADControlMotor(c); c.r[4]=0; hle_WPADControlMotor(c);             // a tap of player 1 that began and ended before the host looked
+    CHECK(uc::input_rumble_motors()==2 && uc::input_rumble_local()==3 && uc::input_rumble_local()==2);   // still reaches the pads, once
+    uc::input_hle_set_aim_channel(1); CHECK(uc::input_rumble_local()==1);                       // network play as the second player: only that motor, as the local player's
+    uc::input_hle_set_aim_channel(0); CHECK(uc::input_rumble_local()==0);                       // as the first player: the other player's motor is somebody else's pad
+    c.r[3]=0; c.r[4]=1; hle_WPADControlMotor(c); uc::input_hle_init(nullptr); CHECK(uc::input_rumble_motors()==0);   // a new game starts quiet
+    {   // network play replays steps after a rollback: what the replay says was already played (or was a wrong guess), and the motors a wrong guess left on are let go
+        c.r[3]=0; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==1);
+        uc::input_rumble_replay(true); CHECK(uc::input_rumble_motors()==0);
+        c.r[3]=1; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==0);
+        uc::input_rumble_replay(true); uc::input_rumble_local();                                       // (the taps before the rollback were played)
+        uc::input_rumble_replay(false);
+        c.r[3]=1; c.r[4]=1; hle_WPADControlMotor(c); CHECK(uc::input_rumble_motors()==2);             // forward steps count again
+        uc::input_hle_init(nullptr);
+    }
+}
+
 int main() {
+    the_games_motor_commands_are_kept_per_player();
     corner_zone_turns_fire_into_reload();
     corner_zone_ignores_edge_middle_and_centre();
     edge_zone_triggers_on_any_edge();
