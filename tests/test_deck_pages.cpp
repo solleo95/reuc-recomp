@@ -26,8 +26,18 @@ int main() {
     for (const char* id : {"crosshair_scale", "reticle_color_p1"}) CHECK(shown(id, deck_menu));   // the reticle stays in the in-game menu
     // what it offers: the gyro and sticks, the gamepad bindings, the reticle, the game toggles, scale/limit, effects
     for (const char* id : {"skip_intro", "skip_tutorials", "logs", "render_scale", "fps_limit", "anisotropy", "per_pixel_lighting", "motion_blur", "contact_shadows",
-                           "bloom", "bloom_strength", "hdr", "hdr_ui", "gyro_mode", "gyro_sens_x", "gyro_sens_y", "aim_speed", "pointer_smoothing", "reload_zone", "pad_bindings"})
+                           "bloom", "bloom_strength", "hdr", "hdr_ui", "gyro_mode", "gyro_sens_x", "gyro_sens_y", "aim_speed", "trackpad_sensitivity", "pointer_smoothing", "reload_zone", "pad_bindings"})
         CHECK(shown(id, deck_launcher));
+    CHECK(shown("trackpad_sensitivity", deck_menu) && !shown("trackpad_sensitivity", desktop_menu) && !shown("trackpad_sensitivity", desktop_launcher));   // the Deck's trackpad only
+    {   // the trackpad's slider opens the "Touch aim" group, right before the aim smoothing; it is the same setting as the mouse sensitivity (config mouse_sensitivity)
+        const auto items = items_for(deck_launcher, Page::gamepad);
+        size_t trackpad_at = 99, smoothing_at = 99;
+        for (size_t i = 0; i < items.size(); ++i) { if (std::string_view(items[i]->id) == "trackpad_sensitivity") trackpad_at = i; if (std::string_view(items[i]->id) == "pointer_smoothing") smoothing_at = i; }
+        CHECK(trackpad_at != 99 && smoothing_at == trackpad_at + 1);
+        Options set; const Item& item = *items[trackpad_at];
+        CHECK(item.get_int(set) == 100 && item.min == 10 && item.max == 300);   // 100% as the aim has always followed the cursor
+        item.set_int(set, 150); CHECK(set.mouse_sensitivity == 150);
+    }
     // the gyro's sensitivity and inversion mean nothing while the gyro is off: they are hidden then (the settings registry is shared with the in-game menu)
     Options options; Env env;
     options.gamepad.gyro.mode = GyroMode::off;

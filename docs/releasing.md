@@ -37,6 +37,10 @@ python -I scripts/build_release.py --version 0.0.1
 1. Создайте релиз в [solleo95/reuc-recomp](https://github.com/solleo95/reuc-recomp/releases).
 2. Укажите тег `0.0.1` или `v0.0.1`. Версия тега должна совпадать с `release.json`.
 3. Прикрепите `UC-Windows-0.0.1.zip`; имя должно точно соответствовать версии.
+   В каждый релиз кладётся и Linux-архив `UC-Linux-X.Y.Z.zip` (для Steam Deck; сборка:
+   [steamdeck-install.md](steamdeck-install.md), на английском). Платформа, которая не
+   менялась, сохраняет прежний архив. Установочный скрипт Steam Deck берёт из релиза
+   именно `UC-Linux-*.zip`.
 4. Опубликуйте обычный релиз и назначьте его **Latest**. Draft и prerelease
    лаунчер игнорирует. Описание релиза показывается обычным текстом.
 

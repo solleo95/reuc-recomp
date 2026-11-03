@@ -2,7 +2,7 @@
 
 # Resident Evil: The Umbrella Chronicles — PC native port (recompilation)
 
-**The Wii game running natively on Windows: very fast loading, unlocked FPS, native ultrawide, mouse, gamepad, light gun and Wii Remote aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
+**The Wii game running natively on Windows and on the Steam Deck (Linux): very fast loading, unlocked FPS, native ultrawide, mouse, gamepad, light gun and Wii Remote aiming, DLSS / FSR, frame generation, ray-traced shadows, HDR, mods and online co-op.**
 
 **English** · [Русский](README.ru.md)
 
@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/njy2CqecyY)
 [![Download](https://img.shields.io/badge/download-latest%20release-brightgreen)](https://github.com/solleo95/reuc-recomp/releases/latest)
 
-[Video](#gameplay-video) · [Features](#features) · [Installation](#installation) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
+[Video](#gameplay-video) · [Features](#features) · [Installation](#installation) · [Steam Deck / Linux](#steam-deck-and-linux) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
 
 <img src="assets/launcher/graphite-train.png" alt="The Ecliptic Express train at night" width="100%">
 
@@ -27,7 +27,7 @@
 >
 > **Multiplayer is still quite raw:** it has a number of known problems and has not been tested much. See [Multiplayer](#multiplayer-online-co-op).
 
-When you report a problem, please say what GPU, driver and Windows version you use, and describe how to reproduce the problem (see [Reporting problems](#reporting-problems)).
+When you report a problem, please say what GPU, driver and Windows version (or SteamOS / Linux version) you use, and describe how to reproduce the problem (see [Reporting problems](#reporting-problems)).
 
 > [!IMPORTANT]
 > **No game files are included and none will ever be.** This is not a piracy tool. You need your **own copy** of the game (a disc image of _Resident Evil: The Umbrella Chronicles_ for the Wii, region **NTSC-U, game ID `RBUE08`**), and you unpack it yourself: the launcher does it with the built-in [Wit](https://wit.wiimm.de/wit/), or you run Wit by hand. See [Installation](#installation). The project is not affiliated with, endorsed by or connected to Capcom, Nintendo, NVIDIA or AMD.
@@ -48,6 +48,11 @@ When you report a problem, please say what GPU, driver and Windows version you u
   - [2. Unpack your game image (in the launcher or with Wit)](#2-unpack-your-game-image-in-the-launcher-or-with-wit)
   - [3. First launch and settings](#3-first-launch-and-settings)
   - [4. Updating](#4-updating)
+- [Steam Deck and Linux](#steam-deck-and-linux)
+  - [Automatic install (script)](#automatic-install-script)
+  - [Manual install](#manual-install)
+  - [Choose the game](#choose-the-game)
+  - [Differences from Windows](#differences-from-windows)
 - [In-game menu and controls](#in-game-menu-and-controls)
   - [Ultrawide and the HUD](#ultrawide-and-the-hud)
 - [Multiplayer (online co-op)](#multiplayer-online-co-op)
@@ -63,7 +68,7 @@ When you report a problem, please say what GPU, driver and Windows version you u
 
 ### Native execution and performance
 
-- **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own Windows runtime and a Vulkan, DirectX 11 or DirectX 12 renderer (your choice in the launcher) instead of the Wii's GPU.
+- **Native code, no emulator.** The game's PowerPC program is statically translated to native x86-64 code ahead of time and runs directly on your CPU, with its own runtime (Windows, or Linux on the Steam Deck) and a Vulkan, DirectX 11 or DirectX 12 renderer (your choice in the launcher; Vulkan on Linux) instead of the Wii's GPU.
 - **High performance and unlocked FPS.** Frame-rate limit presets up to 240 FPS or no limit at all, instead of the original 30. The build uses ThinLTO and profile-guided optimisation, and the hot paths of the Wii SDK are replaced by native code.
 - **Very fast loading.** Scenes, menus and chapter changes load far quicker than on the console: the game's files are read straight from your drive by native code.
 - Shaders and pipelines are warmed up before the game starts, so shader compilation does not cause stutters during play.
@@ -130,7 +135,7 @@ See [Modding](#modding).
 
 ## System requirements
 
-The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windows 11), so the minimum requirements are not determined yet. What is known:
+The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windows 11) and on a Steam Deck, so the minimum requirements are not determined yet. What is known (the table is for Windows; the Steam Deck is covered in [Steam Deck and Linux](#steam-deck-and-linux)):
 
 |                                      |                                                                                               |
 | ------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -147,6 +152,8 @@ The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windo
 > Only the North American release (`RBUE08`) is supported. The translated game code is tied to the exact `main.dol` of that release, so the PAL (`RBUP08`) and Japanese (`RBUJ08`) versions will not work.
 
 ## Installation
+
+This section is for **Windows**. On the **Steam Deck** (or another Linux PC) follow [Steam Deck and Linux](#steam-deck-and-linux): there is an install script that does everything for you.
 
 ### 1. Download the port
 
@@ -236,6 +243,54 @@ You can change most of the graphics options **in the game** as well: press **Ins
 
 The launcher checks for a new release when it starts and offers **Update** or **Later**. After you agree it downloads the archive, verifies it, restarts and replaces the files. `config.json`, `saves`, `mods`, `textures`, `game` and your own files are kept. Close the game before updating. More details: [docs/releasing.md](docs/releasing.md) (in Russian).
 
+## Steam Deck and Linux
+
+The port also runs natively on the **Steam Deck** (SteamOS, x86-64 Linux). It comes as a separate archive, **`UC-Linux-X.Y.Z.zip`**, on the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest). It has been tested on the Steam Deck only; another Linux PC may work, but nobody has tried it (it needs a Vulkan 1.3 driver and SDL 3, which the archive does not include: the Steam Deck has both).
+
+You need the same thing as on Windows: your **own** NTSC-U disc image (`RBUE08`) or an already unpacked game folder, and about 4 GB of free space for the game plus the size of the port. The game and the saves live next to the program, so an SD card works as well as the internal drive.
+
+### Automatic install (script)
+
+The easiest way. In **Desktop Mode** open Konsole and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/solleo95/reuc-recomp/main/scripts/linux/install-steamdeck.sh | bash
+```
+
+Or download [`install-steamdeck.sh`](scripts/linux/install-steamdeck.sh) and run `bash install-steamdeck.sh`. The script:
+
+1. downloads the newest `UC-Linux-X.Y.Z.zip` release and unpacks it into `~/Games/UmbrellaChronicles`;
+2. adds `uc-launcher.sh` to Steam as the non-Steam game **Resident Evil: The Umbrella Chronicles**, with its cover, wide cover, banner and icon;
+3. switches **Steam Input off** for it (the game reads the Deck's controller and gyro itself) and gives it a gamepad layout without gyro, with the right trackpad as a mouse, its haptic feedback and trackball mode off.
+
+Steam is closed for a moment and started again (in Game Mode the session restarts it): Steam rewrites its files when it exits, so it cannot be running while they are changed. The first version of every Steam file the script changes is kept next to it as `*.uc-backup`. Run the script again to update the game; your saves, mods and the `game` folder are not touched. It needs `python3`, which SteamOS has. Then go to [Choose the game](#choose-the-game).
+
+### Manual install
+
+1. Download **`UC-Linux-X.Y.Z.zip`** from the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest) (Desktop Mode, any browser) and extract it into a folder with write permission and room to spare, for example `~/Games/UmbrellaChronicles`. The archive contents go directly into that folder: you will see `uc-launcher.sh`, `uc_launcher`, `uc` and `data`.
+2. In Desktop Mode open Steam, then **Games → Add a Non-Steam Game to My Library → Browse**, show all files and pick **`uc-launcher.sh`** from the extracted folder. Name the entry as you like (after adding, you can change the name and the artwork in the game's properties).
+3. Open the game's **Properties → Controller** and choose **Disable Steam Input**. Then the game reads the Deck's controller and gyro itself. If the aim jumps or the cursor moves by itself, check in Steam's own controller settings that **Gyroscope** is not set to "Gyro as mouse".
+4. Switch to Game Mode and start the game from the library. `uc-launcher.sh` opens the launcher; the launcher starts the game when you press **Singleplayer**.
+
+### Choose the game
+
+On the launcher's **Game** tab choose the game, either way works:
+
+- **Browse** the folder with the extracted game (the one that contains `DATA`), or
+- **Select a disc image** (`.iso`, `.wbfs`, `.ciso`, `.wdf` or `.wia` of the NTSC-U disc; `.rvz` is not supported). When you press **Singleplayer**, the launcher unpacks it with the built-in Wit into the `game` folder next to the launcher (about a minute, 4 GB of free space). The rules are the same as in [way A](#way-a-the-launcher-unpacks-the-image) on Windows, including the check of the disc ID.
+
+The **Graphics**, **Controls** and **Mods** tabs hold the settings, and every change is saved at once. The **Controls** tab has a group for each way of aiming: the gyro (its own horizontal and vertical sensitivity), the sticks (stick aim speed) and touch aim, which includes the **Trackpad sensitivity** slider (100% by default). On the Deck's pad: the D-pad moves between rows and changes values, **A** switches or opens, **X** adds and **Y** clears a binding, **L1 / R1** move between the tabs, **B** goes back. Touch works too. The in-game menu opens with the **View** button (in Desktop Mode also with **Insert**). When a newer `UC-Linux-X.Y.Z.zip` is the latest release, the launcher offers to install it; the update replaces only the program files.
+
+### Differences from Windows
+
+- **Vulkan only:** no Direct3D 11 or 12, and no DLSS, DLSS Frame Generation or Streamline. Options the Linux build cannot run are hidden in the launcher.
+- **No online co-op** on Linux yet, and no native DLL mods (Lua and JavaScript mods work). The native Wii Remote support is Windows-only.
+- **The frame limit is at most 90 FPS** on Linux (the Steam Deck OLED is a 90 Hz screen).
+- The launcher has two looks: in **Game Mode** it is the Deck launcher for the pad and the touch screen; in **Desktop Mode** and on other Linux desktops it is the same launcher as on Windows. To force one: `--ui deck` or `--ui desktop`.
+- Gyro aiming works from the Deck's own gyro (that is why Steam Input is off for the game).
+
+**Full player guide** (controls, gyro, trackpad and touch aiming, menus, performance, troubleshooting): [docs/steamdeck.md](docs/steamdeck.md) · [на русском](docs/steamdeck.ru.md). Technical details and the options of the install script: [docs/steamdeck-install.md](docs/steamdeck-install.md).
+
 ## In-game menu and controls
 
 - **Insert** opens the in-game menu over the game: graphics and effects (live, without restarting the game), DLSS / FSR and frame generation, DLSS 5, key bindings, mouse sensitivity, gamepad settings, the **Reticle** tab and the **Mods** tab where you switch mods on and off while playing. Press Insert again to close it. You can bind another key to the menu on the **Controls** page ("Settings menu").
@@ -318,7 +373,8 @@ NAT punching works with most home routers. It will not work if either side has *
 
 ## Known issues
 
-- Early build, tested on one PC: other GPUs, drivers and CPUs may show problems that the author has not seen.
+- Early build, tested on one PC and on a Steam Deck: other GPUs, drivers and CPUs may show problems that the author has not seen.
+- Linux and the Steam Deck: see [Differences from Windows](#differences-from-windows) for what the Linux build does not have. Only the Steam Deck has been tried; other Linux PCs are untested, and the gamepad, touch and trackpad control in Game Mode and the update from GitHub have been checked only partly.
 - Multiplayer: see above. It may fail to connect, desynchronise or freeze for a moment after a network lag.
 - Only `RBUE08` (NTSC-U) is supported.
 - Not all graphics options work together on all GPUs; unsupported ones are greyed out with a reason.
@@ -334,7 +390,7 @@ Found something else? Tell us: [Reporting problems](#reporting-problems).
 - **[GitHub Issues](https://github.com/solleo95/reuc-recomp/issues)** — bug reports (there is a form) and suggestions.
 - **[Discord](https://discord.gg/njy2CqecyY)** — bug reports and suggestions are welcome here too, as well as questions, help and chat.
 
-A useful report has: the **version** of the port (shown in the launcher), your **GPU, driver, Windows version**, which graphics options were on (upscaler, frame generation, ray tracing, HDR), how to repeat the problem, and a screenshot or a short video if it is visual. The released builds do not write log files; builds from source do (the `logs` and `debug` folders next to `uc.exe`), attach them if you have them. Do not attach any game files.
+A useful report has: the **version** of the port (shown in the launcher), your **GPU, driver, Windows version** (on the Steam Deck: the SteamOS version and whether it was Game Mode or Desktop Mode), which graphics options were on (upscaler, frame generation, ray tracing, HDR), how to repeat the problem, and a screenshot or a short video if it is visual. The released builds do not write log files; builds from source do (the `logs` and `debug` folders next to `uc.exe`), attach them if you have them. Do not attach any game files.
 
 ## Modding
 
@@ -362,6 +418,8 @@ Reference pages: [short modding reference](docs/modding/getting-started.md), [re
 ## Building from source
 
 Short version: you need Visual Studio Build Tools (C++), LLVM / `clang-cl`, CMake, Ninja, Python 3.10+, the Vulkan SDK and **your own extracted game image** (`main.dol` is translated to native code during the build). Copy [`local.env.example`](local.env.example) to `local.env`, set `UC_INSTALL_DIR` and run `build.bat`.
+
+The Linux (Steam Deck) build is cross-built from Windows with `scripts/linux/build.ps1`; see [docs/building.md](docs/building.md#building-for-linux-the-steam-deck).
 
 Full instructions: [docs/building.md](docs/building.md).
 

@@ -43,8 +43,8 @@ body:
   - type: input
     id: windows
     attributes:
-      label: Windows version / Версия Windows
-      placeholder: "Windows 11 24H2"
+      label: Windows or SteamOS version / Версия Windows или SteamOS
+      placeholder: "Windows 11 24H2 / SteamOS 3.7 (Game Mode)"
     validations:
       required: true
   - type: textarea

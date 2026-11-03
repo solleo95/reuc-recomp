@@ -14,6 +14,7 @@ This page explains how to build the port yourself, run its tests and work on it.
 - [Build commands](#build-commands)
 - [Tests](#tests)
 - [Project layout](#project-layout)
+- [Building for Linux (the Steam Deck)](#building-for-linux-the-steam-deck)
 - [Making a release archive](#making-a-release-archive)
 - [Troubleshooting](#troubleshooting)
 
@@ -30,7 +31,7 @@ Two consequences:
 
 | Tool | Notes |
 |---|---|
-| Windows 10 / 11, 64-bit | The port is Windows-only |
+| Windows 10 / 11, 64-bit | The build runs on Windows; the Linux (Steam Deck) build is cross-built from it, see [Building for Linux](#building-for-linux-the-steam-deck) |
 | **Visual Studio Build Tools** (or Visual Studio) with the **"Desktop development with C++"** workload | MSVC runtime, Windows SDK, resource compiler |
 | **LLVM** with `clang-cl` | The project is built with `clang-cl` |
 | **CMake** 3.25 or newer | |
@@ -118,6 +119,21 @@ The harness copies your saves into `build\autotest\<run>\saves` and never plays 
 | `scripts`, `tools` | Build scripts, the test harness (`scripts\uctest`) and development tools |
 | `tests` | Unit, integration and end-to-end tests |
 | `docs` | Documentation, design notes and measurements |
+
+## Building for Linux (the Steam Deck)
+
+The Linux build is cross-compiled on Windows (clang against the Steam Runtime "sniper" sysroot) and runs on the Steam Deck. It needs the translated game like the Windows build (`generated\`), plus:
+
+- the sysroot: download `com.valvesoftware.SteamRuntime.Sdk-amd64,i386-sniper-sysroot.tar.gz` from <https://repo.steampowered.com/steamrt3/images/latest-public-stable/> and unpack it with `python scripts/linux/extract_sysroot.py <archive.tar.gz> <out-dir>` (it works without symlink rights);
+- LLVM, CMake and Ninja on `PATH` (the same ones as for the Windows build).
+
+```powershell
+pwsh scripts/linux/build.ps1 -Target uc_launcher,uc    # build-linux-znver2\ (tuned for the Steam Deck's CPU)
+python scripts/linux/deck.py package build/deck-release
+python scripts/build_release_deck.py --version X.Y.Z --stage build/deck-release   # writes UC-Linux-X.Y.Z.zip
+```
+
+How to install and run it on the Deck: [steamdeck-install.md](steamdeck-install.md). The releasing rules (both archives in every release) are in the same file.
 
 ## Making a release archive
 

@@ -87,7 +87,7 @@ bool HostInput::event(const SDL_Event& event,NativeInput& input,bool captured) {
         if(!captured || event.motion.which==SDL_TOUCH_MOUSEID) break;
         cursor_x_=event.motion.x*density_; cursor_y_=event.motion.y*density_;
         if(pointer_==PointerMode::absolute) {
-            input.aim_absolute(cursor_x_,cursor_y_,width_,height_,event.motion.timestamp,1/density_,touch_mouse && touching_,touch_pointer_);   // the Deck: the cursor's steps move the pointer from where it is (the gyro may have moved it)
+            input.aim_absolute(cursor_x_,cursor_y_,width_,height_,event.motion.timestamp,1/density_,touch_mouse && touching_,touch_pointer_,touch_mouse && touching_ ? 1.f : sensitivity_);   // the Deck: the cursor's steps (the trackpad's) move the pointer from where it is (the gyro may have moved it), scaled by the sensitivity; a finger on the screen keeps its 1:1 steps; a gun's position does not follow
             if(touch_pointer_ && !touching_ && width_ && height_) {   // the grabbed cursor stops at the window's edge and the aim with it: recentre it near the edge
                 const float mx=width_*.1f,my=height_*.1f;
                 if(cursor_x_<mx || cursor_x_>width_-mx || cursor_y_<my || cursor_y_>height_-my) { recentre_=true; input.aim_lift(); }

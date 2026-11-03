@@ -14,6 +14,7 @@
 - [Команды сборки](#команды-сборки)
 - [Тесты](#тесты)
 - [Структура проекта](#структура-проекта)
+- [Сборка для Linux (Steam Deck)](#сборка-для-linux-steam-deck)
 - [Сборка релизного архива](#сборка-релизного-архива)
 - [Если что-то не получается](#если-что-то-не-получается)
 
@@ -30,7 +31,7 @@
 
 | Инструмент | Примечание |
 |---|---|
-| Windows 10 / 11, 64-разрядная | Порт работает только на Windows |
+| Windows 10 / 11, 64-разрядная | Сборка выполняется на Windows; сборка для Linux (Steam Deck) кросс-компилируется из неё, см. [Сборка для Linux](#сборка-для-linux-steam-deck) |
 | **Visual Studio Build Tools** (или Visual Studio) с рабочей нагрузкой **«Разработка классических приложений на C++»** | Среда MSVC, Windows SDK, компилятор ресурсов |
 | **LLVM** с `clang-cl` | Проект собирается `clang-cl` |
 | **CMake** 3.25 или новее | |
@@ -118,6 +119,21 @@ python -m uctest run train_gameplay --speed 8
 | `scripts`, `tools` | Скрипты сборки, тестовый стенд (`scripts\uctest`) и инструменты разработки |
 | `tests` | Модульные, интеграционные и сквозные тесты |
 | `docs` | Документация, заметки о дизайне и измерения |
+
+## Сборка для Linux (Steam Deck)
+
+Сборка для Linux кросс-компилируется на Windows (clang с sysroot «sniper» из Steam Runtime) и работает на Steam Deck. Ей нужна транслированная игра, как и сборке для Windows (`generated\`), и ещё:
+
+- sysroot: скачайте `com.valvesoftware.SteamRuntime.Sdk-amd64,i386-sniper-sysroot.tar.gz` с <https://repo.steampowered.com/steamrt3/images/latest-public-stable/> и распакуйте командой `python scripts/linux/extract_sysroot.py <archive.tar.gz> <out-dir>` (она работает без прав на символические ссылки);
+- LLVM, CMake и Ninja в `PATH` (те же, что для сборки под Windows).
+
+```powershell
+pwsh scripts/linux/build.ps1 -Target uc_launcher,uc    # build-linux-znver2\ (под процессор Steam Deck)
+python scripts/linux/deck.py package build/deck-release
+python scripts/build_release_deck.py --version X.Y.Z --stage build/deck-release   # создаёт UC-Linux-X.Y.Z.zip
+```
+
+Как установить и запустить на Deck: [steamdeck-install.md](steamdeck-install.md) (на английском). Правила выпуска (оба архива в каждом релизе) описаны в том же файле.
 
 ## Сборка релизного архива
 

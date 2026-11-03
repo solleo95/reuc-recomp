@@ -193,6 +193,24 @@ static void absolute_gestures_follow_the_scale() {
         CHECK(knife==(scale==1.f));
     }
 }
+static void trackpad_sensitivity_scales_the_cursor_steps_only() {
+    // the Deck's trackpad is a cursor whose steps move the pointer ("follow"): the sensitivity multiplies the pointer's step, a swing keeps the raw motion
+    float steps[3]={};
+    int at=0;
+    for(const float scale:{1.f,2.f,.5f}) {
+        uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
+        input.host_button({uc::PhysicalKind::mouse,1},true);
+        input.aim_absolute(500,500,1000,1000,1000000000,1,false,true,scale);   // the first point is only the reference
+        input.aim_absolute(540,500,1000,1000,1008000000,1,false,true,scale);   // 40 px in 8 ms: a swing at any sensitivity
+        steps[at++]=input.latest_aim()[0];
+        CHECK((input.consume_actions().pressed&action_bit(uc::Action::knife))!=0);
+    }
+    CHECK(steps[0]>0 && std::abs(steps[1]-2*steps[0])<1e-5f && std::abs(steps[2]-.5f*steps[0])<1e-5f);
+    uc::NativeInput input; input.context(uc::InputContext::gameplay); input.focus(true);
+    CHECK(input.aim_absolute(500,500,1000,1000,1000000000,1,false,false,3));   // not following (a gun's absolute position): the scale does not apply
+    CHECK(input.aim_absolute(750,500,1000,1000,1030000000,1,false,false,3));
+    CHECK(std::abs(input.latest_aim()[0]-.4f)<1e-5f);
+}
 static void smoothing_moves_part_way() {
     uc::NativeInput input; input.focus(true); input.pointer_smoothing(.5f);
     CHECK(input.aim_absolute(0,0,1000,500));   // the first point is taken as it is
@@ -320,6 +338,7 @@ int main() {
     absolute_aim_feeds_gestures();
     smoothing_moves_part_way();
     absolute_gestures_follow_the_scale();
+    trackpad_sensitivity_scales_the_cursor_steps_only();
     a_zone_pulse_leaves_a_held_reload_button_held();
     demo_carries_the_analog_camera();
     raw_demo_sample_remains_compatible();

@@ -19,7 +19,7 @@ namespace {
 const char* section_of(std::string_view id) {
     if (id == "gyro_mode") return "deck_section_gyro";
     if (id == "aim_speed") return "deck_section_sticks";
-    if (id == "pointer_smoothing") return "deck_section_touch";
+    if (id == "trackpad_sensitivity") return "deck_section_touch";
     return nullptr;
 }
 bool follow_editor(Options& options, const BindingEditor& editor) {   // the table follows its editor

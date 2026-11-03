@@ -181,6 +181,7 @@ const std::vector<Item>& table() {
         t.push_back(slider("aim_dead_zone","deck_aim_dead_zone",P,KM|KL,[](const Options& o) { return percent(o.gamepad.aim.dead_zone); },[](Options& o,int v) { o.gamepad.aim.dead_zone=float(v)/100; },0,50,1,"%d%%"));
         t.push_back(slider("camera_dead_zone","deck_camera_dead_zone",P,KM|KL,[](const Options& o) { return percent(o.gamepad.camera_dead_zone); },[](Options& o,int v) { o.gamepad.camera_dead_zone=float(v)/100; },0,50,1,"%d%%"));
         // Touch aim: on the Deck it sits on the Controls page with the gyro and sticks; the desktop menus keep it in their own widgets
+        t.push_back(slider("trackpad_sensitivity","trackpad_sensitivity",P,KM|KL,[](const Options& o) { return int(o.mouse_sensitivity); },[](Options& o,int v) { o.mouse_sensitivity=uint32_t(v); },int(kMouseSensitivityMin),int(kMouseSensitivityMax),5,"%d%%"));   // the Deck's cursor is the trackpad: the same setting as the mouse sensitivity (config mouse_sensitivity), which the Deck surfaces do not list
         t.push_back(slider("pointer_smoothing","pointer_smoothing",P,kEverywhere,[](const Options& o) { return int(o.pointer_smoothing); },[](Options& o,int v) { o.pointer_smoothing=uint32_t(v); },0,int(kPointerSmoothingMax),5,"%d%%",smoothing_state));
         t.push_back(choice("reload_zone","reload_zone",P,kEverywhere,
             [](const Options&,const Env&,const Text& tr) { return std::vector<std::string>{tr("reload_zone_off"),tr("reload_zone_corner"),tr("reload_zone_edge")}; },

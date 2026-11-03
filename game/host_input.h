@@ -11,7 +11,7 @@ namespace uc {
 class HostInput {
 public:
     void extent(uint32_t width,uint32_t height) { width_=width; height_=height; }
-    void sensitivity(uint32_t percent) { sensitivity_=percent/100.f; }   // scales the aim only; gestures (shake, swipes) keep the raw motion
+    void sensitivity(uint32_t percent) { sensitivity_=percent/100.f; }   // scales the aim only (a mouse's motion, or on the Deck the trackpad cursor's steps); gestures (shake, swipes) keep the raw motion
     void pointer(PointerMode mode) { pointer_=mode; }   // absolute: the cursor's window position is the pointer (lightguns); the smoothing is NativeInput's
     void density(float pixels_per_unit) { density_=pixels_per_unit; }   // window pixels per unit of the event coordinates (SDL_GetWindowPixelDensity)
     void touch_pointer(bool on) { touch_pointer_=on; }   // the pointer is a touchscreen (the Steam Deck): taps, held fingers and swipes instead of a mouse's left button
