@@ -76,6 +76,18 @@ const ModEntry* ModMenuUi::entry(const std::string& id) const {
 
 std::string ModMenuUi::manager_title() { return tr("mods_tab"); }
 
+bool ModMenuUi::edit_settings(const std::string& id, const std::function<void(ModSettings&)>& edit) {
+    if (auto* host = host_()) return host->edit_settings(id, edit);
+    if (standalone_) if (auto* settings = standalone_->settings(id)) { edit(*settings); return true; }
+    return false;
+}
+
+std::string ModMenuUi::dll_hash(const std::string& id) {
+    auto& hash = hash_cache_[id];
+    if (hash.empty()) if (const ModEntry* e = entry(id); e && !e->manifest.native.empty()) if (const auto dll = confine(e->root, e->manifest.native)) hash = sha256_file_hex(*dll);
+    return hash;
+}
+
 void ModMenuUi::remember(const std::string& key) {
     const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
     rects_[key] = {lo.x, lo.y, hi.x, hi.y};
@@ -131,6 +143,7 @@ void ModMenuUi::manager_tab(float unit) {
     if (!r) { ImGui::Spacing(); ImGui::TextWrapped("%s", tr("none")); return; }
     ImGui::Separator();
 
+#ifdef _WIN32   // native (DLL) mods exist on Windows only: the switch and its warning are not offered elsewhere
     bool allow = r->allow_native();
     push_row_style();   // the rows (not the windows that open over them) use the host's own box size
     if (ImGui::Checkbox(tr("allow_native"), &allow)) {
@@ -149,8 +162,11 @@ void ModMenuUi::manager_tab(float unit) {
         if (ImGui::Button(tr("cancel"))) ImGui::CloseCurrentPopup();
         end_modal();
     }
+#endif
     if (auto* host = host_()) {
-        ImGui::SameLine();
+#ifdef _WIN32
+        ImGui::SameLine();   // beside the native-code switch above
+#endif
         if (ImGui::Button(tr("reload"))) host->reload_scripts();
     }
     ImGui::Separator();

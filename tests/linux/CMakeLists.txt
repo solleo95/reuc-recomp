@@ -60,9 +60,17 @@ foreach(t test_ppc_int test_ppc_mem test_ppc_float test_mmio test_lowmem test_sc
 endforeach()
 
 target_include_directories(test_gx_hle PRIVATE ${R}/hle)
+uc_linux_test(test_matrix_transpose_hle test_support)
+target_include_directories(test_matrix_transpose_hle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+uc_linux_test(test_game_math_hle test_support)
+target_include_directories(test_game_math_hle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 uc_linux_test(test_frame_limit_cap uc_options uc_game_pacing test_support rt)
 target_include_directories(test_frame_limit_cap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/game)   # check.h, frame_limit_cap.h
+find_package(Vulkan REQUIRED)
+uc_linux_test(test_pipeline_keys Vulkan::Vulkan)
+target_include_directories(test_pipeline_keys PRIVATE ${CMAKE_SOURCE_DIR}/renderer)
+uc_linux_test(test_motion_blur_compute Vulkan::Vulkan)   # reference.spv candidate.spv; headless GPU oracle on Deck
 
 foreach(t test_clock test_clock_sleep)
   uc_linux_test(${t} uc_clock_only)
@@ -86,6 +94,8 @@ add_library(uc_image_unpack_only STATIC ${CMAKE_SOURCE_DIR}/launcher/image_unpac
 target_include_directories(uc_image_unpack_only PUBLIC ${CMAKE_SOURCE_DIR}/launcher)
 uc_linux_test(test_image_unpack_posix uc_image_unpack_only)
 target_include_directories(test_image_unpack_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
+uc_linux_test(test_launch_posix uc_launch_probe uc_netplay)
+target_include_directories(test_launch_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
 uc_linux_test(test_deck_exec_posix uc_deck_game)
 target_include_directories(test_deck_exec_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
 add_library(uc_instance_lock_only STATIC ${CMAKE_SOURCE_DIR}/launcher/deck/instance_lock.cpp)

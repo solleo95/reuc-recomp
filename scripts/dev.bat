@@ -13,5 +13,5 @@ if not "%~1"=="" goto :plain_ctest
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tests-run.ps1" || exit /b 1
 exit /b 0
 :plain_ctest
-ctest --test-dir "%ROOT%\build" --output-on-failure %* || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ctest-hidden.ps1" %* || exit /b 1
 exit /b 0

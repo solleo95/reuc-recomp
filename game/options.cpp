@@ -54,6 +54,10 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
             if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || (tick!=30 && tick!=60 && tick!=120 && tick!=144 && tick!=240))return "invalid value for --net-tick (30, 60, 120, 144 or 240)";
             options.net_tick=tick;
         }
+        else if (arg == "--ui") {
+            if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --ui";
+            options.ui = std::string(arguments[i]);
+        }
         else if (arg == "--renderer") {
             if (++i >= arguments.size() || arguments[i].empty()) return "missing value for --renderer";
             const auto backend = renderer_backend_from_name(arguments[i]);

@@ -13,7 +13,7 @@ spec = importlib.util.spec_from_file_location("build_release_deck", REPO / "scri
 deck = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deck)
 
-FILES = ["uc", "uc_launcher", "uc-deck.sh", "uc-game.sh", "tools/wit/wit", "data/shaders/a.spv", "data/uc.map", "assets/launcher/graphite-train.png",
+FILES = ["uc", "uc_launcher", "uc-launcher.sh", "uc.sh", "tools/wit/wit", "data/shaders/a.spv", "data/uc.map", "assets/launcher/graphite-train.png",
          "assets/launcher/graphite-brand.png", "licenses/wit/gpl-2.0.txt"]
 
 
@@ -49,13 +49,13 @@ class PackageTreeTests(unittest.TestCase):
                 installed |= set(re.findall(r"DESTINATION\s+licenses/([A-Za-z0-9_.+-]+)", cmake.read_text(encoding="utf-8", errors="replace")))
             shipped = {name.split("/")[1] for name in names if name.startswith("licenses/")}
             self.assertEqual(installed - windows_only - shipped, set(), "licences the Windows package ships and the Deck package lacks")
-            for script in ("uc-deck.sh", "uc-game.sh"):          # shell needs LF, whatever git checked out on Windows
+            for script in ("uc-launcher.sh", "uc.sh"):          # shell needs LF, whatever git checked out on Windows
                 text = (out / script).read_bytes()
                 self.assertTrue(text.startswith(b"#!/bin/sh\n") and b"\r" not in text, script)
             # and the release builder accepts exactly this tree
             repo = Path(tmp) / "repo"
             repo.mkdir()
-            self.assertEqual(deck.build_deck_release(repo, "0.0.3", out).name, "UC-SteamDeck-0.0.3.zip")
+            self.assertEqual(deck.build_deck_release(repo, "0.0.3", out).name, "UC-Linux-0.0.3.zip")
 
     def test_package_tree_refuses_a_missing_binary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,7 +78,7 @@ class DeckReleaseTests(unittest.TestCase):
 
     def test_zip_has_manifest_and_modes(self):
         final = deck.build_deck_release(self.repo, "0.0.2", self.stage)
-        self.assertEqual(final.name, "UC-SteamDeck-0.0.2.zip")
+        self.assertEqual(final.name, "UC-Linux-0.0.2.zip")
         with zipfile.ZipFile(final) as archive:
             names = set(archive.namelist())
             self.assertEqual(names, set(FILES) | {"release.json"})
@@ -87,7 +87,7 @@ class DeckReleaseTests(unittest.TestCase):
             self.assertEqual({entry["path"] for entry in manifest["files"]}, set(FILES))
             for info in archive.infolist():   # "made by Unix": extractors ignore the mode bits of an entry written by an MS-DOS host (a build on Windows)
                 self.assertEqual(info.create_system, 3, info.filename)
-            for name in ("uc", "uc_launcher", "uc-deck.sh", "uc-game.sh", "tools/wit/wit"):
+            for name in ("uc", "uc_launcher", "uc-launcher.sh", "uc.sh", "tools/wit/wit"):
                 self.assertEqual(stat.S_IMODE(archive.getinfo(name).external_attr >> 16), 0o755, name)
             self.assertEqual(stat.S_IMODE(archive.getinfo("data/uc.map").external_attr >> 16), 0o644)
 
@@ -113,10 +113,10 @@ class DeckReleaseTests(unittest.TestCase):
         self.assertEqual(list(self.repo.iterdir()), [])
 
     def test_existing_archive_is_not_overwritten(self):
-        (self.repo / "UC-SteamDeck-0.0.2.zip").write_bytes(b"old")
+        (self.repo / "UC-Linux-0.0.2.zip").write_bytes(b"old")
         with self.assertRaises(FileExistsError):
             deck.build_deck_release(self.repo, "0.0.2", self.stage)
-        self.assertEqual((self.repo / "UC-SteamDeck-0.0.2.zip").read_bytes(), b"old")
+        self.assertEqual((self.repo / "UC-Linux-0.0.2.zip").read_bytes(), b"old")
 
     def test_names_every_client_would_refuse_are_refused_here(self):
         # the rules of path_key in updater/release.cpp: a release with such a name would fail as "Invalid manifest" on every Deck
@@ -146,7 +146,7 @@ class DeckReleaseTests(unittest.TestCase):
 
     def test_checklist_mentions_latest_and_both_archives(self):
         text = deck.checklist("0.0.2")
-        for needle in ("BOTH archives", "UC-Windows-<version>.zip", "UC-SteamDeck-<version>.zip", "latest release", "0.0.2"):
+        for needle in ("BOTH archives", "UC-Windows-<version>.zip", "UC-Linux-<version>.zip", "latest release", "0.0.2"):
             self.assertIn(needle, text)
 
 

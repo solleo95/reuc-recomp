@@ -59,11 +59,11 @@ def stage(build_dir):
             shutil.copy2(build / "launcher" / "uc_launcher", out / "uc_launcher")
         # No libSDL3 here: the Deck's own SDL3 (3.4, with Wayland) is used; the one we build has no Wayland backend.
         shutil.copytree(build / "game" / "data", out / "data")
-        for script in ("uc-deck.sh", "uc-game.sh"):   # git on Windows may check them out with CRLF; sh needs LF
+        for script in ("uc-launcher.sh", "uc.sh"):   # git on Windows may check them out with CRLF; sh needs LF
             (out / script).write_bytes(Path(__file__).with_name(script).read_bytes().replace(b"\r\n", b"\n"))   # the Steam / terminal entry; the game's start script
         ssh(f"mkdir -p {GAME}")
         with subprocess.Popen(["tar", "-cf", "-", "-C", str(out), "."], stdout=subprocess.PIPE) as tar:
-            subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -xf - -C {GAME} && chmod +x {GAME}/uc {GAME}/uc_launcher {GAME}/uc-deck.sh {GAME}/uc-game.sh"], stdin=tar.stdout, check=True)
+            subprocess.run(["ssh", "-o", "BatchMode=yes", HOST, f"tar -xf - -C {GAME} && chmod +x {GAME}/uc {GAME}/uc_launcher {GAME}/uc-launcher.sh {GAME}/uc.sh"], stdin=tar.stdout, check=True)
     ssh(f"du -sh {GAME}; df -h /home | tail -1")
 
 
@@ -102,7 +102,7 @@ def package_tree(build_dir, out_dir):
     for target, source in parts.items():
         (out / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, out / target)
-    for script in ("uc-deck.sh", "uc-game.sh"):   # the Steam entry (starts the launcher) and the game's start script (the launcher runs it); sh needs LF, git on Windows may check out CRLF
+    for script in ("uc-launcher.sh", "uc.sh"):   # the Steam entry (starts the launcher) and the game's start script (the launcher runs it); sh needs LF, git on Windows may check out CRLF
         (out / script).write_bytes((Path(__file__).with_name(script)).read_bytes().replace(b"\r\n", b"\n"))
     shutil.copytree(build / "game" / "data", out / "data")
     return out

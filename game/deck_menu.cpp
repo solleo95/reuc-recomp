@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
+#include <span>
 namespace uc {
 namespace {
 constexpr uint64_t kRepeatFirstNs=380000000ull, kRepeatNs=70000000ull;   // a held direction repeats after 0.38 s, then every 70 ms
@@ -34,14 +35,35 @@ settings::Env DeckMenu::env() const {
 void DeckMenu::opened() {
     std::lock_guard lock(mutex_);
     nav_=DeckNav{}; queue_.clear(); has_hold_=false; stick_scroll_=0; close_requested_=quit_armed_=quit_requested_=false; button_sub_=0; moved_by_key_=true; list_was_open_=false; stick_dir_[0]=stick_dir_[1]=0;
-    editor_=BindingEditor(current().gamepad.bindings,BindingTable::gamepad); was_mods_page_=false;
+    editor_=BindingEditor(current().gamepad.bindings,BindingTable::gamepad);
+    mods_focus_=settings_focus_=modal_focus_=deck::FocusList{}; mods_sub_=0; typing_=false;
+    mods_ui_.settings_id.clear(); mods_ui_.confirm_id.clear(); mods_ui_.native_warning=mods_ui_.text_open=mods_ui_.list.open=false;
     right_pad_pressed_=click_open_=false; clicks_.clear();
 }
 void DeckMenu::menu_closed() { hold_capturing_=false; editor_.cancel_capture(); editor_.focus(false); capture_took_=false; right_pad_pressed_=false; if(click_open_) { std::lock_guard lock(mutex_); clicks_.push_back(false); click_open_=false; } }
 std::vector<settings::Page> DeckMenu::pages() const {
     auto result=settings::pages_for(settings::deck_menu);
-    if(!mods_) result.erase(std::remove(result.begin(),result.end(),settings::Page::mods),result.end());
+    if(!mods_access_) result.erase(std::remove(result.begin(),result.end(),settings::Page::mods),result.end());
     return result;
+}
+void DeckMenu::set_mods(deck::ModsAccess access,std::function<void()> registry_changed) {
+    registry_changed_=std::move(registry_changed);
+    if(!access.registry) { mods_access_.reset(); return; }
+    mods_access_=std::move(access);
+    mods_ui_.conflicts_known=false;
+    mods_ui_.open_list=[this](const std::string& title,std::vector<std::string> labels,int current,std::function<void(int)> choose) {   // a mod's choice setting: its list opens over the settings window
+        auto& list=mods_ui_.list;
+        list.open=true; list.title=title; list.labels=std::move(labels); list.current=current; list.choose=std::move(choose);
+        modal_focus_.set_focus(current);
+    };
+}
+deck::RowCtx DeckMenu::mod_rows(deck::FocusList& focus,float unit) {
+    deck::RowCtx rows;
+    rows.focus=&focus; rows.unit=unit; rows.serif=fonts_.serif;
+    rows.text=[this](std::string_view key) { return std::string(tr(key)); };
+    rows.panel_text=[this](std::string_view key) { return tr(key); };
+    rows.env=env(); rows.touch=&touch_; rows.sub=&mods_sub_;
+    return rows;
 }
 bool DeckMenu::custom_press(std::string_view id,uint64_t now_ns) {
     if(id=="gyro_hold_button") { hold_capturing_=true; capture_since_ns_=now_ns; return true; }   // press the button that holds the gyro on
@@ -105,7 +127,7 @@ bool DeckMenu::event(const SDL_Event& event) {
     }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
-        if(event.key.repeat) return false;
+        if(typing_ || event.key.repeat) return false;   // typing a mod's text setting: the keys are the text field's
         const bool down=event.type==SDL_EVENT_KEY_DOWN;
         switch(event.key.scancode) {   // a keyboard stands in for the pad (a desktop test run, a dock)
         case SDL_SCANCODE_UP: hold(NavKey::up,down); return true;
@@ -144,7 +166,10 @@ void DeckMenu::build() {
     }
     nav_.page=std::clamp(nav_.page,0,std::max(0,page_count-1));
     const auto page_of=[&] { return pages[size_t(nav_.page)]; };
-    if(page_of()==settings::Page::mods) io.ConfigFlags|=ImGuiConfigFlags_NavEnableGamepad; else io.ConfigFlags&=~ImGuiConfigFlags_NavEnableGamepad;   // the mod manager's own widgets: ImGui moves the focus with the pad there
+    io.ConfigFlags&=~ImGuiConfigFlags_NavEnableGamepad;
+    const bool mods_window_at_start=deck::mods_window_open(mods_ui_);   // decided once per frame: a window opened during it gets its keys from the next one
+    std::vector<deck::DeckKey> mods_keys;                                // this frame's keys for the Mods page or its windows
+    typing_=mods_ui_.text_open;
     std::deque<NavKey> keys; std::deque<bool> clicks; float scroll=0;
     {   // the keys of this frame: the queue and the repeat of a direction that is held
         std::lock_guard lock(mutex_);
@@ -182,7 +207,17 @@ void DeckMenu::build() {
             }
             continue;
         }
-        if(page==settings::Page::mods && key==NavKey::back && ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId|ImGuiPopupFlags_AnyPopupLevel)) continue;   // a mod's window closes first (ImGui takes the button itself)
+        if(page==settings::Page::mods) {   // the launcher's Mods tab: the focus list takes the keys; the pages are still L1 and R1 (not while a window is open over it)
+            const bool page_key=key==NavKey::page_prev || key==NavKey::page_next;
+            if(!page_key) {
+                using deck::DeckKey;
+                mods_keys.push_back(key==NavKey::up ? DeckKey::up : key==NavKey::down ? DeckKey::down : key==NavKey::left ? DeckKey::left : key==NavKey::right ? DeckKey::right
+                    : key==NavKey::accept ? DeckKey::accept : key==NavKey::back ? DeckKey::back : key==NavKey::add ? DeckKey::add : DeckKey::clear);
+                if(key==NavKey::back && !mods_window_at_start) close_requested_=true;
+                continue;
+            }
+            if(mods_window_at_start) continue;
+        }
         const auto rows=deck_rows(page,options,where);
         if(key==NavKey::accept && !rows.empty() && custom_press(rows[size_t(std::clamp(nav_.row,0,int(rows.size())-1))]->id,now_ns)) continue;
         const auto result=nav_.handle(key,options,where,rows,page_count);
@@ -210,7 +245,6 @@ void DeckMenu::build() {
     ImGui::PushStyleColor(ImGuiCol_WindowBg,rgb(kPanel,.98f)); ImGui::PushStyleColor(ImGuiCol_Border,rgb(kTrack));
     ImGui::PushFont(fonts_.sans,24*s);
     ImGui::Begin("##deck_menu",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse|ImGuiWindowFlags_NoNav);
-    const bool panel_focused=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     auto& draw=*ImGui::GetWindowDrawList();
     const ImVec2 origin=ImGui::GetWindowPos();
     const float side=272*s, footer=70*s, pad=30*s;
@@ -246,13 +280,20 @@ void DeckMenu::build() {
     const float rows_top=origin.y+84*s, rows_height=panel.y-84*s-footer;
     const auto current_page=page_of();
     const PanelText panel_text=[this](std::string_view key) { return tr(key); };
-    if(current_page!=settings::Page::mods) {   // the Mods page is a window of its own, further down
+    {
     ImGui::SetCursorScreenPos({left-10*s,rows_top});
     ImGui::PushStyleColor(ImGuiCol_ChildBg,rgb(0x000000,0));
     ImGui::BeginChild("##rows",{right-left+20*s,rows_height},ImGuiChildFlags_None,ImGuiWindowFlags_NoNav);
     ImGui::PopStyleColor();
     if(scroll!=0) ImGui::SetScrollY(ImGui::GetScrollY()+scroll*1100*s*io.DeltaTime);   // the right stick
-    if(current_page==settings::Page::buttons) {   // one row per action of the gamepad table: its buttons as pictures, a button to add one and one to clear them
+    if(current_page==settings::Page::mods) {   // the launcher's Mods tab: its rows over this game's mods
+        mods_focus_.begin_frame(mods_window_at_start ? std::span<const deck::DeckKey>{} : std::span<const deck::DeckKey>(mods_keys));
+        auto mod_context=mod_rows(mods_focus_,s);
+        ImGui::Dummy({0,4*s});
+        if(deck::draw_mods(mod_context,*mods_access_,mods_ui_,language_) && registry_changed_) registry_changed_();
+        ImGui::Dummy({0,8*s});
+        mods_focus_.end_frame();
+    } else if(current_page==settings::Page::buttons) {   // one row per action of the gamepad table: its buttons as pictures, a button to add one and one to clear them
         auto& rows_draw=*ImGui::GetWindowDrawList();
         const float width=ImGui::GetContentRegionAvail().x-10*s, row_height=64*s, gap=8*s, small=46*s;
         ImGui::Dummy({0,4*s});
@@ -438,7 +479,7 @@ void DeckMenu::build() {
         if(editor_.capturing()) {}
         else if(!nav_.list_open) {
             if(buttons_page) { face("X"); label(tr("deck_hint_add")); face("Y"); label(tr("deck_hint_clear")); }
-            else if(current_page!=settings::Page::mods) { dpad(); label(tr("deck_hint_change")); }
+            else { dpad(); label(tr("deck_hint_change")); }
             face("B"); label(tr("deck_hint_back"));
             pill("L1"); pill("R1"); label(tr("deck_hint_page"));
             pill("View"); label(tr("deck_hint_close"));
@@ -493,25 +534,20 @@ void DeckMenu::build() {
         list_was_open_=nav_.list_open;
     } else list_was_open_=false;
 
-    const bool focus_mods=current_page==settings::Page::mods && (!was_mods_page_ || (panel_focused && !ImGui::IsMouseDown(0)));   // the pad moves ImGui's focus inside the focused window only
     ImGui::End();
     ImGui::PopFont(); ImGui::PopStyleColor(2); ImGui::PopStyleVar(2);
 
-    // the Mods page: the mod platform's own manager in a window over the content area, laid out in the same units as the desktop menu
-    if(current_page==settings::Page::mods && mods_) {
-        const auto saved=ImGui::GetStyle();
-        ImGui::GetStyle().ScaleAllSizes(.82f*s);
-        ImGui::SetNextWindowPos({origin.x+side+pad-10*s,origin.y+84*s}); ImGui::SetNextWindowSize({panel.x-side-2*pad+20*s,panel.y-84*s-footer});
-        if(focus_mods) ImGui::SetNextWindowFocus();
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,rgb(0x000000,0)); ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12*s,0});
-        ImGui::PushFont(fonts_.sans,22*s);
-        ImGui::Begin("##deck_mods",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoMove);
-        mods_->manager_tab(.82f*s);
-        ImGui::End();
-        ImGui::PopFont(); ImGui::PopStyleVar(); ImGui::PopStyleColor();
-        ImGui::GetStyle()=saved;
+    // the windows over the Mods page (a mod's settings, the native code questions), at the top level like the launcher's
+    if(mods_access_ && deck::mods_window_open(mods_ui_)) {
+        deck::ModsWindows windows;
+        windows.unit=s; windows.serif=fonts_.serif; windows.settings_focus=&settings_focus_; windows.modal_focus=&modal_focus_;
+        windows.make_rows=[this,s](deck::FocusList& focus) { return mod_rows(focus,s); };
+        windows.registry_changed=registry_changed_;
+        windows.language=language_;
+        ImGui::PushFont(fonts_.sans,24*s);
+        deck::draw_mods_windows(*mods_access_,mods_ui_,windows,mods_window_at_start ? std::span<const deck::DeckKey>(mods_keys) : std::span<const deck::DeckKey>{});
+        ImGui::PopFont();
     }
-    was_mods_page_=current_page==settings::Page::mods;
     if(changed) pending_=options;
 }
 }

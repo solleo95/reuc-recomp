@@ -36,6 +36,12 @@ public:
     struct RowStyle { float pad_x, pad_y, rounding, spacing_x, spacing_y; };
     void set_row_style(RowStyle style) { row_style_ = style; }
 
+    // For another screen over the same mods (the Steam Deck menu's Mods page): the registry, a mod's settings and DLL hash, and the notice that the registry changed.
+    ModRegistry* registry() { return registry_(); }
+    bool edit_settings(const std::string& id, const std::function<void(ModSettings&)>& edit);   // under the mod's lock; false for a mod without settings
+    std::string dll_hash(const std::string& id);   // sha256 of the mod's native DLL (computed once); empty when it has none
+    void registry_changed() { mark_changed(); }    // after the registry was changed: commit() saves it and applies it to the running game
+
     // ModMenu
     std::string manager_title() override;
     void manager_tab(float unit) override;

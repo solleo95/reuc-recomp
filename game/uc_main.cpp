@@ -73,6 +73,7 @@
 #include "prompt_hooks.h"
 #include "settings_menu.h"
 #include "deck_menu.h"
+#include "ui_mode.h"
 #include "steam_overlay.h"
 #include <ctime>
 #include "system_report.h"
@@ -132,7 +133,8 @@ uint32_t guest_writer() { // first translated function on the stack: the guest c
 struct FifoSink : uc::MmioDevice {   // native resource/vertex ingestion; unowned state bytes remain TD-014
     uint64_t bytes = 0;
     uint32_t read(uint32_t, int) override { return 0; }
-    void write(uint32_t, int size, uint32_t value) override { bytes += uint64_t(size); uc::gx_audit_fifo_write(size,value);
+    void write(uint32_t, int size, uint32_t value) override { bytes += uint64_t(size);
+        if (uc::gx_audit_on.load(std::memory_order_relaxed)) uc::gx_audit_fifo_write(size,value);
         if (uc::gx_gap_audit_enabled()) uc::gx_gap_audit_write(size, value, uc::gx_fifo_in_primitive(), uc::gx_fifo_recording(), guest_writer);
         uc::gx_fifo_write(size, value); }
 };
@@ -305,7 +307,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::vector<std::string_view> arguments;
     for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
     auto parsed = uc::parse_options(arguments);
-    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--no-ultrawide] [--hud-position auto|center|edges] [--pointer relative|absolute][--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
+    if (auto* error = std::get_if<std::string>(&parsed)) { std::fprintf(stderr, "%s\nusage: uc [--game <dir>] [--seconds N] [--headless] [--width N] [--height N] [--render-scale 0.5..6 (720p multiplier)] [--window-mode windowed|borderless|exclusive] [--no-ultrawide] [--hud-position auto|center|edges] [--pointer relative|absolute][--anisotropy 1|2|4|8|16] [--per-pixel-lighting] [--ambient-occlusion off|low|medium|high|ultra] [--motion-blur off|low|medium|high|ultra] [--contact-shadows] [--ray-tracing] [--rt-quality low|medium|high|ultra] [--dlss5] [--dlss5-option key=value] [--unlock-60fps] [--game-hz 61..480] [--validation] [--log-dvd] [--log-sleep] [--gx-audit] [--skip-intro] [--mute] [--no-mods] [--guest-cpu N] [--deterministic] [--det-out <file> [--det-frames N]] [--demo-record <file> | --demo-play <file>] [--stop-retrace N] [--ui desktop|deck] [--no-vulkan-layers] [--profile] [--input-probe] [--capture-scene-passes] [--test-server <name> [--speed 1..8] [--capture-dir <dir>] [--god] [--skip-tutorials]]\n", error->c_str()); return 2; }
     auto options = std::get<uc::Options>(std::move(parsed));
     startup_options=options;   // probe/harness failures remain noninteractive, including a bad config
     const auto config_path=options.config.empty() ? exe_dir()/"config.json" : options.config;
@@ -319,6 +321,20 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::fprintf(stderr,"[settings] dlss5=%s\n",diagnostic_options.properties["dlss5"].dump().c_str());
     if(kPublicRelease) { options.gx_audit=false; options.capture_scene_passes=false; options.audio_audit=false; options.gx_gaps=false; }   // developer reports that write files
     { std::error_code ignored; if(!std::filesystem::exists(exe_dir()/uc::kDlss5Runtime,ignored)) options.dlss5_enabled=false; }   // the player supplies nvngx_dlssnr.dll; without it DLSS 5 stays off
+    bool deck_view=false;   // Linux: the Steam Deck's own menu (Game Mode, or --ui deck); otherwise the menu of the Windows build
+#ifndef _WIN32
+    if(!options.features) {
+        const auto ui_mode=uc::resolve_ui_mode(options.ui ? std::optional<std::string_view>(*options.ui) : std::nullopt,std::getenv("UC_UI"),std::getenv("GAMESCOPE_WAYLAND_DISPLAY"));
+        if(const auto* error=std::get_if<std::string>(&ui_mode)) { std::fprintf(stderr,"%s\n",error->c_str()); return 2; }
+        deck_view=std::get<uc::UiMode>(ui_mode)==uc::UiMode::deck;
+        std::fprintf(stderr,"[ui] mode %s (%s)\n",std::string(uc::ui_mode_name(std::get<uc::UiMode>(ui_mode))).c_str(),options.ui ? "flag" : std::getenv("UC_UI") ? "env" : std::getenv("GAMESCOPE_WAYLAND_DISPLAY") ? "gamescope" : "default");
+    }
+#else
+    if(options.ui) {   // Windows has one view: the flag is accepted (the launcher of another platform may pass it) but a wrong value is still an error
+        const auto checked=uc::resolve_ui_mode(std::string_view(*options.ui),nullptr,nullptr);
+        if(const auto* error=std::get_if<std::string>(&checked)) { std::fprintf(stderr,"%s\n",error->c_str()); return 2; }
+    }
+#endif
     if(options.features) {   // the launcher's support query: the same runtime files the game loads, no window
         uc::UpscalerSupport support;
         if(options.renderer_backend==uc::RendererBackend::vulkan) support=uc::probe_upscalers(exe_dir(),options.dlss5_enabled);
@@ -351,7 +367,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
 #endif
     uc::intro_init(options.skip_intro);
     // Network play steps at the session tick whatever the frame limit says; the limit then only caps presents.
-    const auto pacing=options.netplay ? uc::PacingMode{options.unlock_60fps,options.game_hz} : uc::pacing_for_limit(options.fps_limit,options.game_hz,options.unlock_60fps);   // see Options::fps_limit
+    const auto pacing=options.netplay ? uc::PacingMode{options.unlock_60fps,options.game_hz} : uc::pacing_for_limit(options.fps_limit,options.game_hz,options.unlock_60fps,server_mode && !options.deterministic);   // recorded demos retain their virtual step
     uc::game_pacing_init(pacing.unlock_60,pacing.game_hz);
     if (options.gx_audit) {
 #ifdef UC_TRACE
@@ -569,7 +585,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     const auto pointer_captured=[&] { return options.pointer==uc::PointerMode::absolute ? SDL_GetWindowMouseGrab(window.get()) : SDL_GetWindowRelativeMouseMode(window.get()); };
     std::optional<uc::GamepadInput> gamepad;   // real gamepads feed the game window only: not in headless or harness runs (those inject pad events through the test server)
-    if(!options.headless && !controlled) {
+    if(!options.headless && (!controlled || std::getenv("UC_TEST_REAL_PAD"))) {   // UC_TEST_REAL_PAD: a harness run that pays the real pad's cost too (its events are still ignored there)
         try { gamepad.emplace(); }
         catch(const std::exception& error) { std::fprintf(stderr,"[gamepad] gamepads unavailable, keyboard and mouse only: %s\n",error.what()); }   // a broken joystick backend must not stop the game
     }
@@ -997,7 +1013,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         };
         targets.fps_limit=[&](std::optional<uint32_t> limit) {
             options.fps_limit=limit; frame_limit.set_limit(limit);
-            if(!network)uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps));
+            if(!network)uc::game_pacing_set_mode(uc::pacing_for_limit(limit,options.game_hz,options.unlock_60fps,server_mode && !options.deterministic));
         };
         targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
@@ -1028,13 +1044,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             return features ? &*features : nullptr;
         },monitor_width,monitor_height,options.renderer_backend);
 #ifndef _WIN32
-        deck_menu.emplace(*live_settings,config_language=="system" ? uc::launcher::system_language() : config_language,[&]() -> const uc::FeatureReport* {
+        if(deck_view) deck_menu.emplace(*live_settings,config_language=="system" ? uc::launcher::system_language() : config_language,[&]() -> const uc::FeatureReport* {
             if (!features && features_query.valid() && features_query.wait_for(std::chrono::seconds(0))==std::future_status::ready) features=uc::feature_report_from_json(features_query.get());
             return features ? &*features : nullptr;
         },monitor_width,monitor_height);
 #endif
         settings_menu->set_mod_menu(&mod_menu);
-        if(deck_menu) deck_menu->set_mod_menu(&mod_menu);
+        if(deck_menu) deck_menu->set_mods({[&mod_menu] { return mod_menu.registry(); },
+            [&mod_menu](const std::string& id,const std::function<void(uc::mods::ModSettings&)>& edit) { return mod_menu.edit_settings(id,edit); },
+            [&mod_menu](const std::string& id) { return mod_menu.dll_hash(id); }},[&mod_menu] { mod_menu.registry_changed(); });   // the Deck menu's Mods page: the launcher's rows over the live mods
         settings_menu->set_pad_status([&] { return gamepad ? gamepad->status() : uc::PadStatus{}; });
         if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { if(deck_menu) deck_menu->pad_capture(pad_input,down); else settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
         settings_menu->set_wii_status([&] { return wiimote ? wiimote->status() : uc::WiimoteStatus{}; });
@@ -1099,7 +1117,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
                 +",\"network_waiting\":"+(network_wait_screen ? "true" : "false")
                 +",\"sample_time_ns\":"+std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())
-                +",\"fps_limit\":"+std::to_string((live_settings ? live_settings->options().fps_limit : options.fps_limit).value_or(240))+"}";
+                +",\"fps_limit\":"+std::to_string(options.fps_limit.value_or(240))+"}";
             const auto pumped=test_server->pump(state.frame,frame_json);
             debug_capture_requested|=pumped.capture; draws_wanted|=pumped.draws;
             if (!menu_click_events.empty() && host_keys.menu_open && renderer.presentation_count()!=menu_click_presents) {   // one event per presented frame: the menu needs the hover of a frame before the press
@@ -1217,18 +1235,31 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if(gamepad) gamepad->update(input,pad_allowed());
         if(wiimote) wiimote->update(&input,pad_allowed(),options.wiimote);
     };
+    std::chrono::steady_clock::time_point last_pump{};
+    uint64_t last_pump_presents=~uint64_t(0);
     while (!close && !runner.done.load()) {
         ++profile_loops;
         if (!options.headless) {
             sync_overlay();
             SDL_Event event;
             const auto events_start=frame_log ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-            while (SDL_PollEvent(&event)) {
+#ifdef _WIN32
+            const auto next_event=[&] { return SDL_PollEvent(&event); };
+#else
+            // The loop turns about ten times per presented frame and SDL_PollEvent pumps the devices on every call. SDL's Deck controller driver sends its lizard-mode watchdog
+            // (three HID feature reports, 7-8 ms on the calling thread) every 200 pumps, which made 6% of the frames 8 ms longer. Pump once per presented frame (as SDL assumes), right
+            // after the present: the 8 ms then fall into the wait for the next frame (frame limit, GPU) instead of delaying a present. 25 ms without a present pumps too (menus, loading).
+            const auto pump_time=std::chrono::steady_clock::now();
+            const uint64_t pump_presents=renderer.presentation_count();
+            if(pump_presents!=last_pump_presents || pump_time-last_pump>=std::chrono::milliseconds(25)) { last_pump=pump_time; last_pump_presents=pump_presents; SDL_PumpEvents(); }
+            const auto next_event=[&] { return SDL_PeepEvents(&event,1,SDL_GETEVENT,SDL_EVENT_FIRST,SDL_EVENT_LAST)>0; };
+#endif
+            while (next_event()) {
                 ++frame_events;
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event.window.windowID == SDL_GetWindowID(window.get())) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
-                if(controlled) continue;
+                if(controlled) { if(gamepad) gamepad->event(event,nullptr); continue; }   // with UC_TEST_REAL_PAD the pad opens and streams its gyro like in a player's run, but hands the game nothing
 #ifndef _WIN32
                 {   // diagnostics (Steam Deck): what the trackpads, the menu's cursor and the Steam overlay send (a few hundred lines per run)
                     static int logged=0; const auto type=event.type;
@@ -1300,6 +1331,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     capture_pointer(true);
                     input.focus(true);
                 }
+                if(host_input.take_recentre()) SDL_WarpMouseInWindow(window.get(),float(width)/2/SDL_GetWindowPixelDensity(window.get()),float(height)/2/SDL_GetWindowPixelDensity(window.get()));   // the trackpad's cursor reached the window's edge: back to the middle, the aim goes on from where it is
             }
             if (frame_log) frame_events_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-events_start).count());
             {

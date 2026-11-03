@@ -3,9 +3,10 @@
 #include "deck_menu_nav.h"
 #include "feature_report.h"
 #include "gamepad_config.h"
-#include "menu_bridge.h"
+#include "mods_page.h"
 #include "live_settings.h"
 #include "ui_fonts.h"
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -26,7 +27,9 @@ public:
     void opened();                  // the menu was opened: focus goes back to the first row
     void set_close(std::function<void()> close) { close_=std::move(close); }
     void set_quit(std::function<void()> quit) { quit_=std::move(quit); }   // the Quit game page: A twice ends the game
-    void set_mod_menu(mods::ModMenu* menu) { mods_=menu; }   // the Mods page; without one there is no such page
+    // The Mods page: the launcher's Mods tab (launcher/deck/mods_page) over these mods. `registry_changed` is called after a switch, the order or native code changed.
+    // Without mods there is no such page.
+    void set_mods(deck::ModsAccess access,std::function<void()> registry_changed);
     // The Buttons page waits for a pad button while a binding is captured: GamepadInput's capture sink calls this for every pad press and release.
     // The same pad event then reaches event(): when a capture was waiting it is the capture's (B bound to an action must not also be "back"), even though it has just ended the capture.
     // The same sink serves the gyro's hold button ("while a button is held"): the row waits for the next press of a trigger, a shoulder or a stick button.
@@ -67,9 +70,15 @@ private:
     float press_x_=0, press_y_=0;             // where the finger went down on a row or an entry: a drag scrolls, a tap picks
     bool dragged_=false;
     BindingEditor editor_{default_pad_bindings(),BindingTable::gamepad};   // the Buttons page: the gamepad table; opened() reloads it from the saved options
-    mods::ModMenu* mods_=nullptr;
+    deck::RowCtx mod_rows(deck::FocusList&,float unit);   // the launcher's row context over this menu's fonts, texts and touch state
+    std::optional<deck::ModsAccess> mods_access_;
+    std::function<void()> registry_changed_;
+    deck::ModsUi mods_ui_;
+    deck::FocusList mods_focus_, settings_focus_, modal_focus_;   // the Mods page, a mod's settings window (under its list and text entry), the other windows
+    deck::TouchDrag touch_;
+    int mods_sub_=0;                          // the part of the focused mod row the D-pad has selected
+    std::atomic<bool> typing_{false};         // a text setting is being typed: the keyboard goes to the text field
     uint64_t capture_since_ns_=0;             // a capture nobody answers is dropped after a few seconds
-    bool was_mods_page_=false;
     bool capture_took_=false;                 // the pad event being dispatched went to a waiting capture
     bool hold_capturing_=false;               // the gyro's hold-button row waits for a pad press (capture_since_ns_ times it out)
     std::optional<PhysicalInput> hold_result_;   // the press that answered it, for build() to store

@@ -18,9 +18,9 @@ int main() {
     const auto root = fs::temp_directory_path() / ("uc-exec-posix-" + std::to_string(::getpid()));
     fs::remove_all(root);
     write(root / "uc", "x", 0644); write(root / "uc_launcher", "x", 0600); write(root / "tools/wit/wit", "x", 0644); write(root / "data/other.bin", "x", 0644);
-    write(root / "uc-deck.sh", "x", 0644); write(root / "uc-game.sh", "x", 0644);
+    write(root / "uc-launcher.sh", "x", 0644); write(root / "uc.sh", "x", 0644);
     CHECK(ensure_executables(root) == 5);
-    for (const char* name : {"uc", "uc_launcher", "tools/wit/wit", "uc-deck.sh", "uc-game.sh"}) CHECK((mode_of(root / name) & 0100) && (mode_of(root / name) & 0400));   // the owner can run it
+    for (const char* name : {"uc", "uc_launcher", "tools/wit/wit", "uc-launcher.sh", "uc.sh"}) CHECK((mode_of(root / name) & 0100) && (mode_of(root / name) & 0400));   // the owner can run it
     CHECK(mode_of(root / "data/other.bin") == 0644);                                  // nothing else is touched
     CHECK(ensure_executables(root) == 0);                                             // already executable: nothing to do
     fs::remove(root / "tools/wit/wit");

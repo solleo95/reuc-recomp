@@ -41,13 +41,13 @@
 #include <memory>
 #include <thread>
 #include <map>
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "platform.h"
+#ifdef _WIN32
 #include <shellapi.h>
-#include <dwmapi.h>
-#include <d3d11.h>
-#include <dxgi.h>
+#else
+#include "files_posix.h"   // uc::update::read_text
+#include "window_icon.h"
+#endif
 #include "update_ui.h"
 namespace fs=std::filesystem;
 namespace {
@@ -62,11 +62,7 @@ public:
     void remove(const std::string&,const char* protocol) override {rules_.erase(protocol);}
 };
 std::string utf8(const fs::path& path) {auto value=path.u8string();return {value.begin(),value.end()};}
-fs::path executable_dir() {
-    std::wstring value(32768,L'\0');const auto length=GetModuleFileNameW(nullptr,value.data(),DWORD(value.size()));
-    if(!length || length>=value.size())throw std::runtime_error("cannot locate launcher executable");
-    value.resize(length);return fs::path(value).parent_path();
-}
+using uc::platform::executable_dir;
 struct Ui {
     SDL_Window* window=nullptr;SDL_Renderer* renderer=nullptr;
     bool context=false,platform=false,backend=false;
@@ -86,6 +82,9 @@ struct Ui {
         if(!SDL_Init(SDL_INIT_VIDEO))throw std::runtime_error(SDL_GetError());
         window=SDL_CreateWindow("Resident Evil: The Umbrella Chronicles",1200,820,SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIDDEN|SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if(!window)throw std::runtime_error(SDL_GetError());
+#ifndef _WIN32
+        uc::set_window_icon(window);   // the game's icon in the title bar and the task switcher, not the compositor's generic Wayland one (Windows has it in the exe)
+#endif
         SDL_SetWindowMinimumSize(window,1000,720);
         const float dpi=std::max(1.f,SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
         SDL_Rect bounds{};
@@ -96,19 +95,10 @@ struct Ui {
 #ifdef UC_UPDATE_ACCEPTANCE
         SDL_SetWindowSize(window,1280,720);
 #endif
-        auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
-        if(hwnd) {BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE,&dark,sizeof(dark));}
+        uc::platform::style_window(window);
         renderer=SDL_CreateRenderer(window,nullptr);
         if(!renderer || !SDL_SetRenderVSync(renderer,1))throw std::runtime_error(SDL_GetError());
-        if(auto* device=static_cast<ID3D11Device*>(SDL_GetPointerProperty(SDL_GetRendererProperties(renderer),SDL_PROP_RENDERER_D3D11_DEVICE_POINTER,nullptr))) {
-            IDXGIDevice* dxgi=nullptr;IDXGIAdapter* adapter=nullptr;DXGI_ADAPTER_DESC description{};
-            if(SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice),reinterpret_cast<void**>(&dxgi))) &&
-               SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&description))) {
-                char name[512]{};WideCharToMultiByte(CP_UTF8,0,description.Description,-1,name,sizeof(name),nullptr,nullptr);
-                std::fprintf(stderr,"[ui-gpu] adapter=%s vendor=%04x device=%04x VRAM_MB=%llu feature_level=%x\n",name,description.VendorId,description.DeviceId,static_cast<unsigned long long>(description.DedicatedVideoMemory/(1024*1024)),unsigned(device->GetFeatureLevel()));
-            } else std::fprintf(stderr,"[ui-gpu] adapter query unavailable\n");
-            if(adapter)adapter->Release();if(dxgi)dxgi->Release();
-        }
+        uc::platform::log_renderer_gpu(renderer);
         int width=0,height=0;SDL_GetWindowSizeInPixels(window,&width,&height);
         std::fprintf(stderr,"[ui-display] pixels=%dx%d content_scale=%.2f\n",width,height,SDL_GetWindowDisplayScale(window));
         ImGui::CreateContext();context=true;
@@ -124,7 +114,8 @@ struct Ui {
             banner=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-train.png");
             brand=uc::launcher::load_banner(renderer,executable_dir()/L"assets"/L"launcher"/L"graphite-brand.png");
         } catch(const std::exception& e) {artwork_error=e.what();std::fprintf(stderr,"launcher artwork: %s\n",e.what());}
-        if(diagnostic) {
+#ifdef _WIN32
+        if(diagnostic) {   // the scripted smoke run: Windows checks (DPI awareness) and shows the window without taking the focus
             auto hwnd=static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr));
             if(!hwnd)throw std::runtime_error("launcher window handle unavailable");
             if(GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd))!=DPI_AWARENESS_PER_MONITOR_AWARE)
@@ -133,7 +124,9 @@ struct Ui {
             if(!SDL_GetWindowSizeInPixels(window,&pixel_width,&pixel_height))throw std::runtime_error(SDL_GetError());
             std::fprintf(stderr,"launcher DPI=%u content-scale=%.2f framebuffer=%dx%d\n",GetDpiForWindow(hwnd),SDL_GetWindowDisplayScale(window),pixel_width,pixel_height);
             ShowWindow(hwnd,SW_SHOWNOACTIVATE);
-        } else {
+        } else
+#endif
+        {
             if(!SDL_ShowWindow(window))throw std::runtime_error(SDL_GetError());
             // The window appears before the rest of the start-up (settings, game folder, gamepads: up to a second) is done and the first frame can be drawn: until then it
             // shows the colour of the interface instead of black.
@@ -182,18 +175,36 @@ bool same_options(const uc::Options& a,const uc::Options& b) {
         && a.frame_generation==b.frame_generation && a.frame_generation_multiplier==b.frame_generation_multiplier && a.effects==b.effects && a.dlss5==b.dlss5 && a.dlss5_enabled==b.dlss5_enabled && a.hdr==b.hdr && a.gamepad==b.gamepad && a.wiimote==b.wiimote;
 }
 bool update_handoff=false;   // set when the update helper waits for this process to end (see wWinMain)
-int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
-    const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe;
+std::string game_ui;         // the view passed to the game (--ui): set on Linux by run_desktop_launcher, empty on Windows
+#ifdef _WIN32
+using ResumeStartup=uc::update::ResumeStartup;
+#else
+struct ResumeStartup;        // the update helper's trial start is a Windows thing: Linux installs the update itself and confirms it on the first frame
+char** startup_argv=nullptr;                 // the arguments of this process, for the restart after an update
+std::optional<fs::path> startup_confirm;     // an update installed by the previous launcher waits for this one to draw its first frame
+std::string startup_problem;                 // a half-updated install found at start-up, shown as the page's error
+#endif
+int run(int argc,wchar_t** argv,ResumeStartup* resume) {
+    const auto directory=executable_dir();fs::path config_path=directory/L"config.json",smoke,smoke_exe,snapshot;
     for(int i=1;i<argc;++i) {
         const std::wstring_view arg=argv[i];
         if((arg==L"--config" || arg==L"--smoke" || arg==L"--smoke-exe") && i+1<argc) {
-            if(arg==L"--config")config_path=argv[++i];else if(arg==L"--smoke")smoke=argv[++i];else smoke_exe=argv[++i];
+            if(arg==L"--config")config_path=uc::platform::path_from_wide(argv[++i]);else if(arg==L"--smoke")smoke=uc::platform::path_from_wide(argv[++i]);else smoke_exe=uc::platform::path_from_wide(argv[++i]);
+#ifndef _WIN32
+        } else if(arg==L"--snapshot" && i+1<argc) {   // Linux: draw a few frames, save desktop-launcher-<page>.bmp in this folder and quit (checks the look without touching the install's config.json)
+            snapshot=uc::platform::path_from_wide(argv[++i]);
+#endif
         } else throw std::invalid_argument("usage: uc_launcher [--config path] [--smoke directory]");
     }
+#ifndef _WIN32
+    if(!smoke.empty() || !smoke_exe.empty())throw std::invalid_argument("--smoke is a Windows launcher test");
+    if(!snapshot.empty()) {fs::create_directories(snapshot);config_path=snapshot/L"config.json";}
+#endif
     if(!smoke.empty()) {fs::create_directories(smoke);config_path=smoke/L"config.json";}
     if(!smoke_exe.empty() && smoke.empty())throw std::invalid_argument("--smoke-exe requires --smoke");
     const auto ui_start=SDL_GetTicksNS();
     Ui ui;ui.init(!smoke.empty());
+#ifdef _WIN32
     if(resume) {
         if(!ui.artwork_error.empty()) throw std::runtime_error(ui.artwork_error);
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();ImGui::NewFrame();
@@ -203,9 +214,10 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         if(!SDL_RenderPresent(ui.renderer)) throw std::runtime_error(SDL_GetError());
         auto confirmed=resume->confirm();if(uc::update::failed(confirmed)) throw std::runtime_error(std::get<uc::update::Error>(confirmed).detail);
     }
+#endif
     uc::launcher::UpdateController updates(directory);
     std::optional<uc::update::Manifest> installed;
-    if(smoke.empty() && fs::exists(directory/L"release.json")) {
+    if(smoke.empty() && snapshot.empty() && fs::exists(directory/L"release.json")) {
         auto raw=uc::update::read_text(directory/L"release.json",uc::update::max_manifest_size);
         if(!uc::update::failed(raw)) {
             auto manifest=uc::update::parse_manifest(std::get<std::string>(raw));
@@ -214,7 +226,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         } else std::fprintf(stderr,"[update] Release metadata unavailable; automatic update disabled\n");
     }
 #ifndef UC_UPDATE_ACCEPTANCE
-    updates.start(std::move(installed));
+    if(snapshot.empty())updates.start(std::move(installed));   // a snapshot run asks GitHub for nothing
 #endif
     std::unique_ptr<uc::CpuCalibration> calibration;
     uc::CpuCalibrationResult cpu_choice;bool cpu_ready=false,launch_requested=false;
@@ -237,7 +249,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     } catch(const std::exception&) {pads.reset();}   // the launcher works without gamepads
     uc::BindingEditor wii_editor{uc::default_wii_bindings(),uc::BindingTable::wiimote};uc::WiimotePanelState wii_panel;
     std::optional<uc::WiimoteInput> wii;   // reads the Wii Remote only while the Controllers page is shown (it must be free for the game): its status and the Wii Remote window's capture
-    if(smoke.empty()) {
+    if(smoke.empty() && snapshot.empty()) {
         wii.emplace();
         wii->capture_sink([&](uc::PhysicalInput input,bool down) {wii_editor.event(input,down);});
     }
@@ -275,7 +287,11 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             mods_menu.reset();mods_state.reset();mods_error.clear();   // the file changed under the page: its mods (and what the page remembers of them) are read again when it is next drawn
         } catch(const std::exception& e) {error=e.what();blocked=true;}
     };
-    reload();std::string game_path=utf8(options.game);    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
+    reload();
+#ifndef _WIN32
+    if(!startup_problem.empty())error=startup_problem;   // a half-updated install found at start-up is announced on the page
+#endif
+    std::string game_path=utf8(options.game);    // What DLSS, FSR and frame generation this PC supports, asked of uc.exe itself (the same runtime files the game loads) while the window opens.
     uc::FeatureReport features;std::future<std::string> features_query;bool features_ready=false;
     struct DetachedQuery {std::shared_ptr<std::promise<std::string>> promise;std::thread thread;~DetachedQuery() {if(thread.joinable())thread.detach();}} query_thread;   // closing the launcher must not wait for a hung query
     auto features_backend=options.renderer_backend;
@@ -283,13 +299,13 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         features_backend=options.renderer_backend;features_ready=false;
         if(query_thread.thread.joinable())query_thread.thread.join();
         query_thread.promise=std::make_shared<std::promise<std::string>>();features_query=query_thread.promise->get_future();
-        query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/L"uc.exe",config=config_path,backend=features_backend] {
+        query_thread.thread=std::thread([promise=query_thread.promise,exe=directory/uc::platform::game_program(),config=config_path,backend=features_backend] {
             try {promise->set_value(uc::query_features(exe,config,30000,backend));} catch(...) {promise->set_exception(std::current_exception());}
         });
     };
     if(!smoke.empty()) {features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true;features.dlss_g_max_multiplier=4;features.effects=true;features.anisotropy_max=16;features_ready=true;}   // the smoke run exercises the controls whatever this PC has
 #ifndef UC_UPDATE_ACCEPTANCE
-    if(smoke.empty() && fs::is_regular_file(directory/L"uc.exe")) {
+    if(smoke.empty() && snapshot.empty() && fs::is_regular_file(directory/uc::platform::game_program())) {
         start_features_query();
     }
 #endif
@@ -324,8 +340,17 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
     size_t smoke_typed=0;
     while(!done) {
         const auto frame_start=SDL_GetTicksNS();
+#ifndef _WIN32
+        if(!snapshot.empty()) {const int pages[]={0,1,2,3,5};page=pages[std::min(4,int(frame/8))];}   // snapshot run: the pages of the sidebar, a new one every eight frames
+#endif
         updates.poll();
-        if(updates.close_requested()) {updates.handoff();update_handoff=true;break;}
+        if(updates.close_requested()) {
+            updates.handoff();update_handoff=true;
+#ifndef _WIN32
+            uc::launcher::restart_launcher(directory/"uc_launcher",updates.applied_operation().filename().string(),startup_argv);   // the new launcher confirms the update on its first frame
+#endif
+            break;
+        }
         std::erase_if(retiring_nat,[](const auto& item){return item->finished();});
         if(background_host) {
             if(!uc::game_running(process))break;
@@ -482,9 +507,9 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             for(auto* font:{ui.sans,ui.serif}) {
             auto* baked=font->GetFontBaked(22);
             for(auto locale:uc::launcher::languages())for(auto key:uc::launcher::translation_keys()) {
-                auto value=uc::launcher::text(locale.code,key);const auto length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,value.data(),int(value.size()),nullptr,0);
-                if(length<=0)throw std::runtime_error("invalid UTF-8 translation");
-                std::wstring wide(length,L'\0');MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,value.data(),int(value.size()),wide.data(),length);
+                auto value=uc::launcher::text(locale.code,key);const auto converted=uc::platform::utf8_to_wide(value,true);
+                if(!converted || converted->empty())throw std::runtime_error("invalid UTF-8 translation");
+                const std::wstring& wide=*converted;
                 for(auto character:wide)if(character>32 && !baked->FindGlyphNoFallback(character))throw std::runtime_error("missing launcher glyph: "+std::string(locale.code)+" "+std::to_string(unsigned(character)));
             }
             }
@@ -494,8 +519,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             diagnostics<<"[ui-text] language="<<language<<" active="<<active_language<<" unit="<<unit<<" display="<<ImGui::GetIO().DisplaySize.x<<"x"<<ImGui::GetIO().DisplaySize.y<<std::endl;
             auto* baked=ui.sans->GetFontBaked(22);
             auto report=[&](const std::string& what,std::string_view value) {
-                const auto length=MultiByteToWideChar(CP_UTF8,0,value.data(),int(value.size()),nullptr,0);
-                std::wstring wide(size_t(std::max(length,0)),L'\0');MultiByteToWideChar(CP_UTF8,0,value.data(),int(value.size()),wide.data(),length);
+                const std::wstring wide=uc::platform::utf8_to_wide(value,false).value_or(std::wstring{});
                 for(auto character:wide)if(character>32 && !baked->FindGlyphNoFallback(character))diagnostics<<"[ui-text] no glyph U+"<<std::hex<<unsigned(character)<<std::dec<<" in "<<what<<std::endl;
             };
             for(auto locale:uc::launcher::languages()) {
@@ -622,7 +646,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::BeginChild("display",{column,0},ImGuiChildFlags_AlwaysUseWindowPadding);
             ImGui::PopStyleColor();ImGui::PopStyleVar(2);ImGui::Indent(-12*unit);
-            ImGui::PushItemWidth(-1);if(shown("renderer")) {ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);
+            ImGui::PushItemWidth(-1);if(shown("renderer") && uc::platform::kDirectX) {ImGui::TextUnformatted(tr("renderer"));push_font(ui.sans,22);   // Linux has Vulkan only: nothing to choose
             const char* renderer_names[]={"Vulkan","DirectX 11","DirectX 12"};
             const bool renderer_open=combo("##renderer",renderer_names[int(options.renderer_backend)]);track("renderer");
             if(renderer_open) {
@@ -1082,12 +1106,14 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
         const bool running=uc::game_running(process);ImGui::BeginDisabled(running || launch_requested || !(game_found || image_selected) || unpack || network_modal || network || pending_network || updates.blocks_game_launch());
         push_font(ui.serif,22);
         const float launch_gap=8*unit,launch_width=(width*.395f-launch_gap)/2;
-        ImGui::BeginDisabled(!game_found);   // a disc image has to be unpacked by Singleplayer first
-        if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
-        ImGui::EndDisabled();
-        ImGui::SameLine(0,launch_gap);
+        if(uc::platform::kNetworkPlay) {
+            ImGui::BeginDisabled(!game_found);   // a disc image has to be unpacked by Singleplayer first
+            if(button(tr("multiplayer"),"network",{launch_width,74*unit})) {network_open_requested=true;network_error.clear();}
+            ImGui::EndDisabled();
+            ImGui::SameLine(0,launch_gap);
+        }
         ImGui::PushStyleColor(ImGuiCol_Button,{.43f,.045f,.07f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.62f,.075f,.12f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.67f,.10f,.14f,1});
-        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{launch_width,74*unit})) {
+        if(button(tr(running ? "running" : launch_requested ? "preparing" : "play"),"launch",{uc::platform::kNetworkPlay ? launch_width : 2*launch_width+launch_gap,74*unit})) {
             // The image path is not saved: until the unpack succeeds, the folder that was configured before stays in config.json.
             if(image_selected)unpack=std::make_unique<uc::launcher::ImageUnpack>(directory,fs::absolute(options.game));   // Play continues when it is done
             else if(save(options)) {
@@ -1275,7 +1301,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
             launch_requested=false;
             if(features_ready)uc::disable_unsupported_upscaling(options,features);
             if(save(options)) {
-                try {process=uc::launch_game(smoke_exe.empty() ? directory/L"uc.exe" : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu,pending_network);pending_network.reset();}
+                try {process=uc::launch_game(smoke_exe.empty() ? directory/uc::platform::game_program() : smoke_exe,config_path,smoke_exe.empty() ? nullptr : &diagnostic,cpu_choice.cpu,pending_network,game_ui);pending_network.reset();}
                 catch(const std::exception& e) {error=e.what();cancel_network();}
                 if(process && smoke.empty() && smoke_exe.empty()) {
                     if(network || nat) {background_host=true;SDL_HideWindow(ui.window);} // Keep the Internet transport and router lease alive until the child exits.
@@ -1376,7 +1402,7 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                 if(smoke_exe.empty()) {
                     if(smoke_network==SmokeNetwork::idle) {
                         network_address.clear();
-                        smoke_join_address="127.0.0.1:"+std::to_string(30000+int(GetCurrentProcessId()%20000));
+                        smoke_join_address="127.0.0.1:"+std::to_string(30000+int(uc::platform::process_id()%20000));
                         smoke_network_start=SDL_GetTicks();smoke_network=SmokeNetwork::failed_open;
                     } else if(smoke_network==SmokeNetwork::complete) {
                         if(process || launch_requested || pending_network || network || smoke_network_handoffs!=1)throw std::runtime_error("network smoke launched a game or repeated handoff");
@@ -1388,12 +1414,20 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
                     if(!process) {
                         if(SDL_GetTicks()-start>35000)throw std::runtime_error("calibration wait timed out");
                     } else if(!uc::game_running(process)) {
+#ifdef _WIN32
                         DWORD code=0;if(!GetExitCodeProcess(process.get(),&code) || code!=0)throw std::runtime_error("game launch smoke failed");
+#endif
                         done=true;
                     } else if(SDL_GetTicks()-start>35000)throw std::runtime_error("game launch smoke timed out");
                 }
             }
         }
+#ifndef _WIN32
+        if(!snapshot.empty() && frame%8==7) {   // every page in turn (Game, Graphics, Controls, Controllers, Mods), read back before the present as the Deck launcher does
+            ui.capture(snapshot/(L"desktop-launcher-"+std::to_wstring(page)+L".bmp"));
+            if(page==5)done=true;
+        }
+#endif
         const auto present_start=SDL_GetTicksNS();
         if(!SDL_RenderPresent(ui.renderer))throw std::runtime_error(SDL_GetError());
         const auto frame_end=SDL_GetTicksNS();
@@ -1404,12 +1438,20 @@ int run(int argc,wchar_t** argv,uc::update::ResumeStartup* resume) {
 #ifdef UC_UPDATE_ACCEPTANCE
         if(frame==4) done=true;
 #endif
+#ifndef _WIN32
+        if(startup_confirm) {   // the first frame of an updated launcher is on screen: the update is good
+            auto status=uc::update::finish_install(*startup_confirm);
+            if(uc::update::failed(status))std::fprintf(stderr,"[update] Cannot commit the update: %s\n",std::get<uc::update::Error>(status).detail.c_str());
+            startup_confirm.reset();
+        }
+#endif
     }
     if(!smoke_exe.empty() && !smoke_capture_wait_checked)throw std::runtime_error("pending Play capture check did not run");
     if(!smoke.empty())std::fprintf(stderr,"launcher smoke passed: clear/capture/save/stale/defaults/style2/style3/13 languages/glyph coverage/network validation, cancel and readiness handoff; no OS input\n");
     return 0;
 }
 }
+#ifdef _WIN32
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     int count=0;auto arguments=CommandLineToArgvW(GetCommandLineW(),&count);
     if(!arguments)return 2;
@@ -1447,3 +1489,39 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     if(update_handoff) {diagnostics.reset();TerminateProcess(GetCurrentProcess(),UINT(result));}
     return result;
 }
+#else
+// Linux: the same launcher as on Windows. ui: the view the launcher was started for ("desktop" or "deck"), handed to the game when Play starts it.
+#include "desktop_entry.h"
+#include "deck/exec_game.h"
+#include "deck/instance_lock.h"
+namespace uc::launcher {
+int run_desktop_launcher(int argc,char** argv,std::string_view ui) {
+    std::optional<uc::DiagnosticLog> diagnostics;
+    int result=0;
+    try {
+        game_ui=std::string(ui);startup_argv=argv;
+        const auto directory=executable_dir();
+        uc::deck::ensure_executables(directory);   // a zip extracted by a tool that dropped the Unix modes
+        bool snapshot=false;for(int i=1;i<argc;++i)if(std::string_view(argv[i])=="--snapshot")snapshot=true;
+        const auto instance=snapshot ? uc::deck::InstanceLock::acquire("/nonexistent") : uc::deck::InstanceLock::acquire(directory);   // held for the whole run; a snapshot may sit beside a real launcher
+        if(instance.state()==uc::deck::InstanceLock::State::busy) {std::fprintf(stderr,"uc_launcher: another launcher is already running in %s\n",directory.c_str());return 0;}
+        const auto recovery=snapshot ? uc::launcher::PendingRecovery{} : uc::launcher::recover_pending_update(directory);   // before anything reads or writes the install
+        startup_confirm=recovery.confirm;
+        if(!recovery.problem.empty())startup_problem=recovery.problem;
+        bool logs=!uc::public_release();   // a release client writes no logs unless "Enable logs" is on in config.json
+        if(!logs)try {logs=uc::options_from_config(uc::load_config(directory/"config.json")).logs;} catch(const std::exception&) {}
+        if(logs)diagnostics.emplace("launcher",directory/"logs");
+        std::vector<std::wstring> storage;std::vector<wchar_t*> arguments;   // the launcher's argument parsing is wide-character, as on Windows
+        for(int i=0;i<argc;++i)storage.push_back(uc::platform::utf8_to_wide(argv[i],false).value_or(std::wstring{}));
+        for(auto& item:storage)arguments.push_back(item.data());
+        arguments.push_back(nullptr);
+        result=run(argc,arguments.data(),nullptr);
+    } catch(const std::exception& e) {
+        std::fprintf(stderr,"launcher failed: %s\n",e.what());
+        result=2;
+    }
+    std::fprintf(stderr,"[session] launcher exit=%d\n",result);
+    return result;
+}
+}
+#endif

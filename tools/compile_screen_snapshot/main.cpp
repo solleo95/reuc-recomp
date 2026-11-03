@@ -13,7 +13,14 @@ int main(int argc, char** argv) {
     const std::string folder = argv[2];
     if (!SDL_Init(SDL_INIT_VIDEO)) { std::fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     uc::CompileScreen screen(argv[1]);
-    const auto keep = [&](const char* name) { const std::string path = folder + "/" + name + ".bmp"; setenv("UC_COMPILE_SCREEN_PNG", path.c_str(), 1); };
+    const auto keep = [&](const char* name) {
+        const std::string path = folder + "/" + name + ".bmp";
+#ifdef _WIN32
+        _putenv_s("UC_COMPILE_SCREEN_PNG", path.c_str());
+#else
+        setenv("UC_COMPILE_SCREEN_PNG", path.c_str(), 1);
+#endif
+    };
     const auto wait = [] { std::this_thread::sleep_for(std::chrono::milliseconds(80)); };   // update() draws at most every 50 ms
     keep("starting"); screen.show();
     keep("waiting"); screen.wait_for_peer("Waiting for the other player");

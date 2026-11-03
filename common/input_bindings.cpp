@@ -91,7 +91,11 @@ Bindings default_bindings() {
 Bindings default_pad_bindings() {
     // SDL positions: south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, shoulders 9/10; axes: left trigger 9, right trigger 11.
     Bindings result;
+#ifdef _WIN32
     result[size_t(Action::interact)]={pad_button(0)};
+#else
+    result[size_t(Action::interact)]={pad_button(0),pad_button(kPadTrackpadPress+1)};   // Steam Deck: A, and a firm press of the right trackpad
+#endif
     result[size_t(Action::fire)]={pad_axis(11)};
 #ifdef _WIN32
     result[size_t(Action::weapon_previous)]={pad_button(9)};
@@ -109,7 +113,11 @@ Bindings default_pad_bindings() {
     result[size_t(Action::grenade)]={pad_button(3)};
     result[size_t(Action::knife)]={pad_button(1)};
     result[size_t(Action::pause)]={pad_button(6)};
+#ifdef _WIN32
     result[size_t(Action::confirm)]={pad_button(0)};
+#else
+    result[size_t(Action::confirm)]={pad_button(0),pad_button(kPadTrackpadPress+1)};
+#endif
     result[size_t(Action::back)]={pad_button(1)};
 #ifdef _WIN32
     result[size_t(Action::screenshot)]={pad_button(4)};

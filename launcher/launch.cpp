@@ -61,7 +61,7 @@ std::string query_features(const std::filesystem::path& executable,const std::fi
     std::error_code ignored;std::filesystem::remove(output,ignored);
     return last_json_line(text);
 }
-GameProcess launch_game(const std::filesystem::path& executable,const std::filesystem::path& config,const Options* diagnostic,int guest_cpu,std::optional<net::Endpoint> network) {
+GameProcess launch_game(const std::filesystem::path& executable,const std::filesystem::path& config,const Options* diagnostic,int guest_cpu,std::optional<net::Endpoint> network,std::string_view) {   // the view (--ui) is a Linux choice
     if(guest_cpu < -1 || guest_cpu>=63)throw std::invalid_argument("guest CPU must be -1 or 0..62");
     const auto exe=std::filesystem::absolute(executable),settings=std::filesystem::absolute(config);
     auto session=enter_client_session(exe.parent_path());

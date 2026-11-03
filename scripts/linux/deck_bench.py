@@ -4,7 +4,7 @@ measured window, as `python -m uctest bench --demo` does on the PC.
   python scripts/linux/deck_bench.py --demo fight4 --runs 2 A=build-linux/game/uc B=other/uc [--game-arg=--x]
 
 Every build is copied next to the staged game as ~/uc-run/uc_<label> (the baseline label A also replaces nothing: `uc` stays as staged); a run is started by Steam's shortcut of
-uc-deck.sh, which sources next-run.sh (UC_EXE, the arguments and the log redirect). The identical guest work of every run is checked by retrace and draw counts.
+uc-launcher.sh, which goes to uc.sh, which sources next-run.sh (UC_EXE, the arguments and the log redirect). The identical guest work of every run is checked by retrace and draw counts.
 """
 import argparse
 import json
@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from uctest.deck import REMOTE, RUNTIME, SHORTCUT_ID, SSH, _ssh   # noqa: E402
+from uctest.deck import REMOTE, RUNTIME, SHORTCUT_ID, SSH, _ssh, gamescope_test_limiter   # noqa: E402
 from uctest.client import SAVE_SOURCE   # noqa: E402
 
 DETBENCH = re.compile(r"^\[detbench\] retrace (\d+) draws (\d+) guest_mcycles ([0-9.]+) wall_ms ([0-9.]+)")
@@ -50,6 +50,8 @@ def one_run(label, demo, window, extra, tag):
     script = "\n".join([
         f"export UC_EXE=./uc_{label}",
         *([f"export UC_CPU_SAMPLE={os.environ['UC_CPU_SAMPLE']}", f"export UC_CPU_SAMPLE_OUT={BENCH}/cpu-samples.txt".replace("~", "$HOME")] if os.environ.get("UC_CPU_SAMPLE") else []),
+        *([f"export UC_CPU_SAMPLE_STACKS={os.environ['UC_CPU_SAMPLE_STACKS']}"] if os.environ.get("UC_CPU_SAMPLE_STACKS") else []),
+        *([f"export UC_SKIP_CALLSITES={os.environ['UC_SKIP_CALLSITES']}"] if os.environ.get("UC_SKIP_CALLSITES") else []),   # diagnostic: leave those guest callsites' draws out
         "set -- --test-server demo --save-root bench/run/saves --width 1280 --height 720 --god --skip-tutorials --skip-intro --deterministic "
         f"--demo-play bench/{demo}.demo --stop-retrace {window['to']} --mute --no-vulkan-layers --profile --fps-limit 0 --game-hz 120 --window-mode windowed " + " ".join(extra),
         f"exec > {BENCH}/run.log 2>&1", ""])
@@ -60,9 +62,9 @@ def one_run(label, demo, window, extra, tag):
     if monitored:   # what the game uses while it replays (scripts/linux/deck_monitor.py), summarised below
         put(ROOT / "scripts" / "linux" / "deck_monitor.py", f"{BENCH}/deck_monitor.py")
         _ssh(f"systemctl --user stop uc-monitor 2>/dev/null; systemd-run --user --unit=uc-monitor --collect python3 {BENCH}/deck_monitor.py {BENCH}/monitor.csv", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    launch = (f"pkill -x {names}; XDG_RUNTIME_DIR={RUNTIME} DISPLAY=:0 steam -ifrunning steam://rungameid/{SHORTCUT_ID} >/dev/null 2>&1; "
-              f"for i in $(seq 1 240); do pgrep -x {names} >/dev/null && break; sleep 0.5; done; while pgrep -x {names} >/dev/null; do sleep 1; done")
-    subprocess.run(SSH + [launch], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800)
+    launch = (gamescope_test_limiter(names) + f"pkill -x {names}; XDG_RUNTIME_DIR={RUNTIME} DISPLAY=:0 steam -ifrunning steam://rungameid/{SHORTCUT_ID} >/dev/null 2>&1; "
+              f"for i in $(seq 1 240); do pgrep -x {names} >/dev/null && break; sleep 0.5; done; while pgrep -x {names} >/dev/null; do test_unlimited_tick; sleep 1; done")
+    subprocess.run(SSH + [launch], stdout=subprocess.DEVNULL, timeout=1800, check=True)
     if monitored:
         time.sleep(3)
         csv_text = subprocess.run(SSH + [f"cat {BENCH}/monitor.csv"], capture_output=True, text=True).stdout

@@ -134,7 +134,7 @@ void open_browser(App& app, PickMode mode) {
     fs::path start = last ? *last : mode == PickMode::folder ? game_location(app).parent_path() : home;
     app.browser.emplace(start, mode, default_shortcuts(home, "/run/media", last));
 }
-// Starts the game: saves the settings, then the launcher is replaced by uc-game.sh. Returns only when something stopped it (the reason is in app.error).
+// Starts the game: saves the settings, then the launcher is replaced by uc.sh. Returns only when something stopped it (the reason is in app.error).
 void play(App& app) {
     if (!save_config(app, app.options)) return;
     if (app.features.valid()) app.features.wait_for(std::chrono::seconds(3));   // the GPU probe (`uc --features`) normally ends within a second: not left running beside the game
@@ -819,7 +819,7 @@ int run(int argc, char** argv) {
 }
 }
 
-int main(int argc, char** argv) {
+int run_deck_launcher(int argc, char** argv) {
     try { return uc::deck::run(argc, argv); }
     catch (const std::exception& e) { std::fprintf(stderr, "uc_launcher: %s\n", e.what()); return 1; }
 }

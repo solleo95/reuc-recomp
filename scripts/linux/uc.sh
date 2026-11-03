@@ -1,5 +1,5 @@
 #!/bin/sh
-# Starts the game on the Steam Deck. The launcher runs this file when Play is pressed (uc-deck.sh runs it directly for a test run). It lives next to `uc`, `data/`
+# Starts the game on the Steam Deck. The launcher runs this file when Play is pressed (uc-launcher.sh runs it directly for a test run). It lives next to `uc`, `data/`
 # and `game/`. Fullscreen at the display's size; any argument is passed on to `uc` (a later --window-mode wins). UC_GAME_ARGS: extra arguments before them.
 cd "$(dirname "$0")" || exit 1
 env | grep -E '^(SDL|STEAM|SteamGame|GAMESCOPE)' | sort > steam-env.txt   # what Steam hands the game (diagnostics for the gamepad/gyro)

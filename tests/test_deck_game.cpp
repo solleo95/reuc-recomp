@@ -19,10 +19,10 @@ int main() {
     CHECK(inspect_game("") == GameState::missing);
 
     const auto command = build_game_command("/home/deck/UC", {"--fps-limit", "60"});
-    CHECK(command.path == fs::path("/home/deck/UC/uc-game.sh"));             // the launcher starts the game through the script, which starts `uc`
-    CHECK(command.argv == (std::vector<std::string>{"uc-game.sh", "--fps-limit", "60"}));   // intro skipping comes from config.json (the Game tab's toggle)
+    CHECK(command.path == fs::path("/home/deck/UC/uc.sh"));             // the launcher starts the game through the script, which starts `uc`
+    CHECK(command.argv == (std::vector<std::string>{"uc.sh", "--fps-limit", "60"}));   // intro skipping comes from config.json (the Game tab's toggle)
     CHECK(command.env.empty());                                              // the script sets the environment of the game itself
-    CHECK(build_game_command("/x", {}).argv == std::vector<std::string>{"uc-game.sh"});
+    CHECK(build_game_command("/x", {}).argv == std::vector<std::string>{"uc.sh"});
     fs::remove_all(root);
     std::puts("deck game: path states and command passed");
 }

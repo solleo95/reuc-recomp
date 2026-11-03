@@ -1,4 +1,4 @@
-"""Build the Steam Deck release archive (UC-SteamDeck-X.Y.Z.zip) from an installed Deck tree.
+"""Build the Linux release archive (UC-Linux-X.Y.Z.zip, for the Steam Deck and other Linux machines) from an installed Linux tree.
 
   cmake --install build-linux-znver2 --prefix <stage>
   python scripts/build_release_deck.py --version 0.0.2 --stage <stage>
@@ -16,8 +16,8 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_release import checklist, files_in, parse_version, sha256  # noqa: E402,F401  (checklist is re-exported)
 
-REQUIRED = {"uc", "uc_launcher", "uc-deck.sh", "uc-game.sh", "assets/launcher/graphite-train.png", "assets/launcher/graphite-brand.png", "tools/wit/wit"}
-EXECUTABLES = {"uc", "uc_launcher", "uc-deck.sh", "uc-game.sh", "tools/wit/wit"}
+REQUIRED = {"uc", "uc_launcher", "uc-launcher.sh", "uc.sh", "assets/launcher/graphite-train.png", "assets/launcher/graphite-brand.png", "tools/wit/wit"}
+EXECUTABLES = {"uc", "uc_launcher", "uc-launcher.sh", "uc.sh", "tools/wit/wit"}
 PROTECTED_ROOTS = {"saves", "mods", "textures", "game", "debug", "logs", ".uc-update"}
 PROTECTED_NAMES = {"cpu-samples.txt", "steam-env.txt", "next-run.sh", "launcher-state.json", "release.json",
                    "data/pipeline_cache.bin", "data/pipeline_cache.tmp", "data/pipeline_keys.bin"}
@@ -82,7 +82,7 @@ def package(stage: Path, output: Path) -> None:
 def build_deck_release(repo: Path, version: str, stage: Path) -> Path:
     parse_version(version)
     repo = repo.resolve(strict=True)
-    final = repo / f"UC-SteamDeck-{version}.zip"
+    final = repo / f"UC-Linux-{version}.zip"
     if final.exists():
         raise FileExistsError(f"Release archive already exists: {final}")
     fd, temporary = tempfile.mkstemp(prefix=".deck-release-", suffix=".zip", dir=repo)

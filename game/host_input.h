@@ -16,6 +16,7 @@ public:
     void density(float pixels_per_unit) { density_=pixels_per_unit; }   // window pixels per unit of the event coordinates (SDL_GetWindowPixelDensity)
     void touch_pointer(bool on) { touch_pointer_=on; }   // the pointer is a touchscreen (the Steam Deck): taps, held fingers and swipes instead of a mouse's left button
     bool event(const SDL_Event&,NativeInput&,bool captured); // True: recapture requested; first click is consumed.
+    bool take_recentre() { return std::exchange(recentre_,false); }   // True once after the trackpad's cursor came near the window's edge: warp it to the middle
     void update(NativeInput&,uint64_t now_ns);   // once per loop: the delayed Confirm of a touch in a menu (SDL_GetTicksNS clock)
 private:
     void touch_down(NativeInput&);
@@ -26,7 +27,8 @@ private:
     uint32_t width_=0,height_=0;
     double wheel_remainder_=0;
     float sensitivity_=1;
-    bool touching_=false;       // a finger is on the screen: the aim follows it and the fire is held
+    bool recentre_=false;
+    bool touching_=false;      // a finger is on the screen: the aim follows it and the fire is held
     SDL_FingerID finger_=0;     // the first finger of the touch; the others are ignored
     float cursor_x_=0,cursor_y_=0;   // the cursor's last place in window pixels: where a touch lands
     // A menu highlights the item under the pointer a frame or two after the pointer arrives, and Confirm acts on the highlighted item: the touch's Confirm waits for it

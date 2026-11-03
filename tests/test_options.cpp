@@ -16,6 +16,11 @@ int main() {
     for (const auto invalid : {"", "DX11", "opengl", "dx13"})
         CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--renderer",invalid})));
     CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--renderer"})));
+    // --ui picks the view (desktop as on Windows, or the Deck one); the value is checked where the mode is resolved (common/ui_mode.h), not here.
+    CHECK(!std::get<uc::Options>(parse(std::array<std::string_view,0>{})).ui);
+    CHECK(std::get<uc::Options>(parse(std::array<std::string_view,2>{"--ui","deck"})).ui==std::optional<std::string>("deck"));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,1>{"--ui"})));
+    CHECK(std::holds_alternative<std::string>(parse(std::array<std::string_view,2>{"--ui",""})));
     auto loopback=parse(std::array<std::string_view,2>{"--net-loopback","--net-host"});
     CHECK(std::holds_alternative<uc::Options>(loopback));
     CHECK(std::get<uc::Options>(loopback).netplay->loopback);

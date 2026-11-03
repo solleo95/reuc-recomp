@@ -79,27 +79,27 @@ int main() {
             {"browser_download_url","https://github.com/solleo95/reuc-recomp/releases/download/"+tag+"/"+name}};
     };
     Json both={{"tag_name","0.0.9"},{"draft",false},{"prerelease",false},{"body","Shared notes"},
-        {"assets",Json::array({asset("0.0.9","UC-Windows-0.0.5.zip"),asset("0.0.9","UC-SteamDeck-0.0.9.zip")})}};
+        {"assets",Json::array({asset("0.0.9","UC-Windows-0.0.5.zip"),asset("0.0.9","UC-Linux-0.0.9.zip")})}};
     CHECK(!ok(select_release(both.dump(),{0,0,5},Platform::windows)));         // the carried Windows archive is not newer
     CHECK(!ok(select_release(both.dump(),{0,0,6},Platform::windows)));
     CHECK(ok(select_release(both.dump(),{0,0,4},Platform::windows))->version==(Version{0,0,5}));
     CHECK(ok(select_release(both.dump(),{0,0,8},Platform::steamdeck))->version==(Version{0,0,9}));
-    CHECK(ok(select_release(both.dump(),{0,0,8},Platform::steamdeck))->asset_url.ends_with("/0.0.9/UC-SteamDeck-0.0.9.zip"));
+    CHECK(ok(select_release(both.dump(),{0,0,8},Platform::steamdeck))->asset_url.ends_with("/0.0.9/UC-Linux-0.0.9.zip"));
     CHECK(ok(select_release(both.dump(),{0,0,8},Platform::steamdeck))->notes=="Shared notes");
     CHECK(!ok(select_release(both.dump(),{0,0,9},Platform::steamdeck)));
     CHECK(!ok(select_release(both.dump(),{0,0,10},Platform::steamdeck)));
-    CHECK(archive_prefix(Platform::windows)=="UC-Windows-" && archive_prefix(Platform::steamdeck)=="UC-SteamDeck-");
+    CHECK(archive_prefix(Platform::windows)=="UC-Windows-" && archive_prefix(Platform::steamdeck)=="UC-Linux-");
     r=both; r["assets"].erase(1); CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));   // own archive missing
-    r=both; r["assets"].push_back(asset("0.0.9","UC-SteamDeck-0.0.9.zip")); CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
+    r=both; r["assets"].push_back(asset("0.0.9","UC-Linux-0.0.9.zip")); CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
     r=both; r["assets"].push_back(asset("0.0.9","UC-Windows-0.0.1.zip")); CHECK(failed(select_release(r.dump(),{0,0,0},Platform::windows)));   // two Windows archives
     CHECK(!failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));       // a second foreign archive does not matter
     r=both; r["assets"][1]["state"]="starter"; CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
     r=both; r["assets"][1].erase("digest"); CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
-    r=both; r["assets"][1]["browser_download_url"]="https://github.com/solleo95/reuc-recomp/releases/download/0.0.8/UC-SteamDeck-0.0.9.zip";
+    r=both; r["assets"][1]["browser_download_url"]="https://github.com/solleo95/reuc-recomp/releases/download/0.0.8/UC-Linux-0.0.9.zip";
     CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));       // URL must use the release tag
-    r=both; r["tag_name"]="release-x"; r["assets"]=Json::array({asset("release-x","UC-SteamDeck-0.0.9.zip")});
+    r=both; r["tag_name"]="release-x"; r["assets"]=Json::array({asset("release-x","UC-Linux-0.0.9.zip")});
     CHECK(ok(select_release(r.dump(),{0,0,0},Platform::steamdeck))->version==(Version{0,0,9}));   // the tag need not be a version
-    r=both; r["assets"][1]["name"]="UC-SteamDeck-0.0.09.zip"; CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
+    r=both; r["assets"][1]["name"]="UC-Linux-0.0.09.zip"; CHECK(failed(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
     r=both; r["draft"]=true; CHECK(!ok(select_release(r.dump(),{0,0,0},Platform::steamdeck)));
     // Steam Deck manifest: uc and uc_launcher, no helper files; launcher/steam state files are protected on every platform.
     for (auto path : {"steam-env.txt","STEAM-ENV.TXT","next-run.sh","launcher-state.json"}) CHECK(failed(validate_managed_path(path)));

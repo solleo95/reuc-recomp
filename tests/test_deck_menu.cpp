@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include "standalone.h"
 
 static SDL_Event pad_button(SDL_GamepadButton button,bool down) {
     SDL_Event event{}; event.type=down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP; event.gbutton.button=uint8_t(button); event.gbutton.down=down; return event;
@@ -156,16 +158,26 @@ static void exercise(uc::DeckMenu& menu,uc::LiveSettings& live,const std::functi
         }
         tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);   // back to the first page
     }
-    {   // the Mods page exists only with a mod platform; its manager is drawn in a window of its own
-        struct Fake : uc::mods::ModMenu { int drawn=0; std::string manager_title() override { return "Mods"; } void manager_tab(float) override { ++drawn; ImGui::TextUnformatted("fake mod manager"); } void commit() override {} } fake;
-        CHECK(!ImGui::FindWindowByName("##deck_mods"));
-        menu.set_mod_menu(&fake);
+    {   // the Mods page exists only with mods; it is the launcher's Mods tab (same rows, same keys) over the game's mods
+        const auto mods_dir=std::filesystem::current_path()/"dmenu_mods";
+        std::error_code ignored; std::filesystem::remove_all(mods_dir,ignored); std::filesystem::create_directories(mods_dir/"a");
+        std::ofstream(mods_dir/"a"/"mod.json") << R"({"id":"a","name":"Mod A","version":"1.0","api":"1.0","settings":[{"key":"on","type":"bool","default":false,"label":{"en":"Switch"}}]})";
+        uc::mods::StandaloneMods mods(mods_dir,nlohmann::ordered_json::object());
+        int changes=0;
+        menu.set_mods(uc::deck::access_of(mods),[&] { ++changes; });
         for(int i=0;i<5;++i) tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Effects, Controls, Buttons, Reticle, Mods (Quit game comes after it)
         for(int i=0;i<3;++i) frame();
-        CHECK(fake.drawn>0 && ImGui::FindWindowByName("##deck_mods"));
         capture("mods");
+        tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN);                              // the first row is "Allow native code": down to the mod
+        tap(SDL_GAMEPAD_BUTTON_SOUTH);                                  // A switches the mod on
+        CHECK(mods.registry().wanted("a") && changes>0);
+        tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); tap(SDL_GAMEPAD_BUTTON_SOUTH);   // the gear: its settings window opens
+        capture("mods-settings");
+        tap(SDL_GAMEPAD_BUTTON_SOUTH);                                  // the first setting, a switch
+        CHECK(mods.settings("a")->get("on").get<bool>());
+        tap(SDL_GAMEPAD_BUTTON_EAST); menu.commit(); CHECK(!closed);    // B closes the window, not the menu
         tap(SDL_GAMEPAD_BUTTON_EAST); menu.commit(); CHECK(closed); closed=false;   // B with nothing open closes the menu
-        menu.set_mod_menu(nullptr);
+        menu.set_mods({},nullptr);
         for(int i=0;i<8;++i) tap(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     }
     {   // a slider with left/right and a colour with A: the reticle page

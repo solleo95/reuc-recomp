@@ -1,4 +1,6 @@
 #pragma once
+#include <optional>
+#include <string>
 #include "bloom_math.h"
 #include "frame_limit_cap.h"
 #include "dlss5_settings.h"
@@ -40,6 +42,7 @@ struct ReticleOptions {
 };
 struct Options {
     RendererBackend renderer_backend=RendererBackend::vulkan;
+    std::optional<std::string> ui;   // --ui desktop|deck as typed: the view (resolve_ui_mode checks the value)
     std::optional<net::Endpoint> netplay;
     uint32_t net_tick=60;   // Simulation steps per second both players run in network play: 60 or 30 (the original rate).
     std::filesystem::path game = default_game_folder();

@@ -104,6 +104,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
   target_compile_options(uc_imgui PRIVATE /FIintrin.h)
 endif()
 install(FILES ${imgui_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/imgui)
+include(${CMAKE_SOURCE_DIR}/cmake/stb_image.cmake)
 add_library(uc_imgui_vulkan STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 find_package(Vulkan 1.3 REQUIRED)
 target_link_libraries(uc_imgui_vulkan PUBLIC uc_imgui Vulkan::Vulkan)
@@ -162,15 +163,6 @@ add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-brand.png)
 install(FILES ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png DESTINATION assets/launcher)
 else()   # the Steam Deck launcher (docs/superpowers/specs/2026-10-31-steamdeck-launcher-design.md)
-# stb_image decodes the two PNGs of the launcher's artwork (the Windows launcher uses WIC); pinned like the other dependencies.
-set(stb_image_url "https://raw.githubusercontent.com/nothings/stb/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5/stb_image.h")
-if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/stb_image-2.30.h")
-  set(stb_image_url "${CMAKE_SOURCE_DIR}/build/deps/stb_image-2.30.h")
-endif()
-include(FetchContent)
-FetchContent_Declare(stb_image URL "${stb_image_url}" URL_HASH SHA256=594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3
-  DOWNLOAD_NO_EXTRACT TRUE DOWNLOAD_NAME stb_image.h)
-FetchContent_MakeAvailable(stb_image)
 # Wit (Wiimms ISO Tools, GPL-2.0+) unpacks the disc image chosen in the launcher: the same version as the Windows package, the static Linux build. It runs as a
 # separate program; only the binary is installed.
 set(wit_linux_archive "https://wit.wiimm.de/download/wit-v3.05a-r8638-x86_64.tar.gz")
@@ -184,12 +176,16 @@ add_library(uc_update_ui STATIC update_ui.cpp)
 target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale uc_imgui)
 add_library(uc_launch_probe STATIC launch_posix.cpp)   # query_features: the GPU report asked of uc itself
 target_include_directories(uc_launch_probe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/game)
-target_link_libraries(uc_launch_probe PUBLIC uc_options_config)
+target_link_libraries(uc_launch_probe PUBLIC uc_options_config uc_netplay)   # launch_game checks a network endpoint
 add_library(uc_image_unpack STATIC image_unpack_posix.cpp image_unpack_common.cpp)   # the Linux ImageUnpack (Wit through posix_spawn)
 target_include_directories(uc_image_unpack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-add_executable(uc_launcher deck/main_deck.cpp deck/paths_posix.cpp deck/instance_lock.cpp deck/file_browser_ui.cpp graphite_art.cpp graphite_posix.cpp)
-target_include_directories(uc_launcher PRIVATE ${stb_image_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck ${CMAKE_SOURCE_DIR}/common)
-target_link_libraries(uc_launcher PRIVATE uc_update_ui uc_deck_nav uc_deck_pages uc_deck_game uc_file_browser uc_launch_probe uc_image_unpack uc_gamepad_input uc_ui_style uc_settings_registry uc_launcher_locale uc_options_config uc_imgui)
+# One program, two views: main_linux.cpp picks the Steam Deck's Game Mode launcher (deck/main_deck.cpp) or the launcher of the Windows build (main.cpp) at start.
+# network_unavailable_posix.cpp and cpu_calibration_posix.cpp stand in for the Windows-only network play and CPU calibration code that main.cpp names.
+add_executable(uc_launcher main_linux.cpp main.cpp network_unavailable_posix.cpp cpu_calibration_posix.cpp
+  deck/main_deck.cpp deck/paths_posix.cpp deck/instance_lock.cpp deck/file_browser_ui.cpp graphite_art.cpp graphite_posix.cpp)
+target_include_directories(uc_launcher PRIVATE ${stb_image_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/deck ${CMAKE_SOURCE_DIR}/common ${CMAKE_SOURCE_DIR}/renderer)
+target_link_libraries(uc_launcher PRIVATE uc_ui_mode uc_update_ui uc_deck_nav uc_deck_pages uc_deck_game uc_file_browser uc_launch_probe uc_image_unpack uc_gamepad_input uc_ui_style uc_settings_registry uc_launcher_locale uc_options_config uc_imgui
+  uc_binding_editor uc_gamepad_panel uc_wiimote_input uc_prompt_icons uc_mod_menu uc_diagnostics uc_public_release uc_netplay uc_cpu_topology)
 add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png

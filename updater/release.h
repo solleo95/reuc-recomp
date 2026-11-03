@@ -26,7 +26,7 @@ inline constexpr Platform host_platform = Platform::windows;
 inline constexpr Platform host_platform = Platform::steamdeck;
 #endif
 inline constexpr std::string_view archive_prefix(Platform platform) {
-    return platform == Platform::windows ? "UC-Windows-" : "UC-SteamDeck-";
+    return platform == Platform::windows ? "UC-Windows-" : "UC-Linux-";   // the Linux archive (the Steam Deck among its machines)
 }
 struct FileEntry { std::string path; uint64_t size{}; std::string sha256; };
 struct Manifest { Version version; std::vector<FileEntry> files; std::vector<std::string> helper_files; };

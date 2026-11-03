@@ -56,7 +56,7 @@ bool same_manifest(const Manifest& a,const Manifest& b) {
     return true;
 }
 bool executable_path(std::string_view path) {
-    return path=="uc" || path=="uc_launcher" || path=="uc-deck.sh" || path=="uc-game.sh" || path=="tools/wit/wit";
+    return path=="uc" || path=="uc_launcher" || path=="uc-launcher.sh" || path=="uc.sh" || path=="tools/wit/wit";
 }
 }
 Result<std::string> sha256_file(const fs::path& file) {

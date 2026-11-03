@@ -9,15 +9,15 @@
 namespace uc::deck {
 GameCommand build_game_command(const std::filesystem::path& install, const std::vector<std::string>& extra) {
     GameCommand command;
-    command.path = install / "uc-game.sh";
-    command.argv = {"uc-game.sh"};
+    command.path = install / "uc.sh";
+    command.argv = {"uc.sh"};
     command.argv.insert(command.argv.end(), extra.begin(), extra.end());
     return command;   // the script sets the environment of the game (the Deck's own controller through HIDAPI, borderless at the display's size) and runs `uc`
 }
 #ifndef _WIN32
 unsigned ensure_executables(const std::filesystem::path& install) {
     unsigned changed = 0;
-    for (const char* name : {"uc", "uc_launcher", "uc-deck.sh", "uc-game.sh", "tools/wit/wit"}) {
+    for (const char* name : {"uc", "uc_launcher", "uc-launcher.sh", "uc.sh", "tools/wit/wit"}) {
         const auto path = install / name;
         struct stat info{};
         if (::stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode) || (info.st_mode & S_IXUSR)) continue;

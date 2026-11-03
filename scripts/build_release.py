@@ -101,7 +101,7 @@ def checklist(version: str) -> str:
     """What to do on GitHub with the archives (the publication itself is manual)."""
     return (
         f"Publishing checklist for {version}:\n"
-        f"  - attach BOTH archives: UC-Windows-<version>.zip and UC-SteamDeck-<version>.zip "
+        f"  - attach BOTH archives: UC-Windows-<version>.zip and UC-Linux-<version>.zip"
         f"(a platform that did not change keeps its previous archive, with its own version in the name)\n"
         f"  - publish the release as the latest release (tag {version}); wait until every asset is uploaded"
     )

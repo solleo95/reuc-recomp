@@ -1,5 +1,7 @@
 add_library(uc_common STATIC dol.cpp dol_scan.cpp ppc/isa.cpp analyzer/config.cpp analyzer/analyzer.cpp translator/emit.cpp sig/dsy.cpp ppc/format.cpp)
 target_include_directories(uc_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_ui_mode STATIC ui_mode.cpp)   # which view starts: desktop (as on Windows) or deck (Game Mode), see docs/superpowers/specs/2026-11-02-linux-desktop-ui-design.md
+target_include_directories(uc_ui_mode PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_input STATIC input_bindings.cpp)
 add_library(uc_netplay STATIC netplay.cpp netplay_stream.cpp netplay_datagram.cpp)
 target_include_directories(uc_netplay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

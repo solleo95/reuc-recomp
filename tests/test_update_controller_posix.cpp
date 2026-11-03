@@ -53,9 +53,9 @@ struct World {
         if (tamper) all[0].data = "XXX";            // the content no longer matches the manifest's hash
         zip = zipfix::zip_bytes(all);
         release_json = Json{{"tag_name", "v" + version_in_zip}, {"draft", false}, {"prerelease", false}, {"body", "Notes"},
-            {"assets", Json::array({{{"name", "UC-SteamDeck-" + version_in_zip + ".zip"}, {"state", "uploaded"}, {"size", zip.size()},
+            {"assets", Json::array({{{"name", "UC-Linux-" + version_in_zip + ".zip"}, {"state", "uploaded"}, {"size", zip.size()},
                 {"digest", "sha256:" + sha256_hex(zip)},
-                {"browser_download_url", "https://github.com/solleo95/reuc-recomp/releases/download/v" + version_in_zip + "/UC-SteamDeck-" + version_in_zip + ".zip"}}})}}.dump();
+                {"browser_download_url", "https://github.com/solleo95/reuc-recomp/releases/download/v" + version_in_zip + "/UC-Linux-" + version_in_zip + ".zip"}}})}}.dump();
         installed = std::get<Manifest>(parse_manifest(read(root / "release.json"), Platform::steamdeck));
     }
     ~World() { std::error_code ec; fs::remove_all(root, ec); }

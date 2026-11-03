@@ -10,9 +10,9 @@ struct GameCommand {
     std::vector<std::string> argv;                                      // argv[0] = "uc", then the arguments
     std::vector<std::pair<std::string, std::optional<std::string>>> env;   // name -> value to set, or nullopt to remove
 };
-// The command the launcher starts the game with: <install>/uc-game.sh (scripts/linux/uc-game.sh), which sets the environment (the Deck's own controller is read
+// The command the launcher starts the game with: <install>/uc.sh (scripts/linux/uc.sh), which sets the environment (the Deck's own controller is read
 // directly through SDL's HIDAPI driver, which is where the gyro is) and runs `uc --window-mode borderless`. --skip-intro is not forced: it comes from config.json,
-// the Game tab's toggle. scripts/linux/uc-deck.sh, the Steam entry, starts the launcher.
+// the Game tab's toggle. scripts/linux/uc-launcher.sh, the Steam entry, starts the launcher.
 GameCommand build_game_command(const std::filesystem::path& install, const std::vector<std::string>& extra);
 #ifndef _WIN32
 // A zip extracted by a tool that drops Unix modes leaves `uc`, `uc_launcher` and `tools/wit/wit` unexecutable: gives each of them the owner's execute bit.
