@@ -12,6 +12,7 @@ if(WIN32)   # Streamline, NGX and FidelityFX are Windows runtimes
   include(${CMAKE_SOURCE_DIR}/cmake/upscaler_sdks.cmake)
 endif()
 find_program(UC_SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+set(UC_SLANGC ${UC_SLANGC} -warnings-disable 39001)   # "explicit binding overlap": every shader pairs vk::binding with register(), Slang warns on each variant; the SPIR-V is unchanged
 include(FetchContent)
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "" FORCE)
@@ -26,6 +27,7 @@ FetchContent_Declare(SDL3 URL "${sdl_archive}"
   URL_HASH SHA256=bf308f92c5688b1479faf5cfe24af72f3cd4ce08d0c0670d6ce55bc2ec1e9a5e
   DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(SDL3)
+target_compile_options(SDL3-shared PRIVATE -w)   # SDL's own warnings (unused-but-set-global, a #pragma message) are not ours to fix
 if(WIN32)
   include(patch_sdl.cmake)
 endif()

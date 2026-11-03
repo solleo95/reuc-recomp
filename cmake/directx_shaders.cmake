@@ -1,4 +1,6 @@
 # The GX algorithms stay shared; only binding layout and clip-space Y differ.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(UC_SLANGC_DX ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/tools/slangc_quiet.py ${UC_SLANGC})   # slangc without the fxc warnings that were checked and are harmless (the list is in tools/slangc_quiet.py)
 set(UC_DIRECTX_SHADER_FILES)
 foreach(api dx11 dx12)
   if(api STREQUAL "dx11")
@@ -48,7 +50,7 @@ foreach(api dx11 dx12)
       set(dx_output ${shader_dir}/${shader}.${api}.${stage}.cso)
       add_custom_command(OUTPUT ${dx_output}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-        COMMAND ${UC_SLANGC} ${dx_source} ${dx_defines} -entry ${dx_entry} -stage ${dx_stage}
+        COMMAND ${UC_SLANGC_DX} ${dx_source} ${dx_defines} -entry ${dx_entry} -stage ${dx_stage}
           -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
         DEPENDS ${dx_source} shaders/tev.slang shaders/gbuffer.slang VERBATIM)
       list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -66,7 +68,7 @@ foreach(api dx11 dx12)
     endif()
     set(dx_output ${shader_dir}/bloom.${api}.${pass}.cso)
     add_custom_command(OUTPUT ${dx_output}
-      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom.slang -DUC_DIRECTX
+      COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom.slang -DUC_DIRECTX
         -entry ${dx_entry} -stage compute -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
       DEPENDS shaders/bloom.slang VERBATIM)
     list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -74,7 +76,7 @@ foreach(api dx11 dx12)
   foreach(pass edges weights blend)
     set(dx_output ${shader_dir}/smaa.${api}.${pass}.cso)
     add_custom_command(OUTPUT ${dx_output}
-      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smaa.slang -DUC_DIRECTX
+      COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smaa.slang -DUC_DIRECTX
         -I ${CMAKE_SOURCE_DIR}/third_party/smaa -entry ${pass}Main -stage compute
         -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
       DEPENDS shaders/smaa.slang ${CMAKE_SOURCE_DIR}/third_party/smaa/SMAA.hlsl VERBATIM)
@@ -82,14 +84,14 @@ foreach(api dx11 dx12)
   endforeach()
   set(dx_output ${shader_dir}/rcas.${api}.cso)
   add_custom_command(OUTPUT ${dx_output}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rcas.slang -DUC_DIRECTX
+    COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rcas.slang -DUC_DIRECTX
       -entry main -stage compute -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
     DEPENDS shaders/rcas.slang VERBATIM)
   list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
   foreach(pass ao denoise contact composite)
     set(dx_output ${shader_dir}/gtao.${api}.${pass}.cso)
     add_custom_command(OUTPUT ${dx_output}
-      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gtao.slang -DUC_DIRECTX
+      COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gtao.slang -DUC_DIRECTX
         -entry ${pass}Main -stage compute -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
       DEPENDS shaders/gtao.slang shaders/gbuffer.slang shaders/view_space.slang VERBATIM)
     list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -97,7 +99,7 @@ foreach(api dx11 dx12)
   foreach(pass tile blur)
     set(dx_output ${shader_dir}/motion_blur.${api}.${pass}.cso)
     add_custom_command(OUTPUT ${dx_output}
-      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/motion_blur.slang -DUC_DIRECTX
+      COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/motion_blur.slang -DUC_DIRECTX
         -entry ${pass}Main -stage compute -target ${dx_target} -profile ${dx_profile} -o ${dx_output}
       DEPENDS shaders/motion_blur.slang VERBATIM)
     list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -119,7 +121,7 @@ foreach(shader rt_transform rt_shadow rt_reflect rt_path rt_denoise rr_inputs)
     string(REPLACE "Main" "" pass ${entry})
     set(dx_output ${shader_dir}/${shader}.dx12.${pass}.cso)
     add_custom_command(OUTPUT ${dx_output}
-      COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}.slang -DUC_DIRECTX
+      COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}.slang -DUC_DIRECTX
         -entry ${entry} -stage compute -target dxil -profile sm_6_5 -o ${dx_output}
       DEPENDS shaders/${shader}.slang shaders/gbuffer.slang shaders/view_space.slang VERBATIM)
     list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -129,7 +131,7 @@ foreach(pass prepare resolve)
   string(TOUPPER ${pass} pass_define)
   set(dx_output ${shader_dir}/dlss5.dx12.${pass}.cso)
   add_custom_command(OUTPUT ${dx_output}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/dlss5_bridge.slang -DUC_DIRECTX -D${pass_define}
+    COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/dlss5_bridge.slang -DUC_DIRECTX -D${pass_define}
       -entry main -stage compute -target dxil -profile sm_6_0 -o ${dx_output}
     DEPENDS shaders/dlss5_bridge.slang VERBATIM)
   list(APPEND UC_DIRECTX_SHADER_FILES ${dx_output})
@@ -145,7 +147,7 @@ foreach(variant plain motion)
   endif()
   add_custom_command(OUTPUT ${spec_output}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${shader_dir}
-    COMMAND ${UC_SLANGC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang ${spec_defines} -entry fragmentMain -stage fragment
+    COMMAND ${UC_SLANGC_DX} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang ${spec_defines} -entry fragmentMain -stage fragment
       -target hlsl -profile sm_5_0 -o ${spec_output}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/smoke.slang shaders/tev.slang shaders/gbuffer.slang VERBATIM)
   list(APPEND UC_DIRECTX_SHADER_FILES ${spec_output})

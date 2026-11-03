@@ -145,14 +145,14 @@ def release_lock(repo: Path):
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def build_release(repo: Path, version: str, *, runner=None) -> Path:
+def build_release(repo: Path, version: str, *, runner=None, show_checklist: bool = True) -> Path:
     version = parse_version(version)
     repo = repo.resolve(strict=True)
     with release_lock(repo):
-        return _build_release(repo, version, runner=runner)
+        return _build_release(repo, version, runner=runner, show_checklist=show_checklist)
 
 
-def _build_release(repo: Path, version: str, *, runner=None) -> Path:
+def _build_release(repo: Path, version: str, *, runner=None, show_checklist: bool = True) -> Path:
     version = parse_version(version)
     repo = repo.resolve(strict=True)
     runner = runner or subprocess.run
@@ -174,7 +174,7 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
         # UC_ALL_TESTS makes scripts/tests-run.ps1 run every test, not only the ones changed since their last pass.
         runner([str(repo / "build.bat"), "--no-install"], cwd=repo, check=True, env={**os.environ, "UC_ALL_TESTS": "1"})
         require_thinlto(repo / "build" / "CMakeCache.txt")
-        runner(["cmake", "--install", str(repo / "build"), "--prefix", str(stage)], cwd=repo, check=True)
+        runner(["cmake", "--install", str(repo / "build"), "--prefix", str(stage)], cwd=repo, check=True, stdout=subprocess.DEVNULL)   # the manifest lists the files; errors still reach stderr
         actual = {path.resolve() for path in files_in(stage)}
         listed = {Path(line).resolve() for line in (repo / "build/install_manifest.txt").read_text(encoding="utf-8").splitlines() if line}
         if actual != listed or any(not path.is_relative_to(stage) for path in listed):
@@ -205,7 +205,7 @@ def _build_release(repo: Path, version: str, *, runner=None) -> Path:
                 retain = True
                 raise OSError(f"Publication rollback failed; previous output retained at {previous}: {rollback}") from rollback
             raise
-        print(f"Release: {final}\nClient:  {destination}\nSHA256:  {digest}\n{checklist(version)}")
+        print(f"Release: {final}\nClient:  {destination}\nSHA256:  {digest}" + (f"\n{checklist(version)}" if show_checklist else ""))
         return final
     finally:
         if not retain:
@@ -246,7 +246,7 @@ def main() -> int:
     try:
         version = args.version if args.version is not None else input("Версия релиза (например, 0.0.1): ")
         repo = Path(__file__).resolve().parent.parent
-        build_release(repo, version)
+        build_release(repo, version, show_checklist=args.skip_linux)   # with the Linux archive the checklist comes once, after it
         if not args.skip_linux:
             build_linux_release(repo, version)
         return 0

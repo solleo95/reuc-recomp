@@ -42,7 +42,7 @@ else()
   set(UC_DLSS5_RUNTIME_FILES "" CACHE INTERNAL "")
 endif()
 add_library(uc_fidelityfx_sdk INTERFACE)
-target_include_directories(uc_fidelityfx_sdk INTERFACE ${fidelityfx_SOURCE_DIR}/ffx-api/include)
+target_include_directories(uc_fidelityfx_sdk SYSTEM INTERFACE ${fidelityfx_SOURCE_DIR}/ffx-api/include)
 
 # Production (signed) runtime files loaded from the exe directory.
 set(UC_UPSCALER_RUNTIME

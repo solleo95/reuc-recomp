@@ -50,7 +50,7 @@ if ($keys.Count -and -not $pending) {
     exit 0
 }
 
-$ctestArgs = @('--test-dir', $build, '--output-on-failure')
+$ctestArgs = @('--test-dir', $build, '--quiet')   # --quiet: no line per test; the summary and the output of failed tests are printed below from the junit file
 if ($keys.Count -and -not $env:UC_ALL_TESTS) {
     Write-Host "Running $($pending.Count) of $($keys.Count) tests whose inputs changed"
     $ctestArgs += @('-R', ('^(' + (($pending | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')$'))
@@ -60,6 +60,20 @@ Remove-Item $junit -ErrorAction SilentlyContinue
 $ctestArgs += @('--output-junit', $junit)
 . (Join-Path $PSScriptRoot 'hidden-desktop.ps1')
 $code = Invoke-OnHiddenDesktop 'ctest' $ctestArgs   # the tests open real windows: on another desktop they cannot pop up over what the user is doing (UC_TESTS_VISIBLE=1 shows them)
+
+if (Test-Path $junit) {
+    $cases = @(([xml](Get-Content $junit -Raw)).testsuite.testcase)
+    $failed = @($cases | Where-Object { $_.failure })
+    $skipped = @($cases | Where-Object { $_.skipped }).Count
+    Write-Host "Tests: $($cases.Count - $failed.Count - $skipped) of $($cases.Count) passed$(if ($skipped) { ", $skipped skipped" })"
+    foreach ($case in $failed) {
+        Write-Host "FAILED: $($case.name)"
+        $text = "$($case.'system-out'.InnerText)`n$($case.failure.InnerText)".Trim()
+        if ($text) { Write-Host (($text -split "`r?`n" | Select-Object -Last 40) -join "`n") }
+    }
+} elseif ($code -ne 0) {
+    Write-Host "ctest failed with code $code and wrote no junit file: run scripts\ctest-hidden.ps1 for its output"
+}
 
 # Record every test that passed, whether or not others failed; failed and skipped ones stay pending.
 if ($keys.Count -and (Test-Path $junit)) {

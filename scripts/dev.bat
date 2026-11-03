@@ -2,7 +2,7 @@
 setlocal
 set "ROOT=%~dp0.."
 call "%~dp0env.bat" || exit /b 1
-cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON || exit /b 1
+cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON --log-level=WARNING || exit /b 1
 cmake --build "%ROOT%\build" || exit /b 1
 if not defined CTEST_PARALLEL_LEVEL set "CTEST_PARALLEL_LEVEL=%NUMBER_OF_PROCESSORS%"
 if not defined CTEST_PARALLEL_LEVEL set "CTEST_PARALLEL_LEVEL=1"

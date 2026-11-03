@@ -33,7 +33,7 @@ call "%ROOT%\scripts\dev.bat" || goto :build_failed
 echo [5/6] Staging dist
 if not exist "%DIST%" mkdir "%DIST%"
 if not exist "%DIST%" exit /b 1
-cmake --install "%BUILD%" --prefix "%DIST%" || goto :stage_failed
+cmake --install "%BUILD%" --prefix "%DIST%" > "%BUILD%\install.log" 2>&1 || goto :stage_failed
 
 if defined NO_INSTALL goto :skip_copy
 echo [6/6] Copying dist to %UC_INSTALL_DIR%
@@ -62,7 +62,7 @@ exit /b 1
 echo ERROR: translation step failed
 exit /b 1
 :stage_failed
-echo ERROR: install to dist failed
+echo ERROR: install to dist failed (see %BUILD%\install.log)
 exit /b 1
 :copy_failed
 echo ERROR: robocopy failed

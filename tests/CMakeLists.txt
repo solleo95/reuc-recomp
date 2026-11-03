@@ -527,6 +527,7 @@ target_link_libraries(test_gx_hle PRIVATE test_support)
 add_test(NAME test_gx_hle COMMAND test_gx_hle)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME test_build_release COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_build_release.py ${CMAKE_SOURCE_DIR})
+add_test(NAME test_slangc_quiet COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_slangc_quiet.py)
 add_test(NAME test_build_release_deck COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_build_release_deck.py ${CMAKE_SOURCE_DIR})
 add_test(NAME test_update_end_to_end COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/test_update_end_to_end.py
   ${CMAKE_SOURCE_DIR} $<TARGET_FILE:uc_updater> $<TARGET_FILE:update_test_child> ${CMAKE_BINARY_DIR}/updater-runtime-sources.txt $<TARGET_FILE:test_launcher_update_bootstrap>)

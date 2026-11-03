@@ -163,6 +163,19 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((outside / "user").read_bytes(), b"USER")
 
 
+    def printed(self, **options):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            release.build_release(self.root, "0.0.1", runner=self.runner, **options)
+        return out.getvalue()
+
+    def test_checklist_is_printed_unless_the_linux_archive_follows(self):
+        self.assertIn("Publishing checklist", self.printed())
+        (self.root / "UC-Windows-0.0.1.zip").unlink()
+        self.assertNotIn("Publishing checklist", self.printed(show_checklist=False))
+
+
 class IsolatedLaunchTests(unittest.TestCase):
     def test_script_loads_under_python_isolated_mode(self):
         """build-release.bat runs `python -I`, which leaves the script's folder off sys.path: the Linux archive step must still import."""

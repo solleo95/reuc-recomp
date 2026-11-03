@@ -13,7 +13,7 @@ if ($NoPgo) { $flagArgs += '-DUC_PGO_LINUX_PROFILE=none' }
 if ($CxxFlags) { $env:CXXFLAGS = $CxxFlags }   # CMake appends $CXXFLAGS to the toolchain's initial flags when it creates the cache (a -DCMAKE_CXX_FLAGS would replace them)
 if ($Clean -and (Test-Path $build)) { Remove-Item -Recurse -Force $build }
 $lto = if ($ThinLTO) { 'ON' } else { 'OFF' }
-cmake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DUC_THINLTO=$lto" "-DUC_PGO_GENERATE=$(if ($PgoGenerate) { 'ON' } else { 'OFF' })" $tuneArg @flagArgs --toolchain (Join-Path $root 'cmake\toolchains\linux-sniper.cmake')
+cmake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DUC_THINLTO=$lto" "-DUC_PGO_GENERATE=$(if ($PgoGenerate) { 'ON' } else { 'OFF' })" $tuneArg @flagArgs --log-level=WARNING --toolchain (Join-Path $root 'cmake\toolchains\linux-sniper.cmake')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $args = @('--build', $build)
 if ($Target.Count) { $args += '--target'; $args += $Target }
