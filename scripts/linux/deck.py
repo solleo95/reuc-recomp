@@ -70,7 +70,8 @@ def stage(build_dir):
 def package_tree(build_dir, out_dir):
     """The folder a Steam Deck release is made of (scripts/build_release_deck.py packs it): uc, the launcher, data/, the launcher's pictures, Wit and the licences.
 
-    Assembled from the Linux build folder rather than by `cmake --install`, which would also want the test tools that are not built. No libSDL3: the Deck's own is used.
+    Assembled from the Linux build folder rather than by `cmake --install`, which would also want the test tools that are not built. lib/libSDL3.so.0 is the SDL3 built here (X11, no Wayland):
+    uc.sh and uc-launcher.sh use it only when the system has no SDL3 3.2 or newer (the Deck's own, with Wayland, is preferred).
     """
     build, out = Path(build_dir), Path(out_dir)
     wit = build / "_deps" / "wit_linux-src"
@@ -79,6 +80,8 @@ def package_tree(build_dir, out_dir):
         "uc_launcher": build / "launcher" / "uc_launcher",
         "assets/launcher/graphite-train.png": ROOT / "assets" / "launcher" / "graphite-train.png",
         "assets/launcher/graphite-brand.png": ROOT / "assets" / "launcher" / "graphite-brand.png",
+        "lib/libSDL3.so.0": build / "_deps" / "sdl3-build" / "libSDL3.so.0.2.0",   # the soname the binaries ask for; a zip keeps no symlinks, so the real file is renamed
+        "licenses/SDL3/LICENSE.txt": build / "_deps" / "sdl3-src" / "LICENSE.txt",
         "tools/wit/wit": wit / "bin" / "wit",
         "licenses/wit/gpl-2.0.txt": wit / "gpl-2.0.txt",
         "licenses/wit/wit-source.txt": wit / "doc" / "wit-source.txt",

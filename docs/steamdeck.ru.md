@@ -209,6 +209,7 @@ curl -fsSL https://raw.githubusercontent.com/solleo95/reuc-recomp/main/scripts/l
 ## Отличия от версии для Windows
 
 - **Только Vulkan:** нет Direct3D 11 и 12, нет DLSS, DLSS Frame Generation и Streamline. Параметры, которые сборка для Linux запустить не может, скрыты.
+- **SDL 3:** игра берёт системный SDL 3, если он версии 3.2 или новее (на Steam Deck он есть, с Wayland). Иначе используется копия из папки `lib` архива: она работает с X11, но не с Wayland.
 - **Нет сетевой кооперативной игры** на Linux пока.
 - **Нет нативных DLL-модов** (моды на Lua и JavaScript работают).
 - **Нет нативной поддержки Wii Remote.**

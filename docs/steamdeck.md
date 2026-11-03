@@ -209,6 +209,7 @@ When a newer `UC-Linux-X.Y.Z.zip` is the latest release, the launcher offers **U
 ## Differences from the Windows version
 
 - **Vulkan only:** no Direct3D 11 or 12, no DLSS, DLSS Frame Generation or Streamline. Options the Linux build cannot run are hidden.
+- **SDL 3:** the game uses the system's SDL 3 when it is version 3.2 or newer (the Steam Deck has one, with Wayland). Otherwise it uses the copy in the `lib` folder of the archive, which supports X11 but not Wayland.
 - **No online co-op** on Linux yet.
 - **No native DLL mods** (Lua and JavaScript mods work).
 - **No native Wii Remote** support.

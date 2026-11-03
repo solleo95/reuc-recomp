@@ -30,7 +30,8 @@ class PackageTreeTests(unittest.TestCase):
             for name, data in {"game/uc": b"uc", "launcher/uc_launcher": b"launcher", "game/data/shaders/a.spv": b"spv", "game/data/pipeline_keys.seed": b"seed",
                                "_deps/wit_linux-src/bin/wit": b"wit", "_deps/wit_linux-src/gpl-2.0.txt": b"gpl", "_deps/wit_linux-src/doc/wit-source.txt": b"src",
                                "_deps/nlohmann_json-src/LICENSE.MIT": b"mit", "_deps/mimalloc-src/LICENSE": b"mi", "_deps/imgui-src/LICENSE.txt": b"imgui",
-                               "_deps/miniz-src/LICENSE": b"miniz", "_deps/lua-src/doc/readme.html": b"lua", "_deps/quickjs-src/LICENSE": b"qjs"}.items():
+                               "_deps/miniz-src/LICENSE": b"miniz", "_deps/lua-src/doc/readme.html": b"lua", "_deps/quickjs-src/LICENSE": b"qjs",
+                               "_deps/sdl3-build/libSDL3.so.0.2.0": b"sdl", "_deps/sdl3-src/LICENSE.txt": b"zlib"}.items():
                 path = build / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
@@ -39,11 +40,11 @@ class PackageTreeTests(unittest.TestCase):
             self.assertTrue(deck.REQUIRED <= names, deck.REQUIRED - names)
             for needed in ("data/shaders/a.spv", "data/pipeline_keys.seed", "licenses/wit/gpl-2.0.txt", "licenses/wit/wit-source.txt", "licenses/wit/NOTICE.txt", "licenses/stb/NOTICE.txt"):
                 self.assertIn(needed, names)
-            self.assertNotIn("libSDL3.so", " ".join(names))     # the Deck's own SDL3 is used
+            self.assertIn("lib/libSDL3.so.0", names)            # the SDL3 for machines without one; uc.sh prefers the system's
             self.assertIn("THIRD_PARTY_NOTICES.md", names)
             # every licence the Windows package installs is shipped too, except those of components that are not in the Deck build (Windows upscalers, netplay NAT
-            # libraries, the SDL3 library that the Deck supplies itself): a licence added to a CMake install() must not be forgotten here
-            windows_only = {"Streamline", "FidelityFX", "enet", "miniupnpc", "SDL3"}
+            # libraries): a licence added to a CMake install() must not be forgotten here
+            windows_only = {"Streamline", "FidelityFX", "enet", "miniupnpc"}
             installed = set()
             for cmake in list((REPO / "cmake").glob("*.cmake")) + list(REPO.glob("*/CMakeLists.txt")) + [REPO / "CMakeLists.txt"]:
                 installed |= set(re.findall(r"DESTINATION\s+licenses/([A-Za-z0-9_.+-]+)", cmake.read_text(encoding="utf-8", errors="replace")))

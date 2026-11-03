@@ -245,7 +245,7 @@ The launcher checks for a new release when it starts and offers **Update** or **
 
 ## Steam Deck and Linux
 
-The port also runs natively on the **Steam Deck** (SteamOS, x86-64 Linux). It comes as a separate archive, **`UC-Linux-X.Y.Z.zip`**, on the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest). It has been tested on the Steam Deck only; another Linux PC may work, but nobody has tried it (it needs a Vulkan 1.3 driver and SDL 3, which the archive does not include: the Steam Deck has both).
+The port also runs natively on the **Steam Deck** (SteamOS, x86-64 Linux). It comes as a separate archive, **`UC-Linux-X.Y.Z.zip`**, on the [Releases page](https://github.com/solleo95/reuc-recomp/releases/latest). It has been tested on the Steam Deck only; another Linux PC may work, but nobody has tried it (it needs a Vulkan 1.3 driver, which the archive does not include; the archive brings its own SDL 3, used only when the system has none of version 3.2 or newer, and that copy supports X11 but not Wayland).
 
 You need the same thing as on Windows: your **own** NTSC-U disc image (`RBUE08`) or an already unpacked game folder, and about 4 GB of free space for the game plus the size of the port. The game and the saves live next to the program, so an SD card works as well as the internal drive.
 
