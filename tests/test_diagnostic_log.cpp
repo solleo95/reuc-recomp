@@ -50,6 +50,22 @@ int main() {
     CHECK(read(root/"parent-out.txt").find("native output preserved")!=std::string::npos);
     CHECK(read(root/"parent-out.txt").find("after shutdown")!=std::string::npos);
     CHECK(read(root/"parent-err.txt").find("stderr preserved")!=std::string::npos);
+    {   // A child that outlives the log (a driver's updater) must not hold the log open: closing returns at once, with its output kept.
+        PROCESS_INFORMATION child{};
+        std::filesystem::path closed_at;
+        const auto begin=GetTickCount64();
+        {
+            uc::DiagnosticLog log("child",root);
+            CHECK(log.active());closed_at=uc::diagnostic_directory();
+            std::fprintf(stderr,"before child\n");
+            STARTUPINFOW startup{sizeof(startup)};
+            wchar_t command[]=L"cmd.exe /c ping -n 8 127.0.0.1 >nul";
+            CHECK(CreateProcessW(nullptr,command,nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&child));   // inheriting handles, like the NVIDIA updater
+        }
+        CHECK(GetTickCount64()-begin<4000);   // the child runs for about 7 s
+        CHECK(read(closed_at/"runtime.log").find("before child")!=std::string::npos);
+        TerminateProcess(child.hProcess,0);CloseHandle(child.hProcess);CloseHandle(child.hThread);
+    }
     {std::ofstream blocked(root/"not-directory");blocked<<"fixture";}
     {uc::DiagnosticLog log("test",root/"not-directory");CHECK(!log.active());}
     CHECK(uc::diagnostic_directory().empty());

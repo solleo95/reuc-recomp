@@ -58,8 +58,8 @@ if ($keys.Count -and -not $env:UC_ALL_TESTS) {
 $junit = Join-Path $build 'tests-junit.xml'
 Remove-Item $junit -ErrorAction SilentlyContinue
 $ctestArgs += @('--output-junit', $junit)
-& ctest @ctestArgs
-$code = $LASTEXITCODE
+. (Join-Path $PSScriptRoot 'hidden-desktop.ps1')
+$code = Invoke-OnHiddenDesktop 'ctest' $ctestArgs   # the tests open real windows: on another desktop they cannot pop up over what the user is doing (UC_TESTS_VISIBLE=1 shows them)
 
 # Record every test that passed, whether or not others failed; failed and skipped ones stay pending.
 if ($keys.Count -and (Test-Path $junit)) {

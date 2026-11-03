@@ -30,6 +30,17 @@ class ScriptedGame:
     def fail(self, message, awaited=""): raise StepFailed(message, {"awaited": awaited})
 
 class CheckpointTest(unittest.TestCase):
+    def test_perf_rejects_windows_containing_non_gameplay(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from uctest import scenarios
+        g=SimpleNamespace(frame={"retraces":120,"speed":1,"context":"gameplay"},run_dir=Path("."),
+                          set_speed=Mock(),wait=Mock(),step=lambda name:nullcontext(),capture=lambda:"frame.png",
+                          fail=Mock(side_effect=StepFailed("non-active gameplay",{})))
+        with patch.object(scenarios,"reach_gameplay"),patch.object(steps,"measure_fps",return_value={"fps_mean":85,"non_active_windows":1200}):
+            with self.assertRaises(StepFailed): scenarios.perf(g,SimpleNamespace(chapter=1,measure=30))
+
     def test_perf_records_bounds_after_capture_and_around_measurement(self):
         from contextlib import nullcontext
         from types import SimpleNamespace

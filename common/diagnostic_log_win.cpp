@@ -49,6 +49,7 @@ struct DiagnosticLog::Impl {
         int saved=-1;
         bool redirected=false;
         std::thread worker;
+        std::atomic<bool> finished{true};
         Pipe(Impl& owner,FILE* stream,DWORD standard,const char* name):owner(owner),stream(stream),standard(standard),name(name) {}
         void start() {
             const auto original=GetStdHandle(standard);
@@ -70,6 +71,10 @@ struct DiagnosticLog::Impl {
             redirected=true;
             std::setvbuf(stream,nullptr,_IONBF,0);
             if(!SetStdHandle(standard,HANDLE(_get_osfhandle(_fileno(stream)))))throw std::runtime_error("cannot redirect native diagnostic output");
+            // A child process of a driver or SDK (NVIDIA's nvngx_update.exe, started by DLSS/Streamline) must not inherit the pipe's write end: the reader below only ends when every
+            // writer is closed, and such a child kept the game alive for minutes after it had finished.
+            SetHandleInformation(HANDLE(_get_osfhandle(_fileno(stream))),HANDLE_FLAG_INHERIT,0);
+            finished=false;
             worker=std::thread([this] {
                 char bytes[8192];DWORD count=0;
                 std::string pending;
@@ -84,6 +89,7 @@ struct DiagnosticLog::Impl {
                     if(valid(mirror) && !write(mirror,bytes,count))close(mirror); // A closed harness/console must not stop disk logging.
                 }
                 if(!pending.empty())owner.append(name,pending.data(),pending.size(),mirror);
+                finished=true;
             });
         }
         void stop() noexcept {
@@ -96,7 +102,15 @@ struct DiagnosticLog::Impl {
                 redirected=false;
             }
             if(saved>=0) {_close(saved);saved=-1;}
-            if(worker.joinable())worker.join();
+            if(worker.joinable()) {
+                // The reader ends by itself once every writer is closed. A process that still holds a copy of the write end would keep it blocked in ReadFile. This process's own
+                // writers are closed above, so what it wrote is in the pipe already and the reader takes it in a few milliseconds: give it 150 ms, then interrupt the read until it ends.
+                for(int tries=0;tries<215 && !finished;++tries) {
+                    if(tries>=15)CancelSynchronousIo(worker.native_handle());
+                    Sleep(10);
+                }
+                worker.join();
+            }
             close(read);close(mirror);
         }
         ~Pipe(){stop();}

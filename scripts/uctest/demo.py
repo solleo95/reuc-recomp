@@ -71,6 +71,40 @@ def replay_args(exe, demo, stop, saves, extra=()):
             "--skip-intro", "--deterministic", "--demo-play", str(demo), "--stop-retrace", str(stop), "--mute", "--no-vulkan-layers", "--profile", *pin, *extra]
 
 
+LINGER_SECONDS = 120   # a game whose log says it closed normally but whose process is still there after this long is killed: the measurement is complete, the wait only costs minutes
+
+
+def run_until_closed(command, log_path, cwd, timeout=1800):
+    """Runs the game to its end. Some runs end with the log closed ("log closed normally") but the process alive for a minute or more; the result is already in the log, so such a process is killed after LINGER_SECONDS."""
+    start, closed_at = time.monotonic(), None
+    with open(log_path, "wb") as log:
+        process = subprocess.Popen(command, stdout=log, stderr=log, cwd=cwd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        while True:
+            try:
+                process.wait(timeout=1)
+                if closed_at is not None:
+                    print(f"demo: the game exited {time.monotonic() - closed_at:.0f} s after it closed its log", flush=True)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if closed_at is None:
+                with open(log_path, "rb") as reader:
+                    reader.seek(0, 2)
+                    reader.seek(max(0, reader.tell() - 4096))
+                    if b"log closed normally" in reader.read():
+                        closed_at = now
+            elif now - closed_at > LINGER_SECONDS:
+                print(f"demo: the game closed its log {now - closed_at:.0f} s ago but did not exit; killed", flush=True)
+                process.kill()
+                process.wait()
+                return
+            if now - start > timeout:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(command, timeout)
+
+
 def replay_once(spec, name, run_dir):
     exe, *extra = spec.split("|")   # "dist/uc.exe|--early-draw-done": per-build game arguments after the path
     if not Path(exe).is_absolute() and not Path(exe).exists():
@@ -90,8 +124,7 @@ def replay_once(spec, name, run_dir):
         "demo_sha256": hashlib.sha256(demo.read_bytes()).hexdigest(),
         "diagnostic_environment": {key: os.environ.get(key) for key in ("UC_CPU_SAMPLE", "UC_CPU_SAMPLE_FLAG", "UC_GX_CACHE_VERIFY", "LLVM_PROFILE_FILE")},
     }, indent=2))
-    with open(log_path, "wb") as log:
-        subprocess.run(command, stdout=log, stderr=log, cwd=Path(exe).resolve().parent, timeout=1800, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    run_until_closed(command, log_path, Path(exe).resolve().parent)
     rows = []
     for line in log_path.read_text(errors="replace").splitlines():
         m = DETBENCH.match(line)

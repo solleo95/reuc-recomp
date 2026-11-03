@@ -351,6 +351,8 @@ def perf(g, args):
         result["measure_from_retrace"] = int(g.frame["retraces"])
         result.update(steps.measure_fps(g, args.measure or 15, csv_path=g.run_dir / "fps50.csv"))
         result["measure_to_retrace"] = int(g.frame["retraces"])
+        if result.get("non_active_windows",0):
+            g.fail("performance window includes non-active gameplay; shorten the measurement or enable --god", "continuous gameplay")
     return result
 
 
@@ -1671,6 +1673,25 @@ SCENARIOS = {"boot_to_title": boot_to_title, "train_gameplay": train_gameplay, "
              "pause": pause, "overlay": overlay, "hdr_toggle": hdr_toggle, "hdr_ui": hdr_ui, "mods_smoke": mods_smoke, "hook_probe": hook_probe, "hook_block": hook_block, "weapon_damage": weapon_damage, "fire_rate": fire_rate, "hook_replace": hook_replace, "camera_api": camera_api, "player_api": player_api, "input_force": input_force, "input_block": input_block, "enemy_api": enemy_api, "state_dump": state_dump, "player_dump": player_dump, "game_api": game_api, "timers_api": timers_api, "arc_grow": train_gameplay, "arc_member": arc_member, "movie_probe": movie_probe, "movie_replace": movie_replace, "inspector_live": inspector_live, "randomizer_live": randomizer_live, "randomizer_plain": randomizer_live, "camera_capture": camera_capture, "arc_member_plain": arc_member, "guest_api": guest_api, "text_replace": text_replace, "text_replace_plain": text_replace, "audio_replace": audio_replace, "audio_replace_silent": audio_replace_silent, "dol_names": dol_names}
 SCENARIO_MODS = {"mods_smoke": MODS_SMOKE_MODS, "hook_probe": ["hook_probe"], "hook_block": ["hook_block"], "weapon_damage": ["damage_big"], "fire_rate": ["fire_rate_2"], "hook_replace": ["hook_replace"], "camera_api": ["camera_probe"], "player_api": ["player_probe"], "input_force": ["input_force"], "input_block": ["input_block"], "enemy_api": ["enemy_kill"], "game_api": ["game_probe"], "timers_api": ["timer_probe"], "arc_grow": ["arc_grow"], "arc_member": ["arc_member"], "movie_probe": ["movie_probe"], "movie_replace": ["movie_replace"], "inspector_live": ["inspector"], "randomizer_live": ["randomizer"], "guest_api": ["guest_probe"], "text_replace": ["text_marker"], "audio_replace": ["audio_tone"], "audio_replace_silent": ["audio_silent"], "dol_names": ["dol_names"]}   # example mods a scenario needs installed before the game starts (Game(mods=[...]))
 SCENARIO_MODS["weapon_switch"] = ["timer_probe"]   # enable the input API with a fixture that leaves input unchanged
+def ui_menu(g, args):
+    """The in-game menu over the title screen: Insert opens it (the Windows menu, or the Deck one with --game-arg=--ui --game-arg=deck), a capture of it, Escape closes it."""
+    result = {}
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    with g.step("open_menu"):
+        g.set_options(hdr=False)   # a capture of an HDR picture carries no menu
+        g.advance(30)
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+        g.advance(30)
+        result["menu"] = g.capture()
+    with g.step("close_menu"):
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+    return result
+
+
+SCENARIOS["ui_menu"] = ui_menu
 SCENARIOS["camera_stick"] = camera_stick
 SCENARIOS["gamepad"] = gamepad
 SCENARIOS["gamepad_prompts"] = gamepad_prompts
