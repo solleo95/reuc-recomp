@@ -310,6 +310,10 @@ The **Graphics**, **Controls** and **Mods** tabs hold the settings, and every ch
 - **HUD position** (launcher display page and the in-game menu's main tab, applied at once): **Automatic**, **Centre (16:9)** or **Screen edges**. Automatic keeps the health, ammo and weapon panel at the screen edges up to about 21:9 and in the middle on wider screens.
 - In online co-op, deterministic runs and recorded demos the game keeps its 16:9 picture, stretched over a wide window. This keeps all players in sync.
 
+## Two players on one computer
+
+Two people can play together on one computer (Windows, and Linux with the desktop menu; not the Steam Deck): **press a button on another device (a gamepad, a mouse, a light gun or a Wii Remote) while a game menu is open, and the game asks whether player 1 uses it or a second player joins with it**; any mix of devices works, and nothing has to be switched on. The game takes no second player in the middle of play. The second player's controls can be changed in the in-game menu (**Controls** tab, **Player 1 / Player 2**). Details, the Linux device access (`/dev/input`) and Wii Remotes on Linux: [docs/local-coop.md](docs/local-coop.md).
+
 ## Multiplayer (online co-op)
 
 > [!WARNING]

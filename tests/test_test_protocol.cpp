@@ -79,6 +79,14 @@ int main() {
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":2,"y":0,"buttons":0}})")).empty());     // out of range
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","kpad":{"x":0,"y":0,"buttons":1}})")).empty());     // button outside 0x1C10
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"input","hold_frames":601,"kpad":{"x":0,"y":0,"buttons":0}})")).empty());
+    {   // "player": 1 sends the input to the second player's input (local two-player play); 0 or absent is the first
+        CHECK(ok(parse_test_request(R"({"id":40,"cmd":"input","pad_button":{"button":0,"down":true}})")).input.player==0);
+        CHECK(ok(parse_test_request(R"({"id":41,"cmd":"input","player":1,"pad_button":{"button":0,"down":true}})")).input.player==1);
+        CHECK(ok(parse_test_request(R"({"id":42,"cmd":"input","player":0,"wii_pointer":{"x":0.5,"y":0}})")).input.player==0);
+        CHECK(!err(parse_test_request(R"({"id":43,"cmd":"input","player":2,"pad_button":{"button":0,"down":true}})")).empty());   // two players
+        CHECK(!err(parse_test_request(R"({"id":44,"cmd":"input","player":1.5,"pad_button":{"button":0,"down":true}})")).empty());
+        CHECK(!err(parse_test_request(R"({"id":45,"cmd":"input","player":1,"kpad":{"x":0,"y":0,"buttons":0}})")).empty());      // the legacy pad is the first player's alone
+    }
     CHECK(ok(parse_test_request(R"({"id":9,"cmd":"speed","factor":32})")).factor==32);
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"speed","factor":33})")).empty());
     CHECK(!err(parse_test_request(R"({"id":1,"cmd":"state","extra":1})")).empty());                          // unknown field

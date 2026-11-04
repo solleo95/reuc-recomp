@@ -9,9 +9,11 @@
 #include <tuple>
 #include <vector>
 struct FakeSink : uc::TestInputSink {
-    std::vector<std::tuple<uint64_t,float,float,uint32_t>> kpads; std::vector<uc::HostEvent> hosts; uint64_t consumed_seq=0, last=0;
+    std::vector<std::tuple<uint64_t,float,float,uint32_t>> kpads; std::vector<uc::HostEvent> hosts; std::vector<unsigned> host_players; uint64_t consumed_seq=0, last=0;
+    unsigned player=0;   // the player the server selected for the event being applied
+    void select_player(unsigned p) override { player=p; }
     bool kpad(uint64_t s,float x,float y,uint32_t b) override { kpads.emplace_back(s,x,y,b); last=s; return true; }
-    bool host(uint64_t s,const uc::HostEvent& e) override { hosts.push_back(e); last=s; return true; }
+    bool host(uint64_t s,const uc::HostEvent& e) override { hosts.push_back(e); host_players.push_back(player); last=s; return true; }
     uint64_t consumed() override { return consumed_seq; }
     std::string peek(uint32_t address,uint32_t size) override { return address==0x804B5CC8u && size==2 ? "AABB" : ""; }
 };
@@ -109,6 +111,19 @@ int main() {
         }
         CHECK(released && rested);
         sink.hosts.clear();
+    }
+    {   // an input for the second player is applied with player 1 selected, and the selection ends with it
+        sink.hosts.clear(); sink.host_players.clear();
+        write_line(cmd,R"({"id":60,"cmd":"input","player":1,"pad_button":{"button":0,"down":true},"hold_frames":1})");
+        write_line(cmd,R"({"id":61,"cmd":"input","pad_button":{"button":1,"down":true},"hold_frames":1})");
+        write_line(cmd,R"({"id":110,"cmd":"state"})");
+        CHECK(!await_line(server,lines,"\"id\":110",20).empty());
+        server.pump(21,"{}"); server.pump(22,"{}");
+        const std::vector<unsigned> expected{1,0,1,0};
+        CHECK(sink.hosts.size()==4);
+        CHECK(sink.host_players==expected);   // the press of the second player, the press of the first, then the two releases
+        CHECK(sink.player==0);
+        sink.hosts.clear(); sink.host_players.clear();
     }
     // disconnect_releases_inputs: key held, client closes, server releases.
     write_line(cmd,R"({"id":3,"cmd":"input","hold_frames":100,"key":{"code":21,"down":true}})");

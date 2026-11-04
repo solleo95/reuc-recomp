@@ -29,5 +29,7 @@ inline bool gyro_hold_allowed(PhysicalInput input) { return input.kind==Physical
 std::optional<std::string> validate_gamepad(const GamepadSettings&);   // ranges, distinct stick roles, a valid gamepad table
 // No "gamepad" object gives the defaults; a malformed or out-of-range one throws std::invalid_argument("config: ..."). Unknown keys are refused.
 GamepadSettings gamepad_from_config(const ConfigDocument&);
+GamepadSettings gamepad_from_json(const nlohmann::ordered_json&);   // the same parsing for one gamepad object (the second player's too); throws like gamepad_from_config
+nlohmann::ordered_json gamepad_to_json(const GamepadSettings&);     // throws std::invalid_argument for an invalid set
 void store_gamepad(ConfigDocument&,const GamepadSettings&);   // throws std::invalid_argument and leaves the document alone when the settings are invalid
 }

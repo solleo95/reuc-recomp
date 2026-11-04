@@ -318,6 +318,41 @@ def wiimote(g, args):
     return result
 
 
+def coop(g, args):
+    """Local two-player play through the host-event path: a second player's input ("player": 1) makes the game see a second pad, its Wii Remote pointer moves the second pointer and not
+    the first, its B button fires the second player's weapon and not the first's. The first player keeps playing with its own input."""
+    reach_gameplay(g, args.chapter)
+    g.set_speed(1)
+    g.set_settings(wiimote={"smoothing": 0})   # exact positions for the check
+    result = {}
+    with g.step("first_player_alone"):
+        steps.wait_gameplay(g)
+        if g.frame["player2"]["valid"]:
+            g.fail("a second player exists before anybody joined", "second player before join")
+        g.wii_pointer(.25, -.25); g.advance(3)
+        first = list(g.frame["aim"])
+    with g.step("second_player_joins"):
+        g.wii_button(8, frames=3, player=1); g.advance(30)   # A of the second remote: the join press
+        g.wii_pointer(-.5, .5, player=1); g.advance(3)
+        seen = g.frame["aim2"]
+        if abs(seen[0] + .4) > .01 or abs(seen[1] - .3) > .01:
+            g.fail(f"the second remote pointed at (-.5, .5) and the second pointer is at {seen}, expected (-.4, .3)", "second pointer")
+        if abs(g.frame["aim"][0] - first[0]) > .01 or abs(g.frame["aim"][1] - first[1]) > .01:
+            g.fail(f"the first pointer moved with the second player's: {first} -> {g.frame['aim']}", "pointers apart")
+        g.wait(lambda f: f["player2"]["valid"], seconds=20, awaited="a second player in the game")
+    with g.step("second_player_fires"):
+        steps.wait_gameplay(g, stable_ticks=1)
+        before_first, before_second = g.frame["player"]["magazine"], g.frame["player2"]["magazine"]
+        for _ in range(3):
+            g.wii_button(7, frames=3, player=1); g.advance(20)
+        if g.frame["player2"]["magazine"] >= before_second:
+            g.fail(f"B of the second remote did not fire: magazine {before_second} -> {g.frame['player2']['magazine']}", "second fire")
+        if g.frame["player"]["magazine"] != before_first:
+            g.fail(f"the first player's magazine changed with the second player's shots: {before_first} -> {g.frame['player']['magazine']}", "first magazine")
+    result["capture"] = g.capture()
+    return result
+
+
 def gamepad_prompts(g, args):
     """The in-game prompts (tutorial pages) in the look of a gamepad: Xbox, PlayStation, Nintendo or generic (--model), captured for a look."""
     model = getattr(args, "model", None) or "xbox"
@@ -1702,10 +1737,37 @@ def ui_menu(g, args):
     return result
 
 
+CONTROLS_TAB, CONTROLLERS_TAB = (605, 83), (700, 83)   # the tab labels of the menu in a 1280x720 window (the Russian menu: the tabs are not translated by position, the widths differ a little per language)
+
+
+def coop_menu(g, args):
+    """The in-game menu's Controls and Controllers tabs with the second player's widgets (the harness has a second input, so the menu offers them): a capture of each."""
+    result = {}
+    with g.step("skip_movies"):
+        steps.skip_movies(g)
+    with g.step("open_menu"):
+        g.set_options(hdr=False)
+        g.advance(30)
+        g.host_key(g.INSERT)
+        g.wait(lambda f: f.get("menu_open"), seconds=5, awaited="menu open")
+    with g.step("controls_tab"):
+        g.menu_click(*CONTROLS_TAB); g.advance(10)
+        result["controls"] = g.capture()
+    with g.step("controllers_tab"):
+        g.menu_click(*CONTROLLERS_TAB); g.advance(10)
+        result["controllers"] = g.capture()
+    with g.step("close_menu"):
+        g.host_key(g.ESCAPE)
+        g.wait(lambda f: not f.get("menu_open"), seconds=5, awaited="menu closed")
+    return result
+
+
+SCENARIOS["coop_menu"] = coop_menu
 SCENARIOS["ui_menu"] = ui_menu
 SCENARIOS["camera_stick"] = camera_stick
 SCENARIOS["gamepad"] = gamepad
 SCENARIOS["gamepad_prompts"] = gamepad_prompts
+SCENARIOS["coop"] = coop
 SCENARIOS["game_over"] = game_over
 SCENARIOS["pointer_range"] = pointer_range
 SCENARIOS["damage_draws"] = damage_draws

@@ -12,6 +12,7 @@ struct TestInputSink {                     // implemented over NativeInput in uc
     virtual ~TestInputSink() = default;
     virtual bool kpad(uint64_t sequence, float x, float y, uint32_t buttons) = 0;
     virtual bool host(uint64_t sequence, const HostEvent&) = 0;
+    virtual void select_player(unsigned) {}   // 1 while the server applies an input meant for the second player (local two-player play), 0 otherwise
     virtual uint64_t consumed() = 0;
     virtual std::string peek(uint32_t address, uint32_t size) = 0;   // uppercase hex of guest memory, empty when unreadable
 };

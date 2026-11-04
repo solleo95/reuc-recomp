@@ -26,7 +26,14 @@
 #include "host_input.h"
 #include "gamepad_input.h"
 #include "wiimote_input.h"
+#include "coop_session.h"
+#ifdef _WIN32
+#include "raw_input_backend.h"
+#else
+#include "evdev_backend.h"
+#endif
 #include "rumble_hold.h"
+#include <set>
 #include "hle/gx.h"
 #include "hle/os_layout.h"
 #include "lowmem.h"
@@ -239,8 +246,10 @@ struct VideoSession {
     ~VideoSession() { SDL_Quit(); }
 };
 struct NativeInputSink : uc::TestInputSink {
-    uc::NativeInput& input; SDL_Window* window; const uint8_t* guest;const uc::NetGame* network;
-    NativeInputSink(uc::NativeInput& i, SDL_Window* w, const uint8_t* g,const uc::NetGame* n) : input(i), window(w), guest(g),network(n) {}
+    uc::NativeInput& input; uc::NativeInput* second; SDL_Window* window; const uint8_t* guest;const uc::NetGame* network;
+    unsigned player=0;   // the player the test server is applying an input for (select_player)
+    NativeInputSink(uc::NativeInput& i, uc::NativeInput* s, SDL_Window* w, const uint8_t* g,const uc::NetGame* n) : input(i), second(s), window(w), guest(g),network(n) {}
+    void select_player(unsigned p) override { player=p; }
     std::string peek(uint32_t address, uint32_t size) override {
         // MEM1 24 MB at 0x80000000, MEM2 64 MB at 0x90000000 (guest_mem layout).
         const uint64_t end = uint64_t(address) + size;
@@ -255,9 +264,15 @@ struct NativeInputSink : uc::TestInputSink {
     bool host(uint64_t sequence, const uc::HostEvent& event) override {
         int width = 0, height = 0;
         if (!SDL_GetWindowSizeInPixels(window, &width, &height)) return false;
+        if (player == 1) {   // the second player: the game sees a second pad from the first input for it on (as when a second player has joined)
+            if (!second) return false;
+            if (!second->apply_test_event(sequence, event, uint32_t(std::max(0, width)), uint32_t(std::max(0, height)))) return false;
+            uc::input_hle_set_second_connected(true);
+            return true;
+        }
         return input.apply_test_event(sequence, event, uint32_t(std::max(0, width)), uint32_t(std::max(0, height)));
     }
-    uint64_t consumed() override { return network ? network->consumed_sequence() : input.last_consumed_sequence(); }
+    uint64_t consumed() override { return network ? network->consumed_sequence() : second ? std::max(input.last_consumed_sequence(), second->last_consumed_sequence()) : input.last_consumed_sequence(); }
 };
 struct GuestRunner {
     uc::Sched& sched;
@@ -476,6 +491,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         }
     }
     uc::NativeInput input;
+    uc::NativeInput input2;   // the second player's input (local two-player play: CoopSession decides which devices feed it)
     std::unique_ptr<uc::NetGame> network;
     const auto local_save_root=options.save_root.empty() ? exe_dir()/"saves" : options.save_root;
     if(options.netplay)network=std::make_unique<uc::NetGame>(options,input,exe_path(),local_save_root);
@@ -580,6 +596,11 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     input.bindings(input_config.input);
     input.pad_settings(options.gamepad);
     input.wiimote_settings(options.wiimote);
+    input2.bindings(options.player2.bindings);   // the second player: own mouse and gamepad tables, the first player's Wii Remote table
+    input2.pad_settings(options.player2.gamepad);
+    input2.wiimote_settings(options.wiimote);
+    input2.pointer_smoothing(options.pointer_smoothing/100.f);
+    input2.reload_zone(options.reload_zone,options.reload_zone_size/100.f);
     uc::HostInput host_input;
     host_input.sensitivity(options.mouse_sensitivity);
     host_input.pointer(options.pointer);
@@ -603,8 +624,13 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         try { gamepad.emplace(); }
         catch(const std::exception& error) { std::fprintf(stderr,"[gamepad] gamepads unavailable, keyboard and mouse only: %s\n",error.what()); }   // a broken joystick backend must not stop the game
     }
-    std::optional<uc::WiimoteInput> wiimote;   // a real Wii Remote feeds the game window only, like the gamepads: the harness injects wii_* events through the test server
-    if(!options.headless && !controlled) wiimote.emplace();
+    // Local two-player play: only in the desktop menu's game window (not the Steam Deck's), never in network play, demos, deterministic runs and harness runs.
+    const bool coop_enabled=!options.headless && !controlled && !network && !deck_view && !deterministic && options.demo_record.empty() && options.demo_play.empty();
+    std::set<std::string> wii_claims;   // the remotes the readers have: each reader opens a remote the other one has not
+    const auto wii_opener=[&wii_claims](std::string& error) { return uc::wii_open_unclaimed(wii_claims,error); };
+    std::optional<uc::WiimoteInput> wiimote,wiimote2;   // a real Wii Remote feeds the game window only, like the gamepads: the harness injects wii_* events through the test server; the second reader looks for another remote (the second player's)
+    if(!options.headless && !controlled && !deck_view) wiimote.emplace(wii_opener);   // the Steam Deck's menu has no Wii Remote support: nothing looks for one there
+    if(coop_enabled) wiimote2.emplace(wii_opener);
     if (!options.headless) {
         if (options.width > INT32_MAX || options.height > INT32_MAX) throw std::invalid_argument("window extent exceeds integer limits");
         SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE,"0",SDL_HINT_OVERRIDE);
@@ -658,8 +684,21 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         capture_pointer(true);
         input.focus(controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
     }
-    uc::input_hle_init(options.headless ? nullptr : &input);
-    uc::game_input_init(options.headless ? nullptr : &input,options.input_probe);
+    // The second input exists for local two-player play and for harness runs (which send a second player's inputs with "player":1); the game sees a second pad once a second player has joined.
+    const bool second_available=coop_enabled || (controlled && !network && !options.headless);
+    uc::input_hle_init(options.headless ? nullptr : &input,second_available ? &input2 : nullptr);
+    uc::game_input_init(options.headless ? nullptr : &input,options.input_probe,second_available ? &input2 : nullptr);
+    if(second_available) { uc::input_hle_set_second_connected(false); input2.focus(input.focused()); }
+    std::unique_ptr<uc::PointerBackend> pointer_backend;   // mice and light guns as devices of their own: who pressed a button decides who joins
+    if(coop_enabled) {
+#ifdef _WIN32
+        pointer_backend=uc::make_raw_input_backend(window.get());
+#else
+        pointer_backend=uc::make_evdev_pointer_backend();
+#endif
+    }
+    uc::CoopSession coop({input,input2,gamepad ? &*gamepad : nullptr,{wiimote ? &*wiimote : nullptr,wiimote2 ? &*wiimote2 : nullptr},pointer_backend.get()},coop_enabled);
+    coop.sensitivity(options.mouse_sensitivity);
     if(options.netplay) {
         network->install(sched,saves);
     }
@@ -683,11 +722,11 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
    // the last device used was a gamepad (control type "auto" shows that device's prompts); what the prompts were built for
     unsigned pad_changes=0;
     bool wii_last_used=false,shown_wii_last=false;   // the last device used was the Wii Remote (control type "auto" shows its prompts, in its look)
-    unsigned wii_changes=0,wii_activity=0;
+    unsigned wii_changes=0,wii_activity=0,wii_activity2=0;
     const auto refresh_prompt_device=[&] {   // the gamepad's (or the Wii Remote's) prompts: its table and the look of the connected pad or the chosen model
         const auto status=gamepad ? gamepad->status() : uc::PadStatus{};
         const auto& pad=options.gamepad;
-        if(wiimote && wii_last_used && pad.type==uc::ControlType::automatic && options.wiimote.enabled && wiimote->status().connected) {
+        if(wii_last_used && pad.type==uc::ControlType::automatic && options.wiimote.enabled && ((wiimote && wiimote->status().connected) || (wiimote2 && wiimote2->status().connected))) {
             uc::prompt_hooks_set_gamepad(options.wiimote.bindings,uc::PromptDevice{false,uc::PadFamily::generic,false,true});
             return;
         }
@@ -698,7 +737,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     std::optional<uc::TestPipes> test_pipes;
     std::optional<NativeInputSink> test_sink;
     std::optional<uc::TestServer> test_server;
-    if (server_mode) { test_pipes.emplace(options.test_server); test_sink.emplace(input, window.get(), boot.mem,network.get()); test_server.emplace(*test_pipes, *test_sink); }
+    if (server_mode) { test_pipes.emplace(options.test_server); test_sink.emplace(input, second_available ? &input2 : nullptr, window.get(), boot.mem,network.get()); test_server.emplace(*test_pipes, *test_sink); }
     bool test_released = false, draws_wanted = false; uint32_t draws_pass = 0; std::vector<uc::TestDrawStat> draw_stats; std::string draw_projection;
     double last_render_ms = 0;
     std::optional<uc::AudioOutput> audio;
@@ -1032,10 +1071,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.bloom=[&](const uc::BloomSettings& settings) { options.bloom=settings.enabled; options.bloom_strength=settings.strength; renderer.set_bloom(settings); };
         targets.crosshair_scale=[&](uint32_t percent) { options.crosshair_scale=percent; renderer.set_crosshair_scale(percent); };
         targets.reticle=[&](const uc::ReticleOptions& reticle) { options.reticle=reticle; gx::set_reticle_style(reticle_style_of(reticle)); };
-        targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); };
+        targets.mouse_sensitivity=[&](uint32_t percent) { options.mouse_sensitivity=percent; host_input.sensitivity(percent); coop.sensitivity(percent); };
         targets.rumble=[&](uint32_t percent) { options.rumble=percent; };
-        targets.pointer=[&](uc::PointerMode mode,uint32_t smoothing) { options.pointer=mode; options.pointer_smoothing=smoothing; host_input.pointer(mode); input.pointer_smoothing(smoothing/100.f); capture_pointer(!host_keys.menu_open); };   // the in-game menu is open while it changes this, but the harness changes it during play: the cursor changes hands now
-        targets.reload_zone=[&](uc::ReloadZone zone,uint32_t size) { options.reload_zone=zone; options.reload_zone_size=size; input.reload_zone(zone,size/100.f); };
+        targets.pointer=[&](uc::PointerMode mode,uint32_t smoothing) { options.pointer=mode; options.pointer_smoothing=smoothing; host_input.pointer(mode); input.pointer_smoothing(smoothing/100.f); input2.pointer_smoothing(smoothing/100.f); capture_pointer(!host_keys.menu_open); };   // the in-game menu is open while it changes this, but the harness changes it during play: the cursor changes hands now
+        targets.reload_zone=[&](uc::ReloadZone zone,uint32_t size) { options.reload_zone=zone; options.reload_zone_size=size; input.reload_zone(zone,size/100.f); input2.reload_zone(zone,size/100.f); };
         targets.hud_position=[&](uc::HudPosition position) { options.hud_position=position; view_for_output(view_width,view_height); };
         targets.hdr=[&](uc::HdrSettings hdr) {
             if(fixed_hdr_levels) { hdr.peak_nits=options.hdr.peak_nits; hdr.paper_white_nits=options.hdr.paper_white_nits; }
@@ -1046,7 +1085,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.prompt_style=[&](uc::PromptStyle style) { options.prompt_style=style; renderer.set_prompt_style(style); };
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_key_lists(bindings); };
         targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
-        targets.wiimote=[&](const uc::WiimoteSettings& settings) { options.wiimote=settings; input.wiimote_settings(settings); refresh_prompt_device(); };
+        targets.wiimote=[&](const uc::WiimoteSettings& settings) { options.wiimote=settings; input.wiimote_settings(settings); input2.wiimote_settings(settings); refresh_prompt_device(); };
+        targets.player2=[&](const uc::CoopSettings& settings) { options.player2=settings; input2.bindings(settings.bindings); input2.pad_settings(settings.gamepad); };
         live_settings.emplace(config_path,input_config,std::move(targets));
         if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has
         else {   // what this PC supports, asked of uc.exe --features (the launcher's query) while the game runs; a hung query is left behind at exit
@@ -1070,8 +1110,21 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             [&mod_menu](const std::string& id) { return mod_menu.dll_hash(id); }},[&mod_menu] { mod_menu.registry_changed(); });   // the Deck menu's Mods page: the launcher's rows over the live mods
         settings_menu->set_pad_status([&] { return gamepad ? gamepad->status() : uc::PadStatus{}; });
         if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { if(deck_menu) deck_menu->pad_capture(pad_input,down); else settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
-        settings_menu->set_wii_status([&] { return wiimote ? wiimote->status() : uc::WiimoteStatus{}; });
+        settings_menu->set_wii_status([&] {   // the first player's remote may be either reader's: connected when one is
+            uc::WiimoteStatus status=wiimote ? wiimote->status() : uc::WiimoteStatus{};
+            if(wiimote2) { const auto other=wiimote2->status(); status.connected|=other.connected; status.has_nunchuk|=other.has_nunchuk; if(status.error.empty()) status.error=other.error; }
+            return status;
+        });
+        settings_menu->set_second_command([&](uc::SettingsMenu::SecondCommand command) {   // local two-player play, from the menu's commit(): the answer to the new-device window and the disconnect button
+            switch(command) {
+            case uc::SettingsMenu::SecondCommand::disconnect: coop.release_second(); break;
+            case uc::SettingsMenu::SecondCommand::first: coop.answer_first(); break;
+            case uc::SettingsMenu::SecondCommand::second: coop.answer_second(); break;
+            case uc::SettingsMenu::SecondCommand::not_now: coop.cancel_pending(); break;
+            }
+        });
         if(wiimote) wiimote->capture_sink([&](uc::PhysicalInput remote_input,bool down) { settings_menu->wii_capture(remote_input,down); });   // the Wii Remote window waits for a button
+        if(wiimote2) wiimote2->capture_sink([&](uc::PhysicalInput remote_input,bool down) { settings_menu->wii_capture(remote_input,down); });
         mod_menu.set_save([&live_settings](const nlohmann::ordered_json& section) { live_settings->apply_mods(section); });   // the config's "mods" section
         if(!kPublicRelease)settings_menu->set_open_debug([] {   // the DLSS 5 tab's Open Debug: the debug folder with ngx_dlss5.log
             const auto folder=exe_dir()/"debug"; std::error_code ignored; std::filesystem::create_directories(folder,ignored);
@@ -1095,7 +1148,9 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if (audio && audio_paused!=halted) { audio->pause(halted); audio_paused=halted; }
         const bool playing=!host_keys.menu_open && !host_keys.paused && !steam_overlay_open;
         capture_pointer(!host_keys.menu_open);   // the menu needs the cursor
-        input.focus(playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0));   // nothing reaches the game under the menu or while paused
+        const bool game_focus=playing && (controlled || (SDL_GetWindowFlags(window.get())&SDL_WINDOW_INPUT_FOCUS)!=0);
+        input.focus(game_focus);   // nothing reaches the game under the menu or while paused
+        input2.focus(game_focus);
     };
     const auto host_key_pressed=[&](SDL_Scancode key) {   // true when the key belongs to the port (never to the game)
         if(network && key==SDL_SCANCODE_P)return true; // Escape sends the original synchronized pause action.
@@ -1128,6 +1183,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             frame_json.pop_back(); frame_json+=std::string(",\"menu_open\":")+(host_keys.menu_open ? "true" : "false")+",\"paused\":"+(host_keys.paused ? "true" : "false")
                 +",\"upscaler\":\""+std::string(uc::upscaler_name(renderer.active_upscaler()))+"\",\"frame_generation\":"+(renderer.frame_generation_active() ? "true" : "false")
                 +",\"aim\":["+std::to_string(input.latest_aim()[0])+","+std::to_string(input.latest_aim()[1])+"]"   // the game's pointer (x right, y down): the window's edge is at .8 across and .6 down
+                +",\"aim2\":["+std::to_string(input2.latest_aim()[0])+","+std::to_string(input2.latest_aim()[1])+"]"   // the second player's pointer
                 +",\"game_seconds\":"+std::to_string(uc::game_pacing_stats().timestep_ns/1e9)
                 +",\"simulation_seconds\":"+std::to_string((network ? network->simulation_ns() : uc::game_pacing_stats().timestep_ns)/1e9)
                 +",\"network_waiting\":"+(network_wait_screen ? "true" : "false")
@@ -1208,6 +1264,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
             (services.pressed&(uint64_t(1)<<unsigned(uc::Action::release_cursor)))) {
             capture_pointer(false);
             input.focus(false);
+            input2.focus(false);
         }
         render_pending();
     };
@@ -1249,15 +1306,42 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         steam_overlay_open=!steam_overlay_open;   // Steam's menus opened or closed: nothing reaches the game while they are up, and what was held is let go
         std::fprintf(stderr,"[steam] Steam's menu %s\n",steam_overlay_open ? "opened: the game gets no input" : "closed");
         apply_host_keys();
-        if(gamepad) gamepad->update(input,pad_allowed());
-        if(wiimote) wiimote->update(&input,pad_allowed(),options.wiimote);
+        if(gamepad) gamepad->update(input,pad_allowed(),&input2);
+        coop.update_remotes(pad_allowed(),options.wiimote);
     };
     std::chrono::steady_clock::time_point last_pump{};
     uint64_t last_pump_presents=~uint64_t(0);
+    bool coop_all_mice=false;   // Windows: the pointer backend hands over every mouse
+    bool coop_was_asking=false,coop_menu_opened=false,coop_menu_was_open=false;   // the question about a new device: the menu it opened, so that it can close it again
     while (!close && !runner.done.load()) {
         ++profile_loops;
         if (!options.headless) {
             sync_overlay();
+            if(coop_enabled) {   // what the game is doing now, before this loop's events go through the session: only a press during play joins a second player
+                int coop_width=0,coop_height=0;
+                SDL_GetWindowSizeInPixels(window.get(),&coop_width,&coop_height);
+                const auto context=input.current_context();
+                coop.tick({pad_allowed() && (context==uc::InputContext::gameplay || context==uc::InputContext::qte),context==uc::InputContext::gameplay || context==uc::InputContext::qte,pointer_captured(),
+                           options.pointer==uc::PointerMode::absolute,SDL_GetTicksNS(),
+                           {SDL_GetWindowID(window.get()),uint32_t(std::max(0,coop_width)),uint32_t(std::max(0,coop_height)),SDL_GetWindowPixelDensity(window.get())}});
+#ifdef _WIN32
+                const bool all_mice=pointer_backend && pointer_backend->all_devices();   // the backend took the legacy mouse messages and SDL's own reading with them: when it lets go, SDL's relative mode registers its own again
+                if(coop_all_mice && !all_mice) { capture_pointer(false); capture_pointer(!host_keys.menu_open); }
+                coop_all_mice=all_mice;
+#endif
+            }
+            if(settings_menu) {   // the menu's view of local two-player play, and the question about a new device
+                const auto status=coop.status(); const auto ask=coop.pending();
+                const auto code=[](uc::DeviceKind kind) { return kind==uc::DeviceKind::gamepad ? 1 : kind==uc::DeviceKind::wiimote ? 2 : kind==uc::DeviceKind::pointer ? 3 : 0; };
+                if(!controlled) {
+                    const SDL_Scancode menu_key=menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front();
+                    if(ask.asking && !coop_was_asking && !host_keys.menu_open) { host_key_pressed(menu_key); coop_menu_opened=true; }   // a new device was pressed in a game menu: the menu opens with the question
+                    if(!ask.asking && coop_menu_opened) { coop_menu_opened=false; if(host_keys.menu_open) host_key_pressed(menu_key); }   // answered: back to the game
+                    if(ask.asking && coop_menu_was_open && !host_keys.menu_open) { coop.cancel_pending(); coop_menu_opened=false; }   // the menu was closed with the question open: not now
+                }
+                coop_was_asking=ask.asking; coop_menu_was_open=host_keys.menu_open;
+                settings_menu->set_second_player({second_available,status.joined,status.joined ? code(status.kind) : 0,ask.asking ? code(ask.kind) : 0,ask.replaces,status.problem,coop_menu_opened});   // question_only: the question opened the menu, so only its window shows
+            }
             SDL_Event event;
             const auto events_start=frame_log ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 #ifdef _WIN32
@@ -1276,6 +1360,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) close = true;
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event.window.windowID == SDL_GetWindowID(window.get())) { renderer.resize(uint32_t(std::max(0, event.window.data1)), uint32_t(std::max(0, event.window.data2))); view_for_output(event.window.data1,event.window.data2); }
                 if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) renderer.hdr_state_changed();   // Windows HDR toggled or the window moved to another display
+                if(event.type==SDL_EVENT_KEY_DOWN) coop.note_keyboard();   // a keyboard player aims with a mouse: see CoopSession
+#ifdef _WIN32
+                coop.sdl_mouse(event);   // SDL's mouse id is the Raw Input device handle there: the mice tell themselves apart while the pointer backend is not listening
+#endif
                 if(controlled) { if(gamepad) gamepad->event(event,nullptr); continue; }   // with UC_TEST_REAL_PAD the pad opens and streams its gyro like in a player's run, but hands the game nothing
 #ifndef _WIN32
                 {   // diagnostics (Steam Deck): what the trackpads, the menu's cursor and the Steam overlay send (a few hundred lines per run)
@@ -1307,7 +1395,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                         continue;
                     }
                 }
-                if(gamepad) gamepad->event(event,&input);   // keeps its own state; it hands the game nothing while a menu is open (see update below)
+                if(gamepad) gamepad->event(event,&input,&input2);   // keeps its own state; it hands the game nothing while a menu is open (see update below); the second player's pad feeds input2
                 if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
                 else if(pad_last_used && (event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION)) {
                     static int shown=0;   // diagnostics: who switched the prompts from the pad to the mouse and keyboard (a few lines per run)
@@ -1340,6 +1428,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     continue;
                 }
                 if(host_keys.paused) continue;   // nothing reaches the game while paused
+                if(coop.swallows_mouse(event)) continue;   // a pointer is captured (Windows): every mouse reaches the game through the pointer backend instead
                 int width=0,height=0;
                 if(!SDL_GetWindowSizeInPixels(window.get(),&width,&height))throw std::runtime_error(SDL_GetError());
                 host_input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));
@@ -1347,6 +1436,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 if(host_input.event(event,input,pointer_captured())) {
                     capture_pointer(true);
                     input.focus(true);
+                    input2.focus(true);
                 }
                 if(host_input.take_recentre()) SDL_WarpMouseInWindow(window.get(),float(width)/2/SDL_GetWindowPixelDensity(window.get()),float(height)/2/SDL_GetWindowPixelDensity(window.get()));   // the trackpad's cursor reached the window's edge: back to the middle, the aim goes on from where it is
             }
@@ -1355,17 +1445,23 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 int width=0,height=0;
                 if(SDL_GetWindowSizeInPixels(window.get(),&width,&height)) input.extent(uint32_t(std::max(0,width)),uint32_t(std::max(0,height)));   // stick speed and gyro counts are in pixels
                 host_input.update(input,SDL_GetTicksNS());
-                if(gamepad) gamepad->update(input,pad_allowed());
+                if(gamepad) gamepad->update(input,pad_allowed(),&input2);
+                coop.update_remotes(pad_allowed(),options.wiimote);
                 if(wiimote) {
-                    wiimote->update(&input,pad_allowed(),options.wiimote);
-                    if(wiimote->activity()!=wii_activity) {wii_activity=wiimote->activity();wii_last_used=true;pad_last_used=false;}
-                    if(wiimote->changes()!=wii_changes || wii_last_used!=shown_wii_last) {wii_changes=wiimote->changes();shown_wii_last=wii_last_used;refresh_prompt_device();}   // the remote came or went, or the other device was used
+                    if(wiimote->activity()!=wii_activity) {wii_activity=wiimote->activity();if(!coop.second_is_remote(0)) {wii_last_used=true;pad_last_used=false;}}   // the prompts follow the first player's remote
+                    if(wiimote2 && wiimote2->activity()!=wii_activity2) {wii_activity2=wiimote2->activity();if(!coop.second_is_remote(1)) {wii_last_used=true;pad_last_used=false;}}
+                    const unsigned wii_changed=wiimote->changes()+(wiimote2 ? wiimote2->changes() : 0);
+                    if(wii_changed!=wii_changes || wii_last_used!=shown_wii_last) {wii_changes=wii_changed;shown_wii_last=wii_last_used;refresh_prompt_device();}   // a remote came or went, or the other device was used
                 }
                 if(gamepad && (gamepad->changes()!=pad_changes || pad_last_used!=shown_pad_last)) {pad_changes=gamepad->changes();shown_pad_last=pad_last_used;refresh_prompt_device();}   // a pad came or went, or the other device was used
                 {   // the game's motors run the device in use, and only while the game gets input (a menu, a pause or another window silences them)
                     const uint64_t now_ms=SDL_GetTicks();
-                    const auto device=wii_last_used && wiimote && wiimote->status().connected ? uc::RumbleDevice::remote : pad_last_used ? uc::RumbleDevice::pad : uc::RumbleDevice::none;   // the device the player is using: a remote that is gone or a pad lying on the desk of a keyboard player get nothing
-                    const auto rumble=rumble_router.step(uc::input_rumble_local(),pad_allowed(),device,now_ms);   // input_rumble_local() every loop, allowed or not: it also takes the taps that came and went meanwhile
+                    const bool remote_connected=(wiimote && wiimote->status().connected) || (wiimote2 && wiimote2->status().connected);
+                    const auto device=wii_last_used && remote_connected ? uc::RumbleDevice::remote : pad_last_used ? uc::RumbleDevice::pad : uc::RumbleDevice::none;   // the device the player is using: a remote that is gone or a pad lying on the desk of a keyboard player get nothing
+                    const auto second=coop.status();   // a second player: each player's motor goes to the kind of device that player has
+                    const auto second_device=second.kind==uc::DeviceKind::gamepad ? uc::RumbleDevice::pad : second.kind==uc::DeviceKind::wiimote ? uc::RumbleDevice::remote : uc::RumbleDevice::none;
+                    const auto rumble=second.joined ? rumble_router.step(uc::input_rumble_local(),pad_allowed(),device,second_device,now_ms)
+                                                     : rumble_router.step(uc::input_rumble_local(),pad_allowed(),device,now_ms);   // input_rumble_local() every loop, allowed or not: it also takes the taps that came and went meanwhile
                     rumble_pad_starts+=rumble.pad_starts; rumble_wii_starts+=rumble.wii_starts;
                     if(now_ms-rumble_logged_ms>=2000) {   // diagnostics, only while something happens: the game's "motor on" commands against the taps the pad / the remote were given
                         const uint64_t starts=uc::input_rumble_starts();
@@ -1375,7 +1471,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                         rumble_game_starts=starts; rumble_pad_starts=rumble_wii_starts=0; rumble_logged_ms=now_ms;
                     }
                     if(gamepad) gamepad->rumble(rumble.pad,options.rumble/100.f);
-                    if(wiimote) wiimote->rumble(rumble.wii && options.rumble>0);
+                    if(wiimote) wiimote->rumble((rumble.wii&(coop.second_is_remote(0) ? 2u : 1u)) && options.rumble>0);   // the second player's remote takes bit 1, the first player's bit 0
+                    if(wiimote2) wiimote2->rumble((rumble.wii&(coop.second_is_remote(1) ? 2u : 1u)) && options.rumble>0);
                 }
             }
             if (watch_error) std::rethrow_exception(watch_error);

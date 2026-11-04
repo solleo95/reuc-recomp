@@ -1,38 +1,10 @@
 #include "check.h"
-#include "wiimote_input.h"
-#include <chrono>
+#include "fake_wiimote.h"
 #include <condition_variable>
-#include <thread>
 using namespace uc;
 using namespace std::chrono_literals;
 static PhysicalInput wii(WiiButton button) { return {PhysicalKind::wii_button,uint16_t(button)}; }
 
-struct FakeRemote : WiiTransport {
-    std::mutex m;
-    std::deque<std::vector<uint8_t>> incoming;
-    std::vector<std::vector<uint8_t>> written;
-    bool gone=false,refuse_writes=false,silent=false;
-    // A real remote keeps sending its latest state: at first nothing pressed, nothing seen, the accelerometer at rest, no nunchuk; then the last report pushed.
-    std::vector<uint8_t> rest{0x37,0,0,0x82,0x82,0x9C,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0,0,0,0,0,0};
-    bool read(std::vector<uint8_t>& report,unsigned timeout_ms) override {
-        std::unique_lock lock(m);
-        if(gone) return false;
-        report.clear();
-        if(!incoming.empty()) { report=incoming.front(); incoming.pop_front(); return true; }
-        const bool quiet=silent; const auto latest=rest;
-        lock.unlock(); std::this_thread::sleep_for(std::chrono::milliseconds(std::min(timeout_ms,5u)));
-        if(!quiet) report=latest;
-        return true;
-    }
-    bool write(std::span<const uint8_t> report) override {
-        std::lock_guard lock(m);
-        if(gone || refuse_writes) return false;
-        written.emplace_back(report.begin(),report.end()); return true;
-    }
-    void push(std::vector<uint8_t> report) { std::lock_guard lock(m); if(report[0]!=0x20) rest=report; incoming.push_back(std::move(report)); }
-    size_t writes() { std::lock_guard lock(m); return written.size(); }
-    void disconnect() { std::lock_guard lock(m); gone=true; }
-};
 struct Calls : WiimoteTarget {
     std::vector<std::pair<PhysicalInput,bool>> buttons;
     std::vector<std::array<float,2>> pointers,sticks,motions;
@@ -43,36 +15,6 @@ struct Calls : WiimoteTarget {
     void host_wii_motion(float x,float y,uint64_t) override { motions.push_back({x,y}); }
     void wii_reset() override { ++resets; }
 };
-// A remote the opener hands out once; later calls find nothing (unless more are queued).
-struct Opener {
-    std::mutex m;
-    std::deque<std::shared_ptr<FakeRemote>> remotes;
-    unsigned calls=0;
-    std::string error;
-    WiimoteInput::Opener fn() {
-        return [this](std::string& out) -> std::unique_ptr<WiiTransport> {
-            std::lock_guard lock(m); ++calls; out=error;
-            if(remotes.empty()) return nullptr;
-            struct Handle : WiiTransport {
-                std::shared_ptr<FakeRemote> remote;
-                bool read(std::vector<uint8_t>& r,unsigned t) override { return remote->read(r,t); }
-                bool write(std::span<const uint8_t> r) override { return remote->write(r); }
-            };
-            auto handle=std::make_unique<Handle>(); handle->remote=remotes.front(); remotes.pop_front(); return handle;
-        };
-    }
-};
-template<class F> static bool wait_for(F ready,int ms=5000) {
-    for(int waited=0;waited<ms;waited+=5) { if(ready()) return true; std::this_thread::sleep_for(5ms); }
-    return ready();
-}
-// Report 0x37: buttons, accelerometer, basic IR (two dots in the first five bytes), a nunchuk.
-static std::vector<uint8_t> report(uint8_t first,uint8_t second,std::array<uint8_t,3> accel={0x82,0x82,0x9C},bool ir=false,bool nunchuk=false,std::array<uint8_t,2> stick={128,128},uint8_t nunchuk_buttons=0xFF) {
-    std::vector<uint8_t> r{0x37,first,second,accel[0],accel[1],accel[2]};
-    if(ir) r.insert(r.end(),{44,144,0x56,188,154, 0xFF,0xFF,0xFF,0xFF,0xFF}); else r.insert(r.end(),10,0xFF);
-    if(nunchuk) r.insert(r.end(),{stick[0],stick[1],0x80,0x80,0xB4,nunchuk_buttons}); else r.insert(r.end(),6,0x00);
-    return r;
-}
 struct Rig {
     Opener opener;
     std::shared_ptr<FakeRemote> remote=std::make_shared<FakeRemote>();
@@ -261,6 +203,52 @@ static void the_windows_enumeration_survives_whatever_is_plugged_in() {
     CHECK(remote || error.empty() || error.find("Wii Remote")!=std::string::npos);
     if(remote) { std::vector<uint8_t> report; remote->read(report,1); }
 }
+// Local two-player play: the host loop asks which remote pressed something before it decides whose target the remote feeds.
+static void a_pressed_button_is_pending_until_update_hands_it_on() {
+    Rig rig; CHECK(wait_for([&]{ return rig.connected(); }));
+    CHECK(!rig.input->pending_press());
+    rig.remote->push(report(0x00,0x08));   // A down
+    CHECK(wait_for([&]{ return rig.input->pending_press(); }));
+    rig.update();
+    CHECK(!rig.input->pending_press() && rig.calls.buttons.size()==1);
+    rig.remote->push(report(0x00,0x00));   // A up: a release is not a press
+    CHECK(rig.until([&]{ return rig.calls.buttons.size()>=2; }));
+    CHECK(!rig.input->pending_press());
+}
+static void the_device_id_is_the_transports_and_goes_with_the_link() {
+    Rig rig; CHECK(rig.input->device_id().empty());
+    CHECK(wait_for([&]{ return rig.connected(); }));
+    CHECK(rig.input->device_id()=="remote-1");
+    rig.remote->disconnect();
+    CHECK(wait_for([&]{ return !rig.connected(); }));
+    CHECK(rig.input->device_id().empty());
+}
+static void the_player_led_follows_set_player() {
+    Rig rig; CHECK(wait_for([&]{ return rig.connected(); }));
+    const auto led_written=[&](unsigned player) {
+        const auto led=wii_led_report(player); std::lock_guard lock(rig.remote->m);
+        return std::count(rig.remote->written.begin(),rig.remote->written.end(),std::vector<uint8_t>(led.begin(),led.end()));
+    };
+    CHECK(led_written(1)==1 && led_written(2)==0);                 // the set-up lights LED 1
+    rig.input->set_player(1); CHECK(wait_for([&]{ return led_written(2)==1; }));
+    rig.input->set_player(0); CHECK(wait_for([&]{ return led_written(1)==2; }));
+}
+static void release_lets_go_of_what_the_target_holds() {
+    Rig rig; CHECK(wait_for([&]{ return rig.connected(); }));
+    rig.remote->push(report(0x00,0x08));
+    CHECK(rig.until([&]{ return rig.calls.buttons.size()>=1; }));
+    CHECK(rig.calls.resets==0);
+    rig.input->release(rig.calls); CHECK(rig.calls.resets==1);
+    rig.input->release(rig.calls); CHECK(rig.calls.resets==1);       // nothing held now: nothing to let go of
+}
+static void the_claiming_enumeration_survives_whatever_is_plugged_in() {
+    std::set<std::string> claimed; std::string error;
+    auto first=wii_open_unclaimed(claimed,error);
+    auto second=wii_open_unclaimed(claimed,error);                      // the remote the first call took is not offered again
+    CHECK(!(first && second && first->id()==second->id()));
+    CHECK(!first || (!first->id().empty() && claimed.count(first->id())==1));
+    first.reset(); second.reset(); CHECK(claimed.empty());               // closing hands the claim back
+}
 int main() {
     the_windows_enumeration_survives_whatever_is_plugged_in();
     handshake_writes_the_init_sequence_in_order();
@@ -281,4 +269,6 @@ int main() {
     the_capture_sink_hears_buttons_even_when_inactive();
     the_motor_follows_rumble_and_survives_later_reports();
     a_remote_found_while_rumbling_starts_with_the_motor_on();
+    a_pressed_button_is_pending_until_update_hands_it_on(); the_device_id_is_the_transports_and_goes_with_the_link(); the_player_led_follows_set_player(); release_lets_go_of_what_the_target_holds();
+    the_claiming_enumeration_survives_whatever_is_plugged_in();
 }

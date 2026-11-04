@@ -2,7 +2,7 @@ set(UC_GENERATED_DIR ${CMAKE_SOURCE_DIR}/generated CACHE PATH "translator output
 add_library(uc_options STATIC options.cpp window_mode.cpp)
 target_link_libraries(uc_options PUBLIC uc_path_io)
 target_include_directories(uc_options PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/renderer)
-target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts uc_netplay uc_gamepad_config uc_wiimote_config)
+target_link_libraries(uc_options PUBLIC SDL3::SDL3 uc_input_prompts uc_netplay uc_gamepad_config uc_wiimote_config uc_coop_config)
 add_library(uc_options_config STATIC options_config.cpp)
 target_include_directories(uc_options_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_options_config PUBLIC uc_options uc_input_config)
@@ -27,15 +27,32 @@ target_link_libraries(uc_prompt_bridge PUBLIC uc_input_prompts uc_gx)
 add_library(uc_host_input STATIC host_input.cpp)
 target_include_directories(uc_host_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_host_input PUBLIC uc_runtime SDL3::SDL3)
+add_library(uc_pointer_feed STATIC pointer_feed.cpp)   # a second player's mouse or light gun (read as a device of its own) as the SDL mouse events HostInput reads
+target_include_directories(uc_pointer_feed PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/common)
+target_link_libraries(uc_pointer_feed PUBLIC uc_host_input)
+add_library(uc_coop_session STATIC coop_session.cpp)   # local two-player play: who joins, and whose input each device feeds
+target_include_directories(uc_coop_session PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_gamepad_input STATIC gamepad_input.cpp)   # SDL gamepads: events in, NativeInput sticks, buttons and gyro out
 target_include_directories(uc_gamepad_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_input PUBLIC uc_input uc_gamepad_math SDL3::SDL3)   # no runtime: the launcher reads gamepads too
-add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiimote_hid.cpp,wiimote_hid_stub.cpp>)   # the Wii Remote over Windows HID: a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
+add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiimote_hid.cpp,wiimote_evdev.cpp>)   # the Wii Remote over Windows HID, on Linux through the kernel's hid-wiimote nodes: a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
 target_include_directories(uc_wiimote_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_wiimote_input PUBLIC uc_wiimote_protocol uc_wiimote_math uc_wiimote_config uc_input)
 if(WIN32)
   target_link_libraries(uc_wiimote_input PUBLIC setupapi hid)
+  add_library(uc_raw_input_backend STATIC raw_input_backend.cpp)   # mice and light guns as devices of their own through Raw Input (local two-player play)
+  target_include_directories(uc_raw_input_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/common)
+  target_link_libraries(uc_raw_input_backend PUBLIC SDL3::SDL3 user32)
+else()
+  target_sources(uc_wiimote_input PRIVATE evdev_scan.cpp)
+  target_link_libraries(uc_wiimote_input PUBLIC uc_evdev_logic)
+  add_library(uc_evdev_backend STATIC evdev_backend.cpp evdev_scan.cpp)   # mice and light guns as devices of their own (local two-player play)
+  target_include_directories(uc_evdev_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(uc_evdev_backend PUBLIC uc_evdev_logic)
+  add_executable(uc_evdev_probe evdev_probe.cpp)   # developer tool: what the evdev layer sees (scripts/linux/uinput_fakes.py makes virtual devices to look at)
+  target_link_libraries(uc_evdev_probe PRIVATE uc_evdev_backend uc_wiimote_input)
 endif()   # no runtime: the launcher reads the remote too
+target_link_libraries(uc_coop_session PUBLIC uc_coop_roster uc_pointer_feed uc_gamepad_input uc_wiimote_input)
 add_library(uc_game_mods STATIC game_mods.cpp)   # the port's side of the mod platform (modding/)
 target_include_directories(uc_game_mods PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_game_mods PUBLIC uc_mods uc_diagnostics PRIVATE uc_public_release)
@@ -94,7 +111,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
   add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,system_report_posix.cpp> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
   target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io uc_ui_mode)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_test_server uc_crash_bundle
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_coop_session $<IF:$<BOOL:${WIN32}>,uc_raw_input_backend,uc_evdev_backend> uc_test_server uc_crash_bundle
     uc_live_settings uc_settings_registry uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_deck_pages uc_netplay_game)
   include(${CMAKE_SOURCE_DIR}/cmake/stb_image.cmake)   # the header the compile screen's picture is decoded with (the launcher's folder fetches it too)
   if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

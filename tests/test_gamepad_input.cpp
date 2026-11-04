@@ -1,6 +1,7 @@
 #include "check.h"
 #include "native_input.h"
 #include "gamepad_input.h"
+#include "virtual_pad.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -9,31 +10,6 @@ using namespace uc;
 constexpr uint64_t kSecond=1000000000ull;
 static uint64_t bit(Action a) { return uint64_t(1)<<unsigned(a); }
 static bool near(float a,float b,float tolerance=2e-3f) { return std::fabs(a-b)<=tolerance; }
-// A virtual SDL gamepad: the real SDL path (events, mapping, sensors) without a device.
-struct Virtual {
-    SDL_JoystickID id=0; SDL_Joystick* joystick=nullptr;
-    std::vector<int> rumbles;   // the strength of every rumble the pad was told to play, 0..65535
-    bool refuse=false;          // the pad's driver turns the rumble down (a busy device)
-    static bool rumble_to(void* self,Uint16 low,Uint16 high) { auto* pad=static_cast<Virtual*>(self); pad->rumbles.push_back(std::max(low,high)); return !pad->refuse; }
-    explicit Virtual(const char* name="Test Pad",uint16_t vendor=0,uint16_t product=0) {
-        SDL_VirtualJoystickDesc desc; SDL_INIT_INTERFACE(&desc);
-        desc.userdata=this; desc.Rumble=rumble_to; desc.vendor_id=vendor; desc.product_id=product;
-        const SDL_VirtualJoystickSensorDesc sensors[1]={{SDL_SENSOR_GYRO,250.f}};
-        desc.type=SDL_JOYSTICK_TYPE_GAMEPAD; desc.naxes=SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
-        desc.nsensors=1; desc.sensors=sensors; desc.name=name;
-        static const SDL_VirtualJoystickTouchpadDesc touchpads[2]={{1,{}},{1,{}}};   // two trackpads (the Steam Deck's), one finger each
-        desc.ntouchpads=2; desc.touchpads=touchpads;
-        id=SDL_AttachVirtualJoystick(&desc); CHECK(id);
-        joystick=SDL_OpenJoystick(id); CHECK(joystick);
-    }
-    ~Virtual() { detach(); }
-    void detach() { if(!joystick)return; SDL_CloseJoystick(joystick); joystick=nullptr; SDL_DetachVirtualJoystick(id); }
-    void button(SDL_GamepadButton b,bool down) { CHECK(SDL_SetJoystickVirtualButton(joystick,b,down)); }
-    void axis(SDL_GamepadAxis a,int value) { CHECK(SDL_SetJoystickVirtualAxis(joystick,a,Sint16(value))); }
-    void trigger(SDL_GamepadAxis a,float pull) { axis(a,int(std::lround(pull*65535.f))-32768); }   // joysticks report triggers from -32768 (released) to 32767; the gamepad layer maps that to 0..32767
-    void touch(int touchpad,bool down,float pressure=.05f) { CHECK(SDL_SetJoystickVirtualTouchpad(joystick,touchpad,0,down,.5f,.5f,pressure)); }
-    void gyro(float yaw,float pitch,uint64_t timestamp_ns) { const float data[3]={pitch,yaw,0}; CHECK(SDL_SendJoystickVirtualSensorData(joystick,SDL_SENSOR_GYRO,timestamp_ns,data,3)); }
-};
 static void pump(GamepadInput& pads,NativeInput* input,bool active=true) {
     SDL_PumpEvents();
     SDL_Event event; while(SDL_PollEvent(&event)) pads.event(event,input);
@@ -191,6 +167,84 @@ static void any_other_pad_keeps_its_200_ms_refresh() {
     rig.pads.rumble(1,1.f,1060); CHECK(pad.rumbles.size()==1);                  // SDL is not told again for nothing
     rig.pads.rumble(1,1.f,1250); CHECK(pad.rumbles.size()==1);                  // (the refresh of an unchanged value only extends SDL's timer)
 }
+// Local two-player play: one GamepadInput, two targets. The pad assigned with assign_second feeds the second target, every other pad the first.
+struct TwoRig {
+    GamepadInput pads; NativeInput first,second; uint64_t now=kSecond;
+    TwoRig() { for(auto* input:{&first,&second}) { input->extent(1280,720); input->focus(true); input->context(InputContext::gameplay); input->consume_at(now); } }
+    void pump() {
+        SDL_PumpEvents();
+        SDL_Event event; while(SDL_PollEvent(&event)) pads.event(event,&first,&second);
+        pads.update(first,true,&second);
+    }
+    void run(double seconds) { for(int i=0;i<int(seconds*20+.5);++i) {now+=kSecond/20; pump(); first.consume_at(now); second.consume_at(now);} }
+};
+static void the_assigned_pad_feeds_the_second_target_only() {
+    TwoRig rig; Virtual a("Pad A"),b("Pad B"); rig.pump();
+    std::vector<SDL_JoystickID> pressed;
+    rig.pads.press_sink([&](SDL_JoystickID id) { pressed.push_back(id); if(id==b.id && !pressed.empty() && pressed.size()==1) rig.pads.assign_second(id); });   // the join press is routed to the second target too
+    b.button(SDL_GAMEPAD_BUTTON_WEST,true); rig.pump();
+    CHECK(pressed.size()==1 && pressed[0]==b.id);
+    CHECK(rig.second.consume_actions().pressed==bit(Action::reload) && rig.first.consume_actions().pressed==0);
+    b.button(SDL_GAMEPAD_BUTTON_WEST,false); rig.pump(); rig.second.consume_actions();
+    a.button(SDL_GAMEPAD_BUTTON_WEST,true); rig.pump();
+    CHECK(rig.first.consume_actions().pressed==bit(Action::reload) && rig.second.consume_actions().pressed==0);   // pad A is still the first player's
+    CHECK(pressed.size()==2 && pressed[1]==a.id);                                                              // and its press was reported too
+    CHECK(rig.pads.status().name=="Pad A");                                                                  // the second player's pad never becomes the pad in use
+    b.button(SDL_GAMEPAD_BUTTON_SOUTH,true); rig.pump(); CHECK(rig.pads.status().name=="Pad A");
+}
+static void a_deliberate_stick_push_or_a_trigger_pull_counts_as_use_but_drift_does_not() {   // a new pad's stick must raise the question too, not just its buttons; a pad on the desk with a drifting stick must not
+    TwoRig rig; Virtual a("Pad A"); rig.pump();
+    std::vector<SDL_JoystickID> pressed;
+    rig.pads.press_sink([&](SDL_JoystickID id) { pressed.push_back(id); });
+    a.axis(SDL_GAMEPAD_AXIS_LEFTX,9000); a.axis(SDL_GAMEPAD_AXIS_RIGHTY,-12000); rig.run(.3);
+    CHECK(pressed.empty());                                                // drift, a quarter of the travel: nothing
+    a.axis(SDL_GAMEPAD_AXIS_LEFTX,32767); rig.run(.3);
+    CHECK(pressed.size()==1 && pressed[0]==a.id);                          // a stick pushed past half is use
+    a.axis(SDL_GAMEPAD_AXIS_LEFTX,0); rig.run(.2);
+    a.trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,1.f); rig.run(.2);
+    CHECK(pressed.size()==2);                                              // and so is a trigger
+}
+static void a_muted_pad_reaches_nobody_and_lets_go_of_what_it_held() {   // a device a question is open about must not play for the first player meanwhile
+    TwoRig rig; Virtual a("Pad A"),b("Pad B"); rig.pump();
+    b.button(SDL_GAMEPAD_BUTTON_SOUTH,true); b.axis(SDL_GAMEPAD_AXIS_LEFTX,32767); rig.run(.3);
+    CHECK(rig.first.consume_actions().held&bit(Action::interact));        // unknown, unmuted: it plays for the first player
+    rig.pads.mute(b.id); rig.run(.1);
+    CHECK(!(rig.first.consume_actions().held&bit(Action::interact)));      // muted: what it held is let go...
+    b.button(SDL_GAMEPAD_BUTTON_SOUTH,false); rig.run(.1); b.button(SDL_GAMEPAD_BUTTON_WEST,true); rig.run(.1);
+    CHECK(rig.first.consume_actions().pressed==0);                         // ...and its presses reach nobody
+    const float x=rig.first.consume_at(rig.now).x; rig.run(.5);
+    CHECK(near(rig.first.consume_at(rig.now).x,x));                        // nor its stick
+    a.button(SDL_GAMEPAD_BUTTON_WEST,true); rig.run(.1);
+    CHECK(rig.first.consume_actions().pressed==bit(Action::reload));       // another pad is not muted
+    rig.pads.mute(0); b.button(SDL_GAMEPAD_BUTTON_WEST,false); rig.run(.1); b.button(SDL_GAMEPAD_BUTTON_WEST,true); rig.run(.1);
+    CHECK(rig.first.consume_actions().pressed&bit(Action::reload));       // unmuted: it plays again
+}
+static void the_assigned_pads_sticks_move_the_second_pointer() {
+    TwoRig rig; Virtual a("Pad A"),b("Pad B"); rig.pump(); rig.pads.assign_second(b.id);
+    b.axis(SDL_GAMEPAD_AXIS_LEFTX,32767); rig.run(1);
+    CHECK(rig.second.consume_at(rig.now).x>.2f && near(rig.first.consume_at(rig.now).x,0));
+    b.axis(SDL_GAMEPAD_AXIS_LEFTX,0); a.axis(SDL_GAMEPAD_AXIS_LEFTX,-32767); rig.run(1);
+    CHECK(rig.first.consume_at(rig.now).x<-.2f);
+}
+static void unassigning_or_unplugging_returns_everything_to_rest() {
+    TwoRig rig; Virtual a("Pad A"); auto b=std::make_unique<Virtual>("Pad B"); rig.pump(); rig.pads.assign_second(b->id);
+    b->button(SDL_GAMEPAD_BUTTON_SOUTH,true); rig.pump(); CHECK(rig.second.consume_actions().held&bit(Action::interact));
+    b->detach(); rig.pump(); rig.run(.1);                                   // unplugged while held: the second target is released
+    CHECK(!(rig.second.consume_actions().held&bit(Action::interact)));
+    Virtual c("Pad C"); rig.pump(); rig.pads.assign_second(c.id);
+    c.button(SDL_GAMEPAD_BUTTON_SOUTH,true); rig.pump(); CHECK(rig.second.consume_actions().held&bit(Action::interact));
+    rig.pads.assign_second(0); rig.pump();                                 // handed back: the second target lets go...
+    CHECK(!(rig.second.consume_actions().held&bit(Action::interact)));
+    c.button(SDL_GAMEPAD_BUTTON_SOUTH,false); rig.pump(); c.button(SDL_GAMEPAD_BUTTON_SOUTH,true); rig.pump();
+    CHECK(rig.first.consume_actions().held&bit(Action::interact));        // ...and the pad feeds the first one again
+}
+static void the_motors_follow_the_assigned_pad() {
+    TwoRig rig; Virtual a("Pad A"),b("Pad B"); rig.pump();                 // pad B is the newest, so the pad in use...
+    rig.pads.assign_second(b.id);                                          // ...until it becomes the second player's: then pad A is
+    rig.pads.rumble(1,1.f); CHECK(a.rumbles.size()==1 && a.rumbles.back()==65535 && b.rumbles.empty());
+    rig.pads.rumble(3,1.f); CHECK(b.rumbles.size()==1 && b.rumbles.back()==65535);
+    rig.pads.rumble(0,1.f); CHECK(a.rumbles.back()==0 && b.rumbles.back()==0);
+}
 int main() {
     // Only the virtual pads of this test: a gamepad plugged into the PC must not take part.
     for(const char* hint:{SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_RAWINPUT,SDL_HINT_JOYSTICK_WGI,SDL_HINT_JOYSTICK_DIRECTINPUT,SDL_HINT_XINPUT_ENABLED}) SDL_SetHint(hint,"0");
@@ -199,4 +253,5 @@ int main() {
     an_inactive_gamepad_feeds_nothing_and_resumes_cleanly(); the_capture_sink_sees_every_input_even_while_inactive();
     the_motors_drive_the_pad_in_use_and_the_other_pad(); a_refused_rumble_is_tried_again_on_the_next_pass();
     the_deck_report_is_the_loud_simple_rumble_command(); a_deck_pad_gets_its_motor_command_again_every_60_ms(); any_other_pad_keeps_its_200_ms_refresh();
+    the_assigned_pad_feeds_the_second_target_only(); a_deliberate_stick_push_or_a_trigger_pull_counts_as_use_but_drift_does_not(); a_muted_pad_reaches_nobody_and_lets_go_of_what_it_held(); the_assigned_pads_sticks_move_the_second_pointer(); unassigning_or_unplugging_returns_everything_to_rest(); the_motors_follow_the_assigned_pad();
 }

@@ -18,6 +18,8 @@ constexpr size_t kDemoSampleBytes=32; // Existing raw sample format; stick axes 
 static_assert(offsetof(uc::InputSample,stick_x)==kDemoSampleBytes);
 uc::NativeInput* input; // set before guest execution; cleared after all guest threads join
 uc::NativeInput* second_input;
+std::atomic<bool> second_connected{true};   // local two-player play: the second input exists from the start, the game sees the second pad once a second player has joined (host thread sets, guest reads)
+uc::NativeInput* connected_second() { return second_connected ? second_input : nullptr; }
 unsigned sampled_channel=0;
 unsigned aim_channel=0;   // the pad whose pointer drives the local reticle (network play: the local player's slot)
 bool aim_exact=false;   // network play: the reticle follows the mouse exactly (late_aim.h)
@@ -443,7 +445,7 @@ std::array<float,2> NativeInput::aim_ago(double seconds) {
 std::array<float,2> NativeInput::latest_aim() { std::lock_guard lock(mutex_); ease_pointer(motion_time()); return {state_.x,state_.y}; }
 std::array<float,2> NativeInput::consumed_aim() { std::lock_guard lock(mutex_); return {previous_x_,previous_y_}; }
 std::array<float,2> input_consumed_aim() { auto* source=aim_channel==1 ? second_input : input; return source ? source->consumed_aim() : std::array<float,2>{}; }
-std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? second_input : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
+std::optional<std::array<float,2>> input_consumed_aim_of(unsigned channel) { auto* source=channel==0 ? input : channel==1 ? connected_second() : nullptr; if(!source) return std::nullopt; return source->consumed_aim(); }
 void input_hle_set_aim_channel(unsigned channel) { aim_channel=channel; aim_exact=true; }
 bool input_aim_exact() { return aim_exact; }
 bool input_demo_playing() { return input && input->demo_playing(); }
@@ -581,7 +583,9 @@ InputFrame NativeInput::capture_frame() {
     return frame;
 }
 void NativeInput::install_frame(const InputFrame& frame) { std::lock_guard lock(mutex_); network_frame_=frame; previous_x_=frame.sample.x;previous_y_=frame.sample.y; }
-void input_hle_init(NativeInput* source,NativeInput* second) { input=source; second_input=second; sampled_channel=0; aim_channel=0; aim_exact=false; rumble_motors=0; rumble_taps=0; rumble_replaying=false; }
+void input_hle_set_second_connected(bool connected) { second_connected=connected; }
+bool input_hle_second_connected() { return connected_second()!=nullptr; }
+void input_hle_init(NativeInput* source,NativeInput* second) { input=source; second_input=second; second_connected=true; sampled_channel=0; aim_channel=0; aim_exact=false; rumble_motors=0; rumble_taps=0; rumble_replaying=false; }
 void input_hle_set_poll(std::function<void(const ppc::Ctx&)> poll) { input_poll=std::move(poll); }
 unsigned input_hle_channel() { return sampled_channel; }
 void input_hle_restore_channel(unsigned channel) {
@@ -592,7 +596,7 @@ void input_hle_restore_channel(unsigned channel) {
 void hle_KPADRead(ppc::Ctx& c) {
     uc::gx_audit_enter(0x802F21EC,c);
     const auto channel=c.r[3],buffer=c.r[4],count=c.r[5]; c.r[3]=0;
-    auto* source=channel==0 ? input : channel==1 ? second_input : nullptr;
+    auto* source=channel==0 ? input : channel==1 ? connected_second() : nullptr;
     if (!source || !count || count>16) return;
     try { check(c,buffer,132); } catch (const gx::Error&) { return; }
     sampled_channel=channel;
@@ -628,7 +632,7 @@ void hle_WPADControlMotor(ppc::Ctx& c) {
 }
 void hle_WPADProbe(ppc::Ctx& c) {
     const auto channel=c.r[3],type=c.r[4];
-    const bool connected=channel==0 ? input!=nullptr : channel==1 && second_input!=nullptr;
+    const bool connected=channel==0 ? input!=nullptr : channel==1 && connected_second()!=nullptr;
     if (channel>3) { c.r[3]=uint32_t(-4); return; }
     if (type) {
         try { check(c,type,4); } catch (const gx::Error&) { c.r[3]=uint32_t(-4); return; }

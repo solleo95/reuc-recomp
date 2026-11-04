@@ -21,10 +21,10 @@ bool WiimoteInput::nap(unsigned ms) {
     for(unsigned waited=0;waited<ms && !stop_;waited+=10) std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10u,ms-waited)));
     return !stop_;
 }
-void WiimoteInput::set_link(bool connected,const std::string& error) {
+void WiimoteInput::set_link(bool connected,const std::string& error,const std::string& id) {
     std::lock_guard lock(mutex_);
     if(connected!=connected_) ++changes_;
-    connected_=connected; error_=error;
+    connected_=connected; error_=error; id_=connected ? id : std::string{};
     if(!connected) { events_.clear(); state_=WiiState{}; }
 }
 bool WiimoteInput::send(WiiTransport& link,std::span<const uint8_t> report) {
@@ -66,6 +66,7 @@ void WiimoteInput::run() {
     WiiState previous;
     WiiSwing swing;
     bool extension=false,announced=false,motor=false;   // motor: what the remote was last told
+    unsigned led=0;   // the player whose LED is lit (the set-up lights LED 1 = player 0)
     auto last_report=std::chrono::steady_clock::now();
     while(!stop_) {
         if(!link) {
@@ -80,13 +81,18 @@ void WiimoteInput::run() {
                 if(!stop_) set_link(false,"The Wii Remote did not accept its set-up (another program may be using it)");
                 continue;
             }
-            previous=WiiState{}; swing=WiiSwing{}; extension=false; announced=false;
+            previous=WiiState{}; swing=WiiSwing{}; extension=false; announced=false; led=0;
             last_report=std::chrono::steady_clock::now();
         }
         if(!enabled_) { link.reset(); set_link(false,""); continue; }
         if(rumble_!=motor) {
             motor=rumble_;
             const std::array<uint8_t,2> report{0x10,uint8_t(motor)};
+            if(!send(*link,report)) { link.reset(); set_link(false,"The Wii Remote connection was lost"); continue; }
+        }
+        if(player_!=led) {
+            led=player_;
+            const auto report=wii_led_report(led+1);
             if(!send(*link,report)) { link.reset(); set_link(false,"The Wii Remote connection was lost"); continue; }
         }
         std::vector<uint8_t> input;
@@ -99,7 +105,7 @@ void WiimoteInput::run() {
             continue;
         }
         last_report=std::chrono::steady_clock::now();
-        if(!announced) { announced=true; set_link(true,""); }   // connected is what has been heard, not what has been opened
+        if(!announced) { announced=true; set_link(true,"",link->id()); }   // connected is what has been heard, not what has been opened
         if(const auto status=wii_parse_status(input)) {   // a plugged or unplugged extension reverts the data mode: set it again
             bool sent=true;
             if(status->extension && !extension) for(const auto& step:wii_extension_steps()) { sent=sent && send(*link,step.report); nap(step.delay_ms); }
@@ -121,6 +127,22 @@ void WiimoteInput::capture_sink(std::function<void(PhysicalInput,bool)> sink) {
 WiimoteStatus WiimoteInput::status() const {
     std::lock_guard lock(mutex_);
     return {connected_,connected_ && state_.has_nunchuk,error_};
+}
+bool WiimoteInput::pending_press() const {
+    std::lock_guard lock(mutex_);
+    return std::any_of(events_.begin(),events_.end(),[](const Event& event) { return event.button && event.down; });
+}
+std::string WiimoteInput::device_id() const {
+    std::lock_guard lock(mutex_);
+    return id_;
+}
+void WiimoteInput::set_player(unsigned player) {
+    if(player>1) throw std::invalid_argument("two players: 0 or 1");
+    player_=player;
+}
+void WiimoteInput::release(WiimoteTarget& target) {
+    if(!engaged_) return;
+    target.wii_reset(); engaged_=false; last_stick_={};
 }
 void WiimoteInput::update(WiimoteTarget* target,bool active,const WiimoteSettings& settings) {
     enabled_=settings.enabled; threshold_=settings.swing_threshold;

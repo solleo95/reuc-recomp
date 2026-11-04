@@ -38,6 +38,7 @@ class NativeInput : public GamepadTarget, public WiimoteTarget {
 public:
     NativeInput();
     void focus(bool focused);
+    bool focused() { std::lock_guard lock(mutex_); return state_.valid; }   // what the last focus() said
     void bindings(const Bindings&);
     void context(InputContext);
     InputContext current_context() { std::lock_guard lock(mutex_); return context_; }
@@ -158,7 +159,9 @@ private:
     InputContext context_=InputContext::inactive;
     std::optional<InputFrame> network_frame_;
 };
-void input_hle_init(NativeInput* input,NativeInput* second=nullptr);
+void input_hle_init(NativeInput* input,NativeInput* second=nullptr);   // a given second input starts connected (network play)
+bool input_hle_second_connected();   // whether the game sees the second pad (a second input exists and has joined)
+void input_hle_set_second_connected(bool);   // local two-player play: false until a second player joins; reset to true by input_hle_init; any thread
 void input_hle_set_poll(std::function<void(const ppc::Ctx&)>);
 unsigned input_hle_channel(); // Guest baton owns the currently sampled channel.
 void input_hle_restore_channel(unsigned channel);

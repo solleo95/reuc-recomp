@@ -193,6 +193,7 @@ Options options_from_config(const ConfigDocument& document) {
     }
     options.gamepad=gamepad_from_config(document);
     options.wiimote=wiimote_from_config(document);
+    options.player2=coop_from_config(document);
     // A section written by the first DLSS 5 build (an "enabled" switch and a "stage") has other keys and values than the table: it is dropped (defaults) and rewritten on the next save.
     const bool legacy_dlss5=root.contains("dlss5") && root["dlss5"].is_object() && (root["dlss5"].contains("enabled") || root["dlss5"].contains("stage"));
     if(root.contains("dlss5") && !legacy_dlss5) {
@@ -307,6 +308,7 @@ void store_options(ConfigDocument& document,const Options& options) {
     }
     store_gamepad(replacement,options.gamepad);
     store_wiimote(replacement,options.wiimote);
+    store_coop(replacement,options.player2);
     options_from_config(replacement);
     document.properties=std::move(replacement.properties);
 }

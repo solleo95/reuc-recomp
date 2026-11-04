@@ -350,8 +350,11 @@ class Game:
         t0 = self.frame.get("retraces", 0)
         return self.wait(lambda f: f["retraces"] >= t0 + ticks, seconds=10 + ticks / 20, awaited="game time advance")
 
-    def _input(self, cmd, wait):
-        """Send an input command; wait=False returns at once (the game may not sample input during loads and cutscenes)."""
+    def _input(self, cmd, wait, player=0):
+        """Send an input command; wait=False returns at once (the game may not sample input during loads and cutscenes). player=1: the second player's input (local two-player play;
+        its first input makes the game see a second pad)."""
+        if player:
+            cmd = {**cmd, "player": player}
         if wait:
             return self.request(cmd)["consumed_frame"]
         with self._cond:
@@ -374,46 +377,46 @@ class Game:
         return self._input({"cmd": "input", "hold_frames": frames, "key": {"code": code, "down": True}}, wait)
 
     # gamepad (host events through the same path as a real pad: sticks, buttons, axis presses, gyro) --------------------
-    def pad_button(self, code, frames=2, wait=True):
+    def pad_button(self, code, frames=2, wait=True, player=0):
         """A gamepad button (SDL_GamepadButton: south 0, east 1, west 2, north 3, back 4, start 6, left stick 7, right stick 8, LB 9, RB 10, d-pad 11..14) held for `frames`."""
-        return self._input({"cmd": "input", "hold_frames": frames, "pad_button": {"button": code, "down": True}}, wait)
+        return self._input({"cmd": "input", "hold_frames": frames, "pad_button": {"button": code, "down": True}}, wait, player)
 
-    def pad_axis(self, code, frames=2, wait=True):
+    def pad_axis(self, code, frames=2, wait=True, player=0):
         """A stick direction or trigger pulled past half (axis*2 + direction: left trigger 9, right trigger 11) held for `frames`."""
-        return self._input({"cmd": "input", "hold_frames": frames, "pad_axis": {"code": code, "down": True}}, wait)
+        return self._input({"cmd": "input", "hold_frames": frames, "pad_axis": {"code": code, "down": True}}, wait, player)
 
-    def pad_stick(self, side, x, y, wait=True):
+    def pad_stick(self, side, x, y, wait=True, player=0):
         """A stick position ("left"/"right", -1..1, y down positive); it stays until set again."""
-        return self._input({"cmd": "input", "pad_stick": {"side": side, "x": x, "y": y}}, wait)
+        return self._input({"cmd": "input", "pad_stick": {"side": side, "x": x, "y": y}}, wait, player)
 
     def pad_gyro(self, x, y, wait=True):
         """A gyro rate in rad/s (x turning left, y tilting up); it stays until set again."""
         return self._input({"cmd": "input", "pad_gyro": {"x": x, "y": y}}, wait)
 
-    def host_aim(self, x, y, wait=True):
+    def host_aim(self, x, y, wait=True, player=0):
         """The pointer put at x/y (-1..1 of the window, y down positive) as an absolute device (a lightgun) reports it; the jump feeds the swing detectors. Unlike aim() this is the host-input path."""
-        return self._input({"cmd": "input", "aim": {"x": x, "y": y}}, wait)
+        return self._input({"cmd": "input", "aim": {"x": x, "y": y}}, wait, player)
 
-    def mouse_button(self, button, frames=2, wait=True):
+    def mouse_button(self, button, frames=2, wait=True, player=0):
         """A host mouse button (SDL numbering: left/interact 1, middle 2, right/fire 3) held for `frames`."""
-        return self._input({"cmd": "input", "hold_frames": frames, "mouse": {"button": button, "down": True}}, wait)
+        return self._input({"cmd": "input", "hold_frames": frames, "mouse": {"button": button, "down": True}}, wait, player)
 
     # Wii Remote (host events: buttons, the IR pointer, the nunchuk stick, swings) -------------------------------------------
-    def wii_button(self, code, frames=2, wait=True):
+    def wii_button(self, code, frames=2, wait=True, player=0):
         """A Wii Remote button (WiiButton: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, C 12) held for `frames`."""
-        return self._input({"cmd": "input", "hold_frames": frames, "wii_button": {"button": code, "down": True}}, wait)
+        return self._input({"cmd": "input", "hold_frames": frames, "wii_button": {"button": code, "down": True}}, wait, player)
 
-    def wii_pointer(self, x, y, wait=True):
+    def wii_pointer(self, x, y, wait=True, player=0):
         """The IR pointer at x/y (-1..1 of the window, y down), smoothed like the real one; it stays until set again."""
-        return self._input({"cmd": "input", "wii_pointer": {"x": x, "y": y}}, wait)
+        return self._input({"cmd": "input", "wii_pointer": {"x": x, "y": y}}, wait, player)
 
-    def wii_stick(self, x, y, wait=True):
+    def wii_stick(self, x, y, wait=True, player=0):
         """The nunchuk stick (-1..1, y down positive); it stays until set again."""
-        return self._input({"cmd": "input", "wii_stick": {"x": x, "y": y}}, wait)
+        return self._input({"cmd": "input", "wii_stick": {"x": x, "y": y}}, wait, player)
 
-    def wii_motion(self, x, y, wait=True):
+    def wii_motion(self, x, y, wait=True, player=0):
         """One swing of the remote as mouse counts (x right, y down)."""
-        return self._input({"cmd": "input", "wii_motion": {"x": x, "y": y}}, wait)
+        return self._input({"cmd": "input", "wii_motion": {"x": x, "y": y}}, wait, player)
 
     def set_settings(self, **settings):
         """Change root config.json keys live, as the in-game menu does (pointer, pointer_smoothing, reload_zone, reload_zone_size, mouse_sensitivity)."""

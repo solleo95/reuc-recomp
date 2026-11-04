@@ -32,6 +32,7 @@ void TestServer::schedule(const TestRequest& r, uint64_t frame) {
 bool TestServer::apply(const Item& item, uint64_t) {
     const auto& in = item.input;
     const uint64_t sequence = next_sequence_++;
+    struct PlayerScope { TestInputSink& sink; PlayerScope(TestInputSink& s, unsigned player) : sink(s) { sink.select_player(player); } ~PlayerScope() { sink.select_player(0); } } scope(sink_, in.player);
     switch (item.device) {
     case TestDevice::kpad:
         if (item.press) {

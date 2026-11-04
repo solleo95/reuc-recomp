@@ -50,6 +50,7 @@ void test_state_publish(const InputProbeSnapshot& s, uint8_t context) {
     latest.magazine = int32_t(s.players[0].weapon_words[3]); latest.life = s.hud_life; latest.view = s.view; latest.view_valid = s.view_valid;
     latest.enemies.clear(); for (uint32_t i = 0; i < s.enemy_count; ++i) latest.enemies.push_back({s.enemies[i].id, s.enemies[i].root, s.enemies[i].head_intact, s.enemies[i].actor_class, s.enemies[i].health});
     latest.player_valid = s.players[0].valid; latest.player_address = s.players[0].address; latest.player_mode = s.players[0].mode_630; latest.player_state = s.players[0].state_794;
+    latest.player2_valid = s.players[1].valid; latest.player2_address = s.players[1].address; latest.player2_magazine = s.players[1].valid ? int32_t(s.players[1].weapon_words[3]) : -1;
 }
 TestFrameState test_state_latest() { std::lock_guard g(lock); return latest; }
 void test_state_action(const char* name, bool accepted) {
@@ -66,9 +67,10 @@ std::string test_frame_json(const TestFrameState& f, uint32_t speed, double rend
     ui += "]";
     char buffer[1024];
     std::snprintf(buffer, sizeof buffer,
-        R"({"type":"frame","n":%llu,"speed":%u,"context":"%s","ui":%s,"menu":[%u,%u,%u,%u],"ui_valid":%s,"pause":%u,"scene_mode":%u,"tutorial":%u,"tutorial_loaded":%s,"player":{"valid":%s,"address":%u,"mode":%u,"state":%u,"magazine":%d,"life":%.2f,"damage":%.3f,"scene":%u},"render_ms":%.3f,"presents":%llu,"retraces":%llu,"dropped":%llu)",
+        R"({"type":"frame","n":%llu,"speed":%u,"context":"%s","ui":%s,"menu":[%u,%u,%u,%u],"ui_valid":%s,"pause":%u,"scene_mode":%u,"tutorial":%u,"tutorial_loaded":%s,"player":{"valid":%s,"address":%u,"mode":%u,"state":%u,"magazine":%d,"life":%.2f,"damage":%.3f,"scene":%u},"player2":{"valid":%s,"address":%u,"magazine":%d},"render_ms":%.3f,"presents":%llu,"retraces":%llu,"dropped":%llu)",
         (unsigned long long)f.frame, speed, names[f.context & 3], ui.c_str(), f.menu[0], f.menu[1], f.menu[2], f.menu[3], f.ui_valid ? "true" : "false", f.pause, f.scene_mode, f.tutorial,
-        f.tutorial_loaded ? "true" : "false", f.player_valid ? "true" : "false", f.player_address, f.player_mode, f.player_state, f.magazine, f.life, f.damage, f.scene_address, render_ms,
+        f.tutorial_loaded ? "true" : "false", f.player_valid ? "true" : "false", f.player_address, f.player_mode, f.player_state, f.magazine, f.life, f.damage, f.scene_address,
+        f.player2_valid ? "true" : "false", f.player2_address, f.player2_magazine, render_ms,
         (unsigned long long)presents, (unsigned long long)retraces, (unsigned long long)dropped);
     std::string out = buffer;
     out += ",\"view\":";

@@ -80,8 +80,8 @@ PadStatus GamepadInput::status() const {
 }
 void GamepadInput::rumble(unsigned motors,float strength,uint64_t now) {
     const auto level=uint16_t(std::clamp(strength,0.f,1.f)*65535.f);
-    SDL_JoystickID other=0;
-    for(const auto& [id,pad]:pads_) if(id!=last_) {other=id;break;}
+    SDL_JoystickID other=pads_.count(second_) ? second_ : 0;   // the second player's pad when one is assigned, else any pad that is not the one in use
+    if(!other) for(const auto& [id,pad]:pads_) if(id!=last_) {other=id;break;}
     for(auto& [id,pad]:pads_) {
         const bool on=(id==last_ ? motors&1 : id==other ? motors&2 : 0)!=0;
         const uint16_t want=on ? level : 0;
@@ -132,41 +132,79 @@ void GamepadInput::removed(SDL_JoystickID id,GamepadTarget* input) {
     }
     close_hid(pad.hid); SDL_CloseGamepad(pad.handle);
     pads_.erase(at);
-    if(last_==id) last_=pads_.empty() ? 0 : pads_.begin()->first;
+    if(second_==id) second_=0;
+    if(muted_==id) muted_=0;
+    if(last_==id) {   // another pad becomes the one in use, never the second player's
+        last_=0;
+        for(const auto& [other,pad]:pads_) if(other!=second_) {last_=other;break;}
+    }
     ++changes_;
+}
+void GamepadInput::release_pad(const Pad& pad,GamepadTarget* target) {
+    if(!target) return;
+    target->host_pad_stick(pad.slot,PadSide::left,0,0); target->host_pad_stick(pad.slot,PadSide::right,0,0);
+    for(unsigned b=0;b<32;++b) if(pad.buttons&(1u<<b)) target->host_button({PhysicalKind::pad_button,uint16_t(b)},false);
+    for(unsigned a=0;a<16;++a) if(pad.axis_down&(1u<<a)) target->host_button({PhysicalKind::pad_axis,uint16_t(a)},false);
+}
+void GamepadInput::assign_second(SDL_JoystickID id) {
+    if(id==second_) return;
+    if(const auto old=pads_.find(second_); old!=pads_.end()) {   // the old second pad goes back to the first player: it presses nothing it held
+        release_pad(old->second,second_seen_);
+        if(active_ && first_seen_) feed_sticks(old->second,*first_seen_);
+    }
+    second_=id;
+    if(const auto next=pads_.find(id); next!=pads_.end()) {
+        release_pad(next->second,first_seen_);
+        if(active_ && second_seen_) feed_sticks(next->second,*second_seen_);
+        if(last_==id) {last_=0; for(const auto& [other,pad]:pads_) if(other!=id) {last_=other;break;}}
+        ++changes_;
+    }
+}
+void GamepadInput::press_sink(std::function<void(SDL_JoystickID)> sink) { press_sink_=std::move(sink); }
+void GamepadInput::mute(SDL_JoystickID id) {
+    if(id==muted_) return;
+    const auto before=pads_.find(muted_);
+    muted_=id;
+    if(before!=pads_.end() && active_) if(auto* target=target_of(before->first,first_seen_,second_seen_)) feed_sticks(before->second,*target);   // the pad that was muted plays again: its sticks are where they are
+    if(const auto now=pads_.find(id); now!=pads_.end()) release_pad(now->second,id==second_ ? second_seen_ : first_seen_);   // the pad that is muted now lets go of what it held (only its target knew)
 }
 void GamepadInput::report(PhysicalInput input,bool down,GamepadTarget* target) {
     if(sink_) sink_(input,down);
     if(active_ && target) target->host_button(input,down);
 }
-void GamepadInput::axis(Pad& pad,unsigned axis,float value,GamepadTarget* input) {
+void GamepadInput::axis(SDL_JoystickID id,Pad& pad,unsigned axis,float value,GamepadTarget* first,GamepadTarget* second) {
     pad.axes[axis]=value;
-    if(axis<4 && active_ && input) feed_sticks(pad,*input);
+    if(axis<4 && active_) if(auto* input=target_of(id,first,second)) feed_sticks(pad,*input);
     for(unsigned direction=0;direction<2;++direction) {   // 0: negative, 1: positive (the code is axis*2+direction)
         const float along=direction ? value : -value;
         const unsigned code=axis*2+direction; const uint32_t mask=1u<<code;
         const bool down=(pad.axis_down&mask)!=0;
-        if(!down && along>=kPress) {pad.axis_down|=mask; report({PhysicalKind::pad_axis,uint16_t(code)},true,input);}
-        else if(down && along<kRelease) {pad.axis_down&=~mask; report({PhysicalKind::pad_axis,uint16_t(code)},false,input);}
+        if(!down && along>=kPress) {   // a trigger pulled or a stick pushed past half is use of the pad (drift stays below it); the press sink may mute the pad or hand it to the second player first
+            pressed(id);
+            pad.axis_down|=mask; report({PhysicalKind::pad_axis,uint16_t(code)},true,target_of(id,first,second));
+        }
+        else if(down && along<kRelease) {pad.axis_down&=~mask; report({PhysicalKind::pad_axis,uint16_t(code)},false,target_of(id,first,second));}
     }
 }
 void GamepadInput::feed_sticks(const Pad& pad,GamepadTarget& input) const {
     input.host_pad_stick(pad.slot,PadSide::left,pad.axes[SDL_GAMEPAD_AXIS_LEFTX],pad.axes[SDL_GAMEPAD_AXIS_LEFTY]);
     input.host_pad_stick(pad.slot,PadSide::right,pad.axes[SDL_GAMEPAD_AXIS_RIGHTX],pad.axes[SDL_GAMEPAD_AXIS_RIGHTY]);
 }
-void GamepadInput::event(const SDL_Event& event,GamepadTarget* input) {
+void GamepadInput::event(const SDL_Event& event,GamepadTarget* first,GamepadTarget* second) {
+    first_seen_=first; second_seen_=second;
     switch(event.type) {
     case SDL_EVENT_GAMEPAD_ADDED: added(event.gdevice.which); break;
-    case SDL_EVENT_GAMEPAD_REMOVED: removed(event.gdevice.which,input); break;
+    case SDL_EVENT_GAMEPAD_REMOVED: removed(event.gdevice.which,target_of(event.gdevice.which,first,second)); break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
         const auto at=pads_.find(event.gbutton.which);
         if(at==pads_.end() || event.gbutton.button>=32) break;
         const bool down=event.gbutton.down; const uint32_t mask=1u<<event.gbutton.button;
         if(down==((at->second.buttons&mask)!=0)) break;
+        if(down) pressed(at->first);   // before the state changes: the sink may hand this pad to the second player, which lets go of what it held
         at->second.buttons=down ? at->second.buttons|mask : at->second.buttons&~mask;
         if(down) use(at->first);
-        report({PhysicalKind::pad_button,event.gbutton.button},down,input);
+        report({PhysicalKind::pad_button,event.gbutton.button},down,target_of(at->first,first,second));
         break;
     }
     case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
@@ -185,9 +223,10 @@ void GamepadInput::event(const SDL_Event& event,GamepadTarget* input) {
         const bool was=(at->second.buttons&mask)!=0;
         const bool down=was ? pressure>=kTrackpadPressOff : pressure>=kTrackpadPressOn;
         if(down==was) break;
+        if(down) pressed(at->first);
         at->second.buttons=down ? at->second.buttons|mask : at->second.buttons&~mask;
         if(down) use(at->first);
-        report({PhysicalKind::pad_button,code},down,input);
+        report({PhysicalKind::pad_button,code},down,target_of(at->first,first,second));
         break;
     }
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
@@ -195,7 +234,7 @@ void GamepadInput::event(const SDL_Event& event,GamepadTarget* input) {
         if(at==pads_.end() || event.gaxis.axis>=at->second.axes.size()) break;
         const float value=std::clamp(float(event.gaxis.value)/32767.f,-1.f,1.f);
         if(std::fabs(value)>=kMoved) use(at->first);
-        axis(at->second,event.gaxis.axis,value,input);
+        axis(at->first,at->second,event.gaxis.axis,value,first,second);
         break;
     }
     case SDL_EVENT_GAMEPAD_SENSOR_UPDATE: {
@@ -220,16 +259,17 @@ void GamepadInput::event(const SDL_Event& event,GamepadTarget* input) {
             std::fprintf(stderr,"[gyro] samples=%u calibrated=%d raw=(%.3f %.3f %.3f) rates=(%.3f %.3f) active=%d last=%d\n",at->second.gyro_samples,int(at->second.bias.calibrated()),
                          event.gsensor.data[0],event.gsensor.data[1],event.gsensor.data[2],rates[0],rates[1],int(active_),int(at->first==last_));
         }
-        if(input && active_ && at->first==last_) input->host_pad_gyro(rates[0],rates[1],timestamp);
+        if(active_ && (at->first==second_ || at->first==last_)) if(auto* target=target_of(at->first,first,second)) target->host_pad_gyro(rates[0],rates[1],timestamp);   // each player's own pad aims
         break;
     }
     default: break;
     }
 }
-void GamepadInput::update(GamepadTarget& input,bool active) {
+void GamepadInput::update(GamepadTarget& first,bool active,GamepadTarget* second) {
+    first_seen_=&first; second_seen_=second;
     if(active==active_) return;
     active_=active;
-    if(!active) {input.pad_reset();return;}
-    for(const auto& [id,pad]:pads_) feed_sticks(pad,input);
+    if(!active) {first.pad_reset(); if(second) second->pad_reset(); return;}
+    for(const auto& [id,pad]:pads_) if(auto* target=target_of(id,&first,second)) feed_sticks(pad,*target);
 }
 }

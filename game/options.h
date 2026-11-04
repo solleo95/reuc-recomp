@@ -2,6 +2,7 @@
 #include <optional>
 #include <string>
 #include "bloom_math.h"
+#include "coop_config.h"
 #include "frame_limit_cap.h"
 #include "dlss5_settings.h"
 #include "gamepad_config.h"
@@ -68,6 +69,7 @@ struct Options {
     uint32_t reload_zone_size=5;                 // percent kReloadZoneSizeMin..Max of the window (config reload_zone_size)
     WiimoteSettings wiimote;   // the "wiimote" object of config.json: whether the remote is read, pointer smoothing, swing threshold, nunchuk dead zone, the remote's bindings
     GamepadSettings gamepad;   // the "gamepad" object of config.json: control type, model, sticks, gyro and the gamepad's bindings
+    CoopSettings player2;      // the "player2" object of config.json: the second player's mouse and gamepad bindings (local play on one computer)
     uint32_t crosshair_scale=100;   // aim reticle size in percent of the game's, 0..100 (graphics.crosshair_scale); 0 hides it
     ReticleOptions reticle;         // hidden parts, colours, dot size, wake length, partner opacity
     HdrSettings hdr;   // graphics.hdr / hdr_peak_nits / hdr_paper_white_nits / hdr_ui_nits; SDR while Windows HDR is off

@@ -19,9 +19,13 @@ void LiveSettings::apply(const Options& next) {
         if(auto problem=validate_wiimote(next.wiimote)) { error_=*problem; return; }
     }
     const bool wiimote=next.wiimote!=was.wiimote;
+    if(next.player2!=was.player2) {
+        if(auto problem=validate_coop(next.player2)) { error_=*problem; return; }
+    }
+    const bool player2=next.player2!=was.player2;
     const bool pointer=next.pointer!=was.pointer || next.pointer_smoothing!=was.pointer_smoothing, zone=next.reload_zone!=was.reload_zone || next.reload_zone_size!=was.reload_zone_size;
     const bool rumble=next.rumble!=was.rumble;
-    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle && !pointer && !zone && !wiimote && !rumble) return;
+    if(!scale && !upscaling && !limit && !bloom && !style && !effects && !dlss5 && !crosshair && !hdr && !sensitivity && !gamepad && !hud && !reticle && !pointer && !zone && !wiimote && !player2 && !rumble) return;
     options_=next;
     if(effects) targets_.effects(next.effects);
     if(dlss5) targets_.dlss5(next.dlss5);
@@ -40,6 +44,7 @@ void LiveSettings::apply(const Options& next) {
     if(hdr) targets_.hdr(next.hdr);
     if(gamepad) targets_.gamepad(next.gamepad);
     if(wiimote) targets_.wiimote(next.wiimote);
+    if(player2 && targets_.player2) targets_.player2(next.player2);   // a host without local two-player play sets no target
     save();
 }
 void LiveSettings::apply(const Bindings& next) {

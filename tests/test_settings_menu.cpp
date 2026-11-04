@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 
+static std::vector<uc::SettingsMenu::SecondCommand> g_second_commands;   // what the menu asked the host to do about the second player
 static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureReport& features,const std::function<void()>& frame,const std::function<void(const char*)>& capture) {
     for(int i=0;i<4;++i) frame();
     const auto spacing=ImGui::GetStyle().ItemInnerSpacing.x;
@@ -20,6 +21,11 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     auto& context=*ImGui::GetCurrentContext();
     CHECK(context.TabBars.GetAliveCount()==1);
     auto* tabs=context.TabBars.GetByIndex(0);
+    const auto find_page=[&](const char* name) -> ImGuiWindow* {   // a tab's page: the child window under the fixed tab bar
+        ImGuiWindow* found=nullptr;
+        for(auto* candidate:context.Windows) if(candidate->Active && candidate->ParentWindow==window && (candidate->Flags&ImGuiWindowFlags_ChildWindow) && std::string_view(candidate->Name).find(name)!=std::string_view::npos) found=candidate;
+        return found;
+    };
     std::printf("tabs %d, menu %.0fx%.0f\n",tabs->Tabs.Size,window->Size.x,window->Size.y);
     CHECK(tabs->Tabs.Size==6);   // Main, Effects, DLSS 5, Controls, Controllers, Reticle
     CHECK((tabs->Flags&ImGuiTabBarFlags_FittingPolicyScroll)!=0);   // more tabs than the width (mods) scroll instead of shrinking
@@ -92,11 +98,14 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
     CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);
     capture("controls");
     {   // The last camera row remains reachable and saves a captured replacement binding.
-        ImGuiWindow* bindings=nullptr;
-        for(auto* candidate:context.Windows) if(candidate->Active && std::string_view(candidate->Name).find("bindings")!=std::string_view::npos) bindings=candidate;
+        ImGuiWindow* bindings=find_page("controls-page");   // the whole page scrolls: the pointer settings above the table go with it, the title and the tab bar stay
         CHECK(bindings);
+        CHECK(bindings->ScrollMax.y>0);
+        const float bar_top=tabs->BarRect.Min.y,page_top=bindings->Pos.y;
         io.AddMousePosEvent(bindings->InnerClipRect.GetCenter().x,bindings->InnerClipRect.GetCenter().y); frame();
         io.AddMouseWheelEvent(0,-100); frame(); frame();
+        CHECK(bindings->Scroll.y>bindings->ScrollMax.y*.5f);                                              // the wheel scrolled the page (the scroll eases towards the end)
+        CHECK(tabs->BarRect.Min.y==bar_top && bindings->Pos.y==page_top && window->Scroll.y==0);          // the tab bar did not move: it is fixed
         bindings->IDStack.push_back(bindings->GetID(int(uc::Action::camera_right)));
         const auto button=bindings->GetID(SDL_GetScancodeName(SDL_SCANCODE_RIGHT));
         bindings->IDStack.pop_back();
@@ -116,25 +125,30 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         tabs->NextSelectedTabId=tabs->Tabs[4].ID; frame(); frame();   // the last tab scrolls into view in a narrow menu (like the mod tabs): it is selected directly here
         CHECK(tabs->SelectedTabId==tabs->Tabs[4].ID);
         capture("controllers");
+        ImGuiWindow* page=find_page("controllers-page"); CHECK(page);   // the tab's page: a window of its own under the fixed tab bar, with a scrollbar when it does not fit
+        {   // the second player's section sits below the Wii Remote's: the page is longer than the window, a scrollbar scrolls it into view, the title and the tab bar stay
+            CHECK(page->ScrollMax.y>0 && page->ScrollbarY);
+            const float bar_top=tabs->BarRect.Min.y;
+            page->Scroll.y=page->ScrollMax.y; page->ScrollTarget.y=page->ScrollMax.y; frame(); frame();
+            CHECK(tabs->BarRect.Min.y==bar_top && window->Scroll.y==0);
+            capture("controllers-player2");
+            page->Scroll.y=0; page->ScrollTarget.y=0; frame(); frame();
+        }
         {   // the vibration slider sits in this tab, under the Gamepad button; a click near its left end lowers the strength
-            window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);
-            const auto rumble_slider=window->GetID("##rumble");
-            window->IDStack.pop_back(); window->IDStack.pop_back();
+            const auto rumble_slider=page->GetID("##rumble");
             CHECK(live.options().rumble==100);
             bool rumble_found=false;
-            for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
-                io.AddMousePosEvent(window->Pos.x+90,y); frame();
+            for(float y=page->Pos.y+4;y<page->Pos.y+page->Size.y-4;y+=3) {
+                io.AddMousePosEvent(page->Pos.x+90,y); frame();
                 if(context.HoveredId==rumble_slider) {click(io.MousePos);rumble_found=true;break;}
             }
             CHECK(rumble_found);
             menu.commit(); CHECK(live.options().rumble<100 && !live.error());
         }
-        window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);   // the tab bar and the selected tab are on the ID stack of the tab's widgets
-        const auto gamepad_button=window->GetID(std::string(uc::launcher::text("ru","gamepad")).c_str());   // the menu runs in Russian here
-        window->IDStack.pop_back(); window->IDStack.pop_back();
+        const auto gamepad_button=page->GetID(std::string(uc::launcher::text("ru","gamepad")).c_str());   // the menu runs in Russian here
         bool found=false;
-        for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
-            io.AddMousePosEvent(window->Pos.x+90,y); frame();
+        for(float y=page->Pos.y+4;y<page->Pos.y+page->Size.y-4;y+=3) {
+            io.AddMousePosEvent(page->Pos.x+90,y); frame();
             if(context.HoveredId==gamepad_button) {click(io.MousePos);found=true;break;}
         }
         CHECK(found);
@@ -188,12 +202,11 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         }
         io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
         {   // the Wii Remote button below it opens the remote's own window; a press on the remote captures one binding of its table and leaves the others alone
-            window->IDStack.push_back(tabs->ID); window->IDStack.push_back(tabs->Tabs[4].ID);
-            const auto wii_button=window->GetID(std::string(uc::launcher::text("ru","wiimote")).c_str());
-            window->IDStack.pop_back(); window->IDStack.pop_back();
+            page=find_page("controllers-page"); CHECK(page);
+            const auto wii_button=page->GetID(std::string(uc::launcher::text("ru","wiimote")).c_str());
             bool wii_found=false;
-            for(float y=window->Pos.y+60;y<window->Pos.y+window->Size.y-20;y+=3) {
-                io.AddMousePosEvent(window->Pos.x+90,y); frame();
+            for(float y=page->Pos.y+4;y<page->Pos.y+page->Size.y-4;y+=3) {
+                io.AddMousePosEvent(page->Pos.x+90,y); frame();
                 if(context.HoveredId==wii_button) {click(io.MousePos);wii_found=true;break;}
             }
             CHECK(wii_found);
@@ -296,6 +309,30 @@ static void exercise(uc::SettingsMenu& menu,uc::LiveSettings& live,uc::FeatureRe
         click({tabs->BarRect.Min.x+tabs->Tabs[3].Offset+tabs->Tabs[3].Width*.5f,tabs->BarRect.GetCenter().y});   // back to Controls for the drag below
         CHECK(tabs->SelectedTabId==tabs->Tabs[3].ID);
     }
+    {   // a new device was pressed in a menu: a window asks who plays with it; Escape is "not now", and the answer reaches the host from commit(), not from the drawing
+        menu.set_second_player({true,false,0,2,true,""});
+        for(int i=0;i<3;++i) frame();
+        capture("new-device");
+        g_second_commands.clear();
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        CHECK(g_second_commands.empty());   // drawn, not yet handed over
+        menu.commit();
+        CHECK(g_second_commands.size()==1 && g_second_commands[0]==uc::SettingsMenu::SecondCommand::not_now);
+        g_second_commands.clear(); menu.commit(); CHECK(g_second_commands.empty());   // once
+        menu.set_second_player({true,true,3,0,false,""}); frame(); frame();   // answered: the window goes
+        CHECK(window->Active);                                                  // the menu itself was drawn all along (the question was asked inside it)
+        // The question opened the menu by itself: the window alone, none of the menu behind it.
+        menu.set_second_player({true,false,0,1,false,"",true});
+        for(int i=0;i<3;++i) frame();
+        CHECK(!window->Active);                                                 // the settings window is not drawn
+        auto* question=ImGui::FindWindowByName("##coop-question"); CHECK(question && question->Active);
+        capture("new-device-only");
+        io.AddKeyEvent(ImGuiKey_Escape,true); frame(); io.AddKeyEvent(ImGuiKey_Escape,false); frame();
+        g_second_commands.clear(); menu.commit();
+        CHECK(g_second_commands.size()==1 && g_second_commands[0]==uc::SettingsMenu::SecondCommand::not_now);   // and it answers like the other
+        menu.set_second_player({true,true,3,0,false,""}); for(int i=0;i<3;++i) frame();
+        CHECK(window->Active);                                                  // the menu is back once the question is gone
+    }
     const ImVec2 before=window->Pos;
     io.AddMousePosEvent(before.x+60,before.y+35); frame();
     io.AddMouseButtonEvent(0,true); frame();
@@ -318,6 +355,8 @@ int main(int argc,char** argv) {    const bool gpu=argc==4 && std::string_view(a
     uc::LiveSettings live(folder/"config.json",document,targets);
     uc::FeatureReport features; features.dlss=features.dlss_g=features.fsr=features.fsr_fg=true; features.effects=true; features.anisotropy_max=16; features.dlss5=true;
     uc::SettingsMenu menu(live,"ru",[&]{return &features;},2560,1440);
+    menu.set_second_command([](uc::SettingsMenu::SecondCommand command) { g_second_commands.push_back(command); });
+    menu.set_second_player({true,true,3,0,false,"no access to /dev/input (add the user to the input group, or add a udev rule)"});   // local two-player play is on: the Controllers tab has a second player's section
     if(gpu) {
         std::filesystem::create_directories(argv[3]);
         CHECK(SDL_Init(SDL_INIT_VIDEO));

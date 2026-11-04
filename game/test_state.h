@@ -14,6 +14,7 @@ struct TestFrameState {
     std::array<uint32_t,4> menu{};            // menu page-alive words, see InputProbeSnapshot::menu_pages
     uint32_t pause = 0, scene_mode = 0, tutorial = 0; bool tutorial_loaded = false;
     bool player_valid = false; uint32_t player_address = 0, player_mode = 0, player_state = 0;
+    bool player2_valid = false; uint32_t player2_address = 0; int32_t player2_magazine = -1;   // the second player (local two-player play): weapon words [3] like magazine
     uint32_t scene_address = 0; float damage = -1;           // scene object and its damage float at +6C00 (0 = unhurt)
     int32_t magazine = -1; float life = -1;                 // weapon words [3] and the HUD life gauge 0..1
     std::vector<TestEnemy> enemies; std::array<float,12> view{}; bool view_valid = false;   // world->view 3x4 row-major

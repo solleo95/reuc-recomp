@@ -116,10 +116,11 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
             }
             if (r.text.empty() && r.gamepad.empty() && r.settings.empty()) throw std::runtime_error("options needs graphics, gamepad or settings");
         } else if (name == "input") {
-            only(root, {"id", "cmd", "at_frame", "hold_frames", "kpad", "key", "mouse", "wheel", "motion", "pad_button", "pad_axis", "pad_stick", "pad_gyro", "aim", "wii_button", "wii_pointer", "wii_stick", "wii_motion"});
+            only(root, {"id", "cmd", "at_frame", "hold_frames", "player", "kpad", "key", "mouse", "wheel", "motion", "pad_button", "pad_axis", "pad_stick", "pad_gyro", "aim", "wii_button", "wii_pointer", "wii_stick", "wii_motion"});
             r.kind = TestRequestKind::input; auto& in = r.input;
             if (root.contains("at_frame")) in.at_frame = uint64_t(number(root, "at_frame", 0, 9007199254740991.0, true));
             if (root.contains("hold_frames")) in.hold_frames = uint32_t(number(root, "hold_frames", 1, 600, true));
+            if (root.contains("player")) in.player = uint8_t(number(root, "player", 0, 1, true));
             int devices = 0; const Object* body = nullptr;
             for (auto [key, device] : {std::pair{"kpad", TestDevice::kpad}, {"key", TestDevice::key}, {"mouse", TestDevice::mouse}, {"wheel", TestDevice::wheel}, {"motion", TestDevice::motion},
                                           {"pad_button", TestDevice::pad_button}, {"pad_axis", TestDevice::pad_axis}, {"pad_stick", TestDevice::pad_stick}, {"pad_gyro", TestDevice::pad_gyro}, {"aim", TestDevice::aim},
@@ -130,6 +131,7 @@ std::variant<TestRequest, TestParseError> parse_test_request(std::string_view li
                 ++devices; in.device = device; body = it->second.object.get();
             }
             if (devices != 1) throw std::runtime_error("input needs exactly one device");
+            if (in.player && in.device == TestDevice::kpad) throw std::runtime_error("the legacy pad is the first player's alone");
             switch (in.device) {
             case TestDevice::kpad:
                 only(*body, {"x", "y", "buttons"});

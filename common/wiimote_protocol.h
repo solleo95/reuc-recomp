@@ -23,6 +23,9 @@ constexpr size_t kWiiInputBytes=22;   // every input report, padded by the HID l
 // Data reports 0x30 (buttons), 0x31 (+accelerometer), 0x33 (+extended IR), 0x35 (+extension), 0x37 (+basic IR and extension). True and `state` replaced when the report is
 // one of them and long enough; anything else (status, acknowledge, short, unknown) is refused and leaves `state` alone. Never throws.
 bool wii_parse_report(std::span<const uint8_t> report,WiiState& state);
+// The 0x37 report a remote in that mode would send for `state` (buttons, accelerometer, basic IR, nunchuk bytes when has_nunchuk): wii_parse_report reads it back into the same
+// state (an unseen IR dot comes back unseen). For sources that are not the remote's own link and have only its state (the Linux evdev nodes).
+std::array<uint8_t,kWiiInputBytes> wii_encode_report(const WiiState&);
 std::optional<WiiStatus> wii_parse_status(std::span<const uint8_t> report);   // report 0x20
 std::array<uint8_t,2> wii_led_report(unsigned player);   // 0 none, 1..4 the LED of that player; throws std::invalid_argument above 4
 std::array<uint8_t,3> wii_reporting_report(uint8_t mode);   // report 0x12: send `mode` continuously

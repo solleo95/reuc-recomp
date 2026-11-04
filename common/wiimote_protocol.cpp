@@ -53,6 +53,28 @@ bool wii_parse_report(std::span<const uint8_t> report,WiiState& state) {
     state=next;
     return true;
 }
+std::array<uint8_t,kWiiInputBytes> wii_encode_report(const WiiState& state) {
+    std::array<uint8_t,kWiiInputBytes> report{};
+    report[0]=0x37;
+    const auto held=[&](WiiButton button) { return (state.buttons>>unsigned(button)&1u)!=0; };
+    const auto flag=[&](WiiButton button,uint8_t mask) -> uint8_t { return held(button) ? mask : uint8_t(0); };
+    report[1]=flag(WiiButton::left,0x01)|flag(WiiButton::right,0x02)|flag(WiiButton::down,0x04)|flag(WiiButton::up,0x08)|flag(WiiButton::plus,0x10);
+    report[2]=flag(WiiButton::two,0x01)|flag(WiiButton::one,0x02)|flag(WiiButton::b,0x04)|flag(WiiButton::a,0x08)|flag(WiiButton::minus,0x10)|flag(WiiButton::home,0x80);
+    std::copy(state.accel.begin(),state.accel.end(),report.begin()+3);
+    const auto low=[](const WiiIrDot& dot,bool x) -> uint8_t { return dot.valid ? uint8_t((x ? dot.x : dot.y)&0xFF) : uint8_t(0xFF); };
+    const auto high=[](const WiiIrDot& dot,bool x) -> unsigned { return dot.valid ? unsigned(((x ? dot.x : dot.y)>>8)&3) : 3u; };
+    for(unsigned pair=0;pair<2;++pair) {   // basic mode: two dots in five bytes, the high bits shared in the middle one (see wii_parse_report)
+        const auto& a=state.ir[2*pair]; const auto& b=state.ir[2*pair+1];
+        uint8_t* out=report.data()+6+5*pair;
+        out[0]=low(a,true); out[1]=low(a,false); out[2]=uint8_t(high(a,false)<<6|high(a,true)<<4|high(b,false)<<2|high(b,true)); out[3]=low(b,true); out[4]=low(b,false);
+    }
+    if(state.has_nunchuk) {
+        uint8_t* ext=report.data()+16;
+        ext[0]=state.stick[0]; ext[1]=state.stick[1]; ext[2]=state.nunchuk_accel[0]; ext[3]=state.nunchuk_accel[1]; ext[4]=state.nunchuk_accel[2];
+        ext[5]=uint8_t(0xFF&~(held(WiiButton::nunchuk_z) ? 0x01 : 0)&~(held(WiiButton::nunchuk_c) ? 0x02 : 0));   // active low
+    }
+    return report;
+}
 std::optional<WiiStatus> wii_parse_status(std::span<const uint8_t> report) {
     if(report.size()<7 || report[0]!=0x20) return std::nullopt;
     return WiiStatus{(report[3]&0x02)!=0,report[6]};

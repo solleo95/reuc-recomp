@@ -121,7 +121,29 @@ static void init_sequence_order() {
     CHECK(extension_only.size()==2 && extension_only[0].report==steps[0].report && extension_only[1].report==steps[1].report);
     CHECK((wii_status_request()==std::array<uint8_t,2>{0x15,0x00}));
 }
+static void encodes_what_the_parser_reads() {
+    WiiState state;
+    state.buttons=bit(WiiButton::a)|bit(WiiButton::left)|bit(WiiButton::home)|bit(WiiButton::minus)|bit(WiiButton::nunchuk_z);
+    state.accel={0x82,0x7F,0x9A};
+    state.ir[0]={500,300,true}; state.ir[1]={1000,700,true}; state.ir[2]={5,6,true};   // the fourth dot is not seen
+    state.has_nunchuk=true; state.stick={30,200}; state.nunchuk_accel={0x80,0x81,0x82};
+    const auto bytes=wii_encode_report(state);
+    CHECK(bytes.size()==kWiiInputBytes && bytes[0]==0x37);
+    WiiState back; CHECK(wii_parse_report(bytes,back));
+    CHECK(back.buttons==state.buttons && back.accel==state.accel);
+    for(unsigned i=0;i<4;++i) {
+        CHECK(back.ir[i].valid==state.ir[i].valid);
+        if(state.ir[i].valid) CHECK(back.ir[i].x==state.ir[i].x && back.ir[i].y==state.ir[i].y);
+    }
+    CHECK(back.has_nunchuk && back.stick==state.stick && back.nunchuk_accel==state.nunchuk_accel);
+    state.buttons=bit(WiiButton::b)|bit(WiiButton::nunchuk_c);                  // c only: z stays released
+    back=WiiState{}; CHECK(wii_parse_report(wii_encode_report(state),back) && back.buttons==state.buttons);
+    state.has_nunchuk=false; state.buttons=bit(WiiButton::plus)|bit(WiiButton::up)|bit(WiiButton::one)|bit(WiiButton::two)|bit(WiiButton::down)|bit(WiiButton::right);
+    back=WiiState{}; CHECK(wii_parse_report(wii_encode_report(state),back) && !back.has_nunchuk && back.buttons==state.buttons);
+    WiiState rest; CHECK(wii_parse_report(wii_encode_report(rest),back) && back.buttons==0 && !back.has_nunchuk && !back.ir[0].valid);   // an idle remote
+}
 int main() {
+    encodes_what_the_parser_reads();
     parses_buttons();
     parses_the_accelerometer();
     parses_0x37_with_ir_and_nunchuk();

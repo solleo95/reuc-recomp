@@ -29,6 +29,9 @@ add_library(uc_gamepad_math STATIC gamepad_math.cpp)
 target_include_directories(uc_gamepad_math PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_wiimote_protocol STATIC wiimote_protocol.cpp)   # the Wii Remote's HID reports as pure bytes
 target_include_directories(uc_wiimote_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_evdev_logic STATIC evdev_logic.cpp)   # Linux input devices as pure logic: what they are, what their events mean (the fd layer is game/evdev_backend.cpp)
+target_include_directories(uc_evdev_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_evdev_logic PUBLIC uc_wiimote_protocol)
 add_library(uc_wiimote_math STATIC wiimote_math.cpp)   # the IR pointer, the nunchuk stick and the swing detector
 target_link_libraries(uc_wiimote_math PUBLIC uc_wiimote_protocol)
 add_library(uc_input_prompts STATIC input_prompts.cpp)
@@ -52,6 +55,11 @@ target_link_libraries(uc_input_config PUBLIC uc_input nlohmann_json::nlohmann_js
 add_library(uc_gamepad_config STATIC gamepad_config.cpp)   # the gamepad object of config.json
 target_include_directories(uc_gamepad_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_config PUBLIC uc_input_config uc_gamepad_math)
+add_library(uc_coop_roster STATIC coop_roster.cpp)   # who plays: the second player joins by pressing a button on a new device
+target_include_directories(uc_coop_roster PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(uc_coop_config STATIC coop_config.cpp)   # the player2 object of config.json
+target_include_directories(uc_coop_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(uc_coop_config PUBLIC uc_gamepad_config)
 add_library(uc_wiimote_config STATIC wiimote_config.cpp)   # the wiimote object of config.json
 target_include_directories(uc_wiimote_config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_wiimote_config PUBLIC uc_input_config)

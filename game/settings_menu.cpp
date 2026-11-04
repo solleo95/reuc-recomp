@@ -60,23 +60,60 @@ void draw_reticle_sample(ImDrawList& draw,ImVec2 centre,float radius,const Retic
 }
 }
 SettingsMenu::SettingsMenu(LiveSettings& live,std::string language,std::function<const FeatureReport*()> features,uint32_t monitor_width,uint32_t monitor_height,RendererBackend backend)
-    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad),wii_editor_(live.options().wiimote.bindings,BindingTable::wiimote) {}
+    : live_(live),language_(std::move(language)),features_(std::move(features)),monitor_width_(monitor_width),monitor_height_(monitor_height),backend_ui_(backend_ui(backend)),editor_(live.bindings()),pad_editor_(live.options().gamepad.bindings,BindingTable::gamepad),wii_editor_(live.options().wiimote.bindings,BindingTable::wiimote),
+      p2_editor_(live.options().player2.bindings),p2_pad_editor_(live.options().player2.gamepad.bindings,BindingTable::gamepad) {}
 const char* SettingsMenu::tr(std::string_view key) const { return launcher::text(language_,key).data(); }
 void SettingsMenu::setup() {
     fonts_=ui::load_fonts(*ImGui::GetIO().Fonts);   // the previous menu context (if any) is gone: its atlas no longer reads the old bytes
 }
 void SettingsMenu::capture_event(const SDL_Event& event) {
-    if((event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) && !event.key.repeat) editor_.event({PhysicalKind::key,uint16_t(event.key.scancode)},event.key.down);
-    else if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) editor_.event({PhysicalKind::mouse,event.button.button},event.button.down);
-    else if(event.type==SDL_EVENT_MOUSE_WHEEL) editor_.wheel(event.wheel.y==0 ? 0 : ((event.wheel.y>0)!=(event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED) ? 1 : -1));
-    else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) editor_.focus(false);
+    auto& editor=p2_editor_.capturing() ? p2_editor_ : editor_;   // the table of the player whose binding waits for an input
+    if((event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) && !event.key.repeat) editor.event({PhysicalKind::key,uint16_t(event.key.scancode)},event.key.down);
+    else if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) editor.event({PhysicalKind::mouse,event.button.button},event.button.down);
+    else if(event.type==SDL_EVENT_MOUSE_WHEEL) editor.wheel(event.wheel.y==0 ? 0 : ((event.wheel.y>0)!=(event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED) ? 1 : -1));
+    else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) editor.focus(false);
 }
 void SettingsMenu::commit() {
     if(mod_menu_) mod_menu_->commit();   // every loop, menu open or not: a script may change its settings at any time
     if(pending_) { const auto next=*pending_; pending_.reset(); live_.apply(next); }
     if(!editor_.capturing() && editor_.bindings()!=live_.bindings()) live_.apply(editor_.bindings());
+    if(!p2_editor_.capturing() && p2_editor_.bindings()!=live_.options().player2.bindings) { auto next=live_.options(); next.player2.bindings=p2_editor_.bindings(); live_.apply(next); }   // the second player's table is part of the options
+    if(second_pick_) { const auto pick=*second_pick_; second_pick_.reset(); if(second_command_) second_command_(pick); }   // the answer to the new-device window, or the disconnect button
+}
+template<class Content> void SettingsMenu::page(const char* id,Content&& content) {
+    const float footer=live_.error() ? ImGui::GetTextLineHeightWithSpacing()*2 : 0;
+    ImGui::BeginChild(id,{0,-footer});
+    content();
+    ImGui::EndChild();
+}
+// A button was pressed on a new device in a menu: who plays with it? (the same window recipe as the binding error's). Call inside an ImGui window.
+void SettingsMenu::new_device_modal(float unit) {
+    if(!second_view_.available || !second_view_.asking) return;
+    const auto& io=ImGui::GetIO();
+    if(!ImGui::IsPopupOpen("###coop-new-device")) ImGui::OpenPopup("###coop-new-device");
+    ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Always,{.5f,.5f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{20*unit,20*unit});
+    if(ImGui::BeginPopupModal("###coop-new-device",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar)) {
+        const char* kinds[]={"","coop_gamepad","coop_wiimote","coop_pointer"};
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+520*unit);
+        ImGui::PushFont(fonts_.serif,heading_size_); ImGui::TextWrapped("%s",tr("coop_new_device")); ImGui::PopFont();
+        ImGui::TextWrapped("%s",second_view_.asking>=1 && second_view_.asking<=3 ? tr(kinds[second_view_.asking]) : "");
+        ImGui::Separator();
+        ImGui::TextWrapped("%s",tr("coop_new_device_ask"));
+        if(second_view_.replaces) ImGui::TextDisabled("%s",tr("coop_replaces"));
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy({0,6*unit});
+        if(ImGui::Button(tr("coop_answer_first"))) second_pick_=SecondCommand::first;
+        ImGui::SameLine();
+        if(ImGui::Button(tr("coop_answer_second"))) second_pick_=SecondCommand::second;
+        ImGui::SameLine();
+        if(ImGui::Button(tr("coop_not_now")) || ImGui::IsKeyPressed(ImGuiKey_Escape,false)) second_pick_=SecondCommand::not_now;
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
 }
 void SettingsMenu::build() {
+    { std::lock_guard lock(second_mutex_); second_view_=second_state_; }   // one snapshot for the whole frame
     const auto& io=ImGui::GetIO();
     const float font_scale=std::max(.75f,io.DisplaySize.y/1080.f);
     const float unit=font_scale*.75f;
@@ -86,6 +123,16 @@ void SettingsMenu::build() {
     ImGui::GetStyle().FramePadding.y=(previous_frame_height*.75f-font_size)*.5f;
     ImGui::GetStyle().FrameBorderSize=ImGui::GetStyle().PopupBorderSize=1;   // ScaleAllSizes floors thin borders to zero below 1x
     ImGui::GetStyle().WindowPadding={28*unit,22*unit};
+    if(second_view_.available && second_view_.asking && second_view_.question_only) {   // the question opened the menu alone: only its window, none of the menu behind it
+        heading_size_=std::round(32*font_scale);
+        ImGui::PushFont(fonts_.sans,font_size);
+        ImGui::SetNextWindowPos({0,0});
+        ImGui::Begin("##coop-question",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs);
+        new_device_modal(unit);
+        ImGui::End();
+        ImGui::PopFont();
+        return;
+    }
     const ImVec2 size{std::min(io.DisplaySize.x-40*font_scale,660*font_scale),std::min(io.DisplaySize.y-40*font_scale,900*font_scale)};
     ImGui::SetNextWindowPos({io.DisplaySize.x/2,io.DisplaySize.y/2},ImGuiCond_Once,{.5f,.5f});
     ImGui::SetNextWindowSize(size,ImGuiCond_Always);
@@ -99,11 +146,11 @@ void SettingsMenu::build() {
         if(ImGui::BeginTabItem(tr("menu_main"))) { main_tab(unit); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("effects"))) { effects_tab(unit); ImGui::EndTabItem(); }
         if(backend_ui_.dlss5 && shown("dlss5") && current().dlss5_enabled && ImGui::BeginTabItem(tr("dlss5"))) { dlss5_tab(unit); ImGui::EndTabItem(); }
-        if(ImGui::BeginTabItem(tr("menu_controls"))) { controls_tab(unit); ImGui::EndTabItem(); }
-        if(shown("pad_panel") && ImGui::BeginTabItem(tr("controllers"))) { controllers_tab(unit); ImGui::EndTabItem(); }
+        if(ImGui::BeginTabItem(tr("menu_controls"))) { page("controls-page",[&] { controls_tab(unit); }); ImGui::EndTabItem(); }
+        if(shown("pad_panel") && ImGui::BeginTabItem(tr("controllers"))) { page("controllers-page",[&] { controllers_tab(unit); }); ImGui::EndTabItem(); }
         if(ImGui::BeginTabItem(tr("reticle"))) { reticle_tab(unit); ImGui::EndTabItem(); }
         if(mod_menu_) {   // mods: one manager tab; each mod's settings open in a window from there
-            if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { mod_menu_->manager_tab(unit); ImGui::EndTabItem(); }
+            if(ImGui::BeginTabItem((mod_menu_->manager_title()+"###mods").c_str())) { page("mods-page",[&] { mod_menu_->manager_tab(unit); }); ImGui::EndTabItem(); }
         }
         ImGui::EndTabBar();
     }
@@ -113,6 +160,7 @@ void SettingsMenu::build() {
         ImGui::PopStyleColor();
         if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",error->c_str());
     }
+    new_device_modal(unit);
     ImGui::End();
     ImGui::PopFont();
 }
@@ -389,6 +437,29 @@ void SettingsMenu::controllers_tab(float unit) {
     wii_panel_.heading=fonts_.serif; wii_panel_.heading_size=heading_size_; wii_panel_.control_width=.75f;
     options=current();   // the gamepad tab above may have queued a change: this one builds on it
     if(wiimote_tab(wii_panel_,options.wiimote,wii_editor_,wii_status_ ? wii_status_() : WiimoteStatus{},unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+    const auto& second=second_view_;
+    if(!second.available) return;   // local two-player play is off here (the Steam Deck, network play, a test run)
+    // The second player: who it is, the command that sends the device back, the gamepad window of its own (its own table, sticks and gyro); the Wii Remote has no table of its own.
+    options=current();
+    if(!p2_pad_editor_.capturing() && options.player2.gamepad.bindings!=p2_pad_editor_.bindings() && options.player2.gamepad.bindings!=p2_pad_seen_) p2_pad_editor_=BindingEditor(options.player2.gamepad.bindings,BindingTable::gamepad);
+    p2_pad_seen_=options.player2.gamepad.bindings;
+    ImGui::Dummy({0,14*unit});
+    ImGui::PushFont(fonts_.serif,heading_size_); ImGui::TextWrapped("%s",tr("coop_title")); ImGui::PopFont();
+    ImGui::PushTextWrapPos(0);
+    if(second.joined) {
+        const char* kinds[]={"","coop_gamepad","coop_wiimote","coop_pointer"};
+        ImGui::TextWrapped("%s: %s",tr("coop_device"),second.device>=1 && second.device<=3 ? tr(kinds[second.device]) : "");
+        if(ImGui::Button(tr("coop_disconnect"))) second_pick_=SecondCommand::disconnect;
+    } else ImGui::TextWrapped("%s",tr("coop_waiting"));
+    if(!second.problem.empty()) { ImGui::PushStyleColor(ImGuiCol_Text,{1,.52f,.52f,1}); ImGui::TextWrapped("%s",second.problem.c_str()); ImGui::PopStyleColor(); }
+    ImGui::TextDisabled("%s",tr("coop_wii_note"));
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy({0,6*unit});
+    ImGui::PushID("player2");   // the same window as the first player's: its own ids
+    p2_pad_panel_.heading=fonts_.serif; p2_pad_panel_.heading_size=heading_size_; p2_pad_panel_.control_width=.75f;
+    GamepadSettings pad=options.player2.gamepad; uint32_t rumble=options.rumble;   // the vibration strength is one setting for both players: this slider is the same one
+    if(gamepad_tab(p2_pad_panel_,pad,rumble,p2_pad_editor_,PadStatus{},unit,[this](std::string_view key) { return tr(key); })) { options.player2.gamepad=pad; options.rumble=rumble; pending_=options; }
+    ImGui::PopID();
 }
 // The Reticle tab: a preview of the reticle with the chosen look (yours and a partner's), the size, what to hide, the players' colours, the dot's size, the wake's
 // length and how visible the partner's reticle is.
@@ -533,6 +604,23 @@ void SettingsMenu::controls_tab(float unit) {
         std::string text; for(auto modifier:binding.modifiers) text+=physical_name(modifier)+" + ";
         return text+physical_name(binding.input);
     };
+    const auto& second=second_view_;
+    if(!second.available) player_view_=0;
+    if(second.available) {   // the second player's table is edited with the same widgets: below, `editor_` is the table of the player this shows
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.75f);
+        const char* players[]={tr("player_one"),tr("player_two")};
+        if(ImGui::BeginCombo("##bindings-player",players[player_view_])) {
+            for(int i=0;i<2;++i) if(ImGui::Selectable(players[i],player_view_==i)) player_view_=i;
+            ImGui::EndCombo();
+        }
+        if(player_view_==1) {
+            if(!p2_editor_.capturing() && options.player2.bindings!=p2_editor_.bindings() && options.player2.bindings!=p2_seen_) p2_editor_=BindingEditor(options.player2.bindings);
+            p2_seen_=options.player2.bindings;
+            ImGui::TextDisabled("%s",tr("coop_mouse_note"));
+        }
+        ImGui::Dummy({0,4*unit});
+    }
+    auto& editor_=player_view_==1 ? p2_editor_ : this->editor_;   // shadows the member on purpose: every use below is the shown player's table
     if(ImGui::Button(tr("defaults"))) editor_.restore_defaults();
     if(editor_.capturing()) { ImGui::SameLine(); ImGui::TextWrapped("%s",tr("capture")); }
     if(editor_.error()) { binding_error_=*editor_.error(); editor_.cancel_capture(); ImGui::OpenPopup("###binding-error"); }   // the capture ends: the next click goes to the dialog, not into a new binding
@@ -548,7 +636,7 @@ void SettingsMenu::controls_tab(float unit) {
     }
     ImGui::PopStyleVar();
     ImGui::BeginDisabled(editor_.capturing().has_value());
-    if(ImGui::BeginChild("bindings",{0,0})) {
+    {   // the page scrolls as a whole (see page()), the table with it
         for(size_t i=0;i<size_t(Action::recenter);++i) {   // recenter is a gamepad action: the controllers tab lists it, this page is keyboard and mouse only
             const auto action=Action(i); ImGui::PushID(int(i));
             ImGui::TextWrapped("%s",tr(action_names[i]));
@@ -580,7 +668,6 @@ void SettingsMenu::controls_tab(float unit) {
             ImGui::PopID();
         }
     }
-    ImGui::EndChild();
     ImGui::EndDisabled();
 }
 }

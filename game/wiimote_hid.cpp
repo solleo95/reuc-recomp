@@ -7,14 +7,22 @@
 #include <hidsdi.h>
 #include <hidpi.h>
 #include <algorithm>
+#include <mutex>
 #include <string>
 namespace uc {
 namespace {
+std::mutex g_claims;   // the claimed sets of wii_open_unclaimed: two WiimoteInput threads open and close remotes at the same time
+std::string utf8(const wchar_t* text) {
+    const int size=WideCharToMultiByte(CP_UTF8,0,text,-1,nullptr,0,nullptr,nullptr);
+    std::string out(size>0 ? size-1 : 0,'\0');
+    if(size>1) WideCharToMultiByte(CP_UTF8,0,text,-1,out.data(),size,nullptr,nullptr);
+    return out;
+}
 // One Wii Remote as a Windows HID device. Reads are overlapped and stay pending between calls; a write goes through WriteFile, and once that is refused (the Microsoft
 // Bluetooth stack does for some remotes) through HidD_SetOutputReport, which Dolphin also falls back to.
 class HidRemote final : public WiiTransport {
 public:
-    HidRemote(HANDLE file,size_t input_bytes,size_t output_bytes) : file_(file),input_(input_bytes),output_bytes_(output_bytes) {
+    HidRemote(HANDLE file,size_t input_bytes,size_t output_bytes,std::string id,std::set<std::string>* claimed) : file_(file),input_(input_bytes),output_bytes_(output_bytes),id_(std::move(id)),claimed_(claimed) {
         read_event_=CreateEventW(nullptr,TRUE,FALSE,nullptr);
         write_event_=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     }
@@ -24,7 +32,9 @@ public:
         CloseHandle(file_);
         if(read_event_) CloseHandle(read_event_);
         if(write_event_) CloseHandle(write_event_);
+        if(claimed_) { std::lock_guard lock(g_claims); claimed_->erase(id_); }
     }
+    std::string id() const override { return id_; }
     bool read(std::vector<uint8_t>& report,unsigned timeout_ms) override {
         report.clear();
         if(!read_event_) return false;
@@ -63,6 +73,8 @@ private:
     HANDLE file_,read_event_=nullptr,write_event_=nullptr;
     std::vector<uint8_t> input_;
     size_t output_bytes_;
+    std::string id_;
+    std::set<std::string>* claimed_;
     OVERLAPPED read_{};
     bool pending_=false,use_output_report_=false;
 };
@@ -79,7 +91,8 @@ bool is_wii_remote(const wchar_t* path) {
     return ours;
 }
 }
-std::unique_ptr<WiiTransport> wii_open_first(std::string& error) {
+namespace {
+std::unique_ptr<WiiTransport> open_remote(std::set<std::string>* claimed,std::string& error) {
     error.clear();
     GUID guid; HidD_GetHidGuid(&guid);
     DeviceList devices{SetupDiGetClassDevsW(&guid,nullptr,nullptr,DIGCF_PRESENT|DIGCF_DEVICEINTERFACE)};
@@ -94,6 +107,8 @@ std::unique_ptr<WiiTransport> wii_open_first(std::string& error) {
         std::vector<uint8_t> storage(size);
         auto* detail=reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(storage.data()); detail->cbSize=sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
         if(!SetupDiGetDeviceInterfaceDetailW(devices.handle,&data,detail,size,nullptr,nullptr) || !is_wii_remote(detail->DevicePath)) continue;
+        const std::string id=utf8(detail->DevicePath);
+        if(claimed) { std::lock_guard lock(g_claims); if(claimed->count(id)) continue; }   // another WiimoteInput has this one
         found=true;
         HANDLE file=CreateFileW(detail->DevicePath,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_OVERLAPPED,nullptr);
         if(file==INVALID_HANDLE_VALUE) { why=GetLastError(); continue; }
@@ -101,7 +116,10 @@ std::unique_ptr<WiiTransport> wii_open_first(std::string& error) {
         const bool sized=HidD_GetPreparsedData(file,&preparsed) && HidP_GetCaps(preparsed,&caps)==HIDP_STATUS_SUCCESS;
         if(preparsed) HidD_FreePreparsedData(preparsed);
         if(!sized || caps.InputReportByteLength<kWiiInputBytes || caps.OutputReportByteLength<2) { CloseHandle(file); continue; }
-        auto remote=std::make_unique<HidRemote>(file,caps.InputReportByteLength,caps.OutputReportByteLength);
+        bool taken=false;
+        if(claimed) { std::lock_guard lock(g_claims); taken=!claimed->insert(id).second; }   // claimed between the check above and now: it is the other one's
+        if(taken) { CloseHandle(file); continue; }
+        auto remote=std::make_unique<HidRemote>(file,caps.InputReportByteLength,caps.OutputReportByteLength,id,claimed);   // from here the claim is released by its destructor
         const auto request=wii_status_request();
         if(!remote->write(request)) { why=GetLastError(); continue; }   // a bar's empty slot or a remote already gone: look at the next device
         return remote;
@@ -109,4 +127,7 @@ std::unique_ptr<WiiTransport> wii_open_first(std::string& error) {
     if(found) error="a Wii Remote is paired but did not answer (it may be switched off, or another program has it open; Windows error "+std::to_string(why)+")";
     return nullptr;
 }
+}
+std::unique_ptr<WiiTransport> wii_open_first(std::string& error) { return open_remote(nullptr,error); }
+std::unique_ptr<WiiTransport> wii_open_unclaimed(std::set<std::string>& claimed,std::string& error) { return open_remote(&claimed,error); }
 }

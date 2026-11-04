@@ -52,11 +52,8 @@ std::optional<std::string> validate_gamepad(const GamepadSettings& s) {
     if(auto error=validate_pad_bindings(s.bindings))return *error;
     return {};
 }
-GamepadSettings gamepad_from_config(const ConfigDocument& document) {
+GamepadSettings gamepad_from_json(const nlohmann::ordered_json& g) {
     GamepadSettings s;
-    const auto at=document.properties.find("gamepad");
-    if(at==document.properties.end())return s;
-    const Json& g=*at;
     try {
         fields(g,{"type","model","aim_stick","camera_stick","dead_zone","aim_speed","camera_dead_zone","gyro","bindings"},"");
         s.type=choice(g,"type",s.type,kTypes);
@@ -82,7 +79,11 @@ GamepadSettings gamepad_from_config(const ConfigDocument& document) {
     if(auto error=validate_gamepad(s))invalid(*error);
     return s;
 }
-void store_gamepad(ConfigDocument& document,const GamepadSettings& s) {
+GamepadSettings gamepad_from_config(const ConfigDocument& document) {
+    const auto at=document.properties.find("gamepad");
+    return at==document.properties.end() ? GamepadSettings{} : gamepad_from_json(*at);
+}
+nlohmann::ordered_json gamepad_to_json(const GamepadSettings& s) {
     if(auto error=validate_gamepad(s))invalid(*error);
     Json g=Json::object();
     g["type"]=kTypes[size_t(s.type)]; g["model"]=kModels[size_t(s.model)];
@@ -91,6 +92,7 @@ void store_gamepad(ConfigDocument& document,const GamepadSettings& s) {
     g["gyro"]={{"mode",kGyroModes[size_t(s.gyro.mode)]},{"sensitivity_x",rounded(s.gyro.sensitivity_x)},{"sensitivity_y",rounded(s.gyro.sensitivity_y)},
         {"dead_zone",rounded(s.gyro.dead_zone)},{"invert_x",s.gyro.invert_x},{"invert_y",s.gyro.invert_y},{"hold",physical_input_json(s.gyro_hold)}};
     g["bindings"]=bindings_to_json(s.bindings);
-    document.properties["gamepad"]=std::move(g);
+    return g;
 }
+void store_gamepad(ConfigDocument& document,const GamepadSettings& s) { document.properties["gamepad"]=gamepad_to_json(s); }
 }

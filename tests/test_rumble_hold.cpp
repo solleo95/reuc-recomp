@@ -93,6 +93,22 @@ int main() {
         out=router.step(2,true,RumbleDevice::pad,now+=10); CHECK(out.pad==2 && out.wii==0);      // player 2's motor goes to the pads only
         out=router.step(2,true,RumbleDevice::remote,now+=300); CHECK(out.pad==0 && out.wii==0);  // the remote is player 1's alone
     }
+    {   // local two-player play: each player's motor goes to the kind of device that player uses (a remote 1, a pad, or nothing for a mouse or a light gun)
+        uc::RumbleRouter router; uint64_t now=1000;
+        auto out=router.step(3,true,RumbleDevice::remote,RumbleDevice::pad,now);
+        CHECK(out.wii==1 && out.pad==2 && out.wii_starts==1 && out.pad_starts==1);          // player 1's remote shakes, player 2's pad rumbles
+        out=router.step(0,true,RumbleDevice::pad,RumbleDevice::remote,now+=300);
+        CHECK(out.wii==0 && out.pad==0);
+        out=router.step(3,true,RumbleDevice::pad,RumbleDevice::remote,now+=10);
+        CHECK(out.pad==1 && out.wii==2);                                                      // player 1's pad, player 2's remote
+        out=router.step(0,true,RumbleDevice::pad,RumbleDevice::none,now+=300);
+        out=router.step(3,true,RumbleDevice::pad,RumbleDevice::none,now+=10);
+        CHECK(out.pad==1 && out.wii==0);                                                      // player 2 plays with a mouse: nothing to shake
+        out=router.step(3,true,RumbleDevice::remote,RumbleDevice::remote,now+=300);
+        CHECK(out.wii==3 && out.pad==0);                                                      // two remotes, one motor each
+        out=router.step(3,false,RumbleDevice::remote,RumbleDevice::remote,now+=10);
+        CHECK(out.wii==0 && out.pad==0);                                                      // a menu is open
+    }
     {   // a tap held back by the hold does not come back after a pause or a menu
         uc::RumbleRouter router;
         CHECK(router.step(1,true,RumbleDevice::pad,0).pad==1);

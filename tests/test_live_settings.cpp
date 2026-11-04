@@ -34,6 +34,7 @@ int main() {
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     targets.gamepad=[&](const uc::GamepadSettings&){ calls.push_back("gamepad"); };
     targets.wiimote=[&](const uc::WiimoteSettings&){ calls.push_back("wiimote"); };
+    targets.player2=[&](const uc::CoopSettings&){ calls.push_back("player2"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
     const auto saved=[&]{ return uc::options_from_config(uc::load_config(path)); };
     CHECK(live.options().upscaler==uc::UpscalerKind::dlss && live.options().render_scale==0);
@@ -92,6 +93,16 @@ int main() {
         calls.clear(); next.wiimote.swing_threshold=9; live.apply(next);
         CHECK(calls.empty() && live.error() && live.options().wiimote.swing_threshold==1.5f);
         next=live.options(); next.wiimote.swing_threshold=2.f; live.apply(next); CHECK(!live.error());
+        calls.clear();
+    }
+    {   // the second player's tables reach only their target (once), are saved in the "player2" object, and an invalid set is reported without being applied
+        calls.clear(); auto next=live.options(); next.player2.gamepad.aim.speed=2.5f; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"player2"}) && saved().player2.gamepad.aim.speed==2.5f && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        next.player2.gamepad.aim.speed=40; live.apply(next);
+        CHECK(calls.empty() && live.error() && live.options().player2.gamepad.aim.speed==2.5f);
+        next=live.options(); next.player2.bindings[size_t(uc::Action::reload)]={{uc::BindingKind::physical,{uc::PhysicalKind::mouse,4},{}}}; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"player2"}) && !live.error() && saved().player2.bindings==next.player2.bindings);
         calls.clear();
     }
     {   // HDR and its sliders reach only the HDR target

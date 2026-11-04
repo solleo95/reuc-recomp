@@ -44,11 +44,24 @@ public:
         const unsigned pad=pad_hold_.apply(game_motors,now_ms,kPadHoldMs,kPadBurstMs), wii=wii_hold_.apply(game_motors,now_ms,kWiiHoldMs)&1;
         RumbleOutput out;
         out.pad=device==RumbleDevice::pad ? pad : 0; out.wii=device==RumbleDevice::remote ? wii : 0;
+        return finish(out);
+    }
+    // Local two-player play with a second player: each player's motor goes to the kind of device that player uses (a remote: bit 0 of `wii` is the first player's remote, bit 1 the
+    // second's; a pad: the same in `pad`; none: a mouse or a light gun has no motor).
+    RumbleOutput step(unsigned game_motors,bool input_allowed,RumbleDevice device,RumbleDevice second_device,uint64_t now_ms) {
+        if(!input_allowed) {pad_hold_=wii_hold_={}; game_motors=0;}
+        const unsigned pad=pad_hold_.apply(game_motors,now_ms,kPadHoldMs,kPadBurstMs), wii=wii_hold_.apply(game_motors,now_ms,kWiiHoldMs);
+        const auto only=[](unsigned bits,RumbleDevice first,RumbleDevice second,RumbleDevice wanted) { return ((first==wanted ? bits&1u : 0u)|(second==wanted ? bits&2u : 0u)); };
+        RumbleOutput out;
+        out.pad=only(pad,device,second_device,RumbleDevice::pad); out.wii=only(wii,device,second_device,RumbleDevice::remote);
+        return finish(out);
+    }
+private:
+    RumbleOutput finish(RumbleOutput out) {
         out.pad_starts=unsigned(std::popcount(out.pad&~pad_was_)); out.wii_starts=unsigned(std::popcount(out.wii&~wii_was_));
         pad_was_=out.pad; wii_was_=out.wii;
         return out;
     }
-private:
     RumbleHold pad_hold_,wii_hold_;
     unsigned pad_was_=0,wii_was_=0;
 };

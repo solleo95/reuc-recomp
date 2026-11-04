@@ -237,6 +237,19 @@ int main() {
         bool malformed=false;try {uc::options_from_config(uc::parse_config(R"({"wiimote":{"enabled":2}})"));}catch(const std::invalid_argument&){malformed=true;}
         CHECK(malformed);
     }
+    {   // the player2 object: defaults without it, a round trip through store_options, and a refusal that leaves the file alone
+        CHECK(uc::options_from_config(uc::parse_config("{}")).player2==uc::CoopSettings{});
+        auto document=uc::parse_config(R"({"game":"C:/Games/Test/game"})");
+        auto options=uc::options_from_config(document);
+        options.player2.gamepad.aim.speed=2.5f;
+        options.player2.bindings[size_t(uc::Action::reload)]={{uc::BindingKind::physical,{uc::PhysicalKind::mouse,4},{}}};
+        uc::store_options(document,options);
+        CHECK(uc::options_from_config(uc::parse_config(uc::serialize_config(document))).player2==options.player2);
+        auto bad=options; bad.player2.gamepad.aim.speed=40;
+        const auto before=uc::serialize_config(document); bool refused=false;
+        try {uc::store_options(document,bad);}catch(const std::invalid_argument&){refused=true;}
+        CHECK(refused && uc::serialize_config(document)==before);
+    }
     for(auto text:{R"({"skip_intro":1})",R"({"game":null})",R"({"game":"a\u0000b"})",R"({"graphics":{"render_scale":8}})",
         R"({"graphics":{"render_scale":-1}})",R"({"graphics":{"width":-1}})",R"({"graphics":{"window_mode":"bad"}})",
         R"({"graphics":{"bloom":"off"}})",R"({"graphics":{"bloom":0}})",R"({"graphics":{"bloom":null}})",R"({"graphics":{"prompt_style":"bad"}})",R"({"graphics":{"prompt_style":2}})",R"({"graphics":{"prompt_style":null}})",R"({"graphics":{"fps_limit":-1}})",R"({"graphics":{"fps_limit":10}})",

@@ -7,6 +7,7 @@ int main() {
     uc::InputProbeSnapshot s; s.pause_state=2; s.game_mode=3; s.tutorial_loaded=true; s.tutorial_state=0x00100000;
     s.menu_pages={0,1,0,7}; s.players[0].weapon_words[3]=12; s.hud_life=0.6f; s.scene_address=0x80BDF0A0; s.scene_valid=true; s.scene_words[3]=0x3F000000; /* 0.5 */ s.view_valid=true; s.view={1,0,0,10, 0,1,0,20, 0,0,1,30};
     s.enemy_count=2; s.enemies[0]={160,0x80200000,{500.f,-0.5f,1.5f},true,0x803F2B60,10.f}; s.enemies[1]={161,0x80201000,{497.5f,-0.5f,-9.f},false,0x803F2B60,-5.f}; s.ui_states[6]=5; s.ui_valid=true; s.players[0].valid=true; s.players[0].address=0x80010000; s.players[0].mode_630=1; s.players[0].state_794=1;
+    s.players[1].valid=true; s.players[1].address=0x80020000; s.players[1].weapon_words[3]=7;
     uc::test_state_publish(s,2); CHECK(uc::test_state_latest().frame==0);   // disabled: nothing published
     uc::test_state_enable(true);
     uc::test_state_publish(s,2); uc::test_state_publish(s,1);
@@ -20,6 +21,8 @@ int main() {
     CHECK(json.find(R"("context":"menu")")!=std::string::npos && json.find(R"("speed":4)")!=std::string::npos);
     CHECK(json.find(R"("ui":[0,0,0,0,0,0,5,0,0,0,0,0])")!=std::string::npos);
     CHECK(json.find(R"("player":{"valid":true,"address":2147549184,)")!=std::string::npos);
+    CHECK(json.find(R"("player2":{"valid":true,"address":2147614720,"magazine":7})")!=std::string::npos);   // the second player (local two-player play)
+    CHECK(uc::test_frame_json(uc::TestFrameState{},1,0,0,0,0).find(R"("player2":{"valid":false,"address":0,"magazine":-1})")!=std::string::npos);
     CHECK(f.enemies.size()==2 && f.enemies[0].id==160 && f.enemies[1].root[2]==-9.f && f.magazine==12 && f.view_valid);
     CHECK(json.find(R"("magazine":12,"life":0.60,"damage":0.500,"scene":2159931552})")!=std::string::npos);
     CHECK(json.find(R"("view":[1,0,0,10,0,1,0,20,0,0,1,30])")!=std::string::npos);

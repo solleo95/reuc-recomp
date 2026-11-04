@@ -413,6 +413,16 @@ int main() {
     CHECK(std::abs(ppc::rdf32(c,0x80003020)+0.6f)<0.00001f);
     CHECK(input.latest_aim()[0]==0.2f);
     c.r[3]=2; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(int32_t(c.r[3])==-1);
+    // Local two-player play: the second input exists from the start, but the game sees the second pad only once a second player has joined.
+    uc::input_hle_set_second_connected(false);
+    c.r[3]=1; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(int32_t(c.r[3])==-1 && ppc::rd32(c,0x80001000)==0xFD);
+    c.r[3]=1; c.r[4]=0x80003100; c.r[5]=1; hle_KPADRead(c); CHECK(c.r[3]==0);
+    c.r[3]=0; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(c.r[3]==0);   // the first player is unaffected
+    uc::input_hle_set_second_connected(true);
+    c.r[3]=1; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(c.r[3]==0 && ppc::rd32(c,0x80001000)==1);
+    c.r[3]=1; c.r[4]=0x80003100; c.r[5]=1; hle_KPADRead(c); CHECK(c.r[3]==1 && ppc::rd32(c,0x80003100)==uc::kButtonB);
+    uc::input_hle_set_second_connected(false); uc::input_hle_init(&input,&second);   // a fresh init connects the second pad again (network play, the tests above)
+    c.r[3]=1; c.r[4]=0x80001000; hle_WPADProbe(c); CHECK(c.r[3]==0);
     uc::InputFrame network; network.sample.valid=true; network.sample.x=0.7f;
     network.host=true; network.actions.pressed=uint64_t(1)<<unsigned(uc::Action::reload); network.actions.generation=network.generation=42;
     second.install_frame(network); second.context(uc::InputContext::gameplay);

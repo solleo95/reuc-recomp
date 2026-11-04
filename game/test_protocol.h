@@ -11,7 +11,8 @@ namespace uc {
 // changed; wii_motion: one swing as mouse counts x/y.
 enum class TestDevice : uint8_t { kpad, key, mouse, wheel, motion, pad_button, pad_axis, pad_stick, pad_gyro, aim, wii_button, wii_pointer, wii_stick, wii_motion };
 struct TestInput { uint64_t at_frame = 0; uint32_t hold_frames = 1; TestDevice device = TestDevice::kpad;
-                   float x = 0, y = 0; uint32_t buttons = 0, code = 0; bool down = false; int delta = 0; };
+                   float x = 0, y = 0; uint32_t buttons = 0, code = 0; bool down = false; int delta = 0;
+                   uint8_t player = 0; };   // player: 1 sends the input to the second player's input (local two-player play), 0 to the first's
 enum class TestRequestKind : uint8_t { input, capture, state, speed, quit, peek, draws, host_key, options, menu_click };
 struct TestRequest { uint64_t id = 0; TestRequestKind kind = TestRequestKind::state; TestInput input; uint32_t factor = 1, addr = 0, size = 0; float mx = 0, my = 0; std::string text, gamepad, settings; };   // text: graphics options JSON, gamepad: gamepad options JSON, settings: root config keys JSON (pointer, reload_zone, ...); any may be empty
 struct TestParseError { uint64_t id; std::string message; };   // id 0 when unknown

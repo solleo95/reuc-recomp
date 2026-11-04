@@ -26,6 +26,11 @@ public:
     // Every remote button press and release goes to the sink, active or not: the binding capture of the menus.
     void capture_sink(std::function<void(PhysicalInput,bool)>);
     WiimoteStatus status() const;
+    // Local two-player play. The host loop asks which remote pressed something before it decides whose target the remote feeds (the join press itself reaches that target).
+    bool pending_press() const;               // a button press is queued that update() has not handed on yet (any thread)
+    std::string device_id() const;            // the connected remote's WiiTransport::id(); empty without a connection
+    void set_player(unsigned player);         // 0 or 1: the remote lights that player's LED (the set-up lights LED 1); any thread
+    void release(WiimoteTarget&);             // lets go of what `target` holds of this remote (called before the remote's target changes); main thread
     // The remote's motor (it has no strength). Any thread; kept for a remote that connects later, and in every report the thread sends (the motor is bit 0 of each).
     void rumble(bool on) { rumble_=on; }
     unsigned changes() const { return changes_; }   // counts connections made and lost: status() is worth asking again
@@ -35,7 +40,7 @@ private:
     void run();
     bool handshake(WiiTransport&);
     void publish(WiiState,bool extension,WiiState& previous,WiiSwing&);
-    void set_link(bool connected,const std::string& error);
+    void set_link(bool connected,const std::string& error,const std::string& id={});
     bool nap(unsigned ms);   // false when the thread must end
     bool send(WiiTransport&,std::span<const uint8_t> report);   // write() with the motor bit of the report set while the motor is wanted
     Opener opener_;
@@ -44,8 +49,9 @@ private:
     WiiState state_;
     uint64_t reports_=0;
     bool connected_=false;
-    std::string error_;
+    std::string error_,id_;
     std::function<void(PhysicalInput,bool)> sink_;
+    std::atomic<unsigned> player_{0};
     std::atomic<bool> stop_{false},enabled_{true},rumble_{false};
     std::atomic<float> threshold_{1.5f};
     std::atomic<unsigned> changes_{0};
