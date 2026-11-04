@@ -23,10 +23,10 @@ Result<Handle> directory(const fs::path& path) {
     Handle handle(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,
         OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
     if(!handle.valid()) return file_error("Open directory");
-    FILE_ATTRIBUTE_TAG_INFO info{};
-    if(!GetFileInformationByHandleEx(handle.get(),FileAttributeTagInfo,&info,sizeof(info)))
+    BY_HANDLE_FILE_INFORMATION info{};   // not FileAttributeTagInfo: FAT, exFAT and some network shares refuse it
+    if(!GetFileInformationByHandle(handle.get(),&info))
         return file_error("Inspect directory");
-    if(!(info.FileAttributes&FILE_ATTRIBUTE_DIRECTORY) || (info.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+    if(!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
         return Error{ErrorCode::unsafe_path,"Directory is a reparse point or not a directory"};
     return handle;
 }
@@ -68,9 +68,9 @@ Result<Handle> open_read(const fs::path& path) {
     Handle handle(CreateFileW(std::get<ParentLock>(locked).target.c_str(),GENERIC_READ,FILE_SHARE_READ,
         nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
     if(!handle.valid()) return file_error("Open file");
-    FILE_ATTRIBUTE_TAG_INFO info{};
-    if(!GetFileInformationByHandleEx(handle.get(),FileAttributeTagInfo,&info,sizeof(info))) return file_error("Inspect file");
-    if(info.FileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))
+    BY_HANDLE_FILE_INFORMATION info{};
+    if(!GetFileInformationByHandle(handle.get(),&info)) return file_error("Inspect file");
+    if(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))
         return Error{ErrorCode::unsafe_path,"File is a reparse point or directory"};
     return handle;
 }

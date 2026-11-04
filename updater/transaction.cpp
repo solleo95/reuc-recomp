@@ -67,9 +67,9 @@ Status append_event(const fs::path& operation,Json event) {
     Handle file(CreateFileW((operation/"journal.log").c_str(),FILE_APPEND_DATA,FILE_SHARE_READ,nullptr,
         OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_WRITE_THROUGH,nullptr));
     if(!file.valid()) return file_error("Open journal events");
-    FILE_ATTRIBUTE_TAG_INFO attributes{};
-    if(!GetFileInformationByHandleEx(file.get(),FileAttributeTagInfo,&attributes,sizeof(attributes)) ||
-        (attributes.FileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))
+    BY_HANDLE_FILE_INFORMATION attributes{};   // not FileAttributeTagInfo: FAT, exFAT and some network shares refuse it
+    if(!GetFileInformationByHandle(file.get(),&attributes) ||
+        (attributes.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))
         return recovery_error("Unsafe journal events file");
     return write_all(file.get(),event.dump()+"\n");
 }
@@ -403,9 +403,9 @@ Status recover_install(const fs::path& install,const fs::path& operation) {
         Handle log(CreateFileW((operation/"journal.log").c_str(),GENERIC_WRITE,0,nullptr,OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
         if(!log.valid()) return file_error("Repair interrupted journal append");
-        FILE_ATTRIBUTE_TAG_INFO attributes{};
-        if(!GetFileInformationByHandleEx(log.get(),FileAttributeTagInfo,&attributes,sizeof(attributes)) ||
-            (attributes.FileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))
+        BY_HANDLE_FILE_INFORMATION attributes{};
+        if(!GetFileInformationByHandle(log.get(),&attributes) ||
+            (attributes.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))
             return recovery_error("Unsafe interrupted journal");
         LARGE_INTEGER end{};end.QuadPart=static_cast<LONGLONG>(journal.valid_log_bytes);
         if(!SetFilePointerEx(log.get(),end,nullptr,FILE_BEGIN) || !SetEndOfFile(log.get()) || !FlushFileBuffers(log.get()))

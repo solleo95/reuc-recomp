@@ -36,22 +36,61 @@ struct ClientLockState {
     bool exclusive=false;
 };
 namespace {
-std::variant<std::unique_ptr<ClientLockState>,std::error_code> open_state(const std::filesystem::path& root) {
+// The folder itself, with every link on the way (junction, symbolic link, drive mounted in a folder, mapped or subst drive) resolved,
+// so the plain-folder checks below see the real path. When Windows cannot resolve it, the path stays as given.
+std::wstring resolve_root(const std::filesystem::path& root) {
+    auto absolute=std::filesystem::absolute(root).lexically_normal().wstring();
+    Handle h(CreateFileW(absolute.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+        OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr));
+    if(!h.valid()) return absolute;
+    for(DWORD volume:{VOLUME_NAME_DOS,VOLUME_NAME_GUID}) {   // a drive mounted only in a folder has no drive letter: the GUID name
+        std::wstring text(MAX_PATH,L'\0');
+        for(;;) {
+            auto length=GetFinalPathNameByHandleW(h.value,text.data(),static_cast<DWORD>(text.size()),FILE_NAME_NORMALIZED|volume);
+            if(!length) break;
+            if(length<text.size()) {text.resize(length);return text;}
+            text.resize(length);
+        }
+    }
+    return absolute;
+}
+// Length of the part that is not a folder to hold: "D:\", "\\?\D:\", "\\?\Volume{id}\", "\\server\share\" and "\\?\UNC\server\share\".
+size_t volume_root_length(const std::wstring& path) {
+    size_t position=0,names=1;   // names: the drive or volume, or server and share
+    if(path.starts_with(L"\\\\?\\")) {
+        position=4;
+        if(path.compare(position,4,L"UNC\\")==0) {position+=4;names=2;}
+    } else if(path.starts_with(L"\\\\")) {position=2;names=2;}
+    for(;names;--names) {
+        position=path.find(L'\\',position);
+        if(position==std::wstring::npos) return path.size();
+        ++position;
+    }
+    return position;
+}
+std::variant<std::unique_ptr<ClientLockState>,std::error_code> open_state(const std::wstring& absolute) {
     auto state=std::make_unique<ClientLockState>();
-    auto absolute=std::filesystem::absolute(root).lexically_normal();
-    auto current=absolute.root_path();
+    auto root_length=volume_root_length(absolute);
+    std::filesystem::path current(absolute.substr(0,root_length));
     auto hold=[&](const std::filesystem::path& path)->std::error_code {
         Handle h(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
         if(!h.valid()) return error();
-        FILE_ATTRIBUTE_TAG_INFO tag{};
-        if(!GetFileInformationByHandleEx(h.value,FileAttributeTagInfo,&tag,sizeof(tag))) return error();
-        if(!(tag.FileAttributes&FILE_ATTRIBUTE_DIRECTORY) || (tag.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+        // Not FileAttributeTagInfo: FAT and exFAT cards and some network shares answer it with "The parameter is incorrect".
+        BY_HANDLE_FILE_INFORMATION info{};
+        if(!GetFileInformationByHandle(h.value,&info)) return error();
+        if(!(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
             return error(ERROR_REPARSE_TAG_INVALID);
         state->directories.push_back(std::move(h));return {};
     };
     if(auto ec=hold(current)) return ec;
-    for(const auto& part:absolute.relative_path()) {current/=part;if(auto ec=hold(current)) return ec;}
+    size_t start=root_length;
+    while(start<absolute.size()) {
+        auto end=absolute.find(L'\\',start);
+        if(end==std::wstring::npos) end=absolute.size();
+        if(end>start) {current/=absolute.substr(start,end-start);if(auto ec=hold(current)) return ec;}
+        start=end+1;
+    }
     if(!GetFileInformationByHandle(state->directories.back().value,&state->identity)) return error();
     current/=L".uc-update";
     if(!CreateDirectoryW(current.c_str(),nullptr) && GetLastError()!=ERROR_ALREADY_EXISTS) return error();
@@ -94,9 +133,9 @@ std::error_code reject_pending(const std::filesystem::path& root) {
         Handle log(CreateFileW((entry.path()/L"journal.log").c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,
             OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
         if(!log.valid()) return error(ERROR_RECOVERY_FAILURE);
-        FILE_ATTRIBUTE_TAG_INFO tag{};
-        if(!GetFileInformationByHandleEx(log.value,FileAttributeTagInfo,&tag,sizeof(tag)) ||
-            (tag.FileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))) return error(ERROR_RECOVERY_FAILURE);
+        BY_HANDLE_FILE_INFORMATION info{};
+        if(!GetFileInformationByHandle(log.value,&info) ||
+            (info.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))) return error(ERROR_RECOVERY_FAILURE);
         LARGE_INTEGER size{};
         if(!GetFileSizeEx(log.value,&size)) return error();
         LARGE_INTEGER offset{};offset.QuadPart=std::max<LONGLONG>(0,size.QuadPart-128);
@@ -119,8 +158,9 @@ ClientInstallGuard::ClientInstallGuard(std::unique_ptr<ClientLockState> s):state
 ClientInstallGuard::~ClientInstallGuard()=default;
 ClientInstallGuard::ClientInstallGuard(ClientInstallGuard&&) noexcept=default;
 ClientInstallGuard& ClientInstallGuard::operator=(ClientInstallGuard&&) noexcept=default;
-std::variant<ClientSessionGuard,std::error_code> enter_client_session(const std::filesystem::path& root,const std::optional<ResumeTicket>& ticket) {
-    auto opened=open_state(root);if(auto* ec=std::get_if<std::error_code>(&opened)) return *ec;
+std::variant<ClientSessionGuard,std::error_code> enter_client_session(const std::filesystem::path& given,const std::optional<ResumeTicket>& ticket) {
+    const std::filesystem::path root=resolve_root(given);
+    auto opened=open_state(root.wstring());if(auto* ec=std::get_if<std::error_code>(&opened)) return *ec;
     auto state=std::get<std::unique_ptr<ClientLockState>>(std::move(opened));
     if(ticket) {if(!ticket_matches(*ticket,*state)) return error(ERROR_INVALID_TOKEN);}
     else {
@@ -136,8 +176,9 @@ std::variant<ClientSessionGuard,std::error_code> enter_client_session(const std:
     state->gate=Handle{};
     return ClientSessionGuard(std::move(state));
 }
-std::variant<ClientInstallGuard,std::error_code> reserve_client_install(const std::filesystem::path& root) {
-    auto opened=open_state(root);if(auto* ec=std::get_if<std::error_code>(&opened)) return *ec;
+std::variant<ClientInstallGuard,std::error_code> reserve_client_install(const std::filesystem::path& given) {
+    const std::filesystem::path root=resolve_root(given);
+    auto opened=open_state(root.wstring());if(auto* ec=std::get_if<std::error_code>(&opened)) return *ec;
     auto state=std::get<std::unique_ptr<ClientLockState>>(std::move(opened));
     auto gate=lock_file(root/L".uc-update"/L"gate.lock",0);
     if(auto* ec=std::get_if<std::error_code>(&gate)) return *ec;

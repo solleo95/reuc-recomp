@@ -222,6 +222,22 @@ int main() {
         child.reset();CHECK(!installer.reacquire_for_rollback(10ms));
     }
     {auto session=take(uc::enter_client_session(root));}
+    {   // The game folder reached through a junction (a mounted drive folder, a link to another disk) is the folder it points to.
+        fs::create_directories(root/"real");
+        const auto command="mklink /J \""+(root/"link").string()+"\" \""+(root/"real").string()+"\" >nul";
+        CHECK(std::system(("cmd /c \""+command+"\"").c_str())==0);
+        {auto session=take(uc::enter_client_session(root/"link"));}
+        {auto installer=take(uc::reserve_client_install(root/"link"));CHECK(denied(uc::enter_client_session(root/"real")));}
+        fs::remove(root/"link");
+    }
+    {   // A network path (here the machine's own administrative share, when the account may use it) locks the same folder as the local one.
+        const auto text=root.wstring();
+        const fs::path share=L"\\\\localhost\\"+std::wstring(1,text[0])+L"$"+text.substr(2);
+        std::error_code unreachable;
+        if(fs::exists(share,unreachable)) {
+            auto installer=take(uc::reserve_client_install(share));CHECK(denied(uc::enter_client_session(root)));
+        }
+    }
     process_tests(root);
     helper_tests(root/"helpers");
     cleanup_tests(root/"cleanup");
