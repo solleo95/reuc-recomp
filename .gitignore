@@ -4,6 +4,8 @@ dist/
 /.release-build-*/
 /.release-build.lock
 /UC-Windows-*.zip
+/UC-Linux-*.zip
+/dmenu_mods/
 dist-raw/
 generated/
 *.spv
