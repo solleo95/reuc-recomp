@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/njy2CqecyY)
 [![Download](https://img.shields.io/badge/download-latest%20release-brightgreen)](https://github.com/solleo95/reuc-recomp/releases/latest)
 
-[Video](#gameplay-video) · [Features](#features) · [Installation](#installation) · [Steam Deck / Linux](#steam-deck-and-linux) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
+[Video](#gameplay-video) · [Features](#features) · [Installation](#installation) · [Steam Deck / Linux](#steam-deck-and-linux) · [Two players on one PC](#two-players-on-one-computer) · [Multiplayer](#multiplayer-online-co-op) · [Modding](#modding) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md) · [Credits](#credits) · [License](#license)
 
 <img src="assets/launcher/graphite-train.png" alt="The Ecliptic Express train at night" width="100%">
 
@@ -55,6 +55,7 @@ When you report a problem, please say what GPU, driver and Windows version (or S
   - [Differences from Windows](#differences-from-windows)
 - [In-game menu and controls](#in-game-menu-and-controls)
   - [Ultrawide and the HUD](#ultrawide-and-the-hud)
+- [Two players on one computer](#two-players-on-one-computer)
 - [Multiplayer (online co-op)](#multiplayer-online-co-op)
 - [Known issues](#known-issues)
 - [Reporting problems](#reporting-problems)
@@ -83,6 +84,7 @@ When you report a problem, please say what GPU, driver and Windows version (or S
 - **Gamepad settings** are on the **Controllers** page (launcher and in-game menu): choose keyboard and mouse, gamepad or automatic, pick the gamepad model, and press **Gamepad** to change stick roles, dead zones, motion aiming and every button. The **Controls** page stays for keyboard and mouse.
 - **Light guns (Sinden, GUN4IR, Retro Shooter Reaper, Dolphin Bar in a mouse mode).** Set **Pointing device** to **Light gun (absolute pointer)** on the **Controls** page and the crosshair follows where the gun points instead of adding up mouse motion (which makes a gun drift like a trackball). **Aim smoothing** steadies a shaky pointer. **Reload by shooting at the screen edge** turns a shot in a corner or near an edge into a reload, for guns that have no off-screen reload. Setup per device: [Light guns and the Wii Remote](docs/lightguns.md).
 - **Wii Remote.** A Wii Remote paired through Windows Bluetooth, or a Mayflash DolphinBar in mode 4, works directly, with no extra program: the pointer from its infrared camera (you need a sensor bar), the buttons, a Nunchuk, swings for the knife and shakes. Its settings and bindings are in the **Wii Remote** window on the **Controllers** page. Pairing steps and the default layout: [Light guns and the Wii Remote](docs/lightguns.md). Not tried on real hardware yet.
+- **Two players on one computer.** Press a button on another device (a gamepad, a mouse, a light gun or a Wii Remote) while a game menu is open, and the game asks whether Player 1 uses it or a second player joins with it. Any mix of devices works, and the second player has their own controls and crosshair. Step by step: [Two players on one computer](docs/local-coop.md).
 - **On-screen hints and prompts show the controller you play with:** mouse and keyboard icons, Xbox, PlayStation and Nintendo button pictures for a gamepad, or the Wii Remote's own buttons when you used the remote last (and they update when you rebind a key).
 - **Aim reticle you can restyle.** The **Reticle** tab of the in-game menu hides the aim trail, the laser dot, the white marks and the green ammo arc, sets a colour for each player, the size of the laser dot and the length of the trail, and fades your partner's reticle in co-op. In single-player the laser dot sits right under the mouse and the trail follows the real path of your hand.
 - Every action can be rebound in the launcher and has several bindings; mouse buttons, the wheel, gamepad buttons and key combinations are supported. The key that opens the in-game menu can be changed too.
