@@ -1331,7 +1331,9 @@ int run(int argc,wchar_t** argv,ResumeStartup* resume) {
         }
         if(nat) {const auto state=nat->state();network_state+=" router_phase="+std::to_string(int(state.phase))+" external="+state.external+" router_error="+state.error;}
         if(network_state!=last_network_state) {diagnostics<<"[network] "<<network_state<<std::endl;last_network_state=network_state;}
-        if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer))throw std::runtime_error(SDL_GetError());
+        // ImGui lays out in window points; with a pixel density above 1 (Wayland at 125%) the renderer must scale the geometry too, the backend scales only its clip rectangles.
+        const auto& framebuffer_scale=ImGui::GetIO().DisplayFramebufferScale;
+        if(!SDL_SetRenderDrawColor(ui.renderer,18,19,22,255) || !SDL_RenderClear(ui.renderer) || !SDL_SetRenderScale(ui.renderer,framebuffer_scale.x,framebuffer_scale.y))throw std::runtime_error(SDL_GetError());
         const auto draw_start=SDL_GetTicksNS();
         SDL_ClearError();
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(),ui.renderer);
