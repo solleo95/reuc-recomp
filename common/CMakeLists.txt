@@ -16,7 +16,11 @@ if(UNIX)
   target_link_libraries(uc_path_io PUBLIC ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)   # Windows-only: the launcher/updater handshake and Windows command-line quoting
+  add_library(uc_windows_path STATIC windows_path.cpp)   # a folder with its links resolved (junction, mounted drive, network path), the volume root of a path
+  target_include_directories(uc_windows_path PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(uc_windows_path PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   add_library(uc_client_update_lock STATIC client_update_lock.cpp)
+  target_link_libraries(uc_client_update_lock PUBLIC uc_windows_path)
   add_library(uc_windows_args STATIC windows_args.cpp)
   target_include_directories(uc_windows_args PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_include_directories(uc_client_update_lock PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1,5 +1,6 @@
 #include "savefs.h"
 #include "save_rollback.h"
+#include "windows_path.h"
 #include <stdexcept>
 #include <algorithm>
 #include <limits>
@@ -82,7 +83,17 @@ template<class Pins> int move(const fs::path& source,const fs::path& target,bool
 }
 }
 namespace uc {
-SaveFs::SaveFs(fs::path root):root_(fs::absolute(root).lexically_normal()) {}
+namespace {
+// The game folder may sit behind a junction, a link, a drive mounted in a folder or a network path (what lies above the saves folder is the
+// user's choice, as on POSIX): its parent is resolved. The saves folder itself, and anything inside it, stays a link-free real folder.
+fs::path real_root(const fs::path& root) {
+    auto absolute=fs::absolute(root).lexically_normal();
+    if (absolute.filename().empty() && absolute.has_relative_path()) absolute=absolute.parent_path();   // a trailing separator
+    if (absolute.filename().empty()) return resolve_folder(absolute);   // a volume root
+    return fs::path(resolve_folder(absolute.parent_path()))/absolute.filename();
+}
+}
+SaveFs::SaveFs(fs::path root):root_(real_root(root)) {}
 SaveFs::~SaveFs() {
     for (auto& [fd,file]:files_) {
         if ((file.mode&2) && !FlushFileBuffers(file.handle)) std::fprintf(stderr,"[save] flush fd %d failed: %lu\n",fd,GetLastError());
@@ -90,19 +101,25 @@ SaveFs::~SaveFs() {
     }
 }
 int SaveFs::pin(const fs::path& directory,Pins& pins) {
-    fs::path current;
-    for (const auto& part:directory) {
-        current/=part;
-        if (!current.has_root_directory()) continue;
-        if (std::any_of(pins.begin(),pins.end(),[&](const Pin& pinned) { return pinned.path==current; })) continue;
-        HANDLE handle=CreateFileW(current.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    // The volume root ("D:\", "\\server\share\", "\\?\Volume{id}\") is the first folder held, then each folder below it.
+    const auto text=directory.native();
+    const auto root_length=volume_root_length(text);
+    fs::path current(text.substr(0,root_length));
+    std::vector<fs::path> folders{current};
+    for (const auto& part:fs::path(text.substr(root_length))) {
+        if (part.empty()) continue;
+        current/=part; folders.push_back(current);
+    }
+    for (const auto& folder:folders) {
+        if (std::any_of(pins.begin(),pins.end(),[&](const Pin& pinned) { return pinned.path==folder; })) continue;
+        HANDLE handle=CreateFileW(folder.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
         if (handle==INVALID_HANDLE_VALUE) return error(GetLastError());
         std::shared_ptr<void> owner(handle,[](void* value) { CloseHandle(value); });
         BY_HANDLE_FILE_INFORMATION info{};
         if (!GetFileInformationByHandle(handle,&info)) return error(GetLastError());
         if ((info.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) || !(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)) return -102;
         // Deny write/delete sharing until the path operation (or open file) finishes.
-        pins.push_back({current,std::move(owner)});
+        pins.push_back({folder,std::move(owner)});
     }
     return 0;
 }

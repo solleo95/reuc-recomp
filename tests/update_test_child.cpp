@@ -1,4 +1,5 @@
 #include "update_process.h"
+#include "windows_path.h"
 #include <fstream>
 namespace uc::update::detail {
 Status checkpoint(std::string_view name) {
@@ -20,7 +21,8 @@ int wmain(int argc,wchar_t** argv) {
         auto session=uc::enter_client_session(root);
         if(std::holds_alternative<std::error_code>(session)) return 10;
         auto stage=root/".uc-update"/"11111111-1111-4111-8111-111111111111"/"stage";
-        auto manifest=parse_manifest(std::get<std::string>(read_text(stage/"release.json",max_manifest_size)));
+        // The driver itself reads the staged manifest from the real folder (as the launcher does with its resolved root); start_update_helper gets the path as given.
+        auto manifest=parse_manifest(std::get<std::string>(read_text(std::filesystem::path(uc::resolve_folder(stage))/"release.json",max_manifest_size)));
         auto helper=start_update_helper(root,Package{stage,std::get<Manifest>(manifest)},
             std::wstring_view(argv[1])==L"--native-driver"?std::chrono::milliseconds(30000):std::chrono::milliseconds(3000));
         if(failed(helper)) return 11;

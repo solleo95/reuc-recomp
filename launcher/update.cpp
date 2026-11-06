@@ -1,4 +1,5 @@
 #include "update.h"
+#include "windows_path.h"
 #include <objbase.h>
 #include <cstdio>
 // Windows part of UpdateController: the update helper process. The state machine is in update_common.cpp.
@@ -11,7 +12,7 @@ void cleanup(const fs::path& operation) {
 }
 }
 UpdateController::UpdateController(fs::path root,std::unique_ptr<Transport> transport,Helper helper):
-    root_(std::move(root)),transport_(std::move(transport)),helper_(std::move(helper)) {
+    root_(uc::resolve_folder(root)),transport_(std::move(transport)),helper_(std::move(helper)) {   // behind a junction, a mounted drive or a network path: the real folder
     if(!helper_) helper_=[](const fs::path& root,const Package& package){return start_update_helper(root,package);};
 }
 void UpdateController::discard(Value& value) {

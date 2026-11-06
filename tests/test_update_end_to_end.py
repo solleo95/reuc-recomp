@@ -194,6 +194,20 @@ class UpdateTests(unittest.TestCase):
         self.recover()
         self.assertEqual(json.loads((self.root / "release.json").read_text())["version"], "0.0.2")
 
+    def test_success_through_junction(self):
+        # The client folder reached through a junction (a drive mounted in a folder, a link to another disk) updates like the real folder.
+        link = Path(self.temp.name + "-link")
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(self.root)], check=True, stdout=subprocess.DEVNULL)
+        self.addCleanup(os.rmdir, link)   # only the link; it runs before the temporary folder is removed
+        subprocess.run([str(CHILD), "--native-driver"], cwd=link, check=True, timeout=40)
+        helper = OwnedHelper(self.root)
+        self.addCleanup(helper.close)
+        wait_until(lambda: self.terminal("committed") and (self.root / "child-committed").exists())
+        self.wait_fixture_exit("child-committed")
+        self.assertEqual(json.loads((self.root / "release.json").read_text())["version"], "0.0.2")
+        self.assertEqual((self.root / "payload.bin").read_bytes()[:1], b"B")
+        self.preserve()
+
     def test_real_launcher_bootstrap(self):
         for folder in (self.root, self.stage):
             shutil.copy2(LAUNCHER, folder / "uc_launcher.exe")

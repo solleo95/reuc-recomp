@@ -1,5 +1,6 @@
 #include "files.h"
 #include "../common/file_rename.h"
+#include "../common/windows_path.h"
 #include <bcrypt.h>
 #include <winternl.h>
 #include <array>
@@ -36,14 +37,17 @@ Result<ParentLock> lock_parent(const fs::path& root, std::string_view relative, 
     if(failed(checked)) return std::get<Error>(checked);
     std::error_code ec;
     auto absolute=fs::absolute(root,ec).lexically_normal();
-    if(ec || absolute.root_name().wstring().size()!=2)
-        return Error{ErrorCode::unsafe_path,"Expected an absolute local drive path"};
+    if(ec || !absolute.has_root_name())
+        return Error{ErrorCode::unsafe_path,"Expected an absolute drive, volume or network path"};
+    // The volume root is held first: "D:\", "\\server\share\" (a network folder) or "\\?\Volume{id}\" (a drive mounted only in a folder).
+    const auto volume=absolute.native().substr(0,uc::volume_root_length(absolute.native()));
     ParentLock result;
-    auto current=absolute.root_path();
+    auto current=fs::path(volume);
     auto first=directory(current);
     if(failed(first)) return std::get<Error>(first);
     result.directories.push_back(std::get<Handle>(std::move(first)));
-    for(const auto& part:absolute.relative_path()) {
+    for(const auto& part:fs::path(absolute.native().substr(volume.size()))) {
+        if(part.empty()) continue;
         current/=part;
         auto opened=directory(current);
         if(failed(opened)) return std::get<Error>(opened);

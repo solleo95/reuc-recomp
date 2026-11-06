@@ -51,7 +51,7 @@ private:
     // first player's mouse would go dead. So the backend registers only while SDL reads the cursor's position (light gun mode: SDL has no registration then) or while a pointer
     // is captured (then every mouse reaches the game through here and SDL's mouse events are ignored). Otherwise the devices are told apart by SDL's own events (CoopSession::sdl_mouse).
     bool wants_locked() const { return sdl_absolute_ || !captured_.empty(); }
-    bool legacy_off_locked() const { return !captured_.empty() && playing_; }   // the cursor is only taken away while playing: a menu needs it
+    bool legacy_off_locked() const { return !captured_.empty() && playing_; }   // playing_: the window has the pointer. The port's menu needs the cursor; the game's own menus and missions do not (a gun would drag the shared cursor and click for the first player)
     static bool hook(void* self,MSG* message) {
         auto* backend=static_cast<RawInputBackend*>(self);
         if(message->message==WM_INPUT) backend->read_input(HRAWINPUT(message->lParam));

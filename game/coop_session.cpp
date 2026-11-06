@@ -109,7 +109,7 @@ void CoopSession::sdl_mouse(const SDL_Event& event) {
 void CoopSession::tick(const Frame& frame) {
     if(!enabled_) return;
     frame_=frame;
-    if(pointers_) pointers_->hint(frame.pointer_absolute,frame.in_gameplay);
+    if(pointers_) pointers_->hint(frame.pointer_absolute,frame.captured);   // the port's menu is the only place that needs the cursor: the game's own menus read the pointer like a mission does
     if(second_ && second_->kind==DeviceKind::gamepad && gamepad_ && gamepad_->second()!=SDL_JoystickID(second_->id)) {   // its pad was unplugged
         roster_.remove(*second_); leave();
     }

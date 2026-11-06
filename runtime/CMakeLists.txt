@@ -27,6 +27,8 @@ target_sources(uc_runtime PRIVATE hle/game_math.cpp)
 target_link_libraries(uc_runtime PUBLIC uc_gx uc_input uc_gamepad_config uc_wiimote_config PRIVATE uc_public_release uc_path_io)
 if(UNIX)
   target_link_libraries(uc_runtime PUBLIC ${CMAKE_DL_LIBS})   # dladdr in the crash report
+else()
+  target_link_libraries(uc_runtime PRIVATE uc_windows_path)   # savefs_win.cpp: the saves folder behind a junction or a network path
 endif()
 # Real hook implementations for uc.exe (ppc::trap, mmio_*, timebase); tests use tests/mmio_stub.cpp instead.
 add_library(uc_platform STATIC platform.cpp)

@@ -22,9 +22,9 @@ public:
     // True while the backend hands over every pointer device, not only the captured ones (Windows: capturing takes the legacy mouse messages away from everybody): the caller then
     // ignores the mouse events SDL still delivers and feeds the first player's pointer from poll() as well.
     virtual bool all_devices() const { return false; }
-    // Once per loop: whether SDL is reading the pointer as the cursor's position (light gun mode) and whether a game is being played (not a menu, not a pause). Windows needs both:
-    // SDL's own mouse reading (relative mode) must not be replaced by ours unless a pointer is captured, and the legacy mouse messages are only taken away while playing (a menu
-    // needs the cursor).
-    virtual void hint(bool /*sdl_absolute*/,bool /*playing*/) {}
+    // Once per loop: whether SDL is reading the pointer as the cursor's position (light gun mode) and whether the window has the pointer (the port's menu is closed; the game's
+    // own menus count: they read the pointer like a mission does). Windows needs both: SDL's own mouse reading (relative mode) must not be replaced by ours unless a pointer is
+    // captured, and the legacy mouse messages are only taken away while the window has the pointer (the port's menu needs the cursor; otherwise any gun would move it).
+    virtual void hint(bool /*sdl_absolute*/,bool /*pointer_held*/) {}
 };
 }

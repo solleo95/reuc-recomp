@@ -2,6 +2,7 @@
 #include "savefs.h"
 #include "test_pid.h"
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -107,4 +108,44 @@ int main() {
     CHECK(fs.create_file("/link/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));
 #endif
     CHECK(fs.create_dir("/title/слот")==-101);   // the guest's own names are ASCII-only (resolve() rejects other bytes)
+#ifdef _WIN32
+    {   // The game folder reached through a link (a drive mounted in a folder, a link to another disk) or a network path: the saves live in the real folder.
+        const auto holder=std::filesystem::temp_directory_path()/("uc-save-link-"+suffix);
+        std::filesystem::create_directories(holder/"real");
+        const auto command="mklink /J \""+(holder/"link").string()+"\" \""+(holder/"real").string()+"\" >nul";
+        CHECK(std::system(("cmd /c \""+command+"\"").c_str())==0);
+        {
+            uc::SaveFs linked(holder/"link"/"saves");
+            CHECK(linked.initialize()==0);
+            CHECK(linked.create_dir("/title")==0);
+            CHECK(linked.create_file("/title/save.bin")==0);
+            const int fd=linked.open("/title/save.bin",3); CHECK(fd>=0);
+            CHECK(linked.write(fd,original)==4 && linked.close(fd)==0);
+            CHECK(std::filesystem::file_size(holder/"real"/"saves"/"title"/"save.bin")==4);
+            const auto inner=holder/"real"/"saves"/"inner";   // a link inside the saves folder stays refused
+            CHECK(std::system(("cmd /c \"mklink /J \""+inner.string()+"\" \""+outside.string()+"\" >nul\"").c_str())==0);
+            CHECK(linked.create_file("/inner/escape.bin")==-102 && !std::filesystem::exists(outside/"escape.bin"));
+            std::filesystem::remove(inner);
+        }
+        {   // The saves folder itself as a link stays refused: only what lies above it is the user's choice.
+            const auto command_root="mklink /J \""+(holder/"rootlink").string()+"\" \""+(holder/"real").string()+"\" >nul";
+            CHECK(std::system(("cmd /c \""+command_root+"\"").c_str())==0);
+            uc::SaveFs link_root(holder/"rootlink");
+            CHECK(link_root.initialize()==-102);
+            CHECK(link_root.create_file("/escape.bin")==-102 && !std::filesystem::exists(holder/"real"/"escape.bin"));
+            std::filesystem::remove(holder/"rootlink");
+        }
+        const auto text=(holder/"real"/"saves").wstring();   // the machine's own administrative share, when the account may use it
+        const std::filesystem::path share=L"\\\\localhost\\"+std::wstring(1,text[0])+L"$"+text.substr(2);
+        std::error_code unreachable;
+        if(std::filesystem::exists(share,unreachable)) {
+            uc::SaveFs network(share);
+            CHECK(network.initialize()==0);
+            CHECK(network.create_dir("/title")==-105 || network.create_dir("/title")==0);
+            bool directory=false; CHECK(network.attributes("/title",directory)==0 && directory);
+        }
+        std::filesystem::remove(holder/"link");
+        std::error_code ec; std::filesystem::remove_all(holder,ec);
+    }
+#endif
 }

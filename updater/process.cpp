@@ -1,5 +1,6 @@
 #include "update_process.h"
 #include "windows_args.h"
+#include "windows_path.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -258,7 +259,10 @@ Status start_and_confirm(const fs::path& install,const fs::path& operation,uc::C
     }
     return status;
 }
-Result<HelperProcess> start_update_helper(const fs::path& install,const Package& package,std::chrono::milliseconds timeout) {
+Result<HelperProcess> start_update_helper(const fs::path& given_install,const Package& given_package,std::chrono::milliseconds timeout) {
+    // Behind a junction, a mounted drive or a network path the folders below are the real ones, so no link lies above what is held.
+    const fs::path install=uc::resolve_folder(given_install);
+    const Package package{uc::resolve_folder(given_package.root),given_package.manifest};
     auto pending=pending_install(install,package.root.parent_path());if(failed(pending)) return std::get<Error>(pending);
     if(std::get<bool>(pending)) return Error{ErrorCode::recovery_required,"An unfinished update requires recovery"};
     auto plan=plan_install(install,package);if(failed(plan)) {defer_cleanup(package.root.parent_path());return std::get<Error>(plan);}
@@ -266,7 +270,8 @@ Result<HelperProcess> start_update_helper(const fs::path& install,const Package&
     if(failed(copied)) {defer_cleanup(package.root.parent_path());return std::get<Error>(copied);}
     return start_helper(package.root.parent_path(),false,timeout);
 }
-Status run_update_helper(const fs::path& operation,HANDLE parent,HANDLE ready,bool recover,std::chrono::milliseconds timeout) {
+Status run_update_helper(const fs::path& given_operation,HANDLE parent,HANDLE ready,bool recover,std::chrono::milliseconds timeout) {
+    const fs::path operation=uc::resolve_folder(given_operation);   // see start_update_helper
     const auto install=operation.parent_path().parent_path();
     auto reserved=uc::reserve_client_install(install);
     if(auto* ec=std::get_if<std::error_code>(&reserved)) return lock_error(*ec);
@@ -333,7 +338,8 @@ Status run_update_helper(const fs::path& operation,HANDLE parent,HANDLE ready,bo
     auto restarted=restart_launcher(install);if(failed(restarted)) return restarted;
     return status;
 }
-Result<bool> resume_pending_update(const fs::path& install) {
+Result<bool> resume_pending_update(const fs::path& given) {
+    const fs::path install=uc::resolve_folder(given);   // behind a junction, a mounted drive or a network path the update folders are the real ones
     if(!fs::exists(install/".uc-update")) return false;
     auto reserved=uc::reserve_client_install(install);
     if(auto* ec=std::get_if<std::error_code>(&reserved)) return lock_error(*ec);

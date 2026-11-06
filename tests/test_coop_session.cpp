@@ -16,7 +16,7 @@ struct FakePointers : PointerBackend {
     void poll(std::vector<PointerEvent>& out,std::vector<uint64_t>& removed) override { out.insert(out.end(),pending.begin(),pending.end()); removed.insert(removed.end(),gone.begin(),gone.end()); pending.clear(); gone.clear(); }
     bool capture(uint64_t device,bool on) override { captures.emplace_back(device,on); if(on) held.insert(device); else held.erase(device); return true; }
     std::string status() const override { return problem; }
-    bool all_devices() const override { return windows_like && !held.empty(); }
+    bool all_devices() const override { return windows_like && !held.empty() && last_playing; }   // like RawInputBackend: the legacy mouse messages go while the window has the pointer
     bool last_absolute=false,last_playing=false; int hints=0;
     void hint(bool absolute,bool playing) override { last_absolute=absolute; last_playing=playing; ++hints; }
 };
@@ -246,6 +246,16 @@ static void when_the_backend_hands_over_every_mouse_player_one_comes_from_it_too
     motion.common.timestamp=10000000000ull;                                     // 10 s later, long after the join click's copies
     CHECK(!rig.session->swallows_mouse(motion));                               // SDL's mouse is back
 }
+static void a_second_pointer_does_not_move_the_cursor_of_player_one_in_the_games_menus() {   // two light guns: both are absolute mice to Windows, one shared cursor
+    Rig rig; rig.pointers.windows_like=true;
+    rig.click(4); rig.click(5); rig.session->answer_second(); CHECK(rig.joined());
+    rig.menu(); rig.pump();                                                    // a menu of the game, the port's menu closed (the window has the pointer)
+    SDL_Event motion{}; motion.type=SDL_EVENT_MOUSE_MOTION;
+    CHECK(rig.pointers.all_devices() && rig.session->swallows_mouse(motion));   // SDL's cursor messages are ignored here too
+    rig.frame.captured=false; rig.pump();                                      // the port's menu opens: it needs the cursor
+    motion.common.timestamp=10000000000ull;                                     // long after the join click's copies
+    CHECK(!rig.pointers.all_devices() && !rig.session->swallows_mouse(motion));
+}
 // The light gun rule: both guns' positions go through the same code as a single player's gun: exactly (2*position-1)*edge, from the middle of the screen to its edge.
 static void two_absolute_guns_do_not_disturb_each_other_and_hit_what_they_aim_at() {
     Rig rig; rig.pointers.windows_like=true;
@@ -263,7 +273,9 @@ static void the_backend_is_told_what_the_game_is_doing() {
     Rig rig; rig.frame.pointer_absolute=true; rig.game(); rig.pump();
     CHECK(rig.pointers.hints>0 && rig.pointers.last_absolute && rig.pointers.last_playing);
     rig.frame.pointer_absolute=false; rig.menu(); rig.pump();
-    CHECK(!rig.pointers.last_absolute && !rig.pointers.last_playing);
+    CHECK(!rig.pointers.last_absolute && rig.pointers.last_playing);          // a menu of the game: the window still has the pointer
+    rig.frame.captured=false; rig.pump();
+    CHECK(!rig.pointers.last_playing);                                         // the port's menu is open
 }
 static void the_second_reader_waits_until_the_first_has_a_remote() {   // two readers racing for one remote could leave the first player's menu and bindings window without it
     Opener one,two; two.remotes.push_back(std::make_shared<FakeRemote>()); two.remotes[0]->name="remote-2";
@@ -320,6 +332,6 @@ int main() {
     disconnecting_in_a_game_menu_makes_it_a_one_player_game_again();
     leaving_keeps_the_second_inputs_focus_as_the_menu_and_pause_set_it(); a_pointer_that_goes_away_releases_and_frees_the_place();
     a_device_that_goes_away_while_it_is_asked_about_withdraws_the_question(); a_disabled_session_never_asks();
-    when_the_backend_hands_over_every_mouse_player_one_comes_from_it_too(); two_absolute_guns_do_not_disturb_each_other_and_hit_what_they_aim_at();
+    when_the_backend_hands_over_every_mouse_player_one_comes_from_it_too(); a_second_pointer_does_not_move_the_cursor_of_player_one_in_the_games_menus(); two_absolute_guns_do_not_disturb_each_other_and_hit_what_they_aim_at();
     the_backend_is_told_what_the_game_is_doing(); the_second_reader_waits_until_the_first_has_a_remote(); a_second_remote_asks_and_lights_the_second_led_when_it_joins();
 }

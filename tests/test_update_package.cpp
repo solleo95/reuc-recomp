@@ -111,6 +111,16 @@ int wmain(int argc,wchar_t** argv) {
     auto zip=temp.root/"good.zip"; auto good_bytes=archive(manifest()); write(zip,good_bytes);
     Release rel{{0,0,1},{},{},ok(sha256_file(zip)),good_bytes.size()};
     CHECK(failed(prepare_package(zip,rel,link/"stage")));
+    {   // An installation on a network folder (here the machine's own administrative share, when the account may use it) is held like a local one.
+        const auto text=temp.root.wstring();
+        const fs::path share=L"\\\\localhost\\"+std::wstring(1,text[0])+L"$"+text.substr(2);
+        std::error_code unreachable;
+        if(fs::exists(share,unreachable)) {
+            auto guard=ok(lock_parent(share/"install","network/file.bin",true));
+            CHECK(fs::is_directory(temp.root/"install"/"network"));
+            CHECK(!failed(validate_target_path(share/"install","data/file.bin")));
+        }
+    }
     // Remove only the link, never its target.
     CHECK(RemoveDirectoryW(link.c_str()));
     std::puts("update package: integrity, unsafe archives and reparse boundaries passed");
