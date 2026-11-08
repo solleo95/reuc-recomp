@@ -215,6 +215,17 @@ static void a_pressed_button_is_pending_until_update_hands_it_on() {
     CHECK(rig.until([&]{ return rig.calls.buttons.size()>=2; }));
     CHECK(!rig.input->pending_press());
 }
+static void a_press_that_arrives_after_the_hosts_look_is_not_handed_on_before_the_host_has_seen_it() {   // the reader thread may publish a press between the host's check and its update()
+    Rig rig; CHECK(wait_for([&]{ return rig.connected(); }));
+    rig.input->collect();                                                   // the host looks at this moment: nothing pending
+    CHECK(!rig.input->pending_press());
+    rig.remote->push(report(0x00,0x08));
+    CHECK(wait_for([&]{ return rig.input->pending_press(); }));              // the press arrives after the look
+    rig.update();
+    CHECK(rig.calls.buttons.empty() && rig.input->pending_press());           // it is not handed to whatever target the host chose before it saw the press
+    rig.input->collect(); rig.update();
+    CHECK(rig.calls.buttons.size()==1 && !rig.input->pending_press());
+}
 static void the_device_id_is_the_transports_and_goes_with_the_link() {
     Rig rig; CHECK(rig.input->device_id().empty());
     CHECK(wait_for([&]{ return rig.connected(); }));
@@ -269,6 +280,6 @@ int main() {
     the_capture_sink_hears_buttons_even_when_inactive();
     the_motor_follows_rumble_and_survives_later_reports();
     a_remote_found_while_rumbling_starts_with_the_motor_on();
-    a_pressed_button_is_pending_until_update_hands_it_on(); the_device_id_is_the_transports_and_goes_with_the_link(); the_player_led_follows_set_player(); release_lets_go_of_what_the_target_holds();
+    a_pressed_button_is_pending_until_update_hands_it_on(); a_press_that_arrives_after_the_hosts_look_is_not_handed_on_before_the_host_has_seen_it(); the_device_id_is_the_transports_and_goes_with_the_link(); the_player_led_follows_set_player(); release_lets_go_of_what_the_target_holds();
     the_claiming_enumeration_survives_whatever_is_plugged_in();
 }

@@ -25,7 +25,7 @@ void WiimoteInput::set_link(bool connected,const std::string& error,const std::s
     std::lock_guard lock(mutex_);
     if(connected!=connected_) ++changes_;
     connected_=connected; error_=error; id_=connected ? id : std::string{};
-    if(!connected) { events_.clear(); state_=WiiState{}; }
+    if(!connected) { events_.clear(); held_.clear(); state_=WiiState{}; }
 }
 bool WiimoteInput::send(WiiTransport& link,std::span<const uint8_t> report) {
     std::vector<uint8_t> copy(report.begin(),report.end());
@@ -130,7 +130,13 @@ WiimoteStatus WiimoteInput::status() const {
 }
 bool WiimoteInput::pending_press() const {
     std::lock_guard lock(mutex_);
-    return std::any_of(events_.begin(),events_.end(),[](const Event& event) { return event.button && event.down; });
+    const auto press=[](const Event& event) { return event.button && event.down; };
+    return std::any_of(held_.begin(),held_.end(),press) || std::any_of(events_.begin(),events_.end(),press);
+}
+void WiimoteInput::collect() {
+    std::lock_guard lock(mutex_);
+    if(collected_) return;
+    held_.insert(held_.end(),events_.begin(),events_.end()); events_.clear(); collected_=true;
 }
 std::string WiimoteInput::device_id() const {
     std::lock_guard lock(mutex_);
@@ -149,7 +155,8 @@ void WiimoteInput::update(WiimoteTarget* target,bool active,const WiimoteSetting
     std::deque<Event> events; WiiState state; bool connected; uint64_t reports; std::function<void(PhysicalInput,bool)> sink;
     {
         std::lock_guard lock(mutex_);
-        events.swap(events_); state=state_; connected=connected_; reports=reports_; sink=sink_;
+        if(!collected_) { held_.insert(held_.end(),events_.begin(),events_.end()); events_.clear(); }
+        collected_=false; events.swap(held_); state=state_; connected=connected_; reports=reports_; sink=sink_;
     }
     if(sink) for(const auto& event:events) if(event.button) sink({PhysicalKind::wii_button,event.code},event.down);
     for(const auto& event:events) if(event.button && event.down) ++activity_;

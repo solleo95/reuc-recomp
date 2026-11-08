@@ -28,6 +28,9 @@ public:
     WiimoteStatus status() const;
     // Local two-player play. The host loop asks which remote pressed something before it decides whose target the remote feeds (the join press itself reaches that target).
     bool pending_press() const;               // a button press is queued that update() has not handed on yet (any thread)
+    // Once per loop before pending_press(): takes what has arrived so far. The next update() hands on only that, so a press the reader thread publishes after the host looked is
+    // seen by pending_press() before any target gets it. Without a collect() update() takes everything. Main thread.
+    void collect();
     std::string device_id() const;            // the connected remote's WiiTransport::id(); empty without a connection
     void set_player(unsigned player);         // 0 or 1: the remote lights that player's LED (the set-up lights LED 1); any thread
     void release(WiimoteTarget&);             // lets go of what `target` holds of this remote (called before the remote's target changes); main thread
@@ -45,7 +48,8 @@ private:
     bool send(WiiTransport&,std::span<const uint8_t> report);   // write() with the motor bit of the report set while the motor is wanted
     Opener opener_;
     mutable std::mutex mutex_;
-    std::deque<Event> events_;
+    std::deque<Event> events_,held_;   // held_: collect()ed, waiting for update()
+    bool collected_=false;
     WiiState state_;
     uint64_t reports_=0;
     bool connected_=false;

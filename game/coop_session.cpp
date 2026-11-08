@@ -137,6 +137,7 @@ void CoopSession::update_remotes(bool active,const WiimoteSettings& settings) {
         if(i==1 && remotes_[0] && remotes_[0]->device_id().empty() && remote->device_id().empty()) reader_settings.enabled=false;   // the second reader looks for a remote only once the first has one: two readers racing for one remote could leave the first player's menu and bindings window without it
         if(enabled_) {
             const bool connected=!remote->device_id().empty();
+            remote->collect();   // update() below hands on only what was seen here: a press published in between waits for the next loop
             if(connected && remote->pending_press()) pressed(remote_id(i));
             if(!connected && second_ && second_->kind==DeviceKind::wiimote && second_remote_==i) { roster_.remove(*second_); leave(); }   // the second player's remote went away
         }
