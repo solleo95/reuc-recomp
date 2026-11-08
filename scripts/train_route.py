@@ -86,7 +86,7 @@ def main():
     if not 1 <= args.width <= 3840 or not 1 <= args.height <= 2160:
         parser.error("output dimensions must be positive and at most 3840x2160")
     root = pathlib.Path(__file__).resolve().parent.parent
-    exe = (args.exe or root / "dist" / "uc.exe").resolve()
+    exe = (args.exe or root / "dist" / "uc_avx2.exe").resolve()   # dist/uc.exe only picks a program by the CPU
     folder = root / "build" / "autotest" / str(time.time_ns())
     folder.mkdir(parents=True)
     import localenv   # imported here because tests load this file by path

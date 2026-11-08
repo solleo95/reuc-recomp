@@ -100,12 +100,14 @@ class UpdateTests(unittest.TestCase):
         for folder in (self.root, self.stage):
             folder.mkdir(parents=True, exist_ok=True)
             shutil.copy2(CHILD, folder / "uc_launcher.exe")
-            (folder / "uc.exe").write_bytes(b"NOT A GAME EXECUTABLE")
+            for game in ("uc.exe", "uc_avx2.exe", "uc_compat.exe"):
+                (folder / game).write_bytes(b"NOT A GAME EXECUTABLE")
             for source, name in zip(sources, self.helpers):
                 shutil.copy2(source, folder / name)
             (folder / "data/shaders").mkdir(parents=True)
             (folder / "data/shaders/test.spv").write_bytes(b"shader")
             (folder / "data/uc.map").write_bytes(b"map")
+            (folder / "data/uc_compat.map").write_bytes(b"map")
             (folder / "assets/launcher").mkdir(parents=True)
             for artwork in ("graphite-train.png", "graphite-brand.png"):
                 (folder / "assets/launcher" / artwork).write_bytes(b"fixture")

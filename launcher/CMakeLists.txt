@@ -156,7 +156,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
 endif()
 add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:uc_launcher>)
-install(TARGETS uc_launcher RUNTIME DESTINATION .)
+install(PROGRAMS ${UC_COMPAT_DIR}/launcher/uc_launcher.exe DESTINATION .)   # the x86-64-v2 build: the launcher starts on every CPU (UC_ARCH in the root CMakeLists.txt)
 add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png

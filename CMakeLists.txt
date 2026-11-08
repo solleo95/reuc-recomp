@@ -23,8 +23,13 @@ if(UC_CCACHE)
     message(STATUS "ccache: ${UC_CCACHE_PROGRAM}")
   endif()
 endif()
+# CPU level of the Windows build. The release holds two game programs: uc_avx2.exe (x86-64-v3: AVX2, FMA, BMI) and uc_compat.exe (x86-64-v2: SSE4.2, Nehalem and newer); uc.exe
+# (game/cpu_dispatch.cpp) starts the one this CPU runs. build.bat builds the second one in build-compat (-DUC_ARCH=x86-64-v2) together with the launcher and the updater,
+# which have to start on every CPU. -ffp-contract=off: only the v3 build could fuse a*b+c into an FMA, and the two builds must compute the same floats (netplay hashes the state).
+set(UC_ARCH "x86-64-v3" CACHE STRING "CPU level the Windows code is compiled for (clang -march)")
+set(UC_COMPAT_DIR "${CMAKE_SOURCE_DIR}/build-compat" CACHE PATH "build folder of the x86-64-v2 programs that the release install takes (see UC_ARCH)")
 if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  add_compile_options(/clang:-march=x86-64-v3)
+  add_compile_options(/clang:-march=${UC_ARCH} /clang:-ffp-contract=off)
 endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   add_compile_options(-Wno-deprecated-declarations)   # "unsafe CRT function" (getenv, fopen), winsock and std::filesystem::u8path notes in the tools and third-party code are noise

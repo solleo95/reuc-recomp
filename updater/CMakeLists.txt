@@ -22,4 +22,4 @@ add_executable(uc_updater WIN32 main.cpp app.manifest ${CMAKE_SOURCE_DIR}/assets
 target_link_libraries(uc_updater PRIVATE uc_update_process uc_launcher_locale shell32 user32 gdi32 dwmapi)   # uc_launcher_locale: the window's texts in the launcher's language
 target_compile_definitions(uc_updater PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_options(uc_updater PRIVATE /DEPENDENTLOADFLAG:0xA00)
-install(TARGETS uc_updater RUNTIME DESTINATION .)
+install(PROGRAMS ${UC_COMPAT_DIR}/updater/uc_updater.exe DESTINATION .)   # the x86-64-v2 build: the updater starts on every CPU (UC_ARCH in the root CMakeLists.txt)

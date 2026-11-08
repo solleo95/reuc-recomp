@@ -12,38 +12,44 @@ set "NO_INSTALL="
 if /I "%~1"=="--no-install" set "NO_INSTALL=1"
 
 rem Messages that print user paths live behind labels: a ")" in a path would break a ( ) block.
-echo [1/6] Checking game files
+echo [1/7] Checking game files
 if not exist "%UC_INSTALL_DIR%\" goto :no_install_dir
 if not exist "%GAME_DOL%" goto :no_dol
 call "%ROOT%\scripts\env.bat" || exit /b 1
 if not exist "%BUILD%" mkdir "%BUILD%"
 
-echo [2/6] Configure and build the translator
+echo [2/7] Configure and build the translator
 cmake -S "%ROOT%" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON > "%BUILD%\configure.log" 2>&1
 if errorlevel 1 goto :build_failed
 cmake --build "%BUILD%" --target translator > "%BUILD%\translator_build.log" 2>&1
 if errorlevel 1 goto :build_failed
 
-echo [3/6] Translating the game (cached by DOL + translator + uc.cfg + hle.cfg hash)
+echo [3/7] Translating the game (cached by DOL + translator + uc.cfg + hle.cfg hash)
 call "%ROOT%\scripts\translate.bat" || goto :translate_failed
 
-echo [4/6] Build everything and run tests
+echo [4/7] Build everything and run tests
 call "%ROOT%\scripts\dev.bat" || goto :build_failed
 
-echo [5/6] Staging dist
+echo [5/7] Building the programs for CPUs without AVX2 (x86-64-v2): game, launcher, updater
+cmake -S "%ROOT%" -B "%ROOT%\build-compat" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DUC_THINLTO=ON -DUC_ARCH=x86-64-v2 --log-level=WARNING > "%BUILD%\compat_configure.log" 2>&1
+if errorlevel 1 goto :build_failed
+cmake --build "%ROOT%\build-compat" --target uc uc_launcher uc_updater > "%BUILD%\compat_build.log" 2>&1
+if errorlevel 1 goto :build_failed
+
+echo [6/7] Staging dist
 if not exist "%DIST%" mkdir "%DIST%"
 if not exist "%DIST%" exit /b 1
 cmake --install "%BUILD%" --prefix "%DIST%" > "%BUILD%\install.log" 2>&1 || goto :stage_failed
 
 if defined NO_INSTALL goto :skip_copy
-echo [6/6] Copying dist to %UC_INSTALL_DIR%
+echo [7/7] Copying dist to %UC_INSTALL_DIR%
 robocopy "%DIST%" "%UC_INSTALL_DIR%" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if errorlevel 8 goto :copy_failed
 echo Done.
 exit /b 0
 
 :skip_copy
-echo [6/6] Skipping copy (--no-install)
+echo [7/7] Skipping copy (--no-install)
 exit /b 0
 
 :no_install_var

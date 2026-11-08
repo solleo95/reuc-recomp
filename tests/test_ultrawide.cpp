@@ -1,5 +1,6 @@
 #include "check.h"
 #include "ultrawide.h"
+#include <algorithm>
 #include <cmath>
 // Native ultrawide: the game builds the wide 3D picture itself; the packets' orthographic draws are narrowed by 16:9 / aspect (aspect / 16:9 for y): about the screen
 // centre in a menu, about their cluster's centre in a frame with a 3D scene (a player's block with a health bar excepted); the game's scratch passes, the draws
@@ -28,7 +29,7 @@ static gx::DrawPacket scene_draw() {
     gx::State state; draw.state = state;
     return draw;
 }
-static bool near(float a, float b) { return std::abs(a - b) < 1e-5f; }
+static bool near(float a, float b) { return std::abs(a - b) < 1e-5f * std::max(1.f, std::abs(b)); }   // relative: the builds do not fuse a*b+c, so a result near 370 may differ in its last bit from the expected one
 static std::array<float,2> x_range(const gx::DrawPacket& draw) { return *gx::ortho_range(draw, 0); }
 static std::array<float,2> y_range(const gx::DrawPacket& draw) { return *gx::ortho_range(draw, 1); }
 static float centre(std::array<float,2> range) { return (range[0] + range[1]) / 2; }

@@ -1,4 +1,4 @@
-"""python scripts/det_check.py [--exe dist/uc.exe] [--frames 600] [--runs 2]
+"""python scripts/det_check.py [--exe dist/uc_avx2.exe] [--frames 600] [--runs 2]
 
 Runs the game N times from launch in deterministic mode (--det-out: virtual clock, events from other threads delivered only at idle) and compares
 the per-retrace hashes of guest memory. Prints the first retrace where two runs differ and the guest address ranges (64 KiB chunks) that differ there.
@@ -69,7 +69,7 @@ def run(exe, out, frames, saves, timeout, extra=()):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exe", default=str(ROOT / "dist" / "uc.exe"))
+    parser.add_argument("--exe", default=str(ROOT / "dist" / "uc_avx2.exe"))   # dist/uc.exe only picks a program by the CPU
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--timeout", type=int, default=180)

@@ -6,4 +6,5 @@ add_library(hello_native MODULE src/hello_native.cpp
   ${hello_imgui_dir}/imgui.cpp ${hello_imgui_dir}/imgui_draw.cpp ${hello_imgui_dir}/imgui_tables.cpp ${hello_imgui_dir}/imgui_widgets.cpp)
 target_include_directories(hello_native PRIVATE ${hello_imgui_dir} ${CMAKE_SOURCE_DIR}/modding)
 set_target_properties(hello_native PROPERTIES PREFIX "" OUTPUT_NAME hello_native)
+target_compile_options(hello_native PRIVATE /clang:-march=x86-64-v2)   # loaded by both game programs, the compatible one included
 install(TARGETS hello_native RUNTIME DESTINATION mods-examples/hello_native/native LIBRARY DESTINATION mods-examples/hello_native/native)

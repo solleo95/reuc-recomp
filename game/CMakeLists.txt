@@ -147,10 +147,15 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
     # Linker map lets crash reports (exe offsets) be resolved to runtime function names offline.
     target_link_options(uc PRIVATE "/MAP:$<TARGET_FILE_DIR:uc>/uc.map")
     install(FILES $<TARGET_FILE_DIR:uc>/uc.map DESTINATION data)
+    # The two game programs (uc.exe is the dispatcher below): the compatible one comes from the x86-64-v2 build folder, see UC_ARCH in the root CMakeLists.txt.
+    install(PROGRAMS $<TARGET_FILE:uc> DESTINATION . RENAME uc_avx2.exe)
+    install(PROGRAMS ${UC_COMPAT_DIR}/game/uc.exe DESTINATION . RENAME uc_compat.exe)
+    install(FILES ${UC_COMPAT_DIR}/game/uc.map DESTINATION data RENAME uc_compat.map)
+  else()
+    install(TARGETS uc RUNTIME DESTINATION .)
   endif()
-  install(TARGETS uc RUNTIME DESTINATION .)
   if(WIN32)   # the Deck uses its own SDL3 (3.4, with Wayland): the one built here has no Wayland backend
-    install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION .)
+    install(FILES ${UC_COMPAT_DIR}/game/SDL3.dll DESTINATION .)   # SDL is compiled with the project's flags: the x86-64-v2 build runs under the launcher on every CPU
   endif()
   install(FILES ${UC_SHADER_FILES} DESTINATION data/shaders)
   install(FILES ${UC_UPSCALER_RUNTIME} DESTINATION .)
@@ -161,4 +166,10 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   install(FILES ${CMAKE_SOURCE_DIR}/project/identified_sdk.txt ${CMAKE_SOURCE_DIR}/project/symbols.txt ${CMAKE_SOURCE_DIR}/project/gx_symbols.txt ${CMAKE_SOURCE_DIR}/project/pipeline_keys.seed DESTINATION data)
 else()
   message(STATUS "active generation manifest not found: skipping uc_game (build.bat runs the translator first)")
+endif()
+if(WIN32)
+  # uc.exe of the release: picks uc_avx2.exe or uc_compat.exe by the CPU. Plain x86-64 and no libraries beyond the Windows API, whatever UC_ARCH is.
+  add_executable(uc_dispatch cpu_dispatch.cpp ${CMAKE_SOURCE_DIR}/assets/app.rc)
+  target_compile_options(uc_dispatch PRIVATE /clang:-march=x86-64)
+  install(PROGRAMS $<TARGET_FILE:uc_dispatch> DESTINATION . RENAME uc.exe)
 endif()

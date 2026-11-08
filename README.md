@@ -142,7 +142,7 @@ The port has been tested only on the author's PC (NVIDIA GeForce RTX 4080, Windo
 |                                      |                                                                                               |
 | ------------------------------------ | --------------------------------------------------------------------------------------------- |
 | **OS**                               | Windows 10 / 11, 64-bit                                                                       |
-| **CPU**                              | x86-64 with **AVX2** (Intel Haswell / AMD Excavator or newer)                                 |
+| **CPU**                              | x86-64 with **SSE4.2** (Intel Nehalem or newer). With **AVX2** (Haswell / Excavator or newer) the faster build starts by itself |
 | **GPU**                              | A GPU with **Vulkan 1.3** support and an up-to-date driver                                    |
 | **DLSS and DLSS Frame Generation**   | NVIDIA GeForce RTX (frame generation 2x on RTX 40, up to 6x on RTX 50)                        |
 | **FSR 3.1 and FSR Frame Generation** | Any GPU with Vulkan 1.3 — **RTX is not required**                                             |

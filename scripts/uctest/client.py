@@ -63,6 +63,8 @@ class Game:
 
     def __init__(self, *, exe="dist/uc.exe", run_dir=None, speed=1, skip_intro=True, seconds=600, transport_factory=None, launch=True, god=False, skip_tutorials=False, saves=None, game_args=(), mods=False, mod_settings=None):
         self.exe = (ROOT / exe).resolve()
+        if self.exe.name == "uc.exe" and self.exe.with_name("uc_avx2.exe").exists():   # dist/uc.exe only picks a program by the CPU; the run drives the game itself (its pid names the logs)
+            self.exe = self.exe.with_name("uc_avx2.exe")
         self.run_dir = Path(run_dir) if run_dir else ROOT / "build" / "autotest" / str(time.time_ns())
         self.name = re.sub(r"[^A-Za-z0-9_-]", "_", self.run_dir.name)[-32:] or "run"
         self.speed, self.skip_intro, self.seconds, self.launch, self.god = speed, skip_intro, seconds, launch, god
