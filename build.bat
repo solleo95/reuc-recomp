@@ -1,4 +1,10 @@
 @echo off
+rem The build and the tests use every core: run the whole script (and everything it starts) at idle priority so it never slows a game being played. UC_LOW_PRIORITY=0 turns it off.
+if not defined UC_LOW_PRIORITY (
+  set "UC_LOW_PRIORITY=1"
+  start "" /b /low /wait cmd /c ""%~f0" %*"
+  exit /b
+)
 setlocal EnableExtensions
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"

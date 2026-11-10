@@ -24,7 +24,9 @@ public:
         return const_cast<T&>(*block_);   // sole owner of a block that was created non-const above
     }
 private:
-    static const std::shared_ptr<const T>& default_block() { static const std::shared_ptr<const T> block = std::make_shared<const T>(); return block; }
+    // Points at one static value with no control block (an aliasing pointer with an empty owner): copying and destroying it touches no reference count, so the
+    // default blocks of every draw do not bounce one cache line between the guest thread and the renderer threads. use_count() is 0, which edit() copies.
+    static const std::shared_ptr<const T>& default_block() { static const T value; static const std::shared_ptr<const T> block(std::shared_ptr<void>(), &value); return block; }
     std::shared_ptr<const T> block_;
 };
 // Returns `cache` holding a block with the same bytes as `value`: the previous block when nothing changed, a new one otherwise. Bitwise, so -0.0 and

@@ -148,7 +148,8 @@ def profile(args):
     import os
     demo, meta = paths(args.name)
     window = json.loads(meta.read_text())
-    exe = Path(args.exe).resolve()
+    exe, *extra = args.exe.split("|")   # "build-prof/game/uc.exe|--game|<folder>": per-build game arguments, as in bench
+    exe = Path(exe).resolve()
     run_dir = ROOT / "build" / "autotest" / f"demo-profile-{int(time.time() * 1000)}"
     run_dir.mkdir(parents=True)
     from .client import SAVE_SOURCE
@@ -158,7 +159,7 @@ def profile(args):
     samples = exe.parent / "cpu-samples.txt"
     samples.unlink(missing_ok=True)
     with open(run_dir / "run.log", "wb") as log:
-        subprocess.run(replay_args(exe, demo, window["to"], run_dir / "saves"), stdout=log, stderr=log, cwd=exe.parent, env=env, timeout=1800, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        subprocess.run(replay_args(exe, demo, window["to"], run_dir / "saves", extra), stdout=log, stderr=log, cwd=exe.parent, env=env, timeout=1800, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     kept = run_dir / "cpu-samples.txt"
     if samples.exists():
         shutil.copy(samples, kept)

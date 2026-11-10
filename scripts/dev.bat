@@ -1,4 +1,10 @@
 @echo off
+rem Build and tests at idle priority (see build.bat). UC_LOW_PRIORITY=0 turns it off.
+if not defined UC_LOW_PRIORITY (
+  set "UC_LOW_PRIORITY=1"
+  start "" /b /low /wait cmd /c ""%~f0" %*"
+  exit /b
+)
 setlocal
 set "ROOT=%~dp0.."
 call "%~dp0env.bat" || exit /b 1

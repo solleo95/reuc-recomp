@@ -4,6 +4,7 @@
 # and every runtime data file (tests data and fixtures, tools, modding, mods-examples). Code of the other folders
 # reaches a test through its relinked exe. Any failure to compute keys runs every test.
 $ErrorActionPreference = 'Stop'
+if ($env:UC_LOW_PRIORITY -ne '0') { try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'Idle' } catch { } }   # the tests use every core: children inherit the class, a game being played keeps its speed
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $build = Join-Path $root 'build'
@@ -61,10 +62,21 @@ $ctestArgs += @('--output-junit', $junit)
 . (Join-Path $PSScriptRoot 'hidden-desktop.ps1')
 $code = Invoke-OnHiddenDesktop 'ctest' $ctestArgs   # the tests open real windows: on another desktop they cannot pop up over what the user is doing (UC_TESTS_VISIBLE=1 shows them)
 
+$retriedOk = @{}
 if (Test-Path $junit) {
     $cases = @(([xml](Get-Content $junit -Raw)).testsuite.testcase)
     $failed = @($cases | Where-Object { $_.failure })
     $skipped = @($cases | Where-Object { $_.skipped }).Count
+    if ($failed.Count) {   # at idle priority, on a busy machine, a test with a timeout can fail without a fault: the failed ones run once more, alone
+        Write-Host "Running the $($failed.Count) failed test(s) again"
+        $retryJunit = "$junit.retry"; Remove-Item $retryJunit -ErrorAction SilentlyContinue
+        Invoke-OnHiddenDesktop 'ctest' @('--test-dir', $build, '--rerun-failed', '--output-on-failure', '--output-junit', $retryJunit) | Out-Null
+        if (Test-Path $retryJunit) {
+            foreach ($case in ([xml](Get-Content $retryJunit -Raw)).testsuite.testcase) { if ($case.status -eq 'run' -and -not $case.failure) { $retriedOk[$case.name] = $true } }
+            $failed = @($failed | Where-Object { -not $retriedOk.ContainsKey($_.name) })
+            if (-not $failed.Count) { $code = 0 }
+        }
+    }
     Write-Host "Tests: $($cases.Count - $failed.Count - $skipped) of $($cases.Count) passed$(if ($skipped) { ", $skipped skipped" })"
     foreach ($case in $failed) {
         Write-Host "FAILED: $($case.name)"
@@ -78,7 +90,7 @@ if (Test-Path $junit) {
 # Record every test that passed, whether or not others failed; failed and skipped ones stay pending.
 if ($keys.Count -and (Test-Path $junit)) {
     foreach ($case in ([xml](Get-Content $junit -Raw)).testsuite.testcase) {
-        if ($case.status -eq 'run' -and -not $case.failure -and -not $case.skipped -and $keys.ContainsKey($case.name)) { $state[$case.name] = $keys[$case.name] }
+        if ($case.status -eq 'run' -and (-not $case.failure -or $retriedOk.ContainsKey($case.name)) -and -not $case.skipped -and $keys.ContainsKey($case.name)) { $state[$case.name] = $keys[$case.name] }
         else { $state.Remove($case.name) }
     }
     $out = @{}

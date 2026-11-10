@@ -6,6 +6,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
+#include <cstdlib>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <stdexcept>
 #include <cstdio>
 #include <cstring>
@@ -213,11 +219,13 @@ void mix_ax_voice(ppc::Ctx& c,uint32_t pb,std::span<int32_t,192> mix) {
     if (ppc::rd16(c,pb+0x10)!=1) return;
     if (!mix_ax_voice_fast(c,pb,mix)) mix_ax_voice_reference(c,pb,mix);
 }
+void ax_stop_mixer();   // joins the mixing thread (defined with it, below)
 void audio_hle_init(Sched& s,AudioSink sink,bool profile) {
+    ax_stop_mixer();
     scheduler=&s; output=std::move(sink); started=false; replaying=false; frames=nonzero=0;
     profile_audio=profile; voice_probes={}; voice_probe_starts=0;
 }
-void audio_hle_shutdown() { started=false; output={}; scheduler=nullptr; }
+void audio_hle_shutdown() { ax_stop_mixer(); started=false; output={}; scheduler=nullptr; }
 AudioStats audio_stats() { return {frames.load(),nonzero.load()}; }
 struct AudioSnapshot {
     bool started;
@@ -237,18 +245,9 @@ void audio_set_replaying(bool on) { replaying=on; }
 void hle_AIStartDMA(ppc::Ctx&) {
     if (scheduler && !started) { started=true; arm(uc::now_ticks()+uc::ms_to_ticks(3)); }
 }
-void hle_AXFrame(ppc::Ctx& c) {
-    // Verified RBUE08 AX service/frame callback and320-byte PBs, without DSP command/mail execution.
-    ram(c).read(c.r[13]-25636,4);
-    const auto count=ppc::rd32(c,c.r[13]-25524),base=ppc::rd32(c,c.r[13]-25536);
-    if (count>128) throw std::invalid_argument("invalid AX voice count");
-    if (count) {
-        ram(c).read(base,size_t(count)*320);
-        uc::call_guest(c,0x80275F34,{0x5F50});
-        uc::call_guest(c,0x80273688,{});
-    }
-    const auto callback=ppc::rd32(c,c.r[13]-25636);
-    if (callback) uc::call_guest(c,callback,{});
+namespace {
+// The mixing half of a frame: every running voice into one 96-sample block, then the block to the device.
+void mix_frame(ppc::Ctx& c,uint32_t base,uint32_t count) {
     std::array<int32_t,192> mix{};
     // Each running voice reads the next bytes of its sample data in mix_ax_voice, and those bytes are usually not in the cache: ask for all of them first so the misses overlap
     // instead of stalling one voice after the other. A prefetch changes no state and never faults; the voice array was bounds-checked above.
@@ -298,4 +297,66 @@ void hle_AXFrame(ppc::Ctx& c) {
     for (size_t i=0;i<pcm.size();++i) { pcm[i]=int16_t(std::clamp(mix[i],-32768,32767)); active+=pcm[i]!=0; }
     ++frames; nonzero+=active;
     if (output && !replaying) output(pcm);
+}
+// The mixing of a frame on a thread of its own, started at the end of the frame and joined at the start of the next one (3 ms later), so the guest thread goes on while the
+// voices are mixed. The hardware does the same: the DSP mixes the parameter blocks after the callback has synced them. The guest touches the blocks only inside the callback
+// (joined first) and through the game's voice calls, which the DSP would see in the middle of a frame just the same. Not used when the run must be reproducible
+// (deterministic clock, rollback, replay) or when a profile/audit wants the mixing inline. A voice error is rethrown by the next frame's join.
+class AxMixer {
+public:
+    AxMixer() : thread_([this] { run(); }) {}
+    ~AxMixer() { { std::lock_guard lock(mutex_); stop_=true; } wake_.notify_all(); thread_.join(); }
+    void submit(uint8_t* memory,uint32_t base,uint32_t count) {
+        { std::lock_guard lock(mutex_); memory_=memory; base_=base; count_=count; busy_=true; }
+        wake_.notify_one();
+    }
+    void join() {   // the frame in flight is done; its error, if any, is thrown here
+        std::unique_lock lock(mutex_);
+        idle_.wait(lock,[&] { return !busy_; });
+        if (error_) std::rethrow_exception(std::exchange(error_,nullptr));
+    }
+private:
+    void run() {
+        ppc::Ctx context{};
+        for (;;) {
+            std::unique_lock lock(mutex_);
+            wake_.wait(lock,[&] { return busy_ || stop_; });
+            if (!busy_) return;
+            context.mem=memory_; const auto base=base_,count=count_;
+            lock.unlock();
+            std::exception_ptr failure;
+            try { mix_frame(context,base,count); } catch (...) { failure=std::current_exception(); }
+            lock.lock();
+            error_=failure; busy_=false;
+            idle_.notify_all();
+        }
+    }
+    std::mutex mutex_;
+    std::condition_variable wake_,idle_;
+    uint8_t* memory_=nullptr; uint32_t base_=0,count_=0;
+    bool busy_=false,stop_=false;
+    std::exception_ptr error_;
+    std::thread thread_;   // last: starts running when the rest exists
+};
+std::unique_ptr<AxMixer> mixer;
+const bool async_mix_allowed=[] { const char* off=std::getenv("UC_AX_ASYNC"); return !off || off[0]!='0'; }();
+}
+namespace uc { void ax_stop_mixer() { mixer.reset(); } }
+void hle_AXFrame(ppc::Ctx& c) {
+    // Verified RBUE08 AX service/frame callback and320-byte PBs, without DSP command/mail execution.
+    if (mixer) mixer->join();
+    ram(c).read(c.r[13]-25636,4);
+    const auto count=ppc::rd32(c,c.r[13]-25524),base=ppc::rd32(c,c.r[13]-25536);
+    if (count>128) throw std::invalid_argument("invalid AX voice count");
+    if (count) {
+        ram(c).read(base,size_t(count)*320);
+        uc::call_guest(c,0x80275F34,{0x5F50});
+        uc::call_guest(c,0x80273688,{});
+    }
+    const auto callback=ppc::rd32(c,c.r[13]-25636);
+    if (callback) uc::call_guest(c,callback,{});
+    const bool inline_mix=!async_mix_allowed || !count || replaying || profile_audio || uc::audio_gap_audit_enabled() || scheduler->deterministic() || scheduler->rollback();
+    if (inline_mix) { mix_frame(c,base,count); return; }
+    if (!mixer) mixer=std::make_unique<AxMixer>();
+    mixer->submit(c.mem,base,count);
 }

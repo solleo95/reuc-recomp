@@ -2,6 +2,7 @@
 # Needs: the sniper sysroot (scripts/linux/extract_sysroot.py), LLVM, CMake and Ninja on PATH.
 param([string[]]$Target = @(), [switch]$Clean, [switch]$KeepGoing, [switch]$ThinLTO, [string]$Tune = '', [switch]$PgoGenerate, [string]$Folder = '', [string]$CxxFlags = '', [switch]$NoPgo)   # -PgoGenerate: build-linux-pgogen, instrumented (scripts/linux/pgo.py)   # -Tune znver2: build-linux-<tune>, tuned for that CPU   # -ThinLTO: build-linux-lto with whole-program ThinLTO (slow link)   # -KeepGoing: build everything that can build and list all failures (ninja -k 0)
 $ErrorActionPreference = 'Stop'
+if ($env:UC_LOW_PRIORITY -ne '0') { try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'Idle' } catch { } }   # the build uses every core: children inherit the class, a game being played keeps its speed
 $Target = @($Target | ForEach-Object { $_ -split ',' } | Where-Object { $_ })   # `pwsh -File build.ps1 -Target a,b` passes one string "a,b"
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $build = Join-Path $root $(if ($PgoGenerate) { 'build-linux-pgogen' } elseif ($ThinLTO) { 'build-linux-lto' } else { "build-linux-$(if ($Tune) { $Tune } else { 'znver2' })" })   # the compiler flags are fixed when a build folder is created: one folder per tune (the default: the Deck's CPU)

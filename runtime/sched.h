@@ -162,6 +162,7 @@ public:
     void set_deterministic(bool on) { det_ = on; ext_allowed_ = !on; }
     bool deterministic() const { return det_; }
     void set_rollback(bool on) { rollback_=on; }
+    bool rollback() const { return rollback_; }
     uint64_t async_begin() { ++async_pending_; return generation_.load(); }
     uint64_t generation() const { return generation_.load(); }
     void drain_async(); // Wait for announced results; retain their deterministic delivery order.
