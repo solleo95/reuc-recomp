@@ -49,7 +49,8 @@ uint64_t Packets::seal_batch(FramePacket packet) {
     total_seal_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - wait_start).count();
     if (canceled_) throw Error(ErrorCode::canceled, 0, 0, 0);
     if (next_serial_ == std::numeric_limits<uint64_t>::max()) throw Error(ErrorCode::sequence, 0, 0, 0);
-    uint64_t serial = next_serial_;
+    const bool reserved = packet.serial != 0;   // handed out by reserve_serial(): next_serial_ has moved on already
+    uint64_t serial = reserved ? packet.serial : next_serial_;
     packet.serial = serial;
     const bool presenting = packet.present;
     auto owned = std::make_unique<const FramePacket>(std::move(packet));
@@ -57,7 +58,7 @@ uint64_t Packets::seal_batch(FramePacket packet) {
     if (presenting) frames_in_flight_.emplace(serial, std::chrono::steady_clock::now());
     try { queued_.push_back(std::move(owned)); }
     catch (...) { outstanding_.erase(serial); frames_in_flight_.erase(serial); throw; }
-    ++next_serial_;
+    if (!reserved) ++next_serial_;
     ready_.notify_one();
     return serial;
 }

@@ -55,6 +55,9 @@ public:
     std::shared_ptr<const SceneSnapshot> checkpoint();
     void restore(const SceneSnapshot&);
     uint64_t seal_batch(FramePacket packet);
+    // The serial the next sealed packet gets, handed out ahead: a producer that seals on another thread (the GX worker) must know the serial of a draw-done request now. The packet
+    // sealed for it carries that serial in `serial` (the reservations are sealed in the order they were made).
+    uint64_t reserve_serial() { std::lock_guard lock(mutex_); return next_serial_++; }
     std::unique_ptr<const FramePacket> try_take();
     bool wait_ready(std::chrono::nanoseconds timeout);
     bool complete(uint64_t serial);

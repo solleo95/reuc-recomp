@@ -17,6 +17,10 @@
 #include <set>
 
 #include <variant>
+#include <condition_variable>
+#include <deque>
+#include <exception>
+#include <thread>
 #include <algorithm>
 #include <string>
 #include <cmath>
@@ -621,15 +625,26 @@ void import_resource(uint32_t address,uint32_t length,gx::State& bindings,gx::Tr
     }
     path.pop_back();
 }
-uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::TextureCopy> texture_copy={},std::array<uint32_t,4> display_source={0,0,640,480},bool black=false) {
-    if (!packets) return 0;
+// ---- The GX worker (UC_GX_ASYNC=1, experiment): the guest thread posts the draws of a frame as jobs and the worker builds the DrawPackets, in order, and seals the packets. ----
+// What stays on the guest thread is everything that reads or writes guest memory or host GX state; a job carries its results as values and shared immutable blocks.
+struct MeshOp { std::shared_ptr<const gx::MeshBuffers> buffers; gx::Shared<gx::Transforms> transforms; gx::Shared<gx::DrawUniform> uniforms; std::shared_ptr<const gx::TextureBank> bank; };
+struct MeshGroup { gx::Shared<gx::State> state; gx::TevMaterial material; gx::BlendState blend; std::array<std::shared_ptr<const gx::TexturePixels>,8> textures; std::array<uint8_t,8> wrap; };
+struct MeshJob { std::shared_ptr<const MeshGroup> group; std::vector<MeshOp> ops; };   // the geometries of one hle_ResMeshDraw call
+struct SealParams {   // submit_batch's inputs, read on the guest thread when the batch ends
+    bool present=false,clear=false; uint32_t xfb=0; std::optional<gx::TextureCopy> texture_copy; std::array<uint32_t,4> display_source{0,0,640,480}; bool black=false;
+    std::array<uint8_t,4> clear_color{}; uint32_t clear_depth=0; bool replay=false;
+    std::array<float,2> aim_consumed{}; std::optional<std::array<float,2>> aim0,aim1; unsigned aim_channel=0; bool aim_exact=false; gx::ReticleStyle style;
+    uint64_t serial=0;   // reserved ahead (Packets::reserve_serial) when the worker seals; 0 seals with the next serial
+};
+uint64_t seal_with(gx::DrawQueue&& queue,SealParams&& p) {
     try {
-        gx::FramePacket frame{0,std::move(draws),present,clear,copy_state.color,copy_state.depth,xfb,std::move(texture_copy),display_source};
-        frame.black_output=black;
-        frame.replay=replaying;
-        frame.aim_consumed=uc::input_consumed_aim();
-        gx::mark_reticle_draws(frame.draws,{uc::input_consumed_aim_of(0),uc::input_consumed_aim_of(1)},uc::input_aim_channel(),uc::input_aim_exact() || !uc::input_demo_playing());
-        gx::apply_reticle_style(frame.draws,gx::reticle_style(),uc::input_aim_channel(),uc::input_consumed_aim_of(1).has_value());   // the menu's Reticle tab
+        gx::FramePacket frame{0,std::move(queue),p.present,p.clear,p.clear_color,p.clear_depth,p.xfb,std::move(p.texture_copy),p.display_source};
+        frame.serial=p.serial;
+        frame.black_output=p.black;
+        frame.replay=p.replay;
+        frame.aim_consumed=p.aim_consumed;
+        gx::mark_reticle_draws(frame.draws,{p.aim0,p.aim1},p.aim_channel,p.aim_exact);
+        gx::apply_reticle_style(frame.draws,p.style,p.aim_channel,p.aim1.has_value());   // the menu's Reticle tab
         for(auto& draw:frame.draws) {
             if(draw.late_aim) continue;
             if(profile_mesh && gx::reticle_callsite(draw.callsite) && draw.texture && !draw.texture->levels.empty()) {   // another weapon's reticle texture would show up here
@@ -637,7 +652,7 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
                 if(reported.insert(uint64_t(draw.callsite)<<32|level.width<<16|level.height).second) std::fprintf(stderr,"[late-aim] reticle callsite %08X draws a %ux%u texture that is not shifted\n",draw.callsite,level.width,level.height);
             }
         }
-        if(frame.texture_copy && clear) {
+        if(frame.texture_copy && p.clear) {
             // The copy erases the EFB: prompts drawn so far leave with it, originals stay in the copied texture.
             carried_prompts.clear();
             for(const auto& draw:frame.draws)if(draw.native_prompt)++prompt_fallback;
@@ -645,15 +660,135 @@ uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::T
             // EFB content persists across DrawDone/non-clearing copies until the display copy presents it.
             for(auto& draw:frame.draws)if(draw.native_prompt)carried_prompts.push_back(std::move(*draw.native_prompt));
             std::erase_if(frame.draws,[](const auto& draw){return draw.native_prompt.has_value();});
-            if(present) {prompt_present+=carried_prompts.size();frame.prompts=std::move(carried_prompts);carried_prompts.clear();}
+            if(p.present) {prompt_present+=carried_prompts.size();frame.prompts=std::move(carried_prompts);carried_prompts.clear();}
         }
-        ++prompt_batch;
-        const uint64_t serial=packets->seal_batch(std::move(frame));
-        draws=gx::DrawQueue{}; return serial;
+        return packets->seal_batch(std::move(frame));
     } catch (const gx::Error& error) {
         if (error.code==gx::ErrorCode::canceled) throw uc::ThreadExit{};
         throw;
     }
+}
+class GxWorker {
+public:
+    using Job=std::variant<MeshJob,gx::DrawPacket,SealParams,std::monostate>;   // monostate: a barrier (drain)
+    ~GxWorker() { stop(); }
+    void post(Job job) {   // kept on the guest side until kBatch jobs or flush(): one lock and one wake-up for many jobs
+        rethrow();
+        pending_.push_back(std::move(job));
+        if(pending_.size()>=kBatch) flush();
+    }
+    void flush() {   // hands the jobs to the worker
+        if(pending_.empty()) return;
+        std::unique_lock lock(mutex_);
+        if(!thread_.joinable()) thread_=std::thread([this] { run(); });
+        space_.wait(lock,[&] { return queue_.size()<kMaxJobs; });
+        posted_+=pending_.size();
+        if(queue_.empty()) queue_.swap(pending_);
+        else { for(auto& job:pending_) queue_.push_back(std::move(job)); pending_.clear(); }
+        const bool wake=idle_; lock.unlock();
+        if(wake) ready_.notify_one();
+    }
+    void drain() {   // everything posted has run (the worker is idle until the next post); the first error of the worker is thrown here
+        flush();
+        std::unique_lock lock(mutex_);
+        idle_cv_.wait(lock,[&] { return done_==posted_; });
+        lock.unlock();
+        rethrow();
+    }
+    void stop() {
+        { std::unique_lock lock(mutex_); stop_=true; queue_.clear(); pending_.clear(); }   // the jobs still queued are dropped
+        ready_.notify_all(); space_.notify_all();
+        if(thread_.joinable()) thread_.join();
+        std::lock_guard lock(mutex_);
+        queue_.clear(); posted_=done_=0; stop_=false; error_=nullptr; failed_=false; queue_draws_=gx::DrawQueue{};
+    }
+    gx::DrawQueue& draws() { return queue_draws_; }   // the draws of the batch being built: only while drained
+    bool started() const { return thread_.joinable(); }
+private:
+    static constexpr size_t kMaxJobs=8192,kBatch=48;
+    void rethrow() { if(failed_.load(std::memory_order_acquire)) { std::unique_lock lock(mutex_); if(error_) std::rethrow_exception(std::exchange(error_,nullptr)); } }
+    void run() {
+        std::vector<Job> batch;
+        for(;;) {
+            batch.clear();
+            {
+                std::unique_lock lock(mutex_);
+                idle_=true;
+                ready_.wait(lock,[&] { return !queue_.empty() || stop_; });
+                idle_=false;
+                if(queue_.empty()) return;
+                batch.swap(queue_);
+            }
+            space_.notify_one();
+            for(auto& job:batch) {
+                try { process(std::move(job)); }
+                catch(const gx::Error& error) { if(error.code!=gx::ErrorCode::canceled) fail(std::current_exception()); }
+                catch(const uc::ThreadExit&) {}
+                catch(...) { fail(std::current_exception()); }
+            }
+            { std::lock_guard lock(mutex_); done_+=batch.size(); }
+            idle_cv_.notify_all();
+        }
+    }
+    void fail(std::exception_ptr error) { std::lock_guard lock(mutex_); if(!error_) { error_=error; failed_.store(true,std::memory_order_release); } }
+    void process(Job job) {
+        if(auto* mesh=std::get_if<MeshJob>(&job)) {
+            const MeshGroup& group=*mesh->group;
+            for(auto& op:mesh->ops) {
+                auto& draw=queue_draws_.emplace_back();
+                draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=group.state;
+                draw.mesh=std::move(op.buffers); draw.transforms=std::move(op.transforms); draw.material=group.material; draw.uniforms=std::move(op.uniforms); draw.texture_bank=std::move(op.bank); draw.blend=group.blend; draw.texture=group.textures[0];
+                draw.texture_wrap=group.wrap;
+                std::copy(group.textures.begin()+1,group.textures.end(),draw.texture_maps.begin());
+            }
+        } else if(auto* draw=std::get_if<gx::DrawPacket>(&job)) queue_draws_.push_back(std::move(*draw));
+        else if(auto* seal=std::get_if<SealParams>(&job)) { seal_with(std::move(queue_draws_),std::move(*seal)); queue_draws_=gx::DrawQueue{}; }
+    }
+    std::mutex mutex_;
+    std::condition_variable ready_,space_,idle_cv_;
+    std::vector<Job> queue_;     // handed over by flush(), taken whole by the worker
+    std::vector<Job> pending_;   // the guest thread's own, not yet handed over
+    uint64_t posted_=0,done_=0;
+    bool idle_=false,stop_=false;
+    std::exception_ptr error_;
+    std::atomic<bool> failed_{false};
+    gx::DrawQueue queue_draws_;   // written by the worker only, read by the guest thread only after drain()
+    std::thread thread_;
+};
+GxWorker gx_worker;
+const bool gx_async_requested=[] { const char* on=std::getenv("UC_GX_ASYNC"); return on && on[0]!='0'; }();
+bool gx_async_mode=false;       // true while the guest thread posts to the worker (guest thread only)
+size_t gx_async_draws=0;        // draws posted for the batch being built: the guest thread's stand-in for draws.size()
+// The worker is used on the live run only: not in the deterministic mode, headless, with a detached renderer, rollback or a replay (those read or restore `draws` directly).
+bool gx_async_wanted() { return gx_async_requested && packets && !packets->detached() && !replaying && scheduler && !scheduler->deterministic() && !scheduler->rollback(); }
+// Switches between the worker and the guest thread at a batch boundary or whenever the wish changes: what one side holds is handed to the other.
+bool gx_async() {
+    const bool want=gx_async_wanted();
+    if(want!=gx_async_mode) {
+        if(gx_async_mode) { gx_worker.drain(); draws=std::move(gx_worker.draws()); gx_worker.draws()=gx::DrawQueue{}; }
+        else if(!draws.empty()) { gx_worker.drain(); gx_worker.draws()=std::move(draws); draws=gx::DrawQueue{}; }
+        gx_async_mode=want; gx_async_draws=want ? gx_worker.draws().size() : 0;
+    }
+    return want;
+}
+void emit_draw(gx::DrawPacket&& draw) {
+    if(gx_async()) { ++gx_async_draws; gx_worker.post(std::move(draw)); }
+    else draws.push_back(std::move(draw));
+}
+uint64_t submit_batch(bool present,bool clear,uint32_t xfb=0,std::optional<gx::TextureCopy> texture_copy={},std::array<uint32_t,4> display_source={0,0,640,480},bool black=false) {
+    if (!packets) return 0;
+    SealParams p;
+    p.present=present; p.clear=clear; p.xfb=xfb; p.texture_copy=std::move(texture_copy); p.display_source=display_source; p.black=black;
+    p.clear_color=copy_state.color; p.clear_depth=copy_state.depth; p.replay=replaying;
+    p.aim_consumed=uc::input_consumed_aim(); p.aim0=uc::input_consumed_aim_of(0); p.aim1=uc::input_consumed_aim_of(1);
+    p.aim_channel=uc::input_aim_channel(); p.aim_exact=uc::input_aim_exact() || !uc::input_demo_playing(); p.style=gx::reticle_style();
+    uint64_t serial;
+    if(gx_async()) {
+        serial=p.serial=packets->reserve_serial();   // the draw-done request that follows needs it now
+        gx_worker.post(std::move(p)); gx_worker.flush(); gx_async_draws=0;   // a sealed batch goes at once: the renderer waits for it
+    } else { serial=seal_with(std::move(draws),std::move(p)); draws=gx::DrawQueue{}; }
+    ++prompt_batch;
+    return serial;
 }
 void post_finish(uc::Sched* sched, uint64_t serial,uint64_t generation) {
     sched->post_external([sched, serial] {
@@ -761,8 +896,9 @@ void gx_restore(const GxSnapshot& saved) {
 bool gx_fifo_in_primitive() { return (capture && capture->active()) || recording_primitive(); }
 bool gx_fifo_recording() { return recording != nullptr; }
 GxPromptCheckpoint gx_prompt_checkpoint() {
-    if(recording)return {prompt_batch,draws.size(),producer(),recording->address,recording->native.geometry.size()};
-    return {prompt_batch,draws.size(),producer(),0,0};
+    const size_t count=gx_async() ? gx_async_draws : draws.size();
+    if(recording)return {prompt_batch,count,producer(),recording->address,recording->native.geometry.size()};
+    return {prompt_batch,count,producer(),0,0};
 }
 bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& description,bool compact) {
     if(checkpoint.batch!=prompt_batch || checkpoint.producer!=producer())return false;
@@ -777,14 +913,19 @@ bool gx_prompt_attach(GxPromptCheckpoint checkpoint,const PromptDescription& des
         if(!quad || quad!=recorded_draw(geometry.back()) || quad->primitive!=0x80 || quad->count!=4)return false;
         quad->prompt=description;quad->compact=compact;return true;
     }
-    if(checkpoint.list || draws.size()!=checkpoint.draw+1)return false;
-    auto prompt=prompt_from_quad(draws.back(),description);
+    const bool worker=gx_async();
+    if(checkpoint.list || (worker ? gx_async_draws : draws.size())!=checkpoint.draw+1)return false;
+    if(worker) gx_worker.drain();   // the draws sit in the worker's queue: wait until the quad is there
+    auto& queue=worker ? gx_worker.draws() : draws;
+    auto prompt=prompt_from_quad(queue.back(),description);
     if(!prompt)return false;
-    prompt->compact=compact;draws.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
+    prompt->compact=compact;queue.back().native_prompt=std::move(*prompt);++prompt_annotations;return true;
 }
 void gx_enable_async_textures() { texture_cache.set_async(true); }
 void gx_set_texture_budget(size_t bytes) { texture_cache.set_budget(bytes); }
+void gx_hle_shutdown() { gx_worker.stop(); gx_async_mode=false; gx_async_draws=0; }   // before the packets go away: a sealing worker waits on them
 void gx_hle_init(Sched& sched, uint8_t* base, gx::Packets* queue, bool profile) {
+    gx_hle_shutdown();
     replaying=false;
     prompt_batch=0;carried_prompts.clear();
     prompt_annotations=prompt_present=prompt_fallback=0;
@@ -890,7 +1031,9 @@ static void gx_fifo_write_other(int size, uint32_t value) {
     for (int i = 0; i < size; ++i) bytes[i] = std::byte(uint8_t(value >> ((size - 1 - i) * 8)));
     capture->write_attribute(producer(), {bytes, size_t(size)});
     if (!capture->active()) {
-        auto& draw = draws.emplace_back(capture->take_draw());   // built in the queue: no second move, no moved-from packet to destroy
+        gx::DrawPacket posted;   // the worker's copy of the draw (UC_GX_ASYNC): filled here like the queue's own, then posted
+        const bool to_worker=gx_async();
+        auto& draw = to_worker ? (posted=capture->take_draw()) : draws.emplace_back(capture->take_draw());   // built in the queue: no second move, no moved-from packet to destroy
         add_guest_stat(vertex_count,capture->vertex_count()); add_guest_stat(draw_count,1);
         if(replaying) { draws.pop_back(); return; }
         draw.transforms=live_transforms;
@@ -909,6 +1052,7 @@ static void gx_fifo_write_other(int size, uint32_t value) {
             for (const auto& v:draw.vertices) std::fprintf(stderr,"[movie-vertex] %.2f %.2f %.2f rgba %u %u %u %u uv %.3f %.3f mtx %u\n",v.position[0],v.position[1],v.position[2],v.color[0][0],v.color[0][1],v.color[0][2],v.color[0][3],v.texcoord[0][0],v.texcoord[0][1],v.position_matrix);
         }
 #endif
+        if(to_worker) { ++gx_async_draws; gx_worker.post(std::move(posted)); }
     }
 }
 void gx_completed(uint64_t serial) {
@@ -1101,7 +1245,7 @@ void hle_GXCallDisplayList(ppc::Ctx& c) {
     std::vector<uint32_t> path;
     import_resource(address,length,bindings,transform_state,copy,textures,loaded,blend,colors,matrices,indices,imported,versions,path);
     for (auto& item : imported) {
-        if(auto* draw=std::get_if<gx::DrawPacket>(&item)) { add_guest_stat(vertex_count,draw->vertices.size()); add_guest_stat(draw_count,1); draws.push_back(std::move(*draw)); }
+        if(auto* draw=std::get_if<gx::DrawPacket>(&item)) { add_guest_stat(vertex_count,draw->vertices.size()); add_guest_stat(draw_count,1); emit_draw(std::move(*draw)); }
         else {
             auto& command=std::get<CopiedTexture>(item); copy_state=command.clear_state;
             submit_batch(false,command.clear,0,std::move(command.request)); ++copies;
@@ -1670,6 +1814,13 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
     bool uniforms_dirty=true,transforms_dirty=true;   // changed since the shared block was last compared (that comparison is a memcmp of 2 KB per draw)
     bool matrices_changed=false;   // the texture matrices moved since `uniforms` took them (resolved once, before the next draw reads the uniforms)
     const auto texture_wrap=wraps(bound_textures);
+    const bool to_worker=gx_async();
+    MeshJob job;   // UC_GX_ASYNC: what the geometries of this call share, and one entry per geometry; the worker builds the DrawPackets
+    if(to_worker) {
+        auto group=std::make_shared<MeshGroup>();
+        group->state=mesh_state; group->material=material; group->blend=blend_state; group->textures=textures; group->wrap=texture_wrap;
+        job.group=std::move(group); job.ops.reserve(cached->operations.size());
+    }
     try {
         for(const auto& operation:cached->operations) {
             if(const auto* texture=std::get_if<MeshTexture>(&operation)) {
@@ -1687,16 +1838,22 @@ void hle_ResMeshDraw(ppc::Ctx& c) {
                 const auto& geometry=std::get<MeshGeometry>(operation);
                 if(matrices_changed) { resolve_texture_matrices(uniforms,selectors,texture_matrices); matrices_changed=false; }
                 if(uniforms_dirty) { gx::share(mesh_uniforms_block,uniforms); uniforms_dirty=false; }
+                if(transforms_dirty) { gx::share(mesh_transforms_block,transforms); transforms_dirty=false; }
+                if(to_worker) { job.ops.push_back(MeshOp{geometry.buffers,mesh_transforms_block,mesh_uniforms_block,texture_bank(*mesh_state,texture_matrices)}); continue; }   // the worker builds the DrawPacket
                 auto& draw=draws.emplace_back();
                 draw.callsite=0x80366E14; draw.primitive=0x90; draw.vat=0; draw.state=mesh_state;
                 draw.mesh=geometry.buffers;
-                if(transforms_dirty) { gx::share(mesh_transforms_block,transforms); transforms_dirty=false; }
                 draw.transforms=mesh_transforms_block; draw.material=material; draw.uniforms=mesh_uniforms_block; draw.texture_bank=texture_bank(*draw.state,texture_matrices); draw.blend=blend_state; draw.texture=textures[0];
                 draw.texture_wrap=texture_wrap;
                 std::copy(textures.begin()+1,textures.end(),draw.texture_maps.begin());
             }
         }
     } catch(...) { draws.erase(draws.begin()+std::ptrdiff_t(first_draw),draws.end()); throw; }
+    if(to_worker) {
+        for(const auto& op:job.ops) { add_guest_stat(vertex_count,op.buffers->vertices.size()); add_guest_stat(draw_count,1); }
+        if(!job.ops.empty()) { gx_async_draws+=job.ops.size(); gx_worker.post(std::move(job)); }
+        return;
+    }
     if(profile_this_mesh && draws.size()>first_draw) {
         std::array<uint8_t,4> low_color{255,255,255,255},high_color{};
         for(size_t d=first_draw;d<draws.size();++d) for(const auto& vertex:draws[d].vertex_view()) for(size_t channel=0;channel<4;++channel) {

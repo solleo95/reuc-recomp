@@ -1592,6 +1592,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if(failed || closed!=0) throw std::runtime_error("cannot write audio audit report");
         std::fprintf(stderr,"audio gap report: %s\n",path.string().c_str());
     }
+    packets.cancel(); uc::gx_hle_shutdown();   // the GX worker may sit in a seal that waits for the renderer
     uc::audio_hle_shutdown();
     uc::game_input_shutdown();
     uc::input_hle_init(nullptr);
