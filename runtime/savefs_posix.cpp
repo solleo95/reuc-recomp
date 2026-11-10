@@ -80,7 +80,11 @@ int move(const fs::path& source,const fs::path& target,bool replace) {
     const auto parent=target.parent_path();
     if (lstat(parent.c_str(),&info)) return error(errno);
     if (!S_ISDIR(info.st_mode)) return -102;
+#if defined(__APPLE__)   // macOS: renamex_np's RENAME_EXCL is the no-replace rename
+    const int result=replace ? ::rename(source.c_str(),target.c_str()) : renamex_np(source.c_str(),target.c_str(),RENAME_EXCL);
+#else
     const int result=replace ? ::rename(source.c_str(),target.c_str()) : renameat2(AT_FDCWD,source.c_str(),AT_FDCWD,target.c_str(),RENAME_NOREPLACE);
+#endif
     if (result) return error(errno);
     return sync_directory(parent);   // the rename itself must survive a power cut
 }

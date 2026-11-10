@@ -35,6 +35,22 @@ const std::shared_ptr<const gx::TexturePixels>& draw_texture(const gx::DrawPacke
 void vk_check(VkResult result, const char* operation) {
     if (result != VK_SUCCESS) throw std::runtime_error(std::string(operation) + " failed: VkResult " + std::to_string(result));
 }
+// A GPU without logicOp (Metal, through MoltenVK): for sources and destinations of 0 or 1 per channel, eight of the sixteen GX logic operations are
+// blending (AND = s*d, XOR = s*(1-d) + d*(1-s), OR = s + d*(1-s), ...). The other eight invert the source, which needs the shader; they draw as COPY
+// for now and each is reported once, so a log tells which ones the game uses.
+gx::BlendState emulated_logic_op(gx::BlendState blend) {
+    struct Factors { uint8_t source, destination; };   // GX factor codes: source 0 zero, 1 one, 2 dst color, 3 1-dst color; destination 0 zero, 1 one, 3 1-src color
+    static constexpr Factors exact[8] = {{0,0},{2,0},{3,0},{1,0},{0,3},{0,1},{3,3},{1,3}};   // CLEAR AND AND_REVERSE COPY AND_INVERTED NOOP XOR OR
+    static std::atomic<uint32_t> reported{0};
+    if (blend.logic < 8) { blend.source = exact[blend.logic].source; blend.destination = exact[blend.logic].destination; }
+    else {
+        const uint32_t bit = 1u << blend.logic;
+        if (!(reported.fetch_or(bit) & bit)) std::fprintf(stderr, "[logic-op] GX logic operation %u has no blending equivalent on this GPU: drawn as COPY\n", unsigned(blend.logic));
+        blend.source = 1; blend.destination = 0;
+    }
+    blend.mode = 1;
+    return blend;
+}
 void barrier(VkCommandBuffer command, VkImage image, VkImageLayout before, VkImageLayout after,
              VkPipelineStageFlags2 source, VkAccessFlags2 source_access, VkPipelineStageFlags2 destination, VkAccessFlags2 destination_access,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT,uint32_t levels=1,uint32_t base_mip=0) {
     VkImageMemoryBarrier2 image_barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -94,6 +110,10 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (maintenance_ext) extensions.push_back("VK_EXT_surface_maintenance1");
     colorspace_ext_ = has(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 surface formats; without it HDR stays off
     if (colorspace_ext_) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+#ifdef __APPLE__
+    const bool portability = has(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);   // MoltenVK is a portability driver: the loader lists it only when asked
+    if (portability) extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
     std::vector<std::string> dlss5_instance_names;   // DLSS 5: what NGX asks of the instance (nothing without nvngx_dlssnr.dll next to the exe)
     if (dlss5_allowed_) for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
         if (has(name.c_str()) && std::none_of(extensions.begin(), extensions.end(), [&](const char* have) { return name == have; })) dlss5_instance_names.push_back(name);
@@ -114,6 +134,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo = &application;
     instance_info.enabledExtensionCount = uint32_t(extensions.size()); instance_info.ppEnabledExtensionNames = extensions.data();
     if (validation) { instance_info.enabledLayerCount = 1; instance_info.ppEnabledLayerNames = &layer; instance_info.pNext = &debug_info; }
+#ifdef __APPLE__
+    if (portability) instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
     {   // Optional backends must be ready before the instance, so live picks never need a new device.
         std::string reason;
         const auto directory=shaders.parent_path().parent_path();
@@ -247,6 +270,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
 #endif
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
+#ifdef __APPLE__   // a device that has VK_KHR_portability_subset (MoltenVK) must have it enabled
+        if (std::any_of(supported.begin(), supported.end(), [](const auto& extension) { return std::strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0; })) device_extensions.push_back("VK_KHR_portability_subset");
+#endif
         if (through_streamline && std::any_of(supported.begin(),supported.end(),[](const auto& extension) { return std::strcmp(extension.extensionName,VK_KHR_PRESENT_ID_EXTENSION_NAME)==0; }))
             device_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);   // dependency of the low-latency extension Streamline enables
     }
@@ -545,7 +571,7 @@ PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_p
     if(alpha_pass) blend={0,1,0,3,false,true};
     else if(draw.uniforms->pixel[2]&256) blend.alpha_write=false;
     if (blend.mode>3 || blend.source>7 || blend.destination>7 || blend.logic>15) throw std::invalid_argument("invalid native blend state");
-    if (blend.mode==2 && !logic_ops_) throw std::runtime_error("native GX logic operation requires GPU logicOp support");
+    if (blend.mode==2 && !logic_ops_) blend=emulated_logic_op(blend);
     // Fields the pipeline ignores in this mode must not split the key space (factors only matter when blending, the logic op only in logic mode).
     if (blend.mode!=1) { blend.source=1; blend.destination=0; }
     if (blend.mode!=2) blend.logic=3;

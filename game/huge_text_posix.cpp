@@ -2,6 +2,12 @@
 // The kernel gives file-backed code only 4 KB pages here (no READ_ONLY_THP_FOR_FS on the Deck), so the 2 MB aligned middle of the code segment is copied
 // into anonymous memory, which THP backs with 2 MB pages, and moved over the original addresses: the same bytes at the same addresses, so code running
 // in that range (this function included) continues unchanged. Any failure keeps the original mapping.
+// macOS: nothing (no mremap, and signed code cannot be replaced by a copy); Apple Silicon's 16 KB pages already cover four times as much per TLB entry.
+#if defined(__APPLE__)
+namespace uc {
+void text_to_huge_pages() {}
+}  // namespace uc
+#else
 #include <cstdint>
 #include <cstring>
 #include <link.h>
@@ -35,3 +41,4 @@ void text_to_huge_pages() {
     munmap(copy + size, size_t(first + size + kHuge - (copy + size)));
 }
 }  // namespace uc
+#endif

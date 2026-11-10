@@ -8,7 +8,11 @@
 #include <cstdlib>
 #include <exception>
 #include <string>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>   // the signal context only (<ucontext.h> is the deprecated makecontext API)
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 
 namespace uc {
@@ -25,7 +29,11 @@ void set_exit_hook(void (*fn)()) { g_hook = fn; }
 // SA_RESETHAND makes a second fault inside it terminate the process instead of looping.
 static void on_signal(int signal_number, siginfo_t* info, void* context) {
     const auto* registers = static_cast<const ucontext_t*>(context);
+#if defined(__APPLE__) && defined(__aarch64__)
+    const void* pc = reinterpret_cast<void*>(__darwin_arm_thread_state64_get_pc(registers->uc_mcontext->__ss));
+#else
     const void* pc = reinterpret_cast<void*>(registers->uc_mcontext.gregs[REG_RIP]);
+#endif
     const char* name = signal_number == SIGSEGV ? "SIGSEGV" : signal_number == SIGBUS ? "SIGBUS" : signal_number == SIGILL ? "SIGILL"
                      : signal_number == SIGFPE ? "SIGFPE" : signal_number == SIGABRT ? "SIGABRT" : "signal";
     const bool address_fault = signal_number == SIGSEGV || signal_number == SIGBUS;

@@ -8,6 +8,14 @@
 #ifndef _WIN32
 namespace uc::ui {
 // Linux (SteamOS): the fonts the system ships. DejaVu Sans for Latin and Cyrillic, Noto Sans CJK merged in for Japanese, Korean and Chinese, DejaVu Serif for headings.
+// macOS: Arial, Arial Unicode merged in for Japanese, Korean and Chinese, Georgia for headings (all in /System/Library/Fonts/Supplemental).
+#if defined(__APPLE__)
+constexpr const char* kSansFonts[]={"/System/Library/Fonts/Supplemental/Arial.ttf","/System/Library/Fonts/Supplemental/Arial Unicode.ttf"};
+constexpr const char* kSerifFonts[]={"/System/Library/Fonts/Supplemental/Georgia.ttf"};
+#else
+constexpr const char* kSansFonts[]={"/usr/share/fonts/TTF/DejaVuSans.ttf","/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
+constexpr const char* kSerifFonts[]={"/usr/share/fonts/TTF/DejaVuSerif.ttf","/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"};
+#endif
 Fonts load_fonts(ImFontAtlas& atlas) {
     Fonts fonts;
     const auto read=[](const char* path) {
@@ -17,7 +25,7 @@ Fonts load_fonts(ImFontAtlas& atlas) {
         return data;
     };
     fonts.bytes.reserve(5);   // the atlas keeps pointers into these buffers
-    for(const char* path:{"/usr/share/fonts/TTF/DejaVuSans.ttf","/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"}) {
+    for(const char* path:kSansFonts) {
         auto data=read(path);
         if(data.empty())continue;
         ImFontConfig config;config.FontDataOwnedByAtlas=false;config.MergeMode=!fonts.bytes.empty();
@@ -26,8 +34,8 @@ Fonts load_fonts(ImFontAtlas& atlas) {
     }
     if(fonts.bytes.empty())throw std::runtime_error("no UI font found (install DejaVu Sans)");
     fonts.sans=atlas.Fonts[0];
-    auto serif_data=read("/usr/share/fonts/TTF/DejaVuSerif.ttf");
-    if(serif_data.empty())serif_data=read("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf");
+    std::vector<char> serif_data;
+    for(const char* path:kSerifFonts) if(serif_data.empty())serif_data=read(path);
     if(serif_data.empty()) {fonts.serif=fonts.sans;return fonts;}   // headings in the sans font
     const size_t fallback_count=fonts.bytes.size();fonts.bytes.push_back(std::move(serif_data));
     ImFontConfig serif_config;serif_config.FontDataOwnedByAtlas=false;

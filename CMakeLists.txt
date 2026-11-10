@@ -6,6 +6,8 @@ endif()
 # The Linux (Steam Deck) cross build: cmake --toolchain cmake/toolchains/linux-sniper.cmake, see scripts/linux/build.ps1.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(UC_LINUX ON)
+elseif(APPLE)   # native macOS build on Apple Silicon: cmake --toolchain cmake/toolchains/macos-arm64.cmake, see scripts/macos/build.sh
+  set(UC_MACOS ON)
 endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -100,6 +102,19 @@ if(UC_LINUX)
   add_subdirectory(launcher)   # only the pieces the game shares (settings UI, bindings editor); the launcher program itself is Windows-only
   add_subdirectory(game)
   add_subdirectory(tests/linux)
+  return()
+endif()
+if(UC_MACOS)
+  # The POSIX code of the Linux port, plus the translator: macOS translates main.dol itself (scripts/macos/build.sh).
+  add_subdirectory(common)
+  add_subdirectory(tools/translator)
+  add_subdirectory(runtime)
+  add_subdirectory(renderer)
+  add_subdirectory(modding)
+  add_subdirectory(updater)
+  add_subdirectory(launcher)
+  add_subdirectory(game)
+  add_subdirectory(tests/linux)   # the POSIX tests: programs to run by hand (no ctest registration)
   return()
 endif()
 # Every test runs on a desktop of its own (tools/hidden_run): the windows the tests open never appear over what the user is doing and never take the focus, however ctest is

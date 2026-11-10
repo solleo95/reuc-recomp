@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
-#include <xmmintrin.h>
+#include "compat.h"   // _mm_prefetch (xmmintrin.h on x86, the ARM prefetch on Apple Silicon)
 namespace {
 uc::Sched* scheduler;
 uc::AudioSink output;

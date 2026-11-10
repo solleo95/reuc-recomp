@@ -35,7 +35,7 @@ target_include_directories(uc_coop_session PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(uc_gamepad_input STATIC gamepad_input.cpp)   # SDL gamepads: events in, NativeInput sticks, buttons and gyro out
 target_include_directories(uc_gamepad_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_gamepad_input PUBLIC uc_input uc_gamepad_math SDL3::SDL3)   # no runtime: the launcher reads gamepads too
-add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiimote_hid.cpp,wiimote_evdev.cpp>)   # the Wii Remote over Windows HID, on Linux through the kernel's hid-wiimote nodes: a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
+add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiimote_hid.cpp,$<IF:$<BOOL:${APPLE}>,wiimote_none.cpp,wiimote_evdev.cpp>>)   # the Wii Remote over Windows HID, on Linux through the kernel's hid-wiimote nodes (none on macOS yet): a thread reads it, NativeInput's WiimoteTarget gets its buttons, pointer, stick and swings
 target_include_directories(uc_wiimote_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_wiimote_input PUBLIC uc_wiimote_protocol uc_wiimote_math uc_wiimote_config uc_input)
 if(WIN32)
@@ -43,7 +43,7 @@ if(WIN32)
   add_library(uc_raw_input_backend STATIC raw_input_backend.cpp)   # mice and light guns as devices of their own through Raw Input (local two-player play)
   target_include_directories(uc_raw_input_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/common)
   target_link_libraries(uc_raw_input_backend PUBLIC SDL3::SDL3 user32)
-else()
+elseif(NOT APPLE)   # Linux: evdev (macOS reads mice through SDL only)
   target_sources(uc_wiimote_input PRIVATE evdev_scan.cpp)
   target_link_libraries(uc_wiimote_input PUBLIC uc_evdev_logic)
   add_library(uc_evdev_backend STATIC evdev_backend.cpp evdev_scan.cpp)   # mice and light guns as devices of their own (local two-player play)
@@ -109,9 +109,9 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
   add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
-  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,system_report_posix.cpp> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
+  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,$<IF:$<BOOL:${APPLE}>,system_report_macos.cpp,system_report_posix.cpp>> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
   target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io uc_ui_mode)
-  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_coop_session $<IF:$<BOOL:${WIN32}>,uc_raw_input_backend,uc_evdev_backend> uc_test_server uc_crash_bundle
+  target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_coop_session $<IF:$<BOOL:${WIN32}>,uc_raw_input_backend,$<$<NOT:$<BOOL:${APPLE}>>:uc_evdev_backend>> uc_test_server uc_crash_bundle
     uc_live_settings uc_settings_registry uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_deck_pages uc_netplay_game)
   include(${CMAKE_SOURCE_DIR}/cmake/stb_image.cmake)   # the header the compile screen's picture is decoded with (the launcher's folder fetches it too)
   if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

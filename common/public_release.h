@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 #else
+#include "executable_path_posix.h"
 #include <cstdlib>
 #endif
 
@@ -28,8 +29,8 @@ inline bool public_release() {
 #else
         if(std::getenv("UC_LOGS"))return false;
         std::error_code ignored;
-        const auto executable=std::filesystem::read_symlink("/proc/self/exe",ignored);
-        return !ignored && std::filesystem::is_regular_file(executable.parent_path()/"release.json",ignored);
+        const auto executable=posix_executable_path();
+        return !executable.empty() && std::filesystem::is_regular_file(executable.parent_path()/"release.json",ignored);
 #endif
     }();
     return value;

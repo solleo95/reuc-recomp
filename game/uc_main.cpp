@@ -218,6 +218,9 @@ bool get_affinity(uint64_t& mask) {
     if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) return false;
     mask = process;
     return true;
+#elif defined(__APPLE__)
+    (void)mask;
+    return false;   // macOS has no CPU affinity: the system places threads by QoS (the guest threads ask for user-interactive, runtime/sched.cpp)
 #else
     cpu_set_t set;
     if (sched_getaffinity(0, sizeof set, &set)) return false;
@@ -229,6 +232,9 @@ bool get_affinity(uint64_t& mask) {
 bool set_affinity(uint64_t mask) {   // Linux: the calling thread and the threads it starts afterwards
 #ifdef _WIN32
     return SetProcessAffinityMask(GetCurrentProcess(), mask) != 0;
+#elif defined(__APPLE__)
+    (void)mask;
+    return false;
 #else
     cpu_set_t set;
     CPU_ZERO(&set);
@@ -291,7 +297,18 @@ struct GuestRunner {
 }  // namespace
 
 // Sleeps until `due` to within ~150 us: a high-resolution waitable timer for most of it, a spin for the rest (the reticle layer's refresh cadence).
-#ifndef _WIN32
+#if defined(__APPLE__)
+static void precise_sleep_until(std::chrono::steady_clock::time_point due) {   // no clock_nanosleep on macOS: a relative nanosleep to the margin, then the spin
+    const auto margin=std::chrono::microseconds(150);
+    const auto rest=due-margin-std::chrono::steady_clock::now();
+    if(rest>std::chrono::nanoseconds(0)) {
+        const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(rest).count();
+        const timespec span{time_t(ns/1000000000),long(ns%1000000000)};
+        nanosleep(&span,nullptr);
+    }
+    while(std::chrono::steady_clock::now()<due) _mm_pause();
+}
+#elif !defined(_WIN32)
 static void precise_sleep_until(std::chrono::steady_clock::time_point due) {   // steady_clock is CLOCK_MONOTONIC with libstdc++
     const auto margin=std::chrono::microseconds(150);
     if(due-std::chrono::steady_clock::now()>margin) {
@@ -693,7 +710,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if(coop_enabled) {
 #ifdef _WIN32
         pointer_backend=uc::make_raw_input_backend(window.get());
-#else
+#elif !defined(__APPLE__)   // macOS: none yet, both players' mice are SDL's one mouse (gamepads still tell the players apart)
         pointer_backend=uc::make_evdev_pointer_backend();
 #endif
     }

@@ -10,7 +10,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-// Linux transport of the test server: two Unix-domain sockets, <runtime dir>/uc-test-<name>-cmd.sock (client -> game) and -evt.sock (game -> client),
+// Linux and macOS transport of the test server: two Unix-domain sockets, <runtime dir>/uc-test-<name>-cmd.sock (client -> game) and -evt.sock (game -> client),
 // one client each. Windows uses named pipes (test_pipe_win.cpp). A remote harness reaches them with `ssh -L local.sock:remote.sock`.
 namespace uc {
 namespace {
@@ -24,6 +24,25 @@ sockaddr_un address_of(const std::string& path) {
     std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
     return address;
 }
+// A close-on-exec stream socket and a close-on-exec accepted client. macOS has neither SOCK_CLOEXEC nor accept4: fcntl right after.
+int stream_socket() {
+#if defined(__APPLE__)
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+#else
+    return ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+#endif
+}
+int accept_client(int listener) {
+#if defined(__APPLE__)
+    const int client = ::accept(listener, nullptr, nullptr);
+    if (client >= 0) ::fcntl(client, F_SETFD, FD_CLOEXEC);
+    return client;
+#else
+    return ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+#endif
+}
 std::string socket_path(const std::string& name, const char* suffix) {
     const char* directory = std::getenv("XDG_RUNTIME_DIR");
     return std::string(directory && *directory ? directory : "/tmp") + "/uc-test-" + name + suffix + ".sock";
@@ -36,7 +55,7 @@ int listen_on(const std::string& path, const std::string& name, int& lock) {
     if (lock < 0) throw std::runtime_error("cannot create the lock file of the test socket " + path);
     if (::flock(lock, LOCK_EX | LOCK_NB)) { ::close(lock); lock = -1; throw std::runtime_error("test pipe already in use: " + name); }
     ::unlink(path.c_str());
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const int fd = stream_socket();
     if (fd < 0 || ::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof address) || ::listen(fd, 1)) {
         if (fd >= 0) ::close(fd);
         ::close(lock); lock = -1;
@@ -82,7 +101,7 @@ TestPipes::~TestPipes() {
 }
 void TestPipes::read_loop() {
     std::string partial; bool discarding = false;
-    const int client = ::accept4(to_fd(cmd_), nullptr, nullptr, SOCK_CLOEXEC);
+    const int client = accept_client(to_fd(cmd_));
     if (client >= 0) {
         cmd_client_ = client;
         cmd_connected_ = true;
@@ -109,7 +128,7 @@ void TestPipes::read_loop() {
     reader_done_ = true;
 }
 void TestPipes::write_loop() {
-    const int client = ::accept4(to_fd(evt_), nullptr, nullptr, SOCK_CLOEXEC);
+    const int client = accept_client(to_fd(evt_));
     if (client >= 0) {
         evt_client_ = client;
         evt_connected_ = true;

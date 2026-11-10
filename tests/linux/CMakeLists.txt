@@ -1,4 +1,4 @@
-# The tests that build for Linux (cross build, run on the Deck with scripts/linux/deck.py run build-linux/tests/linux/<name>).
+# The tests that build for Linux (cross build, run on the Deck with scripts/linux/deck.py run build-linux/tests/linux/<name>) and for macOS (run them from build-macos/tests/linux).
 # Each platform-port task adds its tests here; sources stay in tests/ and are shared with the Windows list in tests/CMakeLists.txt.
 function(uc_linux_test name)
   add_executable(${name} ${CMAKE_CURRENT_SOURCE_DIR}/../${name}.cpp)
@@ -65,7 +65,7 @@ target_include_directories(test_matrix_transpose_hle PRIVATE ${CMAKE_CURRENT_SOU
 uc_linux_test(test_game_math_hle test_support)
 target_include_directories(test_game_math_hle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
-uc_linux_test(test_frame_limit_cap uc_options uc_game_pacing test_support rt)
+uc_linux_test(test_frame_limit_cap uc_options uc_game_pacing test_support $<$<NOT:$<BOOL:${APPLE}>>:rt>)   # macOS has no librt (its calls are in libSystem)
 target_include_directories(test_frame_limit_cap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/game)   # check.h, frame_limit_cap.h
 find_package(Vulkan REQUIRED)
 uc_linux_test(test_pipeline_keys Vulkan::Vulkan)

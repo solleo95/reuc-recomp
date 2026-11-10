@@ -189,7 +189,7 @@ target_link_libraries(uc_prompt_picture PUBLIC uc_gx uc_prompt_icons)
 add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp bloom_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp hdr_pass.cpp dlss5_pass.cpp pass_timer.cpp upscaler_probe.cpp)
 if(WIN32)
   target_sources(uc_vulkan PRIVATE streamline.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp ffx_dx12.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
-else()   # Linux: no DLSS/FSR runtimes; one file defines them as unavailable
+else()   # Linux and macOS: no DLSS/FSR runtimes; one file defines them as unavailable
   target_sources(uc_vulkan PRIVATE upscalers_unavailable.cpp)
 endif()
 target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
@@ -202,6 +202,7 @@ else()
 endif()
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})
+if(NOT APPLE)   # tests/renderer_smoke.cpp reads its pictures back through Windows' WIC
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
 target_include_directories(renderer_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_smoke PRIVATE uc_vulkan)
@@ -212,6 +213,7 @@ add_custom_command(TARGET renderer_smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:renderer_smoke> VERBATIM)
+endif()
 if(WIN32)   # the DLSS, DirectX and rollback smoke programs
 add_executable(renderer_rollback_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_rollback_smoke.cpp)
 target_include_directories(renderer_rollback_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
@@ -232,7 +234,9 @@ target_include_directories(renderer_effects_smoke PRIVATE ${CMAKE_SOURCE_DIR}/te
 target_link_libraries(renderer_effects_smoke PRIVATE uc_vulkan)
 add_dependencies(renderer_effects_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 endif()
-install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
+if(TARGET renderer_smoke)
+  install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
+endif()
 install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION tools)
 install(FILES ${UC_SHADER_FILES} DESTINATION tools/data/shaders)
 install(FILES ${sdl3_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/SDL3)
