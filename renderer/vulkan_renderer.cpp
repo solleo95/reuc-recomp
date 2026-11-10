@@ -226,6 +226,12 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (const char* uber=std::getenv("UC_UBER_ONLY")) uber_only_=std::atoi(uber)!=0;
     else uber_only_=driver.driverID==VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
     if (uber_only_) std::fprintf(stderr,"[pipeline] ubershaders only (driver %s)\n",driver.driverName);
+    // Turnip on Android's KGSL kernel driver answers vkGetFenceStatus of an unfinished submission by waiting for the GPU to reach it: the render
+    // thread's completion polls then ran at the GPU's pace (74% of its time blocked there on the Thor), and the guest, which waits for the render
+    // thread at every draw done, with it. There the slot's event is read first (host-visible memory, no kernel call). UC_POLL_BY_EVENT=0/1 decides.
+    if (const char* poll=std::getenv("UC_POLL_BY_EVENT")) poll_by_event_=std::atoi(poll)!=0;
+    else poll_by_event_=driver.driverID==VK_DRIVER_ID_MESA_TURNIP;
+    if (poll_by_event_) std::fprintf(stderr,"[vulkan] completion polls read an event first (vkGetFenceStatus waits on this driver)\n");
 #endif
     if (streamline_) {
         std::string reason;
@@ -374,6 +380,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         vk_check(vkCreateFence(device, &fence, nullptr, &slots_[i].fence), "frame fence");
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &slots_[i].acquired), "acquire semaphore");
+        if (poll_by_event_) { VkEventCreateInfo event{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO}; vk_check(vkCreateEvent(device, &event, nullptr, &slots_[i].done), "frame event"); }
     }
     shaders_=shaders; cache_dir_=shaders_.parent_path();
     const std::string variant=motion_outputs_ ? "smoke.motion." : "smoke.";
@@ -1061,10 +1068,18 @@ void VulkanRenderer::sweep_meshes(bool all) {
     }
     if (all) { for (auto& slab : mesh_slabs_) destroy_buffer(slab->buffer); mesh_slabs_.clear(); }
 }
+VkResult VulkanRenderer::slot_status(const Slot& slot) const {
+    if (slot.done_armed) {
+        const VkResult event = vkGetEventStatus(device, slot.done);
+        if (event == VK_EVENT_RESET) return VK_NOT_READY;
+        if (event != VK_EVENT_SET) return event;   // an error (device lost)
+    }
+    return vkGetFenceStatus(device, slot.fence);   // the event is set at the end of the commands: the fence follows right after
+}
 void VulkanRenderer::collect() {
     for (auto& slot : slots_) {
         if (!slot.submitted || slot.reported) continue;
-        VkResult status = vkGetFenceStatus(device, slot.fence);
+        VkResult status = slot_status(slot);
         if (status == VK_NOT_READY) continue;
         vk_check(status, "frame fence status");
         completed_.push_back(slot.serial); slot.reported = true;
@@ -1985,12 +2000,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     const bool hold=layer_on && !overlay_frame && packet.present && display && !packet.black_output && held_.image;   // this frame is kept, not presented: the overlay frame after it is
     reap_retired(false);
     Slot& slot = slots_[next_slot_];
-    VkResult fence_status = vkGetFenceStatus(device, slot.fence);
+    VkResult fence_status = slot_status(slot);
     if (fence_status == VK_NOT_READY) return false;
     vk_check(fence_status, "frame slot fence");
     const size_t reticle_before=frame_reticle_.size();
     if (layer_on && !overlay_frame) for (const auto& draw:packet.draws) if (draw.layer) frame_reticle_.push_back(draw);   // after every early return: a packet that is retried must not be counted twice
     collect();   // after the check: a fence that finishes between an earlier collect() and the check would be reused unreported and its packet would never complete
+    if (slot.done_armed) { vk_check(vkResetEvent(device, slot.done), "reset frame event"); slot.done_armed = false; }   // its submission finished (above): the next one sets it again
     slot.copy_sources.clear();
     slot.mesh_refs.clear();   // the submission that used these meshes completed (fence checked above)
     if ((++renders_ & 255)==0) sweep_meshes(false);
@@ -2777,6 +2793,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         }
     }
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query + 1);
+    if (slot.done) vkCmdSetEvent(slot.command, slot.done, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);   // slot_status(): set once every command before it finished
     vk_check(vkEndCommandBuffer(slot.command), "end frame"); vk_check(vkResetFences(device, 1, &slot.fence), "reset frame fence");
     VkSemaphoreSubmitInfo waits[2]{{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO},{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}}; uint32_t wait_count = 0;
     if (present_image) { waits[wait_count].semaphore = slot.acquired; waits[wait_count].stageMask = hdr_active_ ? VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_2_TRANSFER_BIT; ++wait_count; }   // the first write of the swapchain image
@@ -2791,6 +2808,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (packet.present && !overlay_frame && upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
     const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
+    slot.done_armed = slot.done != VK_NULL_HANDLE;
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) {
         copy_target->initialized=true;
@@ -2852,7 +2870,7 @@ bool VulkanRenderer::render_overlay(uint64_t serial) {
     // The overlay frames share the slot ring with the game's packets and come far more often: they leave the next two slots to the packets (a slow GPU
     // would otherwise keep every slot busy with reticle frames and the simulation would wait for one).
     for (size_t k=0;k<2 && k<slots_.size();++k)
-        if (vkGetFenceStatus(device,slots_[(next_slot_+k)%slots_.size()].fence)==VK_NOT_READY) return false;
+        if (slot_status(slots_[(next_slot_+k)%slots_.size()])==VK_NOT_READY) return false;
     gx::FramePacket packet;
     packet.serial=serial; packet.present=true; packet.clear_after_copy=false; packet.display_source=held_.display_source; packet.overlay_only=true;
     for (const auto& draw:held_.draws) packet.draws.push_back(draw);
@@ -2912,6 +2930,7 @@ void VulkanRenderer::shutdown() {
         for (auto& slot : slots_) {
             if (slot.fence) vkDestroyFence(device, slot.fence, nullptr);
             if (slot.acquired) vkDestroySemaphore(device, slot.acquired, nullptr);
+            if (slot.done) vkDestroyEvent(device, slot.done, nullptr);
             slot = {};
         }
         pass_timer_.shutdown();

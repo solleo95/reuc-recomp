@@ -215,8 +215,10 @@ private:
         std::vector<VkDescriptorSet> texture_sets;
         VkDescriptorPool texture_pool=VK_NULL_HANDLE;
         uint32_t descriptor_capacity=0;
+        VkEvent done = VK_NULL_HANDLE;   // poll_by_event_: set by the last command of the slot's frame submission
         uint64_t serial = 0;
         bool submitted = false, reported = false, initialized = false, copied = false, timed = false;
+        bool done_armed = false;   // the current submission sets `done`
     };
     // A mesh uploaded once and drawn from every frame; freed once the guest dropped it (owner expired) and no submission still holds it.
     // Meshes live in a few large buffers (one vkAllocateMemory per slab, not per mesh): vertices then indices at the given offsets.
@@ -263,6 +265,7 @@ private:
     void compile_worker();
     void make_attachment(VkImage& image,VkDeviceMemory& memory,VkImageView& view,VkExtent2D extent,bool depth=false,VkFormat format=VK_FORMAT_UNDEFINED);
     void collect();
+    VkResult slot_status(const Slot& slot) const;   // the slot's last submission finished (VK_SUCCESS) or not (VK_NOT_READY), without waiting
     SDL_Window* window_ = nullptr;
     PromptOverlay prompt_overlay_;
     MenuOverlay menu_overlay_;
@@ -427,6 +430,7 @@ private:
     double compiled_ms_ = 0, compiled_uber_ms_ = 0;   // compile time since the last idle report
     bool compile_stop_ = false;
     bool uber_only_ = false;
+    bool poll_by_event_ = false;   // Android Turnip: vkGetFenceStatus waits, slot_status() reads the slot's event first
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
     size_t pipeline_cache_loaded_ = 0;
     std::filesystem::path pipeline_cache_file_;   // load_pipeline_cache(): data/pipeline_cache.bin (Android: one file per driver build)

@@ -20,7 +20,7 @@ PACKAGE = "org.reuc_recomp.umbrella_chronicles"
 DEVICE_DIR = "/sdcard/UmbrellaChronicles"
 ADB = ["adb"] + (["-s", os.environ["UC_ANDROID_SERIAL"]] if os.environ.get("UC_ANDROID_SERIAL") else [])
 # Diagnostics of a run that reach the game as environment variables (GameActivity sets every UC_* extra), as the Deck runs pass them.
-FORWARDED_ENV = ("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_UBER_ONLY", "UC_PIPELINE_THREADS", "UC_PIPELINE_TRACE", "UC_SAVE_TRACE", "UC_TEST_REAL_PAD")
+FORWARDED_ENV = ("UC_CPU_SAMPLE", "UC_FRAME_LOG", "UC_UBER_ONLY", "UC_PIPELINE_THREADS", "UC_PIPELINE_TRACE", "UC_SAVE_TRACE", "UC_TEST_REAL_PAD", "UC_POLL_BY_EVENT")
 
 
 def enabled():
@@ -72,7 +72,9 @@ class AndroidRun:
         for arg in args:
             if not arg or any(c.isspace() for c in arg):
                 raise ValueError(f"the app splits UC_ARGS on whitespace: argument {arg!r} cannot pass")
-        _shell(f"am force-stop {PACKAGE}", check=True)
+        # sync: /sdcard is FUSE with a write-back cache, and the app reads through its own view of it: without the flush the game once read the
+        # run's config.json cut at 8192 bytes (the pages written so far) and stopped at startup.
+        _shell(f"sync; am force-stop {PACKAGE}", check=True)
         extras = {"UC_AUTOSTART": "1", "UC_DRIVER": os.environ.get("UC_ANDROID_DRIVER", ""), "UC_ARGS": " ".join(args), **env}
         command = f"am start -W -n {PACKAGE}/.LauncherActivity" + "".join(f" --es {shlex.quote(key)} {shlex.quote(value)}" for key, value in extras.items())
         _shell(command, check=True, stdout=subprocess.DEVNULL)
@@ -112,6 +114,7 @@ class AndroidRun:
     def fetch(self, local_dir):
         """Pulls the run folder (all but the saves) and this run's session logs into local_dir."""
         local_dir = Path(local_dir)
+        _shell("sync")   # what the game wrote (captures, logs) reaches the files adb reads
         for name in _shell(f"ls {self.remote_dir}", capture_output=True, text=True).stdout.split():
             if name != "saves":
                 subprocess.run(ADB + ["pull", f"{self.remote_dir}/{name}", str(local_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
