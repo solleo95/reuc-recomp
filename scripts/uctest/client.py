@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from .deck import DeckRun, enabled as deck_enabled
-from .transport import PipeTransport, SocketTransport
+from .transport import PipeTransport, SocketTransport, UnixSocketTransport
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import localenv  # noqa: E402  (reads local.env into the environment)
@@ -107,6 +107,8 @@ class Game:
                 self._launch()
             if self.deck and self.launch:
                 factory = self.transport_factory or (lambda: SocketTransport(self.remote.cmd_port, self.remote.evt_port, alive=lambda: self.process.poll() is None))
+            elif sys.platform == "darwin":   # macOS: the game listens on Unix-domain sockets
+                factory = self.transport_factory or (lambda: UnixSocketTransport(self.name, alive=lambda: self.process.poll() is None))
             else:
                 factory = self.transport_factory or (lambda: PipeTransport(self.name, alive=lambda: self.process.poll() is None))
             self.transport = factory()
@@ -441,7 +443,7 @@ class Game:
     def set_speed(self, factor):
         self.request({"cmd": "speed", "factor": factor})
 
-    INSERT, P, ESCAPE = 73, 19, 41   # SDL scancodes of the port's host keys
+    INSERT, P, ESCAPE = (43 if sys.platform == "darwin" else 73), 19, 41   # SDL scancodes of the port's host keys (the menu key is Tab on macOS: kDefaultMenuKey)
 
     def host_key(self, code):
         """A key of the port itself (Insert: settings menu, P: pause), handled in the main loop's next iteration."""

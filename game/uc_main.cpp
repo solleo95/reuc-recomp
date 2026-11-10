@@ -1052,7 +1052,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::HostKeys host_keys;
     uc::SteamOverlay steam_overlay;   // Steam Deck: Steam's own menus (Steam button, "...") are on top: the game gets no input meanwhile
     bool steam_overlay_open=false;
-    std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert)
+    std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert, Tab on macOS)
     std::vector<SDL_Scancode> speed_keys;   // the keys bound to the speed_up action (empty: no speed key)
     const auto set_key_lists=[&](const uc::Bindings& bindings) {
         for(const auto [action,keys]:{std::pair{uc::Action::menu,&menu_keys},std::pair{uc::Action::speed_up,&speed_keys}}) {
@@ -1351,7 +1351,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 const auto status=coop.status(); const auto ask=coop.pending();
                 const auto code=[](uc::DeviceKind kind) { return kind==uc::DeviceKind::gamepad ? 1 : kind==uc::DeviceKind::wiimote ? 2 : kind==uc::DeviceKind::pointer ? 3 : 0; };
                 if(!controlled) {
-                    const SDL_Scancode menu_key=menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front();
+                    const SDL_Scancode menu_key=menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front();
                     if(ask.asking && !coop_was_asking && !host_keys.menu_open) { host_key_pressed(menu_key); coop_menu_opened=true; }   // a new device was pressed in a game menu: the menu opens with the question
                     if(!ask.asking && coop_menu_opened) { coop_menu_opened=false; if(host_keys.menu_open) host_key_pressed(menu_key); }   // answered: back to the game
                     if(ask.asking && coop_menu_was_open && !host_keys.menu_open) { coop.cancel_pending(); coop_menu_opened=false; }   // the menu was closed with the question open: not now
@@ -1403,12 +1403,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     const bool down=event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN;
                     if(down && (event.gbutton.button==SDL_GAMEPAD_BUTTON_GUIDE || event.gbutton.button==SDL_GAMEPAD_BUTTON_MISC1)) { steam_overlay.hint(); sync_overlay(); }   // the Steam / "..." button reaches the game before its menu shows
                     if(deck_menu && event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) {   // View opens and closes the Deck menu
-                        if(down && !settings_menu->capturing()) host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());
+                        if(down && !settings_menu->capturing()) host_key_pressed(menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front());
                         continue;
                     }
                     if(event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) pad_back_held=down;
                     else if(down && event.gbutton.button==SDL_GAMEPAD_BUTTON_START && pad_back_held && !settings_menu->capturing()) {
-                        host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());   // the same toggle as the menu key; the Start press is not passed on (no pause)
+                        host_key_pressed(menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front());   // the same toggle as the menu key; the Start press is not passed on (no pause)
                         continue;
                     }
                 }

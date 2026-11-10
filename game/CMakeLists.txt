@@ -105,9 +105,11 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
   add_executable(uc_smoke smoke.cpp)
   target_link_libraries(uc_smoke PRIVATE uc_game uc_common test_support)
   install(TARGETS uc_smoke RUNTIME DESTINATION tools)
-  add_executable(step_probe ${CMAKE_SOURCE_DIR}/tools/step_probe/step_probe.cpp)   # offline proof of tools/step_audit fix records
-  target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
-  add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
+  if(WIN32)   # step_probe.cpp reports guest faults through a Windows vectored exception handler
+    add_executable(step_probe ${CMAKE_SOURCE_DIR}/tools/step_probe/step_probe.cpp)   # offline proof of tools/step_audit fix records
+    target_link_libraries(step_probe PRIVATE uc_game uc_common test_support)
+    add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
+  endif()
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
   add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,$<IF:$<BOOL:${APPLE}>,system_report_macos.cpp,system_report_posix.cpp>> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
   target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io uc_ui_mode)
