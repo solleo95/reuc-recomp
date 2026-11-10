@@ -22,6 +22,9 @@ void set_exit_hook(void (*fn)()) { g_hook = fn; }
 [[noreturn]] static void die(int code) {
     if (g_hook) g_hook();
     std::fflush(stderr);
+#ifdef __ANDROID__
+    usleep(300000);   // stderr reaches logcat and the session log through threads (game/android_app_main.cpp): let them take the last lines
+#endif
     _exit(code);   // kills the other host threads too
 }
 
@@ -31,6 +34,8 @@ static void on_signal(int signal_number, siginfo_t* info, void* context) {
     const auto* registers = static_cast<const ucontext_t*>(context);
 #if defined(__APPLE__) && defined(__aarch64__)
     const void* pc = reinterpret_cast<void*>(__darwin_arm_thread_state64_get_pc(registers->uc_mcontext->__ss));
+#elif defined(__aarch64__)   // Linux on arm64 (Android)
+    const void* pc = reinterpret_cast<void*>(registers->uc_mcontext.pc);
 #else
     const void* pc = reinterpret_cast<void*>(registers->uc_mcontext.gregs[REG_RIP]);
 #endif

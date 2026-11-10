@@ -1,6 +1,6 @@
 #include "cpu_sampler.h"
-#if defined(__APPLE__)
-// macOS: no sampler (it needs Linux's per-thread SIGEV_THREAD_ID timers); profile with Instruments or `sample <pid>` instead.
+#if defined(__APPLE__) || defined(__ANDROID__)
+// macOS and Android: no sampler (it reads x86-64 registers from Linux's per-thread SIGEV_THREAD_ID timers); profile with Instruments or simpleperf instead.
 namespace uc {
 void cpu_sampler_start_once(const char*) {}
 void cpu_sampler_set_replaying(bool) {}

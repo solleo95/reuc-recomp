@@ -6,6 +6,6 @@ if [[ -f "$ROOT/local.env" ]]; then
     [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
     key="${line%%=*}"; value="${line#*=}"
     key="${key//[[:space:]]/}"
-    [[ -n "$key" && -z "${!key+set}" ]] && export "$key=$value"
+    if [[ -n "$key" && -z "${!key+set}" ]]; then export "$key=$value"; fi   # an "if": a skipped last line must not make `source` fail under set -e
   done < "$ROOT/local.env"
 fi

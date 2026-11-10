@@ -215,8 +215,8 @@ void Sched::join_hosts() {
     std::lock_guard joining(join_m_);
     std::vector<void*> handles;
     { std::lock_guard lock(baton_m_); handles.swap(handles_); }
-#if defined(__APPLE__)
-    {   // no pthread_timedjoin_np on macOS: the same 5 s limit on every host leaving thread_main (HostExit), then a plain join below
+#if defined(__APPLE__) || defined(__ANDROID__)
+    {   // no pthread_timedjoin_np on macOS or Android (Bionic): the same 5 s limit on every host leaving thread_main (HostExit), then a plain join below
         std::unique_lock lock(baton_m_);
         const auto stopped = [&] {
             for (const auto* list : {&threads_, &retired_}) for (const auto& t : *list) if (t->host_alive) return false;
@@ -230,7 +230,7 @@ void Sched::join_hosts() {
         DWORD result = WaitForSingleObject(static_cast<HANDLE>(handle), 5000);
         if (result != WAIT_OBJECT_0) fatal("guest host thread failed to stop: wait result %lu", result);
         if (!CloseHandle(static_cast<HANDLE>(handle))) fatal("cannot close joined guest thread: Windows error %lu", GetLastError());
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__ANDROID__)
         const int result = pthread_join(reinterpret_cast<pthread_t>(handle), nullptr);
         if (result) fatal("guest host thread failed to stop: %s", std::strerror(result));
 #else
@@ -632,7 +632,12 @@ void Sched::start_host(Thread* t) {
     const int created = pthread_create(&thread, &attributes, tramp, start);
     pthread_attr_destroy(&attributes);
     if (created) { delete start; fatal("cannot create a host thread for guest thread %d: %s", t->id, std::strerror(created)); }
-#if !defined(__APPLE__)   // macOS has no CPU pinning on Apple Silicon (the scheduler places threads by QoS): --pin-cpu does nothing there
+#if defined(__ANDROID__)   // Bionic has no pthread_setaffinity_np: the kernel call on the thread's id
+    if (pin_cpu_ >= 0) {
+        cpu_set_t set; CPU_ZERO(&set); CPU_SET(pin_cpu_, &set);
+        sched_setaffinity(pthread_gettid_np(thread), sizeof set, &set);
+    }
+#elif !defined(__APPLE__)   // macOS has no CPU pinning on Apple Silicon (the scheduler places threads by QoS): --pin-cpu does nothing there
     if (pin_cpu_ >= 0) {
         cpu_set_t set; CPU_ZERO(&set); CPU_SET(pin_cpu_, &set);
         pthread_setaffinity_np(thread, sizeof set, &set);

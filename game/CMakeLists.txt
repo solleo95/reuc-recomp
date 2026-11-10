@@ -111,7 +111,17 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
     add_test(NAME test_step_probe_selfcheck COMMAND step_probe --selfcheck)
   endif()
   include(${CMAKE_SOURCE_DIR}/cmake/mimalloc.cmake)
-  add_executable(uc allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,$<IF:$<BOOL:${APPLE}>,system_report_macos.cpp,system_report_posix.cpp>> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
+  set(uc_sources allocator.cpp uc_main.cpp audio_output.cpp compile_screen.cpp det_trace.cpp frame_log.cpp settings_menu.cpp deck_menu.cpp steam_overlay.cpp $<IF:$<BOOL:${WIN32}>,system_report_win.cpp,$<IF:$<BOOL:${APPLE}>,system_report_macos.cpp,system_report_posix.cpp>> $<$<NOT:$<BOOL:${WIN32}>>:huge_text_posix.cpp>)
+  if(ANDROID)   # the app's libmain.so: SDLActivity calls its SDL_main (android_app_main.cpp); uc_cli runs the same game from adb shell
+    add_library(uc SHARED ${uc_sources} android_app_main.cpp)
+    set_target_properties(uc PROPERTIES OUTPUT_NAME main)
+    target_link_libraries(uc PRIVATE log android)
+    target_link_options(uc PRIVATE -Wl,--as-needed)   # no NEEDED libvulkan.so: Vulkan comes through volk, from the driver android_vulkan.cpp loads
+    add_executable(uc_cli android_cli_main.cpp)
+    target_link_libraries(uc_cli PRIVATE uc)
+  else()
+    add_executable(uc ${uc_sources})
+  endif()
   target_link_libraries(uc PRIVATE mimalloc-static uc_public_release uc_path_io uc_ui_mode)
   target_link_libraries(uc PRIVATE uc_game uc_common uc_cpu_topology uc_platform uc_options_config uc_intro uc_vulkan uc_input_probe uc_host_input uc_gamepad_input uc_wiimote_input uc_coop_session $<IF:$<BOOL:${WIN32}>,uc_raw_input_backend,$<$<NOT:$<BOOL:${APPLE}>>:uc_evdev_backend>> uc_test_server uc_crash_bundle
     uc_live_settings uc_settings_registry uc_ui_style uc_launcher_locale uc_binding_editor uc_gamepad_panel uc_game_mods uc_mod_menu uc_deck_pages uc_netplay_game)
@@ -153,7 +163,7 @@ if(DEFINED UC_GENERATED_INCLUDE_DIR AND EXISTS ${UC_GENERATED_INCLUDE_DIR}/game_
     install(PROGRAMS $<TARGET_FILE:uc> DESTINATION . RENAME uc_avx2.exe)
     install(PROGRAMS ${UC_COMPAT_DIR}/game/uc.exe DESTINATION . RENAME uc_compat.exe)
     install(FILES ${UC_COMPAT_DIR}/game/uc.map DESTINATION data RENAME uc_compat.map)
-  else()
+  elseif(NOT ANDROID)   # the Android app is packaged by scripts/android/build.sh
     install(TARGETS uc RUNTIME DESTINATION .)
   endif()
   if(WIN32)   # the Deck uses its own SDL3 (3.4, with Wayland): the one built here has no Wayland backend

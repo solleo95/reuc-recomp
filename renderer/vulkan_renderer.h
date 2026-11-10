@@ -246,6 +246,7 @@ private:
     void destroy_texture(Texture& texture);
     void retire_textures(Slot& slot);
     void rebuild();
+    bool create_window_surface();   // surface_ for window_ (Android: through volk)
     void retire_images(bool keep_buffers=false);
     void retire_for_resize();
     void reap_retired(bool wait);
@@ -428,6 +429,8 @@ private:
     bool uber_only_ = false;
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
     size_t pipeline_cache_loaded_ = 0;
+    std::filesystem::path pipeline_cache_file_;   // load_pipeline_cache(): data/pipeline_cache.bin (Android: one file per driver build)
+    bool pipeline_cache_migrated_ = false;        // Android: the data came from the single file of earlier builds, removed after the first save
     VkShaderModule vertex_module_ = VK_NULL_HANDLE, fragment_module_ = VK_NULL_HANDLE, uber_module_ = VK_NULL_HANDLE;
     std::filesystem::path cache_dir_;
     std::set<PipelineKey> known_keys_;        // keys already in the seed or recorded file
@@ -486,6 +489,7 @@ private:
     size_t next_slot_ = 0;
     uint64_t last_serial_ = 0;
     bool resized_ = true;
+    bool surface_lost_ = false;   // Android: the window's surface went away with the app in the background; rebuild() makes a new one
     std::chrono::steady_clock::time_point last_rebuild_{};
     std::atomic<uint32_t> errors_{0};
     std::atomic<uint64_t> presentations_{0}, gpu_busy_ns_{0}, gpu_window_max_ns_{0};

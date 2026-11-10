@@ -9,9 +9,13 @@
 namespace uc::ui {
 // Linux (SteamOS): the fonts the system ships. DejaVu Sans for Latin and Cyrillic, Noto Sans CJK merged in for Japanese, Korean and Chinese, DejaVu Serif for headings.
 // macOS: Arial, Arial Unicode merged in for Japanese, Korean and Chinese, Georgia for headings (all in /System/Library/Fonts/Supplemental).
+// Android: the same roles from /system/fonts.
 #if defined(__APPLE__)
 constexpr const char* kSansFonts[]={"/System/Library/Fonts/Supplemental/Arial.ttf","/System/Library/Fonts/Supplemental/Arial Unicode.ttf"};
 constexpr const char* kSerifFonts[]={"/System/Library/Fonts/Supplemental/Georgia.ttf"};
+#elif defined(__ANDROID__)   // Roboto (the static copy first, the variable one otherwise), Noto Sans CJK merged in, Noto Serif for headings
+constexpr const char* kSansFonts[]={"/system/fonts/RobotoStatic-Regular.ttf","/system/fonts/NotoSansCJK-Regular.ttc"};
+constexpr const char* kSerifFonts[]={"/system/fonts/NotoSerif-Regular.ttf"};
 #else
 constexpr const char* kSansFonts[]={"/usr/share/fonts/TTF/DejaVuSans.ttf","/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
 constexpr const char* kSerifFonts[]={"/usr/share/fonts/TTF/DejaVuSerif.ttf","/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"};

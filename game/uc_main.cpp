@@ -587,7 +587,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);
-        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect,options.window_mode==uc::WindowMode::exclusive);
+        try { renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect,options.window_mode==uc::WindowMode::exclusive); }
+        catch(const std::exception& error) { std::fprintf(stderr,"[startup] renderer initialization failed: %s\n",error.what()); throw; }   // said before the unwinding, whose own failures can end the process
         std::fprintf(stderr,"[startup] renderer initialized after %.1f ms; setting effects\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-renderer_start).count());
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom_settings());
@@ -657,9 +658,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const auto* mode=display ? SDL_GetDesktopDisplayMode(display) : nullptr;
         if(!mode || mode->w<=0 || mode->h<=0) throw std::runtime_error("monitor display mode unavailable: "+std::string(SDL_GetError()));
         const double aspect=options.width && options.height ? double(options.width)/options.height : double(mode->w)/mode->h; render_aspect=aspect;   // an explicit window size sets the picture's shape, otherwise the monitor does
+#ifdef __ANDROID__
+        options.window_mode=uc::WindowMode::borderless;   // an app on a phone or handheld fills the screen: SDL hides the system bars
+#endif
         const bool monitor_window=!options.width && !options.height;
         if(!options.width) options.width=uint32_t(mode->w);
         if(!options.height) options.height=uint32_t(mode->h);
+#ifdef __ANDROID__   // 1x (720p) by default on a handheld: with Qualcomm's driver every draw takes the ubershader, GPU bound at 1.5x (20 fps on the Thor's title, 90 at 1x)
+        if(!options.render_scale) options.render_scale=1.0;
+#endif
         if(!options.render_scale) options.render_scale=uc::monitor_render_scale(uint32_t(mode->w),uint32_t(mode->h));
         std::fprintf(stderr,"Monitor: %dx%d %.3g Hz;720p multiplier %.4gx\n",mode->w,mode->h,mode->refresh_rate,options.render_scale);
         int window_width=int(options.width),window_height=int(options.height);
@@ -1306,13 +1313,17 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); view_for_output(int(w),int(h)); } catch (...) { watch_error = std::current_exception(); } };
     watch_state = {&render_step, &resize_step, window ? SDL_GetWindowID(window.get()) : 0};
-    const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the main thread, also inside the modal resize loop
+    const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the thread that pushes the event: the main one on Windows, also inside the modal resize loop
         auto& state = *static_cast<Watch*>(user);
         if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event->window.windowID == state.window) (*state.resize)(uint32_t(std::max(0, event->window.data1)), uint32_t(std::max(0, event->window.data2)));
         else if (event->type == SDL_EVENT_WINDOW_EXPOSED) (*state.render)();
         return true;
     };
+#ifdef __ANDROID__   // Android pushes window events from its UI (Java) thread, where the watch would call the renderer off its owner thread; the main loop
+    (void)watch;     // handles every resize itself, and there is no modal loop to render through
+#else
     if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
+#endif
     uc::cpu_sampler_start_once("main");
     uc::RumbleRouter rumble_router;
     unsigned rumble_pad_starts=0,rumble_wii_starts=0; uint64_t rumble_game_starts=0,rumble_logged_ms=0;   // the diagnostics line of the vibration
@@ -1635,7 +1646,11 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
 int wmain(int argc, wchar_t** argv) {
 #else
 namespace uc { void text_to_huge_pages(); }   // huge_text_posix.cpp
+#if defined(__ANDROID__)
+int uc_program_main(int argc, char** argv) {   // Android: called by the app's SDL_main (android_app_main.cpp) or by uc_cli over adb (android_cli_main.cpp)
+#else
 int main(int argc, char** argv) {   // Linux arguments are bytes already (UTF-8)
+#endif
     uc::text_to_huge_pages();   // first, while this is the only thread
 #endif
     uc::Options startup_options;
