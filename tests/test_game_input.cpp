@@ -301,6 +301,53 @@ int main() {
     second.host_wheel(1);sample_second();
     c.r[3]=binding;c.r[4]=4;c.lr=0x80068510;c.r[30]=first_actor;hle_GameActionMask(c);CHECK(c.r[3]!=uc::kNativeWeaponStep);
     c.r[3]=binding+0x68;c.r[4]=4;c.lr=0x80068510;c.r[30]=actor_address;hle_GameActionMask(c);CHECK(c.r[3]==uc::kNativeWeaponStep);
+    {   // Auto QTE: the input comes from the game state alone; what the player presses or shakes changes nothing while it is on (a late packet of the other player in network play).
+        uc::NativeInput solo; solo.focus(true); uc::input_hle_init(&solo); uc::game_input_init(&solo);   // the first player's channel again (the two-player part above left the second selected)
+        const uint32_t qactor=0x80070000;
+        ppc::wr32(c,c.r[13]-27464,qactor); ppc::wr32(c,qactor+0x790,0); ppc::wr32(c,qactor+0x794,1);
+        ppc::wr32(c,qactor+0x630,1); ppc::wr32(c,qactor+0x798,2);
+        const auto shakes=[&] {c.r[3]=qactor+0x5F8;c.r[4]=0;c.lr=0x800672C0;hle_GameMotionCount(c);return c.r[3];};
+        uc::game_input_set_auto_qte(false);
+        for(unsigned i=0;i<8;++i) {uc::game_input_sample(c,raw);CHECK(shakes()==0);}   // off: nothing happens by itself
+        uc::game_input_init(&solo); uc::game_input_set_auto_qte(true);
+        uint32_t counted=0;
+        for(unsigned i=1;i<=8;++i) {uc::game_input_sample(c,raw);counted=shakes();if(i<4)CHECK(counted==0);}
+        CHECK(counted==2);   // a step every fourth sample while the window is open
+        uc::game_input_init(&solo);
+        uc::game_input_sample(c,raw);   // opens the window
+        solo.host_motion(32,0,5000000000); solo.host_motion(-32,0,5030000000);
+        uc::game_input_sample(c,raw); CHECK(shakes()==2);   // the real gesture adds nothing
+        uc::game_input_set_auto_qte(false); uc::game_input_init(&solo);
+        uc::game_input_sample(c,raw);
+        solo.host_motion(32,0,6000000000); solo.host_motion(-32,0,6030000000);
+        uc::game_input_sample(c,raw); CHECK(shakes()==3);   // the control: the same gesture counts with auto QTE off
+        // A button QTE waits in a suspended scene (mode 0): the prompts drawn this step decide what is pressed, alternately down and up.
+        ppc::wr32(c,qactor+0x630,0); ppc::wr32(c,qactor+0x798,0); ppc::wr32(c,0x80020000+0x6BD0,1);
+        uc::game_input_set_auto_qte(true); uc::game_input_init(&solo);
+        const uc::Action a_prompt[]={uc::Action::interact},ab_prompt[]={uc::Action::interact,uc::Action::fire};
+        uc::game_input_note_qte_prompt(a_prompt); mapped=uc::game_input_sample(c,raw);   // sample 1: up
+        CHECK(mapped.held==0 && mapped.pressed==0 && mapped.released==uc::kButtonA);
+        uc::game_input_note_qte_prompt(a_prompt); mapped=uc::game_input_sample(c,raw);   // sample 2: down
+        CHECK(mapped.held==uc::kButtonA && mapped.pressed==uc::kButtonA && mapped.released==0);
+        solo.host_button({uc::PhysicalKind::mouse,3},true);   // the player's real B: ignored while a prompt is drawn
+        uc::game_input_note_qte_prompt(a_prompt); mapped=uc::game_input_sample(c,raw);   // 3: up
+        CHECK(mapped.held==0);
+        mapped=uc::game_input_sample(c,raw);   // 4: no prompt drawn (a cutscene or the Check Point screen): the real B passes through to skip / continue
+        CHECK(mapped.held==uc::kButtonB);
+        uc::game_input_note_qte_prompt(a_prompt); mapped=uc::game_input_sample(c,raw); mapped=uc::game_input_sample(c,raw);   // 5: up, 6: down, no prompt after the 5th
+        CHECK(mapped.held==uc::kButtonB);
+        uc::game_input_note_qte_prompt(ab_prompt); mapped=uc::game_input_sample(c,raw);   // 7: up
+        uc::game_input_note_qte_prompt(ab_prompt); mapped=uc::game_input_sample(c,raw);   // 8: down, A and B together
+        CHECK(mapped.held==(uc::kButtonA|uc::kButtonB) && mapped.pressed==(uc::kButtonA|uc::kButtonB));
+        // The state belongs to the checkpoint: a rollback replays the same beats and prompts.
+        const auto saved=uc::game_input_checkpoint();
+        uc::game_input_note_qte_prompt(ab_prompt); const auto first=uc::game_input_sample(c,raw);
+        uc::game_input_restore(*saved);
+        uc::game_input_note_qte_prompt(ab_prompt); const auto again=uc::game_input_sample(c,raw);
+        CHECK(first.held==again.held && first.pressed==again.pressed && first.released==again.released);
+        uc::game_input_set_auto_qte(false);
+        ppc::wr32(c,0x80020000+0x6BD0,0);
+    }
     uc::input_hle_init(nullptr);
     uc::game_input_shutdown();
 }

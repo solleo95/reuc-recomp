@@ -128,6 +128,38 @@ static void a_gyro_swing_is_a_knife_and_a_shake_is_a_qte_step() {
     for(int i=0;i<12;++i) {off.input.host_pad_gyro(i&1 ? 6.f : -6.f,0,t); t+=30000000; none+=downs(off.input.consume_actions(),Action::qte_shake);}
     CHECK(none==0);
 }
+// Issue 41: a pad without a gyro (Xbox One, PS4 with the gyro off) waggles the right stick for a QTE shake, as the prompt's "RS" suggests; R3 stays bound too.
+static size_t stick_shake_steps(Pad& p,bool right,int half_stroke_frames,int strokes,float amplitude) {
+    size_t steps=0; uint64_t t=p.now; float previous=0;   // each stroke moves the stick evenly from where the last one ended
+    for(int i=0;i<strokes;++i) {
+        const float x=(i&1 ? -1.f : 1.f)*amplitude;
+        for(int k=0;k<half_stroke_frames;++k) {
+            p.input.host_pad_stick(0,right ? PadSide::right : PadSide::left,previous+(x-previous)*float(k+1)/float(half_stroke_frames),0);
+            t+=16000000; p.input.consume_at(t); steps+=downs(p.input.consume_actions(),Action::qte_shake);
+        }
+        previous=x;
+    }
+    p.now=t; return steps;
+}
+static void a_right_stick_waggle_is_a_qte_shake() {
+    Pad shake(InputContext::qte); shake.input.qte_window(true);
+    CHECK(stick_shake_steps(shake,true,3,12,1.f)>=8);                               // 3 frames (48 ms) per stroke, full deflection
+    Pad half(InputContext::qte); half.input.qte_window(true);
+    CHECK(stick_shake_steps(half,true,3,12,.5f)>=8);                                // a half-deflection waggle counts too
+    Pad slow(InputContext::qte); slow.input.qte_window(true);
+    CHECK(stick_shake_steps(slow,true,60,4,1.f)==0);                                // a one-second sweep is a camera move, no shake
+    Pad drift(InputContext::qte); drift.input.qte_window(true);
+    CHECK(stick_shake_steps(drift,true,3,12,.08f)==0);                              // inside the dead zone
+    Pad left(InputContext::qte); left.input.qte_window(true);
+    CHECK(stick_shake_steps(left,false,3,12,1.f)==0);                               // the left stick aims, it does not shake
+    Pad closed(InputContext::qte);                                                  // no QTE window open: nothing
+    CHECK(stick_shake_steps(closed,true,3,12,1.f)==0);
+    Pad gameplay(InputContext::gameplay); gameplay.input.qte_window(true);
+    gameplay.input.host_button({PhysicalKind::pad_button,0},true); gameplay.input.consume_actions();   // interact held: the waggle must not become a knife swing
+    size_t knives=0; uint64_t t=gameplay.now;
+    for(int i=0;i<12;++i) {gameplay.input.host_pad_stick(0,PadSide::right,i&1 ? -1.f : 1.f,0); t+=48000000; gameplay.input.consume_at(t); knives+=downs(gameplay.input.consume_actions(),Action::knife);}
+    CHECK(knives==0);
+}
 static void reset_releases_the_gamepad() {
     Pad p; p.input.host_button({PhysicalKind::pad_axis,11},true); p.input.host_pad_stick(0,PadSide::left,1,0); p.input.host_pad_stick(0,PadSide::right,1,0);
     CHECK(p.input.consume_actions().held&bit(Action::fire));
@@ -156,5 +188,5 @@ static void test_events_reach_the_pad_pipeline() {
 int main() {
     left_stick_moves_the_pointer_per_second(); dt_is_capped_and_an_idle_stick_is_still(); two_pads_add_after_their_own_dead_zones();
     roles_choose_the_aim_and_camera_sticks(); recenter_action_centres_the_pointer(); gyro_modes();
-    a_gyro_swing_is_a_knife_and_a_shake_is_a_qte_step(); reset_releases_the_gamepad(); test_events_reach_the_pad_pipeline();
+    a_gyro_swing_is_a_knife_and_a_shake_is_a_qte_step(); a_right_stick_waggle_is_a_qte_shake(); reset_releases_the_gamepad(); test_events_reach_the_pad_pipeline();
 }

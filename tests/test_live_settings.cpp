@@ -34,6 +34,10 @@ int main() {
     targets.bindings=[&](const uc::Bindings&){ calls.push_back("bindings"); };
     targets.gamepad=[&](const uc::GamepadSettings&){ calls.push_back("gamepad"); };
     targets.wiimote=[&](const uc::WiimoteSettings&){ calls.push_back("wiimote"); };
+    uint32_t last_fov=0;
+    targets.fov=[&](uint32_t percent){ calls.push_back("fov"); last_fov=percent; };
+    bool last_auto_qte=false;
+    targets.auto_qte=[&](bool on){ calls.push_back("auto_qte"); last_auto_qte=on; };
     targets.player2=[&](const uc::CoopSettings&){ calls.push_back("player2"); };
     uc::LiveSettings live(path,uc::load_config(path),targets);
     const auto saved=[&]{ return uc::options_from_config(uc::load_config(path)); };
@@ -75,6 +79,20 @@ int main() {
     {   // the interface position alone reaches only its target and is saved
         calls.clear(); auto next=live.options(); next.hud_position=uc::HudPosition::edges; live.apply(next);
         CHECK((calls==std::vector<std::string>{"hud_position"}) && saved().hud_position==uc::HudPosition::edges && !live.error());
+    }
+    {   // the field of view reaches only its target, once, and is saved
+        calls.clear(); auto next=live.options(); next.fov=125; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"fov"}) && last_fov==125 && saved().fov==125 && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        next.fov=100; live.apply(next); CHECK(last_fov==100 && saved().fov==100);
+        calls.clear();
+    }
+    {   // Auto QTE reaches only its target, once, and is saved
+        calls.clear(); auto next=live.options(); next.auto_qte=true; live.apply(next);
+        CHECK((calls==std::vector<std::string>{"auto_qte"}) && last_auto_qte && saved().auto_qte && !live.error());
+        calls.clear(); live.apply(next); CHECK(calls.empty());
+        next.auto_qte=false; live.apply(next); CHECK(!last_auto_qte && !saved().auto_qte);
+        calls.clear();
     }
     {   // the gamepad settings reach only their target (once) and are saved in the "gamepad" object
         calls.clear(); auto next=live.options(); next.gamepad.model=uc::PadModel::nintendo; next.gamepad.gyro.mode=uc::GyroMode::always; live.apply(next);

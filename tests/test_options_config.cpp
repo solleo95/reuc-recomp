@@ -46,6 +46,19 @@ int main() {
     options.skip_tutorials=true;uc::store_options(document,options);
     CHECK(document.properties["skip_tutorials"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).skip_tutorials);
     options.skip_tutorials=false;uc::store_options(document,options);
+    CHECK(!options.auto_qte && document.properties["auto_qte"]==false && !uc::options_from_config(uc::parse_config(uc::serialize_config(document))).auto_qte);   // absent: the game plays its QTEs by hand
+    options.auto_qte=true;uc::store_options(document,options);
+    CHECK(document.properties["auto_qte"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).auto_qte);
+    options.auto_qte=false;uc::store_options(document,options);
+    CHECK(options.fov==100 && document.properties["fov"]==100 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fov==100);   // absent: the game's own field of view
+    options.fov=135;uc::store_options(document,options);
+    CHECK(document.properties["fov"]==135 && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).fov==135);
+    for(const char* bad:{"49","301","\"wide\"","1.5","true"}) {
+        auto broken=document;broken.properties["fov"]=nlohmann::ordered_json::parse(bad);
+        bool refused=false;try{uc::options_from_config(broken);}catch(const std::exception&){refused=true;}
+        CHECK(refused);   // a value outside 50..300 or no whole number is reported, never clamped silently
+    }
+    options.fov=100;uc::store_options(document,options);
     CHECK(!options.logs && document.properties["logs"]==false);   // absent: no logs in a release client
     options.logs=true;uc::store_options(document,options);
     CHECK(document.properties["logs"]==true && uc::options_from_config(uc::parse_config(uc::serialize_config(document))).logs);

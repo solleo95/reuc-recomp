@@ -231,6 +231,18 @@ void NativeInput::host_pad_stick(unsigned pad,PadSide side,float x,float y) {
     sticks_[pad][size_t(side)]={x,y};
     update_camera();
 }
+void NativeInput::stick_shake(uint64_t now_ns) {
+    constexpr float kCountsPerStick=60;   // full travel (2.0) = 120 counts: a waggle of 3 frames per stroke, even at half deflection, passes the detector's stroke and speed; a one-second sweep (aiming the camera) does not
+    float dx=0,dy=0;
+    for(unsigned i=0;i<sticks_.size();++i) {
+        // Same dead zone and focus rule as the camera stick; the position is tracked outside a QTE window too, so a stick that was already pushed makes no jump when the window opens.
+        const auto axes=state_.valid ? camera_axes(sticks_[i][1][0],sticks_[i][1][1],pad_.camera_dead_zone) : std::array<int8_t,2>{};
+        const std::array<float,2> now{axes[0]/127.f,axes[1]/127.f};
+        dx+=(now[0]-shake_prev_[i][0])*kCountsPerStick; dy+=(now[1]-shake_prev_[i][1])*kCountsPerStick;
+        shake_prev_[i]=now;
+    }
+    if(dx!=0 || dy!=0)actions_.qte_motion(dx,dy,now_ns);
+}
 void NativeInput::step_pointer(uint64_t now_ns) {
     const double dt=step_ns_ && now_ns>step_ns_ ? std::min(.1,double(now_ns-step_ns_)/1e9) : 0.0;   // a hitch or a pause counts as a tenth of a second, never a jump
     step_ns_=now_ns;
@@ -464,6 +476,7 @@ InputSample NativeInput::consume_at(uint64_t now_ns) {
         demo_host_=item.host; demo_generation_=item.generation;
         return item.sample;
     }
+    stick_shake(now_ns);
     step_pointer(now_ns);
     ease_pointer(motion_time());
     auto result=state_;

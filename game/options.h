@@ -11,6 +11,7 @@
 #include "input_prompts.h"
 #include "pointer_settings.h"
 #include "upscale_mode.h"
+#include "view_fov.h"
 #include "wiimote_config.h"
 #include "netplay.h"
 #include "renderer_backend.h"
@@ -110,6 +111,8 @@ struct Options {
     std::string test_server; // agent test server pipe name [A-Za-z0-9_-]{1,32}
     bool god = false;        // test-mode cheat: health and ammo stay at their maxima, needs test_server
     bool skip_tutorials = false;   // tutorial pages never open (launcher "Skip tutorials", config skip_tutorials, --skip-tutorials)
+    uint32_t fov = 100;   // launcher / in-game menu "FOV", config fov, --fov: percent of the game's own field of view (view_fov.h, kFovMin..kFovMax, 50..300); in network play the host's value counts for both players
+    bool auto_qte = false;   // launcher "Auto QTE", in-game menu, config auto_qte, --auto-qte: the game completes every QTE by itself (in network play the host's value counts for both players)
     bool logs = false;   // launcher "Enable logs", config logs: a release client (see public_release.h) writes logs and crash reports again; the launcher passes UC_LOGS=1 to uc.exe
     uint32_t speed = 1;     // test-mode virtual clock factor 1..32, needs test_server
 };

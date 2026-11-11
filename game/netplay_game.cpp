@@ -7,6 +7,7 @@
 #include "ax_audio.h"
 #include "hle/gx.h"
 #include "game_input.h"
+#include "view_fov.h"
 #include "clock.h"
 #include "sched.h"
 #include "game_pacing.h"
@@ -302,7 +303,7 @@ struct NetGame::Impl {
     std::atomic<bool> waiting{false};
     std::chrono::steady_clock::time_point began{};
     Impl(const Options& o,NativeInput& source,const std::filesystem::path& executable,const std::filesystem::path& root):options(o),local(source),saves(o.netplay->host,root),tick(o.net_tick),tick_now(o.net_tick) {
-        hello={{"game","UC-NET-13"},{"build",file_hash(executable)},{"dol",file_hash(o.game/"DATA/sys/main.dol")},{"speed",o.speed},{"god",o.god},{"tick",o.net_tick}};
+        hello={{"game","UC-NET-13"},{"build",file_hash(executable)},{"dol",file_hash(o.game/"DATA/sys/main.dol")},{"speed",o.speed},{"god",o.god},{"tick",o.net_tick},{"auto_qte",o.auto_qte},{"fov",o.fov}};
         if(!o.netplay->host)std::fprintf(stderr,"[netplay] temporary saves: %s\n",saves.root().string().c_str());
     }
     std::vector<uint8_t> exchange(std::span<const uint8_t> out) {
@@ -328,8 +329,18 @@ struct NetGame::Impl {
         WaitScope waiting_scope(waiting);
         try {
                 socket=std::make_unique<net::Socket>(*options.netplay,stop.get_token(),std::chrono::seconds(60));
-                const auto data=exchange(bytes(hello));const auto remote=parse_packet(data);
-                if(remote!=hello)throw std::runtime_error("Network startup mismatch: use the same build, game and simulation settings");
+                const auto data=exchange(bytes(hello));auto remote=parse_packet(data);
+                // Auto QTE and the field of view are the host's choice for both players: the settings the two PCs may differ in, and both then run the host's values from the first step.
+                if(!remote.contains("auto_qte") || !remote["auto_qte"].is_boolean() || !remote.contains("fov") || !remote["fov"].is_number_unsigned())throw std::runtime_error("Network startup mismatch: use the same build, game and simulation settings");
+                const bool host_auto_qte=options.netplay->host ? options.auto_qte : remote["auto_qte"].get<bool>();
+                const uint32_t host_fov=options.netplay->host ? options.fov : remote["fov"].get<uint32_t>();
+                if(host_fov<kFovMin || host_fov>kFovMax)throw std::runtime_error("Network startup mismatch: invalid field of view");
+                auto own=hello;own.erase("auto_qte");own.erase("fov");remote.erase("auto_qte");remote.erase("fov");
+                if(remote!=own)throw std::runtime_error("Network startup mismatch: use the same build, game and simulation settings");
+                game_input_set_auto_qte(host_auto_qte);
+                set_view_fov(host_fov);
+                if(host_auto_qte)std::fprintf(stderr,"[netplay] auto QTE on (host's setting)\n");
+                if(host_fov!=kFovDefault)std::fprintf(stderr,"[netplay] field of view %u%% (host's setting)\n",host_fov);
                 saves.transfer(*socket);
                 const auto saved=bytes(Json{{"saves",saves_hash(saves.root())}});
                 if(exchange(saved)!=saved)throw std::runtime_error("Network save snapshot mismatch");

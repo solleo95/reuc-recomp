@@ -114,7 +114,9 @@ PromptScope::PromptScope(ppc::Ctx& c,uint32_t entry):c_(c),entry_(entry),excepti
                 }
             } catch(const gx::Error&) {}
         }
-        if(registry.actions(memory(c),c.r[28],InputContext::qte).empty())return;
+        const auto qte_actions=registry.actions(memory(c),c.r[28],InputContext::qte);
+        if(qte_actions.empty())return;
+        game_input_note_qte_prompt(qte_actions);   // auto QTE answers what is drawn; the guest draws on every step, replays included
         const auto found=registry.actions(memory(c),c.r[28],prompt_context(c));
         if(found.size()==1)description_=primary_prompt(shown(),{found[0]},device);   // the first assigned input only, never "X or Y"
         else if(found.size()==2)description_=chord_prompt(shown(),found[0],found[1],device);

@@ -6,6 +6,7 @@
 #include "guest_call.h"
 #include "dispatch.h"
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -46,6 +47,13 @@ uint32_t traced_tutorial=0;
 bool weapon(uc::Action action) { return action==uc::Action::weapon_previous || action==uc::Action::weapon_next; }
 bool semantic(uc::Action action) { return weapon(action) || action==uc::Action::reload || action==uc::Action::grenade || action==uc::Action::knife || action==uc::Action::qte_shake; }
 uint64_t bit(uc::Action action) { return uint64_t(1)<<unsigned(action); }
+// Auto QTE (option auto_qte). The input is a function of the game state alone (the prompts the guest drew, the QTE window, a step counter), never of what a player pressed, so every PC of a
+// network game computes the same input and a late or missing packet of the other player changes nothing. `seen` / `shown`: the QTE prompts drawn since / before the last first-player sample
+// (a bit per Action); `beat` counts those samples. This state is part of the checkpoint; the switch is a setting.
+struct AutoQteState { uint32_t seen=0,shown=0,beat=0; };
+std::atomic<bool> auto_qte_on{false};
+AutoQteState auto_qte_state;
+uint32_t prompt_bit(uc::Action action) { return uint32_t(1)<<unsigned(action); }
 gx::Memory memory(const ppc::Ctx& c) { return {{reinterpret_cast<const std::byte*>(c.mem),24u<<20},{reinterpret_cast<const std::byte*>(c.mem+0x10000000),64u<<20},{}}; }
 bool current_requests() {
     if(input && input->using_host_input() && input->generation()==generation)return true;
@@ -88,11 +96,17 @@ void action_log(const char* action,uint32_t object,bool accepted) {
 }
 }
 namespace uc {
-struct GameInputSnapshot { PadState active,other; unsigned player; };
+struct GameInputSnapshot { PadState active,other; unsigned player; AutoQteState auto_qte; };
 std::shared_ptr<const GameInputSnapshot> game_input_checkpoint() {
-    return std::make_shared<GameInputSnapshot>(GameInputSnapshot{active_pad,other_pad,player});
+    return std::make_shared<GameInputSnapshot>(GameInputSnapshot{active_pad,other_pad,player,auto_qte_state});
 }
-void game_input_restore(const GameInputSnapshot& saved) { active_pad=saved.active; other_pad=saved.other; player=saved.player; }
+void game_input_restore(const GameInputSnapshot& saved) { active_pad=saved.active; other_pad=saved.other; player=saved.player; auto_qte_state=saved.auto_qte; }
+void game_input_set_auto_qte(bool on) { auto_qte_on=on; }
+bool game_input_auto_qte() { return auto_qte_on; }
+void game_input_note_qte_prompt(std::span<const Action> actions) {
+    if(!auto_qte_on)return;
+    for(const auto action:actions)auto_qte_state.seen|=prompt_bit(action);
+}
 InputContext game_input_context(const InputProbeSnapshot& state,unsigned index) {
     if(index>=state.players.size())return InputContext::inactive;
     if(!state.ui_valid || !state.ui_enabled)return InputContext::inactive;
@@ -155,6 +169,8 @@ static InputSample game_input_sample_unfiltered(const ppc::Ctx& c,const InputSam
     if(!input)return raw;
     const auto state=input_probe_snapshot(c);
     const auto context=game_input_context(state,player);
+    const bool auto_qte=auto_qte_on;
+    if(auto_qte && player==0) { auto_qte_state.shown=auto_qte_state.seen; auto_qte_state.seen=0; ++auto_qte_state.beat; }
     if(player==0) {
         test_state_publish(state,uint8_t(context));
         test_state_apply_god(const_cast<ppc::Ctx&>(c),state);
@@ -187,15 +203,30 @@ static InputSample game_input_sample_unfiltered(const ppc::Ctx& c,const InputSam
         std::fprintf(stderr,"\n");
     }
     for(size_t i=0;i<frame.count;++i) if(frame.events[i].down && semantic(frame.events[i].action)) {
-        if(frame.events[i].action==Action::qte_shake && !qte_window)continue;
+        if(frame.events[i].action==Action::qte_shake && (!qte_window || auto_qte))continue;   // auto QTE: no real shake counts, only the synthetic ones below
         if(requests.size()==256) { requests.clear(); throw std::overflow_error("native game action queue overflow"); }
         requests.push_back(frame.events[i]);
         if(trace_actions && request_records<32) { ++request_records; std::fprintf(stderr,"[native-request] action %u actor %08X generation %llu\n",unsigned(frame.events[i].action),actor,(unsigned long long)generation); }
     }
+    // One shake step every fourth sample while the window is open, never more than one waiting (a window nobody counts in must not fill the queue).
+    if(auto_qte && qte_window && (auto_qte_state.beat&3)==0 &&
+       std::none_of(requests.begin(),requests.end(),[](auto request){return request.action==Action::qte_shake;}))
+        requests.push_back(ActionEvent{Action::qte_shake,true});
     const auto buttons=game_input_buttons(context,frame);
     auto result=raw;
     result.held=buttons.held; result.pressed=buttons.pressed; result.released=buttons.released;
     result.stick_x=buttons.stick_x; result.stick_y=buttons.stick_y;
+    // A suspended scene is also a cutscene or a result screen ("Check Point"): with no QTE prompt drawn the player's own A and B pass through to skip or continue it.
+    const uint32_t want=((auto_qte_state.shown&prompt_bit(Action::interact)) ? kButtonA : 0)|((auto_qte_state.shown&prompt_bit(Action::fire)) ? kButtonB : 0);
+    if(auto_qte && want && context==InputContext::qte && state.players[player].mode_630==0) {
+        // A button QTE waits in a suspended scene: press what its prompts show, A and B together for a chord, up and down on alternate samples so a repeat prompt counts every press.
+        // While a prompt is drawn the real A and B are ignored: the other player's late packet must not change the result.
+        constexpr uint32_t both=kButtonA|kButtonB;
+        const bool down=(auto_qte_state.beat&1)==0;
+        result.held=(result.held&~both)|(down ? want : 0);
+        result.pressed=(result.pressed&~both)|(down ? want : 0);
+        result.released=(result.released&~both)|(down ? 0 : want);
+    }
     if(context==InputContext::gameplay && std::any_of(requests.begin(),requests.end(),[](auto request){return weapon(request.action);}))result.pressed|=kNativeWeaponStep;
     return result;
 }
@@ -208,7 +239,7 @@ InputSample game_input_sample(const ppc::Ctx& c,const InputSample& raw) {
     sample.x=view.x; sample.y=view.y; sample.held=view.held; sample.pressed=view.pressed; sample.released=view.released;
     return sample;
 }
-void game_input_init(NativeInput* source,bool trace,NativeInput* second) { active_pad={};other_pad={};player=0;input=source;other_pad.input=second;traced_tutorial=0; trace_actions=trace; trace_records=request_records=wrapper_records=gate_records=tutorial_records=0; input_hle_set_map(source ? game_input_sample : nullptr); }
+void game_input_init(NativeInput* source,bool trace,NativeInput* second) { active_pad={};other_pad={};player=0;input=source;other_pad.input=second;traced_tutorial=0; auto_qte_state={}; trace_actions=trace; trace_records=request_records=wrapper_records=gate_records=tutorial_records=0; input_hle_set_map(source ? game_input_sample : nullptr); }
 void game_input_shutdown() { input_hle_set_map(nullptr); active_pad={};other_pad={};player=0; }
 }
 void hle_GameActionMask(ppc::Ctx& c) {

@@ -97,6 +97,14 @@ std::variant<Options, std::string> parse_options(std::span<const std::string_vie
         else if (arg == "--audio-audit") options.audio_audit = true;
         else if (arg == "--god") options.god = true;
         else if (arg == "--skip-tutorials") options.skip_tutorials = true;
+        else if (arg == "--auto-qte") options.auto_qte = true;
+        else if (arg == "--fov") {
+            if (++i >= arguments.size()) return "missing value for --fov";
+            uint32_t percent = 0; const auto value = arguments[i];
+            auto parsed = std::from_chars(value.data(), value.data() + value.size(), percent);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || percent < kFovMin || percent > kFovMax) return "invalid value for --fov";
+            options.fov = percent;
+        }
         else if (arg == "--no-sharpening") options.sharpening = false;
         else if (arg == "--features") options.features = true;
         else if (arg == "--per-pixel-lighting") options.effects.per_pixel_lighting = true;

@@ -25,7 +25,9 @@ struct SettingsTargets {
     std::function<void(const Bindings&)> bindings;
     std::function<void(const GamepadSettings&)> gamepad;       // control type, sticks, gyro and the gamepad bindings
     std::function<void(const WiimoteSettings&)> wiimote;       // the Wii Remote's switch, smoothing, swing threshold, stick dead zone and bindings
-    std::function<void(const CoopSettings&)> player2;          // the second player's mouse and gamepad tables (local two-player play)
+    std::function<void(uint32_t)> fov;                         // percent of the game's field of view, kFovMin..kFovMax; unset on a host without the projection hook
+    std::function<void(bool)> auto_qte;                       // the game completes QTEs by itself; unset on a host without the input path
+    std::function<void(const CoopSettings&)> player2;         // the second player's mouse and gamepad tables (local two-player play)
 };
 // The in-game settings: the options saved in config.json (not the command-line overrides of a run). Every change goes to the targets
 // whose fields changed and is saved at once; a refused save leaves the change applied and reports why.

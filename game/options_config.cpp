@@ -27,6 +27,12 @@ Options options_from_config(const ConfigDocument& document) {
     }
     if(root.contains("skip_intro"))options.skip_intro=boolean(root["skip_intro"]);
     if(root.contains("skip_tutorials"))options.skip_tutorials=boolean(root["skip_tutorials"]);
+    if(root.contains("auto_qte"))options.auto_qte=boolean(root["auto_qte"]);
+    if(root.contains("fov")) {
+        const auto& value=root["fov"];
+        if(!value.is_number_unsigned() || value.get<uint64_t>()<kFovMin || value.get<uint64_t>()>kFovMax)invalid("fov must be 50..300");
+        options.fov=value.get<uint32_t>();
+    }
     if(root.contains("logs"))options.logs=boolean(root["logs"]);
     if(root.contains("mouse_sensitivity")) {
         const auto& value=root["mouse_sensitivity"];
@@ -236,6 +242,8 @@ void store_options(ConfigDocument& document,const Options& options) {
     replacement.properties["game"]=utf8_path(options.game);
     replacement.properties["skip_intro"]=options.skip_intro;
     replacement.properties["skip_tutorials"]=options.skip_tutorials;
+    replacement.properties["auto_qte"]=options.auto_qte;
+    replacement.properties["fov"]=options.fov;
     replacement.properties["logs"]=options.logs;
     replacement.properties["mouse_sensitivity"]=options.mouse_sensitivity;
     replacement.properties["rumble"]=options.rumble;

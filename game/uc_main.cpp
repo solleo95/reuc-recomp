@@ -503,6 +503,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::test_state_enable(server_mode);
     uc::test_state_set_god(options.god);
     uc::test_state_set_skip_tutorials(options.skip_tutorials);
+    uc::game_input_set_auto_qte(options.auto_qte);   // a network game replaces it with the host's value when the PCs connect
+    // The field of view changes what the game computes: a deterministic run or a demo keeps the game's own (a network game takes the host's value when the PCs connect).
+    const bool fov_fixed=deterministic || !options.demo_record.empty() || !options.demo_play.empty();
+    uc::set_view_fov(fov_fixed ? uc::kFovDefault : options.fov);
     uc::os_hle_init(sched, boot.mem, 0x817F0000);
     sched.irq_ctx().r[1] = 0x817EFF00;
     uc::vi_hle_init(sched, uc::kViPeriodNtsc, [&] {
@@ -1086,6 +1090,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         targets.bindings=[&](const uc::Bindings& bindings) { input.bindings(bindings); uc::prompt_hooks_set_bindings(bindings); set_key_lists(bindings); };
         targets.gamepad=[&](const uc::GamepadSettings& settings) { options.gamepad=settings; input.pad_settings(settings); refresh_prompt_device(); };
         targets.wiimote=[&](const uc::WiimoteSettings& settings) { options.wiimote=settings; input.wiimote_settings(settings); input2.wiimote_settings(settings); refresh_prompt_device(); };
+        targets.fov=[&](uint32_t percent) { options.fov=percent; if(!options.netplay && !fov_fixed) uc::set_view_fov(percent); };   // a network game keeps the host's value agreed at the start
+        targets.auto_qte=[&](bool on) { options.auto_qte=on; if(!options.netplay) uc::game_input_set_auto_qte(on); };   // a network game keeps the host's value agreed at the start
         targets.player2=[&](const uc::CoopSettings& settings) { options.player2=settings; input2.bindings(settings.bindings); input2.pad_settings(settings.gamepad); };
         live_settings.emplace(config_path,input_config,std::move(targets));
         if (controlled && options.renderer_backend==uc::RendererBackend::vulkan) { features=uc::FeatureReport{true,true,true,true,4,{},{},{},{},true,{},16}; features->dlss5=true; }   // Vulkan test runs exercise every integrated choice whatever this PC has

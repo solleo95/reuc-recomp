@@ -3,6 +3,7 @@
 #include "dispatch.h"
 #include "ppc_fixture.h"
 #include "wide_view.h"
+#include "view_fov.h"
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -98,5 +99,18 @@ int main() {
             CHECK(seen_aspect==1.6);
         }
         gx::set_view_factors({});
+        {   // the field of view option scales the vertical tangent (the aspect stays); 100 left every case above untouched; on a wide output both apply
+            const double pi=3.14159265358979323846;
+            for(const uint32_t percent:{50u,120u,150u,300u}) {
+                uc::set_view_fov(percent); c.f[1]=60.0; c.f[2]=1.6;
+                hle_MTXPerspective(c);
+                CHECK(std::abs(std::tan(seen_fov*pi/360)-std::tan(60*pi/360)*percent/100.0)<1e-4 && std::abs(seen_aspect-1.6f)<1e-5);
+            }
+            uc::set_view_fov(120); gx::set_view_factors(gx::factors_for_aspect(21.0/9)); c.f[1]=60.0; c.f[2]=1.6;
+            hle_MTXPerspective(c);
+            CHECK(std::abs(std::tan(seen_fov*pi/360)-std::tan(60*pi/360)*1.2)<1e-4 && std::abs(seen_aspect-1.6f/(16.0f/21.0f))<1e-5);
+            uc::set_view_fov(1000); CHECK(uc::view_fov()==uc::kFovMax);   // the setter clamps
+            uc::set_view_fov(100); gx::set_view_factors({});
+        }
     }
 }

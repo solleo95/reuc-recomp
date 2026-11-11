@@ -294,6 +294,19 @@ void SettingsMenu::main_tab(float unit) {
     }
     if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("hud_hint"));
     }
+    if(shown("fov")) {
+    ImGui::Dummy({0,10*unit});
+    ImGui::TextUnformatted(tr("fov"));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("fov_hint"));
+    int fov=int(options.fov);
+    if(launcher::slider_int("##fov",fov,int(kFovMin),int(kFovMax),"%d%%")) options.fov=uint32_t(std::clamp(fov,int(kFovMin),int(kFovMax)));
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("fov_hint"));
+    }
+    if(shown("auto_qte")) {
+    ImGui::Dummy({0,10*unit});
+    compact_checkbox("##auto_qte",tr("auto_qte"),options.auto_qte,unit);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr("auto_qte_hint"));
+    }
     ImGui::PopItemWidth();
     if(shown("hdr")) {
     ImGui::Dummy({0,14*unit}); ImGui::SeparatorText(tr("hdr"));

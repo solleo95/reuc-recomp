@@ -44,6 +44,17 @@ including localhost, with automatic free-port selection. Copy the displayed LAN 
 Internet `IP:Port` into the client's single address field. The game starts automatically
 after connection; no Ready checkboxes. LAN does not need router NAT traversal.
 
+**Auto QTE** (`auto_qte`, launcher Game page, in-game General tab under the HUD position, `--auto-qte`): the host's value counts for both players (the startup message carries it; the
+joining PC takes the host's value, its own checkbox is ignored for the session and live changes do not apply during a network game). The input is a function of the simulated state
+only (`game/game_input.cpp`): the QTE prompts the guest drew this step (`game_input_note_qte_prompt`, called from `PromptScope`), the QTE window and a sample counter; the same state is part
+of the game-input checkpoint, so a rollback replays the same input. Nothing the players press, shake or send is read in a QTE while it is on (button A/B of a suspended-scene QTE and
+shake events are replaced), so a late or missing packet of the other player cannot change the result or cause a correction. Shake QTEs get one synthetic step every fourth sample, button QTEs
+press what the prompts show, up and down on alternate samples (A+B together for a chord). Unverified on a live QTE encounter (none reached by the harness yet).
+
+**Field of view** (`fov`, percent 50..300 of the game's own, 100 = unchanged; launcher Game page, in-game General tab above Auto QTE, `--fov`): `hle_MTXPerspective` (`game/intro.cpp`) scales the tangent of the
+game's vertical half field of view, so the pointer's range, hit tests and culling follow the picture (like the native ultrawide). It changes what the game computes, so a network game uses the host's
+value on both PCs (same startup message as Auto QTE) and a deterministic run or a demo keeps 100. It applies to every projection the game builds (3D previews and cutscenes too).
+
 ## Archived: host-authoritative video build (2026-10-26, replaced, see `build/backup-host-auth`)
 
 That build streamed the host's picture to a thin client. Its stream used H.264 (Media Foundation, High profile or Main where the encoder

@@ -36,6 +36,14 @@ int main() {
         CHECK(shown("rumble",deck_launcher) && shown("rumble",desktop_menu) && shown("rumble",desktop_launcher));   // everywhere a pad can be used
         for(const char* id:{"render_scale","fps_limit","dlss5","frame_generation","hdr","key_bindings","pad_panel"}) CHECK(shown(id,desktop_menu) || shown(id,desktop_launcher));
         CHECK(shown("skip_intro",desktop_launcher) && !shown("skip_intro",desktop_menu) && !shown("skip_intro",deck_menu));   // the launcher's own page
+        for(const char* id:{"fov","auto_qte"}) CHECK(shown(id,desktop_launcher) && shown(id,desktop_menu) && shown(id,deck_launcher) && !shown(id,deck_menu));
+        {   // FOV sits right above Auto QTE on the launcher's Game page
+            const auto game=items_for(desktop_launcher,Page::game); size_t fov_at=99,qte_at=99;
+            for(size_t i=0;i<game.size();++i) { if(std::string(game[i]->id)=="fov")fov_at=i; if(std::string(game[i]->id)=="auto_qte")qte_at=i; }
+            CHECK(fov_at!=99 && qte_at==fov_at+1);
+            Options o; const Item& item=*find("fov"); set_slider(item,o,10); CHECK(o.fov==uc::kFovMin); set_slider(item,o,1000); CHECK(o.fov==uc::kFovMax);
+        }
+        CHECK(shown("auto_qte",desktop_launcher) && shown("auto_qte",desktop_menu) && shown("auto_qte",deck_launcher) && !shown("auto_qte",deck_menu));   // the launcher's Game page and the desktop menu's General tab under the HUD position
         CHECK(!shown("gyro_mode",desktop_menu));   // the desktop reaches the gyro through the Controllers window
         bool threw=false; try { shown("fps_limt",deck_menu); } catch(const std::logic_error&) { threw=true; }
         CHECK(threw);   // a typo in a menu is an error, not a hidden setting

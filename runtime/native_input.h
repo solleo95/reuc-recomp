@@ -124,6 +124,8 @@ private:
     void update_camera();      // Requires mutex_: the analog camera from the sticks with the camera role.
     void step_pointer(uint64_t now_ns);   // Requires mutex_: the aim stick moves the pointer for the time since the previous step.
     void gyro_motion(float yaw,float pitch,uint64_t timestamp_ns);   // Requires mutex_.
+    void stick_shake(uint64_t now_ns);   // Requires mutex_: the right stick's travel since the previous step goes to the QTE shake detector (a pad without a gyro waggles the stick).
+    std::array<std::array<float,2>,kPadSlots> shake_prev_{};   // [pad][x,y] the right stick as the last stick_shake saw it, past the camera dead zone, -1..1
     Bindings keyboard_=default_bindings();
     GamepadSettings pad_;
     WiimoteSettings wii_;

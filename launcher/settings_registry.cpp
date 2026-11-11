@@ -110,6 +110,8 @@ const std::vector<Item>& table() {
         // Game: the launcher's page
         t.push_back(toggle("skip_intro","skip",G,DL|KL,[](const Options& o) { return o.skip_intro; },[](Options& o,bool v) { o.skip_intro=v; }));
         t.push_back(toggle("skip_tutorials","skip_tutorials",G,DL|KL,[](const Options& o) { return o.skip_tutorials; },[](Options& o,bool v) { o.skip_tutorials=v; }));
+        t.push_back(slider("fov","fov",G,DM|DL|KL,[](const Options& o) { return int(o.fov); },[](Options& o,int v) { o.fov=uint32_t(v); },int(kFovMin),int(kFovMax),5,"%d%%",nullptr,"fov_hint"));   // above Auto QTE in the launcher and in the desktop menu's General tab (under the HUD position)
+        t.push_back(toggle("auto_qte","auto_qte",G,DM|DL|KL,[](const Options& o) { return o.auto_qte; },[](Options& o,bool v) { o.auto_qte=v; },nullptr,"auto_qte_hint"));   // the desktop menu draws it under the HUD position (Graphics tab, "General"); the Deck menu has no Game page
         t.push_back(toggle("logs","enable_logs",G,DL|KL,[](const Options& o) { return o.logs; },[](Options& o,bool v) { o.logs=v; }));
         // Graphics
         t.push_back(choice("renderer","renderer",V,DL,

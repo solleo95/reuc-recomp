@@ -25,7 +25,8 @@ int main() {
         CHECK(!shown(id, deck_launcher));
     for (const char* id : {"crosshair_scale", "reticle_color_p1"}) CHECK(shown(id, deck_menu));   // the reticle stays in the in-game menu
     // what it offers: the gyro and sticks, the gamepad bindings, the reticle, the game toggles, scale/limit, effects
-    for (const char* id : {"skip_intro", "skip_tutorials", "logs", "render_scale", "fps_limit", "anisotropy", "per_pixel_lighting", "motion_blur", "contact_shadows",
+    for (const char* id : {"fov", "auto_qte"}) CHECK(!shown(id, deck_menu) && shown(id, desktop_menu) && shown(id, desktop_launcher));   // the Deck's in-game menu has no Game page
+    for (const char* id : {"skip_intro", "skip_tutorials", "fov", "auto_qte", "logs", "render_scale", "fps_limit", "anisotropy", "per_pixel_lighting", "motion_blur", "contact_shadows",
                            "bloom", "bloom_strength", "hdr", "hdr_ui", "gyro_mode", "gyro_sens_x", "gyro_sens_y", "aim_speed", "trackpad_sensitivity", "pointer_smoothing", "reload_zone", "pad_bindings"})
         CHECK(shown(id, deck_launcher));
     CHECK(shown("trackpad_sensitivity", deck_menu) && !shown("trackpad_sensitivity", desktop_menu) && !shown("trackpad_sensitivity", desktop_launcher));   // the Deck's trackpad only

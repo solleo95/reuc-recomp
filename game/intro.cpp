@@ -2,6 +2,7 @@
 #include "dispatch.h"
 #include "gx_vertices.h"
 #include "wide_view.h"
+#include "view_fov.h"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -47,13 +48,14 @@ void hle_MTXPerspective(ppc::Ctx& c) {
     {
         const auto factors=gx::view_factors();
         const float kx=factors.x,ky=factors.y;
+        const uint32_t percent=uc::view_fov();   // the field of view option: 100 leaves the tangent alone
         float aspect=float(c.f[2]),fov=float(c.f[1]);
-        if((kx<1.f || ky<1.f) && std::isfinite(aspect) && aspect>0 && std::isfinite(fov) && fov>0 && fov<180) {   // at 16:9 the arguments are not touched at all
+        if((kx<1.f || ky<1.f || percent!=100) && std::isfinite(aspect) && aspect>0 && std::isfinite(fov) && fov>0 && fov<180) {   // at 16:9 and 100% the arguments are not touched at all
             if(kx<1.f) aspect/=kx;
-            if(ky<1.f) {   // the vertical tangent grows by 1 / k_y; the horizontal one stays: cot' = cot * k_y, aspect' = aspect * k_y
-                const double tangent=std::tan(double(fov)*3.14159265358979323846/360.0);
-                fov=float(std::atan(tangent/ky)*360.0/3.14159265358979323846);
-                aspect*=ky;
+            if(ky<1.f || percent!=100) {   // the vertical tangent grows by 1 / k_y and by percent / 100; the horizontal one follows the option only: cot' = cot * k_y / zoom, aspect' = aspect * k_y
+                double tangent=std::tan(double(fov)*3.14159265358979323846/360.0)*(double(percent)/100.0);
+                if(ky<1.f) { tangent/=ky; aspect*=ky; }
+                fov=float(std::atan(tangent)*360.0/3.14159265358979323846);
             }
             c.f[1]=fov; c.f[2]=aspect;
         }

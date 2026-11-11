@@ -56,6 +56,7 @@ public:
     void motion(float,float,uint64_t timestamp_ns=0,bool swipe=false);
     void tap(Action action) { pulse(action); }   // one press and release of an action, whatever is held
     ActionFrame consume();
+    void qte_motion(float,float,uint64_t);   // the shake detector alone (inside a QTE window, with a motion binding), without the knife's: the gamepad's right stick feeds it
 private:
     bool allowed(Action) const;
     bool held(PhysicalInput) const;
@@ -64,7 +65,6 @@ private:
     uint64_t physical_actions() const;
     void cancel();
     void finish_motion();
-    void qte_motion(float,float,uint64_t);
     void emit(Action,bool,float=0,float=0,bool=false);
     void pulse(Action,float=0,float=0);
     Bindings bindings_=default_bindings();
