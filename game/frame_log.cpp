@@ -9,6 +9,9 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 #endif
 
 namespace uc {
@@ -35,6 +38,8 @@ void FrameLog::add(const FrameRow& row) {
 void FrameLog::run() {
 #ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);   // this thread only, below the game's threads (macOS's SYS_gettid is not a thread id)
 #else
     setpriority(PRIO_PROCESS, id_t(syscall(SYS_gettid)), 5);   // this thread only: a nicer value is lower priority
 #endif

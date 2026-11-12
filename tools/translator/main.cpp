@@ -8,9 +8,15 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <cerrno>
+#include <cstdio>
+#include <unistd.h>
+#endif
 
 static bool same_generation(const std::filesystem::path& dir, const uc::Output& out) {
     for (const auto& [name, text] : out.files) {
@@ -85,7 +91,12 @@ int main(int argc, char** argv) {
         if (!f) { std::fprintf(stderr, "cannot write %s\n", name.c_str()); return 1; }
     }
     // Old shards remain on disk; only this generation participates in the build.
-    auto temporary = generation / ("manifest_" + std::to_string(GetCurrentProcessId()) + ".tmp");
+#ifdef _WIN32
+    const unsigned long process_id = GetCurrentProcessId();
+#else
+    const unsigned long process_id = static_cast<unsigned long>(getpid());
+#endif
+    auto temporary = generation / ("manifest_" + std::to_string(process_id) + ".tmp");
     std::ofstream manifest(temporary, std::ios::binary);
     std::string relative = generation.filename().string();
     manifest << "# translation-input: " << cache_key << "\n";
@@ -97,9 +108,15 @@ int main(int argc, char** argv) {
     manifest.close();
     if (!manifest) { std::fprintf(stderr, "cannot write game_sources.cmake\n"); return 1; }
     auto published = std::filesystem::path(out_dir) / "game_sources.cmake";
+#ifdef _WIN32
     if (!MoveFileExW(temporary.c_str(), published.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::fprintf(stderr, "cannot publish game_sources.cmake (Windows error %lu); previous generation retained\n", GetLastError()); return 1;
     }
+#else
+    if (std::rename(temporary.c_str(), published.c_str()) != 0) {   // POSIX rename replaces the old manifest atomically
+        std::fprintf(stderr, "cannot publish game_sources.cmake (%s); previous generation retained\n", std::strerror(errno)); return 1;
+    }
+#endif
     std::printf("functions %zu  instructions %zu  invalid-words %zu  outside-branch-traps %zu  unresolved-switch-bctr %zu  indirect-tail-bctr %zu\n",
                 st.functions, st.instructions, st.invalid, st.traps_midfunc, st.unresolved_bctr, st.indirect_tail);
     std::printf("secondary-entries %zu  fallthrough-tails %zu  OE-traps %zu  unsupported %zu  jump-tables %zu  files %zu\n",

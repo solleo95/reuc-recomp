@@ -10,7 +10,7 @@ else()
   set(uc_crash_report_source crash_report_posix.cpp)
 endif()
 add_library(uc_runtime STATIC ${uc_guest_mem_source} dispatch.cpp trace.cpp ${uc_fatal_source} guest_call.cpp hle/nop.cpp clock.cpp mmio.cpp lowmem.cpp sched.cpp hle/os_thread.cpp hle/os_sync.cpp hle/os_misc.cpp hle/format_guest.cpp dvdfs.cpp hle/dvd.cpp hle/vi.cpp hle/exi.cpp hle/ios.cpp hle/dsp.cpp)
-if(UC_LINUX)   # by quote only: runtime/sched.h would shadow <sched.h>, which glibc's <pthread.h> includes
+if(UC_LINUX OR UC_MACOS OR UC_ANDROID)   # by quote only: runtime/sched.h would shadow <sched.h>, which glibc's and macOS's <pthread.h> include
   target_compile_options(uc_runtime PUBLIC "-iquote${CMAKE_CURRENT_SOURCE_DIR}")
 else()
   target_include_directories(uc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

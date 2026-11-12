@@ -174,7 +174,13 @@ void load_prompt_font(std::vector<char>& font_bytes) {
         font_bytes.assign(std::istreambuf_iterator<char>(file),{});
         if(font_bytes.empty() || font_bytes.size()>INT_MAX)throw std::runtime_error("Segoe UI font unavailable");
 #else
+#if defined(__APPLE__)
+        for(const char* path:{"/System/Library/Fonts/Supplemental/Arial Bold.ttf"}) {
+#elif defined(__ANDROID__)
+        for(const char* path:{"/system/fonts/RobotoStatic-Bold.ttf","/system/fonts/Roboto-Bold.ttf","/system/fonts/RobotoStatic-Regular.ttf","/system/fonts/Roboto-Regular.ttf"}) {
+#else
         for(const char* path:{"/usr/share/fonts/TTF/DejaVuSans-Bold.ttf","/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"}) {   // SteamOS, Debian
+#endif
             std::ifstream file(path,std::ios::binary);
             font_bytes.assign(std::istreambuf_iterator<char>(file),{});
             if(!font_bytes.empty())break;

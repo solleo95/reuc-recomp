@@ -84,7 +84,7 @@ Bindings default_bindings() {
     result[size_t(Action::camera_down)]={key(81)};
     result[size_t(Action::camera_left)]={key(80)};
     result[size_t(Action::camera_right)]={key(79)};
-    result[size_t(Action::menu)]={key(73)};   // Insert
+    result[size_t(Action::menu)]={key(kDefaultMenuKey)};   // Insert (Tab on macOS)
     result[size_t(Action::speed_up)]={key(53)};   // ` (grave, the tilde key)
     return result;
 }

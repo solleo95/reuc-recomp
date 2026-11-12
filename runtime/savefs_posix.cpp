@@ -7,6 +7,7 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <stdexcept>
@@ -19,6 +20,8 @@
 namespace fs=std::filesystem;
 namespace {
 int error(int value) {
+    static const bool trace=std::getenv("UC_SAVE_TRACE")!=nullptr;   // diagnostics: the system's reason behind an ISFS error (runtime/hle/save.cpp traces the calls)
+    if (trace) std::fprintf(stderr,"[save] host error %d: %s\n",value,std::strerror(value));
     switch (value) {
     case ENOENT: case ENOTDIR: return -106;
     case EEXIST: return -105;
@@ -80,7 +83,18 @@ int move(const fs::path& source,const fs::path& target,bool replace) {
     const auto parent=target.parent_path();
     if (lstat(parent.c_str(),&info)) return error(errno);
     if (!S_ISDIR(info.st_mode)) return -102;
-    const int result=replace ? ::rename(source.c_str(),target.c_str()) : renameat2(AT_FDCWD,source.c_str(),AT_FDCWD,target.c_str(),RENAME_NOREPLACE);
+#if defined(__APPLE__)   // macOS: renamex_np's RENAME_EXCL is the no-replace rename
+    const int result=replace ? ::rename(source.c_str(),target.c_str()) : renamex_np(source.c_str(),target.c_str(),RENAME_EXCL);
+#else
+    int result=replace ? ::rename(source.c_str(),target.c_str()) : renameat2(AT_FDCWD,source.c_str(),AT_FDCWD,target.c_str(),RENAME_NOREPLACE);
+    if (result && !replace && (errno==EINVAL || errno==ENOSYS || errno==EOPNOTSUPP)) {
+        // A file system without the no-replace flag (Android's /sdcard, a FUSE file system): only this process writes the saves, so "nothing there"
+        // checked right before a plain rename gives the same result. Without it removing and backing up fail, and the game waits on its save forever.
+        struct stat existing;
+        if (lstat(target.c_str(),&existing)==0) errno=EEXIST;
+        else if (errno==ENOENT) result=::rename(source.c_str(),target.c_str());
+    }
+#endif
     if (result) return error(errno);
     return sync_directory(parent);   // the rename itself must survive a power cut
 }

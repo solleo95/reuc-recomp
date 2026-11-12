@@ -17,6 +17,10 @@
 #endif
 #include <tuple>
 #include <SDL3/SDL_vulkan.h>
+#ifdef __ANDROID__
+#include "android_vulkan.h"
+#include <android/native_window.h>
+#endif
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -34,6 +38,22 @@ constexpr size_t kTevWords=68, kDrawUniformBytes=sizeof(gx::DrawUniform)+kTevWor
 const std::shared_ptr<const gx::TexturePixels>& draw_texture(const gx::DrawPacket& draw,size_t map) { return map ? draw.texture_maps[map-1] : draw.texture; }
 void vk_check(VkResult result, const char* operation) {
     if (result != VK_SUCCESS) throw std::runtime_error(std::string(operation) + " failed: VkResult " + std::to_string(result));
+}
+// A GPU without logicOp (Metal, through MoltenVK): for sources and destinations of 0 or 1 per channel, eight of the sixteen GX logic operations are
+// blending (AND = s*d, XOR = s*(1-d) + d*(1-s), OR = s + d*(1-s), ...). The other eight invert the source, which needs the shader; they draw as COPY
+// for now and each is reported once, so a log tells which ones the game uses.
+gx::BlendState emulated_logic_op(gx::BlendState blend) {
+    struct Factors { uint8_t source, destination; };   // GX factor codes: source 0 zero, 1 one, 2 dst color, 3 1-dst color; destination 0 zero, 1 one, 3 1-src color
+    static constexpr Factors exact[8] = {{0,0},{2,0},{3,0},{1,0},{0,3},{0,1},{3,3},{1,3}};   // CLEAR AND AND_REVERSE COPY AND_INVERTED NOOP XOR OR
+    static std::atomic<uint32_t> reported{0};
+    if (blend.logic < 8) { blend.source = exact[blend.logic].source; blend.destination = exact[blend.logic].destination; }
+    else {
+        const uint32_t bit = 1u << blend.logic;
+        if (!(reported.fetch_or(bit) & bit)) std::fprintf(stderr, "[logic-op] GX logic operation %u has no blending equivalent on this GPU: drawn as COPY\n", unsigned(blend.logic));
+        blend.source = 1; blend.destination = 0;
+    }
+    blend.mode = 1;
+    return blend;
 }
 void barrier(VkCommandBuffer command, VkImage image, VkImageLayout before, VkImageLayout after,
              VkPipelineStageFlags2 source, VkAccessFlags2 source_access, VkPipelineStageFlags2 destination, VkAccessFlags2 destination_access,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT,uint32_t levels=1,uint32_t base_mip=0) {
@@ -78,6 +98,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     render_aspect_=render_aspect;
     set_render_scale(render_scale);
     if (!window) throw std::invalid_argument("Vulkan requires an SDL window");
+#ifdef __ANDROID__
+    std::fprintf(stderr, "[vulkan] %s\n", android_load_vulkan().c_str());   // volk's entry points: the system's driver or the player's (Turnip)
+#endif
     uint32_t version = 0; vk_check(vkEnumerateInstanceVersion(&version), "vkEnumerateInstanceVersion");
     if (version < VK_API_VERSION_1_3) throw std::runtime_error("Vulkan 1.3 loader required");
     Uint32 count = 0; const char* const* required = SDL_Vulkan_GetInstanceExtensions(&count);
@@ -94,6 +117,10 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     if (maintenance_ext) extensions.push_back("VK_EXT_surface_maintenance1");
     colorspace_ext_ = has(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 surface formats; without it HDR stays off
     if (colorspace_ext_) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+#ifdef __APPLE__
+    const bool portability = has(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);   // MoltenVK is a portability driver: the loader lists it only when asked
+    if (portability) extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
     std::vector<std::string> dlss5_instance_names;   // DLSS 5: what NGX asks of the instance (nothing without nvngx_dlssnr.dll next to the exe)
     if (dlss5_allowed_) for (const auto& name : dlss5_instance_extensions(shaders.parent_path().parent_path()))
         if (has(name.c_str()) && std::none_of(extensions.begin(), extensions.end(), [&](const char* have) { return name == have; })) dlss5_instance_names.push_back(name);
@@ -114,6 +141,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance_info.pApplicationInfo = &application;
     instance_info.enabledExtensionCount = uint32_t(extensions.size()); instance_info.ppEnabledExtensionNames = extensions.data();
     if (validation) { instance_info.enabledLayerCount = 1; instance_info.ppEnabledLayerNames = &layer; instance_info.pNext = &debug_info; }
+#ifdef __APPLE__
+    if (portability) instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
     {   // Optional backends must be ready before the instance, so live picks never need a new device.
         std::string reason;
         const auto directory=shaders.parent_path().parent_path();
@@ -135,6 +165,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         }
     }
     vk_check(streamline_ ? streamline_->create_instance(instance_info, instance_) : vkCreateInstance(&instance_info, nullptr, &instance_), "vkCreateInstance");
+#ifdef __ANDROID__
+    volkLoadInstance(instance_);
+#endif
     if (validation) {
         auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT"));
         if (!create) throw std::runtime_error("debug-utils creation function unavailable");
@@ -148,7 +181,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
 #endif
         if (!hwnd) throw std::runtime_error("window has no native handle");
         vk_check(streamline_->create_surface(instance_, hwnd, surface_), "Streamline surface");
-    } else if (!SDL_Vulkan_CreateSurface(window, instance_, nullptr, &surface_)) throw std::runtime_error(SDL_GetError());
+    } else if (!create_window_surface()) throw std::runtime_error(SDL_GetError());
     const auto enumerate = [&](uint32_t* count, VkPhysicalDevice* devices) { return streamline_ ? streamline_->enumerate_physical_devices(instance_, count, devices) : vkEnumeratePhysicalDevices(instance_, count, devices); };
     uint32_t n = 0; vk_check(enumerate(&n, nullptr), "physical device count");
     std::vector<VkPhysicalDevice> physical(n); vk_check(enumerate(&n, physical.data()), "physical devices");
@@ -187,6 +220,19 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     VkPhysicalDeviceProperties2 details{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};details.pNext=&driver;
     vkGetPhysicalDeviceProperties2(physical_,&details);
     std::fprintf(stderr,"[gpu] vendor=%04x device=%04x Vulkan=%u.%u.%u driver_version=%u driver=%s info=%s\n",properties.vendorID,properties.deviceID,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),VK_VERSION_PATCH(properties.apiVersion),properties.driverVersion,driver.driverName,driver.driverInfo);
+#ifdef __ANDROID__
+    // Qualcomm's own driver (the AYN Thor's Adreno 740, driver of 12/2023) crashes in its shader compiler on some specialized pipelines: every draw then
+    // takes the ubershader, which compiles there. Mesa's Turnip keeps the specialized ones. UC_UBER_ONLY=0 or 1 decides instead.
+    if (const char* uber=std::getenv("UC_UBER_ONLY")) uber_only_=std::atoi(uber)!=0;
+    else uber_only_=driver.driverID==VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
+    if (uber_only_) std::fprintf(stderr,"[pipeline] ubershaders only (driver %s)\n",driver.driverName);
+    // Turnip on Android's KGSL kernel driver answers vkGetFenceStatus of an unfinished submission by waiting for the GPU to reach it: the render
+    // thread's completion polls then ran at the GPU's pace (74% of its time blocked there on the Thor), and the guest, which waits for the render
+    // thread at every draw done, with it. There the slot's event is read first (host-visible memory, no kernel call). UC_POLL_BY_EVENT=0/1 decides.
+    if (const char* poll=std::getenv("UC_POLL_BY_EVENT")) poll_by_event_=std::atoi(poll)!=0;
+    else poll_by_event_=driver.driverID==VK_DRIVER_ID_MESA_TURNIP;
+    if (poll_by_event_) std::fprintf(stderr,"[vulkan] completion polls read an event first (vkGetFenceStatus waits on this driver)\n");
+#endif
     if (streamline_) {
         std::string reason;
         dlss_available_=streamline_->dlss_supported(physical_, reason);
@@ -247,6 +293,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
 #endif
         for (const char* name : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME})
             if (std::any_of(supported.begin(), supported.end(), [&](const auto& extension) { return std::strcmp(extension.extensionName, name) == 0; })) device_extensions.push_back(name);
+#ifdef __APPLE__   // a device that has VK_KHR_portability_subset (MoltenVK) must have it enabled
+        if (std::any_of(supported.begin(), supported.end(), [](const auto& extension) { return std::strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0; })) device_extensions.push_back("VK_KHR_portability_subset");
+#endif
         if (through_streamline && std::any_of(supported.begin(),supported.end(),[](const auto& extension) { return std::strcmp(extension.extensionName,VK_KHR_PRESENT_ID_EXTENSION_NAME)==0; }))
             device_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);   // dependency of the low-latency extension Streamline enables
     }
@@ -293,6 +342,9 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
     device_info.queueCreateInfoCount = 1; device_info.pQueueCreateInfos = &queue_info;   // queue_info.queueCount: 3 with the interpolation swapchain
     device_info.enabledExtensionCount = uint32_t(device_extensions.size()); device_info.ppEnabledExtensionNames = device_extensions.data();
     vk_check(through_streamline ? streamline_->create_device(instance_, physical_, device_info, device) : vkCreateDevice(physical_, &device_info, nullptr, &device), "vkCreateDevice");
+#ifdef __ANDROID__
+    volkLoadDevice(device);   // device calls straight to the driver
+#endif
     if (through_streamline) {
         base_present_=streamline_->present_functions(device);
         present_.present=base_present_.present;   // SR/RR also need Streamline's per-present tag recycling and garbage collection.
@@ -328,6 +380,7 @@ void VulkanRenderer::initialize(SDL_Window* window, bool validation, const std::
         vk_check(vkCreateFence(device, &fence, nullptr, &slots_[i].fence), "frame fence");
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &slots_[i].acquired), "acquire semaphore");
+        if (poll_by_event_) { VkEventCreateInfo event{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO}; vk_check(vkCreateEvent(device, &event, nullptr, &slots_[i].done), "frame event"); }
     }
     shaders_=shaders; cache_dir_=shaders_.parent_path();
     const std::string variant=motion_outputs_ ? "smoke.motion." : "smoke.";
@@ -545,7 +598,7 @@ PipelineKey VulkanRenderer::pipeline_key(const gx::DrawPacket& draw,bool alpha_p
     if(alpha_pass) blend={0,1,0,3,false,true};
     else if(draw.uniforms->pixel[2]&256) blend.alpha_write=false;
     if (blend.mode>3 || blend.source>7 || blend.destination>7 || blend.logic>15) throw std::invalid_argument("invalid native blend state");
-    if (blend.mode==2 && !logic_ops_) throw std::runtime_error("native GX logic operation requires GPU logicOp support");
+    if (blend.mode==2 && !logic_ops_) blend=emulated_logic_op(blend);
     // Fields the pipeline ignores in this mode must not split the key space (factors only matter when blending, the logic op only in logic mode).
     if (blend.mode!=1) { blend.source=1; blend.destination=0; }
     if (blend.mode!=2) blend.logic=3;
@@ -816,16 +869,55 @@ VkPipeline VulkanRenderer::make_pipeline(const PipelineKey& key,bool uber) {
     return pipeline;
 }
 // The driver cache makes recompiling a known pipeline cheap on later runs; the key files let a loading screen compile everything before the game starts.
+// Android: the player switches between the system's driver and custom ones (Turnip...), each with its own pipelines; one shared file would hold only the
+// last driver's, and every switch would compile all of them again at the next start. So one file per driver build (its pipelineCacheUUID), the four
+// used last kept.
+#ifdef __ANDROID__
+static void prune_pipeline_caches(const std::filesystem::path& directory, size_t keep) {
+    std::error_code error;
+    std::vector<std::pair<std::filesystem::file_time_type,std::filesystem::path>> files;
+    for (const auto& entry:std::filesystem::directory_iterator(directory,error)) {
+        const auto name=entry.path().filename().string();
+        if (name.rfind("pipeline_cache-",0)==0 && entry.path().extension()==".bin") files.emplace_back(entry.last_write_time(error),entry.path());
+    }
+    if (files.size()<=keep) return;
+    std::sort(files.begin(),files.end(),[](const auto& a,const auto& b) { return a.first>b.first; });
+    for (size_t i=keep;i<files.size();++i) { std::filesystem::remove(files[i].second,error); std::fprintf(stderr,"[pipeline] removed the disk cache of an unused driver: %s\n",files[i].second.filename().string().c_str()); }
+}
+#endif
 void VulkanRenderer::load_pipeline_cache() {
+    pipeline_cache_file_=cache_dir_/"pipeline_cache.bin";
+    auto source=pipeline_cache_file_;
+#ifdef __ANDROID__
+    {
+        VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_,&properties);
+        std::string name="pipeline_cache-";
+        for (const uint8_t byte:properties.pipelineCacheUUID) { char hex[3]; std::snprintf(hex,sizeof hex,"%02x",byte); name+=hex; }
+        pipeline_cache_file_=cache_dir_/(name+".bin");
+        std::error_code error;
+        if (std::filesystem::exists(pipeline_cache_file_,error)) {
+            source=pipeline_cache_file_;
+            std::filesystem::last_write_time(pipeline_cache_file_,std::filesystem::file_time_type::clock::now(),error);   // used now: pruned last
+        } else pipeline_cache_migrated_=std::filesystem::exists(source,error);   // the one file of earlier builds: the driver ignores it when it is another's
+        if (!pipeline_cache_migrated_) source=pipeline_cache_file_;
+        prune_pipeline_caches(cache_dir_,4);
+    }
+#endif
     std::vector<char> data;
-    if (std::ifstream file(cache_dir_/"pipeline_cache.bin",std::ios::binary|std::ios::ate); file) {
+    if (std::ifstream file(source,std::ios::binary|std::ios::ate); file) {
         data.resize(size_t(file.tellg())); file.seekg(0); file.read(data.data(),std::streamsize(data.size()));
         if (!file) data.clear();
     }
     VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO}; info.initialDataSize=data.size(); info.pInitialData=data.data();
     vk_check(vkCreatePipelineCache(device,&info,nullptr,&pipeline_cache_),"pipeline cache");   // the driver ignores data from another driver or version
     pipeline_cache_loaded_=data.size();
-    std::fprintf(stderr,"[pipeline] disk cache bytes=%zu\n",data.size());
+#ifdef __ANDROID__
+    if (pipeline_cache_migrated_) {   // the old shared file moves to this driver only when it is this driver's (then the cache holds its data): else it stays for its owner
+        size_t kept=0;
+        if (vkGetPipelineCacheData(device,pipeline_cache_,&kept,nullptr)!=VK_SUCCESS || kept*2<data.size()) pipeline_cache_migrated_=false;
+    }
+#endif
+    std::fprintf(stderr,"[pipeline] disk cache %s bytes=%zu\n",source.filename().string().c_str(),data.size());
     for (const char* name:{"pipeline_keys.seed","pipeline_keys.bin"}) {
         bool legacy=false;
         for (const auto& recorded:load_pipeline_keys(cache_dir_/name,&legacy)) {
@@ -843,21 +935,25 @@ void VulkanRenderer::save_pipeline_cache() {
     static std::mutex saving;   // compile threads and shutdown may save concurrently
     std::lock_guard guard(saving);
     size_t size=0;
-    if (vkGetPipelineCacheData(device,pipeline_cache_,&size,nullptr)!=VK_SUCCESS || size==0 || size==pipeline_cache_loaded_) return;
+    if (vkGetPipelineCacheData(device,pipeline_cache_,&size,nullptr)!=VK_SUCCESS || size==0 || (size==pipeline_cache_loaded_ && !pipeline_cache_migrated_)) return;
     std::vector<char> data(size);
     if (vkGetPipelineCacheData(device,pipeline_cache_,&size,data.data())!=VK_SUCCESS) return;
-    const auto path=cache_dir_/"pipeline_cache.bin", temporary=cache_dir_/"pipeline_cache.tmp";
+    const auto path=pipeline_cache_file_, temporary=std::filesystem::path(pipeline_cache_file_).replace_extension(".tmp");
     if (std::ofstream file(temporary,std::ios::binary|std::ios::trunc); !file.write(data.data(),std::streamsize(size))) { std::fprintf(stderr,"[pipeline] cannot write %s\n",temporary.string().c_str()); return; }
     std::error_code error; std::filesystem::rename(temporary,path,error);   // atomic replace: a crash never leaves a torn cache
-    if (error) std::fprintf(stderr,"[pipeline] cannot replace %s: %s\n",path.string().c_str(),error.message().c_str());
-    else pipeline_cache_loaded_=size;
+    if (error) { std::fprintf(stderr,"[pipeline] cannot replace %s: %s\n",path.string().c_str(),error.message().c_str()); return; }
+    pipeline_cache_loaded_=size;
+#ifdef __ANDROID__
+    if (std::exchange(pipeline_cache_migrated_,false)) std::filesystem::remove(cache_dir_/"pipeline_cache.bin",error);   // its pipelines now live in this driver's file
+#endif
 }
 // Pipelines missing at draw time are compiled by these threads, off the render thread (the ubershader draws meanwhile).
 void VulkanRenderer::queue_pipeline(const PipelineKey& key,bool uber) {
     if ((uber ? uber_queued_ : queued_).insert(key).second) { compile_queue_.push_back({key,uber}); compile_cv_.notify_one(); }
 }
 void VulkanRenderer::start_workers() {
-    const unsigned all=std::max(2u,std::thread::hardware_concurrency());
+    unsigned all=std::max(2u,std::thread::hardware_concurrency());
+    if (const char* threads=std::getenv("UC_PIPELINE_THREADS")) all=std::clamp(unsigned(std::atoi(threads)),1u,64u);   // diagnostics: fewer compile threads (a driver whose compiler fails in parallel)
     game_workers_=compile_limit_=std::clamp(all/2,2u,8u);
     for (unsigned t=0;t<all;++t) compilers_.emplace_back([this] { compile_worker(); });   // the extra threads only work during warm-up
 }
@@ -874,6 +970,12 @@ void VulkanRenderer::compile_worker() {
         lock.unlock();
         VkPipeline pipeline=VK_NULL_HANDLE;
         const auto start=std::chrono::steady_clock::now();
+        static const bool trace=std::getenv("UC_PIPELINE_TRACE")!=nullptr;   // diagnostics: names the pipeline a driver's compiler dies on (the last line before a crash)
+        if (trace) {
+            uint64_t hash=14695981039346656037ull;
+            for (uint32_t word:job.key) hash=(hash^word)*1099511628211ull;
+            std::fprintf(stderr,"[pipeline-trace] compiling %s %016llx key0=%08x key1=%u\n",job.uber ? "uber" : "key",(unsigned long long)hash,job.key[0],job.key[1]);
+        }
         try { pipeline=make_pipeline(job.key,job.uber); }
         catch (const std::exception& error) { std::fprintf(stderr,"[pipeline] background compile failed: %s\n",error.what()); }
         lock.lock();
@@ -899,7 +1001,7 @@ void VulkanRenderer::warm_pipelines(const std::function<void(size_t,size_t)>& pr
     compile_limit_=compilers_.size(); compile_cv_.notify_all();   // nothing else runs on the loading screen: every thread compiles
     auto closure_keys=warm_keys_; closure_keys.insert(closure_keys.end(),legacy_keys_.begin(),legacy_keys_.end());
     for (const auto& key:uber_key_closure(closure_keys)) queue_pipeline(key,true);   // the ubershader variants first: they cover any key still missing
-    for (const auto& key:warm_keys_) queue_pipeline(key,false);
+    if (!uber_only_) for (const auto& key:warm_keys_) queue_pipeline(key,false);
     const size_t base=jobs_done_, total=compile_queue_.size()+compiling_;
     while (!compile_queue_.empty() || compiling_) {
         const size_t done=jobs_done_-base;
@@ -966,10 +1068,18 @@ void VulkanRenderer::sweep_meshes(bool all) {
     }
     if (all) { for (auto& slab : mesh_slabs_) destroy_buffer(slab->buffer); mesh_slabs_.clear(); }
 }
+VkResult VulkanRenderer::slot_status(const Slot& slot) const {
+    if (slot.done_armed) {
+        const VkResult event = vkGetEventStatus(device, slot.done);
+        if (event == VK_EVENT_RESET) return VK_NOT_READY;
+        if (event != VK_EVENT_SET) return event;   // an error (device lost)
+    }
+    return vkGetFenceStatus(device, slot.fence);   // the event is set at the end of the commands: the fence follows right after
+}
 void VulkanRenderer::collect() {
     for (auto& slot : slots_) {
         if (!slot.submitted || slot.reported) continue;
-        VkResult status = vkGetFenceStatus(device, slot.fence);
+        VkResult status = slot_status(slot);
         if (status == VK_NOT_READY) continue;
         vk_check(status, "frame fence status");
         completed_.push_back(slot.serial); slot.reported = true;
@@ -1631,7 +1741,33 @@ void VulkanRenderer::make_attachment(VkImage& target,VkDeviceMemory& memory,VkIm
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image = target; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = image.format; view.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1, 0, 1};
     vk_check(vkCreateImageView(device, &view, nullptr, &target_view), "attachment view");
 }
+// The window's surface. Android: through the loaded Vulkan (volk), from the window SDL holds; SDL's own call would go through the system's loader,
+// which a custom driver's instance is not.
+bool VulkanRenderer::create_window_surface() {
+#ifdef __ANDROID__
+    auto* native = static_cast<ANativeWindow*>(SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+    if (!native) return false;
+    VkAndroidSurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR};
+    info.window = native;
+    return vkCreateAndroidSurfaceKHR(instance_, &info, nullptr, &surface_) == VK_SUCCESS;
+#else
+    return SDL_Vulkan_CreateSurface(window_, instance_, nullptr, &surface_);
+#endif
+}
 void VulkanRenderer::rebuild() {
+#ifdef __ANDROID__
+    if (surface_lost_) {   // Android destroys the window's surface when the app goes to the background: a new one for the window it gives back
+        retire_images(true);   // the old swapchain belongs to the lost surface: destroyed, never passed on as oldSwapchain
+        if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+        if (!create_window_surface()) { surface_ = VK_NULL_HANDLE; resized_ = true; return; }   // no window yet: the next frame tries again
+        VkBool32 present = VK_FALSE;
+        vk_check(vkGetPhysicalDeviceSurfaceSupportKHR(physical_, family_, surface_, &present), "surface queue support");
+        if (!present) throw std::runtime_error("the new window surface cannot present");
+        surface_lost_ = false;
+        std::fprintf(stderr, "[android] window surface recreated\n");
+    }
+#endif
     if (fsr_presentation_) fsr_g_->release_context();
     if (swapchain_ && !fsr_presentation_ && !streamline_swapchain()) retire_for_resize(); else retire_images(true);
     VkSurfaceCapabilitiesKHR capabilities; vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &capabilities), "surface capabilities");
@@ -1639,6 +1775,18 @@ void VulkanRenderer::rebuild() {
     if ((capabilities.supportedUsageFlags & swapchain_usage) != swapchain_usage) throw std::runtime_error("swapchain lacks transfer/color attachment support");
     extent_ = capabilities.currentExtent;
     if (extent_.width == UINT32_MAX) extent_ = {std::clamp(requested_.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width), std::clamp(requested_.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
+#ifdef __ANDROID__
+    {   // The window's own size. A panel may be mounted rotated (the AYN Thor's top screen is a portrait panel used in landscape, currentTransform
+        // ROTATE_90): the frame is drawn upright with the identity transform and the compositor turns it, so the image has the window's orientation.
+        // currentExtent can also lag behind the window: it kept the 1920x970 the window had with the navigation bar after the bar went away and the
+        // window grew to 1920x1080, and the compositor stretched that image over the screen. Android scales any size to the window, so the window decides.
+        int width = 0, height = 0;
+        SDL_GetWindowSizeInPixels(window_, &width, &height);
+        if (width > 0 && height > 0)
+            extent_ = {std::clamp(uint32_t(width), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+                       std::clamp(uint32_t(height), capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
+    }
+#endif
     if (!extent_.width || !extent_.height) { resized_ = true; return; }
     VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_, &properties);
     if (extent_.width > properties.limits.maxImageDimension2D || extent_.height > properties.limits.maxImageDimension2D) throw std::runtime_error("render extent exceeds device image limits");
@@ -1681,6 +1829,12 @@ void VulkanRenderer::rebuild() {
 #endif
     create.imageFormat = chosen.format; create.imageColorSpace = chosen.colorSpace; create.imageExtent = extent_; create.imageArrayLayers = 1;
     create.imageUsage = swapchain_usage; create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; create.preTransform = capabilities.currentTransform;
+#ifdef __ANDROID__
+    create.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;   // see the extent above
+    std::fprintf(stderr, "[android] surface transform 0x%x extent %ux%u (%ux%u..%ux%u), swapchain %ux%u drawn upright\n", unsigned(capabilities.currentTransform),
+                 capabilities.currentExtent.width, capabilities.currentExtent.height, capabilities.minImageExtent.width, capabilities.minImageExtent.height,
+                 capabilities.maxImageExtent.width, capabilities.maxImageExtent.height, extent_.width, extent_.height);
+#endif
     create.compositeAlpha = VkCompositeAlphaFlagBitsKHR(capabilities.supportedCompositeAlpha & (0u - capabilities.supportedCompositeAlpha));
     create.presentMode = VK_PRESENT_MODE_FIFO_KHR; create.clipped = VK_TRUE;
     {   // mailbox by default: with fifo the compositor held a swapchain image for up to two extra refreshes now and then, and the guest stalled in GXWaitDrawDone for 9-12 ms (the micro-freezes). UC_PRESENT_MODE=fifo|mailbox|immediate overrides; fifo is also the fallback
@@ -1846,12 +2000,13 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     const bool hold=layer_on && !overlay_frame && packet.present && display && !packet.black_output && held_.image;   // this frame is kept, not presented: the overlay frame after it is
     reap_retired(false);
     Slot& slot = slots_[next_slot_];
-    VkResult fence_status = vkGetFenceStatus(device, slot.fence);
+    VkResult fence_status = slot_status(slot);
     if (fence_status == VK_NOT_READY) return false;
     vk_check(fence_status, "frame slot fence");
     const size_t reticle_before=frame_reticle_.size();
     if (layer_on && !overlay_frame) for (const auto& draw:packet.draws) if (draw.layer) frame_reticle_.push_back(draw);   // after every early return: a packet that is retried must not be counted twice
     collect();   // after the check: a fence that finishes between an earlier collect() and the check would be reused unreported and its packet would never complete
+    if (slot.done_armed) { vk_check(vkResetEvent(device, slot.done), "reset frame event"); slot.done_armed = false; }   // its submission finished (above): the next one sets it again
     slot.copy_sources.clear();
     slot.mesh_refs.clear();   // the submission that used these meshes completed (fence checked above)
     if ((++renders_ & 255)==0) sweep_meshes(false);
@@ -2170,6 +2325,9 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
             return false;
         }
         if (acquired == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;   // stale swapchain while the window is resized: the frame is rendered but not shown, the guest must not wait for the rebuild
+#ifdef __ANDROID__
+        else if (acquired == VK_ERROR_SURFACE_LOST_KHR) resized_ = surface_lost_ = true;   // the app went to the background: not shown either, rebuild() waits for a window
+#endif
         else {
             if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) vk_check(acquired, "acquire image");
             suboptimal = acquired == VK_SUBOPTIMAL_KHR;
@@ -2635,6 +2793,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
         }
     }
     vkCmdWriteTimestamp2(slot.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timing_pool_, first_query + 1);
+    if (slot.done) vkCmdSetEvent(slot.command, slot.done, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);   // slot_status(): set once every command before it finished
     vk_check(vkEndCommandBuffer(slot.command), "end frame"); vk_check(vkResetFences(device, 1, &slot.fence), "reset frame fence");
     VkSemaphoreSubmitInfo waits[2]{{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO},{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}}; uint32_t wait_count = 0;
     if (present_image) { waits[wait_count].semaphore = slot.acquired; waits[wait_count].stageMask = hdr_active_ ? VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_2_TRANSFER_BIT; ++wait_count; }   // the first write of the swapchain image
@@ -2649,6 +2808,7 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (packet.present && !overlay_frame && upscaler_kind_==UpscalerKind::dlss && streamline_ && streamline_->active()) streamline_->marker(Streamline::Marker::render_submit_end);
     const auto submit_start = std::chrono::steady_clock::now();
     vk_check(vkQueueSubmit2(queue_, 1, &submit, slot.fence), "submit frame");
+    slot.done_armed = slot.done != VK_NULL_HANDLE;
     timings_.submit_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submit_start).count();
     if(copy_target) {
         copy_target->initialized=true;
@@ -2674,8 +2834,16 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
     if (fsr_presentation_) fsr_g_->after_present();
     timings_.present_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_start).count();
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { present_image->pending = tracked; ++presentations_; }
+#ifdef __ANDROID__
+    else if (result == VK_ERROR_SURFACE_LOST_KHR) resized_ = surface_lost_ = true;   // the app went to the background
+#endif
     else if (result != VK_ERROR_OUT_OF_DATE_KHR) vk_check(result, "present frame");
+#ifdef __ANDROID__   // drawn upright on a rotated panel (the swapchain's identity transform), every present is suboptimal by design: only an out-of-date one rebuilds
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;   // (a new window size arrives as an SDL resize)
+    (void)suboptimal;
+#else
     if (suboptimal || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) resized_ = true;
+#endif
     return true;
 }
 void VulkanRenderer::ensure_held_frame() {
@@ -2702,7 +2870,7 @@ bool VulkanRenderer::render_overlay(uint64_t serial) {
     // The overlay frames share the slot ring with the game's packets and come far more often: they leave the next two slots to the packets (a slow GPU
     // would otherwise keep every slot busy with reticle frames and the simulation would wait for one).
     for (size_t k=0;k<2 && k<slots_.size();++k)
-        if (vkGetFenceStatus(device,slots_[(next_slot_+k)%slots_.size()].fence)==VK_NOT_READY) return false;
+        if (slot_status(slots_[(next_slot_+k)%slots_.size()])==VK_NOT_READY) return false;
     gx::FramePacket packet;
     packet.serial=serial; packet.present=true; packet.clear_after_copy=false; packet.display_source=held_.display_source; packet.overlay_only=true;
     for (const auto& draw:held_.draws) packet.draws.push_back(draw);
@@ -2762,6 +2930,7 @@ void VulkanRenderer::shutdown() {
         for (auto& slot : slots_) {
             if (slot.fence) vkDestroyFence(device, slot.fence, nullptr);
             if (slot.acquired) vkDestroySemaphore(device, slot.acquired, nullptr);
+            if (slot.done) vkDestroyEvent(device, slot.done, nullptr);
             slot = {};
         }
         pass_timer_.shutdown();
