@@ -9,7 +9,7 @@ User selected concept 1. Native C++ / SDL3 / ImGui; no additional UI framework.
 - Language selector applies immediately. Save (or Play) persists it to `launcher.language` in `config.json`.
 - Default `system` resolves the Windows preferred UI language at startup. Unsupported language falls back to English.
 - Languages: en, ru, de, fr, es, it, pt-BR, pl, uk, tr, ja, ko, zh-Hans.
-- Language affects the launcher only. It does not change game assets, region, save data or the game's language.
+- Language also selects the game's original text/font pack on the next normal launch when that pack exists in the extracted disc. Available native packs are English, German, French, Spanish, Italian and Japanese; missing or incomplete packs fall back to US English. Network play, deterministic runs and demo recording/playback always use English game resources; the port UI keeps the local launcher language. Disc files, region and save data are not rewritten.
 - Existing atomic config saves and stale-file detection preserve other settings and bindings.
 - File picker selects the extracted game directory. Play requires `DATA/sys/main.dol`.
 - Missing/corrupt decorative banner shows a translated fallback; settings remain available.

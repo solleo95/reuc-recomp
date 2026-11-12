@@ -233,6 +233,10 @@ WPADControlMotor
 @801AB350 GameActionOwnerUpdate
 @80171D38 GameMotionCount
 
+# --- Game text language (runtime/hle/game_language.cpp): the selector asks the console's language and remaps it (Spanish would become the US
+# text, index 7); this stores the pack chosen at startup from the launcher language instead.
+@80242984 GameLanguageSelect
+
 # --- Dolphin SDK matrix/vector library (mtx.a, runtime/hle/sdk_math.cpp): bit-exact native versions of the translated paired-single code.
 # Mapped by address because identified_sdk.txt lists other, unrelated functions under the same names.
 @80264680 ModelHistoryIdentity

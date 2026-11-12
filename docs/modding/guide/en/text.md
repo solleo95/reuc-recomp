@@ -98,7 +98,7 @@ The mod's `text` folder may contain these files:
 
 Inside one mod, `all.json` is applied first and then the language file, so a language file can refine `all.json`.
 
-**Which language does the game use?** It picks the file by the region of the game: a US game reads `mes_us`. So a mod for a US game needs `us.json` (or `all.json`).
+**Which language does the game use?** Normal play follows the launcher language when its disc pack is complete: English reads `mes_us`, German `mes_ge`, French `mes_fr`, Spanish `mes_sp`, Italian `mes_it`, and Japanese `mes_jp`. Missing or unsupported packs fall back to `mes_us`. Target the selected file with the matching JSON name (Spanish needs `sp.json`, not `us.json`), or use `all.json`. Network play, deterministic runs and demos use English game resources; mods are disabled in network play. Changing the language needs a game restart. Existing translations stored inside `mes_us` remain translations of that file, not a newly detected language pack.
 
 ## Placeholders - percent signs
 

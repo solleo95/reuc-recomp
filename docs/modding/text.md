@@ -30,7 +30,7 @@ Each file maps a record id to the new text:
 tools\dump_text.bat "game\DATA\files\Data\message\mes_en.txtres" --output en-original.json
 ```
 
-Cut the entries you do not want to change and edit the rest. The files are in `game/DATA/files/Data/message/`: `mes_us`, `mes_en`, `mes_fr`, `mes_ge`, `mes_it`, `mes_jp`, `mes_sp`, `mes_du`. The game picks one by its region, so a mod for a US game needs `us.json` (or `all.json`). Some localizations show their own alphabet through the font's code points (a Russian `mes_us` stores `Handgun` as `&ucmovem`): the dump shows the file as it is, and so must your text.
+Cut the entries you do not want to change and edit the rest. The files are in `game/DATA/files/Data/message/`: `mes_us`, `mes_en`, `mes_fr`, `mes_ge`, `mes_it`, `mes_jp`, `mes_sp`, `mes_du`. Normal play follows the launcher language when the disc has its complete pack: English uses `mes_us`, German `mes_ge`, French `mes_fr`, Spanish `mes_sp`, Italian `mes_it`, Japanese `mes_jp`; otherwise it falls back to `mes_us`. Use the matching mod file (`sp.json` for Spanish), or `all.json`. Network play, deterministic runs and demos use English game resources; network play disables mods. A language change needs a game restart. Some localizations show their own alphabet through the font's code points (a Russian `mes_us` stores `Handgun` as `&ucmovem`): the dump shows the file as it is, and so must your text.
 
 ## Rules
 

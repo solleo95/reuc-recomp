@@ -6,6 +6,7 @@
 #include "dispatch.h"
 #include "dol.h"
 #include "dvdfs.h"
+#include "game_language.h"
 #include "texture_replacement.h"
 #include "fatal.h"
 #include "crash_report.h"
@@ -452,12 +453,21 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::mods::set_guest_call_backend(&guest_calls);
     uc::DvdFs dvd;
     if (!dvd.open_root(game / "DATA" / "files")) uc::fatal("game files not found under %s", (game / "DATA" / "files").string().c_str());
+    // Text and fonts: the disc decides in ordinary play. Runs whose guest state is shared or recorded stay English, so a peer or a replay reads
+    // the same text the run produced. Chosen before the mods' overlays, so no mod can add a pack the disc lacks.
+    const auto launcher_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return std::string(configured=="system" ? uc::launcher::system_language() : std::string(configured)); }();
+    const bool deterministic = options.deterministic || !options.det_out.empty();
+    const bool english_only = uc::english_only_run(options.netplay.has_value(), deterministic, !options.det_out.empty(), !options.demo_record.empty(), !options.demo_play.empty());
+    const auto language = english_only ? uc::GameLanguage{} : uc::select_game_language(launcher_language, dvd);
+    uc::game_language_init(language.guest_index);
+    std::fprintf(stderr, "[language] launcher=%s guest=%u message=%s font=%c pack=%s\n", launcher_language.c_str(), language.guest_index,
+                 std::string(language.message).c_str(), language.font, language.installed ? "installed" : "incomplete, English instead");
+    if (english_only) std::fprintf(stderr, "[language] network play, deterministic runs and demos use English only, whatever the launcher language is\n");
     // Mods: their file overlays go into the disc tree now, before the game opens anything; the scripts start once the guest is about to run.
     uc::GameMods mods(exe_dir(), input_config.properties.contains("mods") ? input_config.properties["mods"] : nlohmann::ordered_json::object(), dvd,
                       std::string(reinterpret_cast<const char*>(hdr), 6), options.no_mods);
     uc::Sched sched(boot.mem);
     std::unique_ptr<uc::DetTrace> det_trace;
-    const bool deterministic = options.deterministic || !options.det_out.empty();
     if (deterministic) {
         uc::set_deterministic_clock(true);
         sched.set_deterministic(true);
@@ -562,7 +572,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const bool shared_state=network || deterministic || !options.demo_record.empty() || !options.demo_play.empty();
         gx::set_view_factors(options.ultrawide && !shared_state ? gx::factors_for_aspect(aspect,edges) : gx::ViewFactors{});
     };
-    const auto menu_language=[&]{ const auto configured=uc::launcher::config_language(input_config); return configured=="system" ? uc::launcher::system_language() : configured; }();   // the launcher's language: menus and start screens
+    const auto& menu_language=launcher_language;   // the launcher's language: menus and start screens; the game's text may be English anyway
     // Creates the renderer's device and pipelines for the current options (startup and every upscaler / frame generation switch).
     const auto init_renderer=[&](bool compile_screen) {
         const auto renderer_start=std::chrono::steady_clock::now();

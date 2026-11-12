@@ -1,0 +1,20 @@
+# Task 2 — Native game language selection and integration probe
+
+## Objective
+Implement the approved ordinary-play language selection and a real harness probe. This task does not establish different-language netplay compatibility. Read `docs/superpowers/specs/2026-11-12-game-language-design.md` and Task 2 in `docs/superpowers/plans/2026-11-12-game-language.md`.
+
+## Allowed files
+Create `runtime/game_language.h`, `runtime/game_language.cpp`, `runtime/hle/game_language.cpp`, `tests/test_game_language.cpp`, `scripts/uctest/language.py`. Modify `runtime/CMakeLists.txt`, `project/hle_map.txt`, `game/uc_main.cpp`, `tests/CMakeLists.txt`. Maintain `.superpowers/sdd/2026-11-12-game-language/progress.md` and `task-2-report.md` in that directory. Generated/build/dist output is allowed only through normal build/tests. No installed game writes; external read-only DATA at `S:\Games\Umbrella Chronicles\game\DATA`.
+
+## Interfaces and decisions
+Use `GameLanguage select_game_language(std::string_view language, const DvdFs& dvd)` and `void game_language_init(uint32_t guest_language)`; choose the smallest result struct containing the verified guest index and effective suffix/font if needed. Replace game-specific selector `@80242984 GameLanguageSelect`: r3 is the language object; store selected index at r3+4 with normal checked ppc write. Do not replace SCGetLanguage globally: the US game maps SC Spanish to US text plus S font, not Spanish text. Resolve existing launcher config/system language once before guest startup, sharing the same value with UI. No new config or CLI option. Keep deterministic/det-out, demo record/play, and netplay English through one tested startup policy (user revised netplay scope to forced English). Local port UI still uses the configured language. No provisional different-language network loading.
+
+Verify actual DOL SC mapping and regional variants from Task 1 evidence supplied by parent; do not infer `es` suffix (it is `sp`). Check messages, all font0–2 required fonts and actual localized layout/resource dependencies against DvdFs before selecting. Missing/partial requested pack returns native English, preserving US English/patched English behavior and disc identity. Decide selection before mods overlays so a mod cannot manufacture missing disc support. Preserve per-language text-mod bases and overlay ordering.
+
+## Checks and evidence
+Read TDD skill and its writing-good-tests reference. Add failing behavior tests first: literal verified mappings, unsupported language, missing text/font0/font1/font2/layout, directories/empty files where a file is required, English fallback; HLE returns selected integer. Test startup mode policy with actual production helper if nontrivial. HLE assertions must use guest memory and prove only object+4 changes, preserving nonvolatile registers; the original selector has no other persistent writes. Record exact RED then GREEN commands/exits.
+
+Use existing Game harness in new module with isolated run configs, no system input, visible nonactivating 1280x720, unlocked FPS and copied saves. Prove actual Spanish message and S-font opens, English fallback, and Spanish-config deterministic English opens; capture localized accented text if reachable. Do not mutate installed or dist config. Run `build.bat --no-install` at Idle priority and focused tests. Do not run network tests yet, the parent assigns the boundary probe separately. Avoid broad full-suite repetition if build runs it; report exactly what ran.
+
+## Ledger and deliverable
+Create ledger identity `# SDD ledger — plan: docs/superpowers/plans/2026-11-12-game-language.md`. Record preflight: Task 2 and Task 3 share startup/language interface; network work stays separate and does not waive hash equality. Task 2 self-consistency: fixture behavior must reflect actual DOL mapping; no guessed regional suffix. Task 1 read-only has no writer conflicts. Record rulings, actual files, commands/exits, output paths and task status. Report concise DONE/DONE_WITH_CONCERNS/BLOCKED plus concerns; full evidence in task-2-report.md. No commits, no subagents, no unrelated refactors or DSH/config edits.
