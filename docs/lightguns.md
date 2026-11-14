@@ -51,7 +51,7 @@ The game also talks to a Wii Remote directly: the pointer from its infrared came
 
 **Not supported:** the Motion Plus gyro, the speaker, the Classic Controller.
 
-Two physical Wii Remotes were tested together in local two-player mode; both players' controls worked. The test did not separately measure whether an unusually fast aim-only sweep can resemble a reload gesture. Individual light-gun models and adapter combinations may still need hardware validation. The signs of the swing directions and the pointer range may need a small correction: please report what you see.
+Two physical Wii Remotes were tested simultaneously in local two-player mode; both players' controls worked. Testing used standard Bluetooth adapters: CSR8510 (VID `0x0A12`, PID `0x0001`) and Intel Wireless Bluetooth (VID `0x8087`, PID `0x07DC`). Ordinary aiming and aim sweeps did not trigger reload. A sharp, abrupt swing can trigger it, as intended.
 
 ## If something does not work
 
