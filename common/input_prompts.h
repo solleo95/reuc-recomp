@@ -12,7 +12,7 @@ struct PromptChoice {std::vector<Binding> bindings;bool held=false;};
 struct PromptAlternative {std::vector<PromptChoice> choices;std::optional<PromptGesture> gesture;};
 // Which controller the prompts are for: the keyboard and mouse (default), a gamepad of one family, or the Wii Remote; gyro: the gestures (shake, swing) are done with the
 // gamepad's motion (the Wii Remote always has its own).
-struct PromptDevice {bool gamepad=false;PadFamily family=PadFamily::generic;bool gyro=false;bool wiimote=false;bool operator==(const PromptDevice&) const=default;};
+struct PromptDevice {bool gamepad=false;PadFamily family=PadFamily::generic;bool gyro=false;bool wiimote=false;bool reload_with_shake=false;bool operator==(const PromptDevice&) const=default;};
 struct PromptDescription {Action action;std::vector<PromptAlternative> alternatives;PromptDevice device;};
 // `bindings` is the keyboard table for the keyboard device, the gamepad table for a gamepad device and the Wii Remote table for the remote; any other kind is refused (std::invalid_argument).
 PromptDescription describe_prompt(const Bindings&,Action,const PromptDevice& device={});

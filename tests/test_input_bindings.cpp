@@ -1,5 +1,6 @@
 #include "check.h"
 #include "input_bindings.h"
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -195,6 +196,78 @@ static void validation_preserves_configuration() {
     fails<std::invalid_argument>([&]{r.button({PhysicalKind::wheel,1},true);});
     fails<std::invalid_argument>([&]{r.context(InputContext(255));});
 }
+static void wiimote_wave_reloads_and_qte_wave_remains_contextual() {
+    const float wave=60.f*150.f/26.f;   // 60 raw Wii accelerometer counts -> ~346 Wii swing units
+    const auto with_wii=merge_bindings(default_bindings(),default_pad_bindings(),default_wii_bindings());
+    CHECK(!validate_wii_bindings(default_wii_bindings()));   // Reload remains physical buttons; shake reload is not a binding
+
+    auto reload=game(); reload.replace(with_wii);
+    reload.wii_motion(wave,0,true,1000000000ull);
+    reload.wii_motion(-wave,0,true,1030000000ull);
+    auto frame=reload.consume();
+    CHECK(downs(frame,Action::reload)==1 && downs(frame,Action::qte_shake)==0);
+
+    // A long pause between strokes is deliberate pointing movement, not a reload wave.
+    auto slow=game(); slow.replace(with_wii);
+    slow.wii_motion(wave,0,true,2000000000ull);
+    slow.wii_motion(-wave,0,true,2300000000ull);
+    frame=slow.consume();
+    CHECK(downs(frame,Action::reload)==0);
+
+    // The checkbox off means the wave has no reload effect; the physical 1 button still works.
+    auto disabled=game(); disabled.replace(with_wii);
+    disabled.wii_motion(wave,0,false,2500000000ull);
+    disabled.wii_motion(-wave,0,false,2530000000ull);
+    CHECK(downs(disabled.consume(),Action::reload)==0);
+    disabled.button(wii(6),true);
+    CHECK(downs(disabled.consume(),Action::reload)==1);
+
+    // Mouse movement never enters the Wii-only reload path, even when the checkbox is on.
+    auto mouse_only=game(); mouse_only.replace(with_wii);
+    mouse_only.motion(wave,0,3000000000ull);
+    mouse_only.motion(-wave,0,3030000000ull);
+    CHECK(downs(mouse_only.consume(),Action::reload)==0);
+
+    // The original A + swing combination still produces a directional knife attack.
+    auto knife=game(); knife.replace(with_wii);
+    knife.button(wii(8),true); // Wii Remote A / Interact
+    knife.consume();
+    knife.wii_motion(40,0,false,3500000000ull);
+    frame=knife.consume();
+    CHECK(downs(frame,Action::knife)==1 && downs(frame,Action::reload)==0);
+
+    // During a prompted timed-action window, the same wave advances the QTE instead of reloading.
+    auto qte=game(); qte.replace(with_wii);
+    qte.context(InputContext::qte); qte.qte_window(true);
+    qte.wii_motion(wave,0,true,4000000000ull);
+    qte.wii_motion(-wave,0,true,4030000000ull);
+    frame=qte.consume();
+    CHECK(downs(frame,Action::qte_shake)==1 && downs(frame,Action::reload)==0);
+
+    // Merely being in a timed-action context is not enough: the actual shake window must be open.
+    auto waiting=game(); waiting.replace(with_wii);
+    waiting.context(InputContext::qte);
+    waiting.wii_motion(wave,0,true,5000000000ull);
+    waiting.wii_motion(-wave,0,true,5030000000ull);
+    frame=waiting.consume();
+    CHECK(downs(frame,Action::qte_shake)==0 && downs(frame,Action::reload)==0);
+
+    for(auto context:{InputContext::menu,InputContext::inactive}) {
+        auto gated=game(); gated.replace(with_wii); gated.context(context); gated.qte_window(true);
+        gated.wii_motion(wave,0,true,6000000000ull);
+        gated.wii_motion(-wave,0,true,6030000000ull);
+        const auto blocked=gated.consume();
+        CHECK(downs(blocked,Action::reload)==0);
+        CHECK(downs(blocked,Action::qte_shake)==0);
+    }
+    auto unfocused=game(); unfocused.replace(with_wii);
+    unfocused.context(InputContext::qte); unfocused.qte_window(true); unfocused.focus(false);
+    unfocused.wii_motion(wave,0,true,7000000000ull);
+    unfocused.wii_motion(-wave,0,true,7030000000ull);
+    const auto blocked=unfocused.consume();
+    CHECK(downs(blocked,Action::reload)==0);
+    CHECK(downs(blocked,Action::qte_shake)==0);
+}
 static void qte_mouse_jerks() {
     auto r=game(); r.motion(32,0,1000000000); r.motion(-32,0,1030000000);
     CHECK(downs(r.consume(),Action::qte_shake)==0);
@@ -320,5 +393,5 @@ int main() {
     defaults_and_context(); multiple_sources_and_short_click(); ordered_chord_and_dedup(); clear_special_and_remap();
     wheel_keyboard_repeat_and_chords(); replace_focus_and_context_cancel(); knife_direction_bursts_and_overflow(); knife_key_direction_and_mouse_threshold();
     wheel_pulse_preserves_keyboard_hold(); validation_preserves_configuration();
-    qte_mouse_jerks(); qte_mouse_shake_profiles();
+    wiimote_wave_reloads_and_qte_wave_remains_contextual(); qte_mouse_jerks(); qte_mouse_shake_profiles();
 }

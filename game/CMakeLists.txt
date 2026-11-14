@@ -39,7 +39,7 @@ add_library(uc_wiimote_input STATIC wiimote_input.cpp $<IF:$<BOOL:${WIN32}>,wiim
 target_include_directories(uc_wiimote_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_wiimote_input PUBLIC uc_wiimote_protocol uc_wiimote_math uc_wiimote_config uc_input)
 if(WIN32)
-  target_link_libraries(uc_wiimote_input PUBLIC setupapi hid)
+  target_link_libraries(uc_wiimote_input PUBLIC setupapi hid bthprops)
   add_library(uc_raw_input_backend STATIC raw_input_backend.cpp)   # mice and light guns as devices of their own through Raw Input (local two-player play)
   target_include_directories(uc_raw_input_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/common)
   target_link_libraries(uc_raw_input_backend PUBLIC SDL3::SDL3 user32)

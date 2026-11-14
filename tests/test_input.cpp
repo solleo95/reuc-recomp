@@ -347,6 +347,44 @@ static void the_games_motor_commands_are_kept_per_player() {
     }
 }
 
+static void wiimote_shake_reload_checkbox_controls_native_motion() {
+    uc::NativeInput input;
+    input.context(uc::InputContext::gameplay);
+    input.focus(true);
+    uc::WiimoteSettings settings;
+    const float wave=60.f*150.f/26.f;
+
+    settings.reload_with_shake=false;
+    input.wiimote_settings(settings);
+    input.host_wii_motion(wave,0,1000000000ull);
+    input.host_wii_motion(-wave,0,1030000000ull);
+    auto frame=input.consume_actions();
+    bool reloaded=false;
+    for(size_t i=0;i<frame.count;++i)reloaded|=frame.events[i].action==uc::Action::reload && frame.events[i].down;
+    CHECK(!reloaded);
+
+    settings.reload_with_shake=true;
+    input.wiimote_settings(settings);
+    input.host_wii_motion(wave,0,2000000000ull);
+    input.host_wii_motion(-wave,0,2030000000ull);
+    frame=input.consume_actions();
+    reloaded=false;
+    for(size_t i=0;i<frame.count;++i)reloaded|=frame.events[i].action==uc::Action::reload && frame.events[i].down;
+    CHECK(reloaded);
+
+    // A QTE shake remains available even when gameplay wave reload is disabled.
+    settings.reload_with_shake=false;
+    input.wiimote_settings(settings);
+    input.context(uc::InputContext::qte);
+    input.qte_window(true);
+    input.host_wii_motion(wave,0,3000000000ull);
+    input.host_wii_motion(-wave,0,3030000000ull);
+    frame=input.consume_actions();
+    bool shook=false;
+    for(size_t i=0;i<frame.count;++i)shook|=frame.events[i].action==uc::Action::qte_shake && frame.events[i].down;
+    CHECK(shook);
+}
+
 int main() {
     the_games_motor_commands_are_kept_per_player();
     corner_zone_turns_fire_into_reload();
@@ -371,6 +409,7 @@ int main() {
     raw_demo_sample_remains_compatible();
     host_actions_have_separate_consumers();
     host_test_commands_are_atomic_and_acknowledged();
+    wiimote_shake_reload_checkbox_controls_native_motion();
     uc::NativeInput input;
     input.focus(true);
     CHECK(input.move_raw(100,50,1000,500));
