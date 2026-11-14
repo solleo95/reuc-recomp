@@ -449,7 +449,7 @@ void SettingsMenu::controllers_tab(float unit) {
     wii_seen_=options.wiimote.bindings;
     wii_panel_.heading=fonts_.serif; wii_panel_.heading_size=heading_size_; wii_panel_.control_width=.75f;
     options=current();   // the gamepad tab above may have queued a change: this one builds on it
-    if(wiimote_tab(wii_panel_,options.wiimote,wii_editor_,wii_status_ ? wii_status_() : WiimoteStatus{},unit,[this](std::string_view key) { return tr(key); })) pending_=options;
+    if(wiimote_tab(wii_panel_,options.wiimote,wii_editor_,wii_status_ ? wii_status_() : WiimoteStatus{},unit,[this](std::string_view key) { return tr(key); },wii_sync_)) pending_=options;
     const auto& second=second_view_;
     if(!second.available) return;   // local two-player play is off here (the Steam Deck, network play, a test run)
     // The second player: who it is, the command that sends the device back, the gamepad window of its own (its own table, sticks and gyro); the Wii Remote has no table of its own.

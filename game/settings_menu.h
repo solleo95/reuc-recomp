@@ -32,6 +32,7 @@ public:
     // The same for the Wii Remote window: WiimoteInput's capture sink calls this for every remote button press and release.
     void wii_capture(PhysicalInput input,bool down) { wii_editor_.event(input,down); }
     void set_wii_status(std::function<WiimoteStatus()> status) { wii_status_=std::move(status); }   // the connected Wii Remote, asked while the tab is drawn
+    void set_wii_sync(std::function<void()> sync) { wii_sync_=std::move(sync); }   // request Bluetooth discovery/pairing from the in-game menu
     // The Controllers tab's gamepad window waits for a pad button while a binding is captured: GamepadInput's capture sink calls this for every pad press and release.
     // (Not part of capturing(): the menu keeps its mouse and keyboard while it waits, and Esc or a click cancels.)
     void pad_capture(PhysicalInput input,bool down) { (p2_pad_editor_.capturing() ? p2_pad_editor_ : pad_editor_).event(input,down); }   // whichever gamepad window waits for a press
@@ -81,6 +82,7 @@ private:
     Bindings wii_seen_;          // the saved Wii Remote table as the tab last saw it
     WiimotePanelState wii_panel_;
     std::function<WiimoteStatus()> wii_status_;
+    std::function<void()> wii_sync_;
     BindingEditor p2_editor_;       // the second player's keyboard-and-mouse table (the Controls tab, "Player 2"): only its mouse entries act
     BindingEditor p2_pad_editor_;   // the second player's gamepad table (the Controllers tab)
     Bindings p2_seen_,p2_pad_seen_;   // the saved tables as the tabs last saw them: a different one is a change from outside

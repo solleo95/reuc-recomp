@@ -3,6 +3,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <bluetoothapis.h>
+#include <cwchar>
 #include <setupapi.h>
 #include <hidsdi.h>
 #include <hidpi.h>
@@ -130,4 +132,66 @@ std::unique_ptr<WiiTransport> open_remote(std::set<std::string>* claimed,std::st
 }
 std::unique_ptr<WiiTransport> wii_open_first(std::string& error) { return open_remote(nullptr,error); }
 std::unique_ptr<WiiTransport> wii_open_unclaimed(std::set<std::string>& claimed,std::string& error) { return open_remote(&claimed,error); }
+std::string wii_sync_devices() {
+    BLUETOOTH_FIND_RADIO_PARAMS radio_params{};
+    radio_params.dwSize=sizeof(radio_params);
+    HANDLE raw_radio=nullptr;
+    HBLUETOOTH_RADIO_FIND radios=BluetoothFindFirstRadio(&radio_params,&raw_radio);
+    if(!radios) return "No Bluetooth radio found. Connect a Bluetooth adapter or a DolphinBar in Mode 4.";
+
+    bool found_remote=false,enabled_hid=false,authentication_failed=false;
+    struct RadioHandle {
+        HANDLE value;
+        ~RadioHandle() { if(value) CloseHandle(value); }
+    };
+    do {
+        RadioHandle radio{raw_radio};
+        BLUETOOTH_RADIO_INFO radio_info{};
+        radio_info.dwSize=sizeof(radio_info);
+        if(BluetoothGetRadioInfo(radio.value,&radio_info)!=ERROR_SUCCESS) continue;
+
+        BLUETOOTH_DEVICE_SEARCH_PARAMS search{};
+        search.dwSize=sizeof(search);
+        search.hRadio=radio.value;
+        search.fReturnAuthenticated=search.fReturnRemembered=search.fReturnUnknown=TRUE;
+        search.fIssueInquiry=TRUE;
+        search.cTimeoutMultiplier=2;
+        BLUETOOTH_DEVICE_INFO device{};
+        device.dwSize=sizeof(device);
+        HBLUETOOTH_DEVICE_FIND devices=BluetoothFindFirstDevice(&search,&device);
+        if(!devices) continue;
+        do {
+            if(wcscmp(device.szName,L"Nintendo RVL-CNT-01") &&
+               wcscmp(device.szName,L"Nintendo RVL-CNT-01-TR")) continue;
+            found_remote=true;
+            if(device.fConnected) { enabled_hid=true; continue; }
+
+            bool authenticated=device.fAuthenticated!=FALSE;
+            if(!authenticated) {
+                WCHAR pin[7]{};
+                // Nintendo's red SYNC button uses the host Bluetooth address as its PIN.
+                for(int i=0;i<6;++i) pin[i]=WCHAR(radio_info.address.rgBytes[i]);
+                DWORD result=BluetoothAuthenticateDevice(nullptr,radio.value,&device,pin,6);
+                if(result!=ERROR_SUCCESS) {
+                    // The 1+2 guest-pairing flow uses the remote's Bluetooth address instead.
+                    for(int i=0;i<6;++i) pin[i]=WCHAR(device.Address.rgBytes[i]);
+                    result=BluetoothAuthenticateDevice(nullptr,radio.value,&device,pin,6);
+                }
+                authenticated=result==ERROR_SUCCESS;
+            }
+            if(!authenticated) { authentication_failed=true; continue; }
+
+            const GUID hid_service{0x00001124,0,0x1000,{0x80,0,0,0x80,0x5f,0x9b,0x34,0xfb}};
+            if(BluetoothSetServiceState(radio.value,&device,&hid_service,BLUETOOTH_SERVICE_ENABLE)==ERROR_SUCCESS)
+                enabled_hid=true;
+        } while(BluetoothFindNextDevice(devices,&device));
+        BluetoothFindDeviceClose(devices);
+    } while(BluetoothFindNextRadio(radios,&raw_radio));
+    BluetoothFindRadioClose(radios);
+
+    if(!found_remote) return "No Wii Remote discovered. Press the red SYNC button or hold 1+2, then try again.";
+    if(enabled_hid) return "Wii Remote discovered; Windows is waiting for its HID connection.";
+    if(authentication_failed) return "Wii Remote found, but Bluetooth pairing failed. Close other Bluetooth tools and try again.";
+    return "Wii Remote found, but Windows could not enable its HID service.";
+}
 }

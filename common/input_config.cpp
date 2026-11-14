@@ -102,7 +102,8 @@ Bindings bindings_from_json(const nlohmann::ordered_json& bindings,Bindings resu
                 const auto type=kind(value);
                 if(type=="interact_fire" || type=="interact_motion" || type=="qte_motion") {
                     fields(value,{"kind"});
-                    binding.kind=type=="interact_fire" ? BindingKind::interact_fire : type=="interact_motion" ? BindingKind::interact_motion : BindingKind::qte_motion;
+                    binding.kind=type=="interact_fire" ? BindingKind::interact_fire :
+                        type=="interact_motion" ? BindingKind::interact_motion : BindingKind::qte_motion;
                 } else {
                     fields(value,{"kind","code","modifiers"}); binding.input=physical(value);
                     if(value.contains("modifiers")) {
@@ -129,7 +130,8 @@ nlohmann::ordered_json bindings_to_json(const Bindings& bindings) {
                     value["modifiers"]=Json::array();
                     for(auto modifier:binding.modifiers)value["modifiers"].push_back(physical_json(modifier));
                 }
-            } else value={{"kind",binding.kind==BindingKind::interact_fire ? "interact_fire" : binding.kind==BindingKind::interact_motion ? "interact_motion" : "qte_motion"}};
+            } else value={{"kind",binding.kind==BindingKind::interact_fire ? "interact_fire" :
+                binding.kind==BindingKind::interact_motion ? "interact_motion" : "qte_motion"}};
             entries.push_back(std::move(value));
         }
         result[std::string(action_names[i])]=std::move(entries);

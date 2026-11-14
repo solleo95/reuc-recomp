@@ -1039,7 +1039,7 @@ int run(int argc,wchar_t** argv,ResumeStartup* resume) {
             pad_panel.heading=ui.serif;pad_panel.heading_size=std::round(30*unit);pad_panel.control_width=.57f;pad_panel.combo_unit=unit;
             if(shown("pad_panel"))uc::gamepad_tab(pad_panel,options.gamepad,options.rumble,pad_editor,pads ? pads->status() : uc::PadStatus{},unit,[](std::string_view key) {return tr(key);});   // edits options.gamepad; the launcher saves options as it does for every page
             wii_panel.heading=ui.serif;wii_panel.heading_size=std::round(30*unit);wii_panel.control_width=.57f;
-            if(shown("wiimote"))uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);});
+            if(shown("wiimote"))uc::wiimote_tab(wii_panel,options.wiimote,wii_editor,wii ? wii->status() : uc::WiimoteStatus{},unit,[](std::string_view key) {return tr(key);},[&] {if(wii)wii->request_sync();});
             ImGui::Dummy({0,20*unit});ImGui::PopFont();
         } else if(page==5) {
             if(!mods_state && mods_error.empty()) {

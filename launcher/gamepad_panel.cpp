@@ -65,7 +65,8 @@ std::vector<Piece> pieces(const std::vector<Binding>& entries,const PanelText& t
         if(binding.kind==BindingKind::physical) {
             for(auto modifier:binding.modifiers) {result.push_back({{},modifier});result.push_back({"+",{}});}
             result.push_back({{},binding.input});
-        } else result.push_back({binding.kind==BindingKind::interact_fire ? tr("interact_fire") : binding.kind==BindingKind::interact_motion ? tr("interact_motion") : tr("rapid"),{}});
+        } else result.push_back({binding.kind==BindingKind::interact_fire ? tr("interact_fire") :
+            binding.kind==BindingKind::interact_motion ? tr("interact_motion") : tr("rapid"),{}});
     }
     return result;
 }
