@@ -177,6 +177,7 @@ const std::vector<Item>& table() {
         }
         t.push_back(slider("gyro_sens_x","gyro_sens_x",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_x); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_x=float(v)/100; },10,500,5,"%d%%",gyro_state));
         t.push_back(slider("gyro_sens_y","gyro_sens_y",P,KM|KL,[](const Options& o) { return percent(o.gamepad.gyro.sensitivity_y); },[](Options& o,int v) { o.gamepad.gyro.sensitivity_y=float(v)/100; },10,500,5,"%d%%",gyro_state));
+        t.push_back(toggle("gyro_roll","gyro_roll",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.roll; },[](Options& o,bool v) { o.gamepad.gyro.roll=v; },gyro_state));
         t.push_back(toggle("gyro_invert_x","gyro_invert_x",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_x; },[](Options& o,bool v) { o.gamepad.gyro.invert_x=v; },gyro_state));
         t.push_back(toggle("gyro_invert_y","gyro_invert_y",P,KM|KL,[](const Options& o) { return o.gamepad.gyro.invert_y; },[](Options& o,bool v) { o.gamepad.gyro.invert_y=v; },gyro_state));
         t.push_back(slider("aim_speed","aim_speed",P,KM|KL,[](const Options& o) { return percent(o.gamepad.aim.speed); },[](Options& o,int v) { o.gamepad.aim.speed=float(v)/100; },20,400,10,"%d%%"));

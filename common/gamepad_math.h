@@ -10,7 +10,7 @@ inline constexpr GyroMode kDefaultGyroMode=GyroMode::off;
 #else
 inline constexpr GyroMode kDefaultGyroMode=GyroMode::always;   // Linux is the Steam Deck: its gyro aims from the first start (the in-game menu is not usable there yet)
 #endif
-struct GyroSettings { GyroMode mode=kDefaultGyroMode; float sensitivity_x=1,sensitivity_y=1,dead_zone=.0087f; bool invert_x=false,invert_y=false; bool operator==(const GyroSettings&) const=default; };
+struct GyroSettings { GyroMode mode=kDefaultGyroMode; float sensitivity_x=1,sensitivity_y=1,dead_zone=.0087f; bool invert_x=false,invert_y=false,roll=false; /* roll: the sideways aim follows tilting the controller to the side (roll) instead of turning it (yaw) */ bool operator==(const GyroSettings&) const=default; };
 // Mouse counts per radian of rotation. A hand swing of the controller (a few rad/s) must reach kKnifeSpeed (4000 counts/s) and a careful aim (under 1 rad/s) must not.
 constexpr float kGyroCountsPerRadian=2000.f;
 // Pointer velocity in screen heights per second from a stick (y down is positive, as SDL reports it): radial dead zone, rescaled, then a quadratic curve.

@@ -27,5 +27,5 @@ struct Virtual {
     void axis(SDL_GamepadAxis a,int value) { CHECK(SDL_SetJoystickVirtualAxis(joystick,a,Sint16(value))); }
     void trigger(SDL_GamepadAxis a,float pull) { axis(a,int(std::lround(pull*65535.f))-32768); }   // joysticks report triggers from -32768 (released) to 32767; the gamepad layer maps that to 0..32767
     void touch(int touchpad,bool down,float pressure=.05f) { CHECK(SDL_SetJoystickVirtualTouchpad(joystick,touchpad,0,down,.5f,.5f,pressure)); }
-    void gyro(float yaw,float pitch,uint64_t timestamp_ns) { const float data[3]={pitch,yaw,0}; CHECK(SDL_SendJoystickVirtualSensorData(joystick,SDL_SENSOR_GYRO,timestamp_ns,data,3)); }
+    void gyro(float yaw,float pitch,uint64_t timestamp_ns,float roll=0) { const float data[3]={pitch,yaw,roll}; CHECK(SDL_SendJoystickVirtualSensorData(joystick,SDL_SENSOR_GYRO,timestamp_ns,data,3)); }
 };

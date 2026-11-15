@@ -87,6 +87,21 @@ static void gyro_is_calibrated_and_moves_the_pointer() {
     const auto moved=rig.input.consume_at(rig.now+=kSecond/20);
     CHECK(near(moved.x-still.x,-2*24.f/1280,1e-3f) && near(moved.y,still.y,1e-3f));
 }
+static void roll_aims_sideways_when_chosen() {
+    for(const bool roll:{false,true}) {
+        Rig rig; Virtual pad; rig.pump();
+        GamepadSettings settings; settings.gyro.mode=GyroMode::always; settings.gyro.roll=roll; rig.input.pad_settings(settings); rig.pads.gyro_roll(roll);
+        uint64_t t=kSecond;
+        for(int i=0;i<130;++i) {pad.gyro(0,0,t); t+=4000000; rig.pump();}                 // calibrated at rest
+        const auto rest=rig.input.consume_at(rig.now+=kSecond/20);
+        for(int i=0;i<3;++i) {pad.gyro(0,0,t,1.f); t+=4000000; rig.pump();}                // 1 rad/s of roll only: 24 counts left in roll mode, nothing in yaw mode
+        const auto rolled=rig.input.consume_at(rig.now+=kSecond/20);
+        CHECK(roll ? near(rolled.x-rest.x,-2*24.f/1280,1e-3f) : near(rolled.x,rest.x,1e-3f));
+        for(int i=0;i<3;++i) {pad.gyro(1.f,0,t); t+=4000000; rig.pump();}                  // 1 rad/s of yaw only: the reverse
+        const auto turned=rig.input.consume_at(rig.now+=kSecond/20);
+        CHECK(roll ? near(turned.x,rolled.x,1e-3f) : near(turned.x-rolled.x,-2*24.f/1280,1e-3f));
+    }
+}
 static void a_removed_pad_is_released() {
     Rig rig; auto pad=std::make_unique<Virtual>(); rig.pump();
     pad->axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767); pad->axis(SDL_GAMEPAD_AXIS_LEFTX,32767); pad->axis(SDL_GAMEPAD_AXIS_RIGHTX,32767); pad->button(SDL_GAMEPAD_BUTTON_SOUTH,true);
@@ -249,7 +264,7 @@ int main() {
     // Only the virtual pads of this test: a gamepad plugged into the PC must not take part.
     for(const char* hint:{SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_RAWINPUT,SDL_HINT_JOYSTICK_WGI,SDL_HINT_JOYSTICK_DIRECTINPUT,SDL_HINT_XINPUT_ENABLED}) SDL_SetHint(hint,"0");
     family_from_type_table(); a_pad_appears_and_its_buttons_reach_the_input(); a_firm_press_on_a_trackpad_is_a_button(); triggers_press_at_half_with_a_hysteresis();
-    sticks_move_the_pointer_and_the_camera(); gyro_is_calibrated_and_moves_the_pointer(); a_removed_pad_is_released();
+    sticks_move_the_pointer_and_the_camera(); gyro_is_calibrated_and_moves_the_pointer(); roll_aims_sideways_when_chosen(); a_removed_pad_is_released();
     an_inactive_gamepad_feeds_nothing_and_resumes_cleanly(); the_capture_sink_sees_every_input_even_while_inactive();
     the_motors_drive_the_pad_in_use_and_the_other_pad(); a_refused_rumble_is_tried_again_on_the_next_pass();
     the_deck_report_is_the_loud_simple_rumble_command(); a_deck_pad_gets_its_motor_command_again_every_60_ms(); any_other_pad_keeps_its_200_ms_refresh();

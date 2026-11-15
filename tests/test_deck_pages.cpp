@@ -42,10 +42,10 @@ int main() {
     // the gyro's sensitivity and inversion mean nothing while the gyro is off: they are hidden then (the settings registry is shared with the in-game menu)
     Options options; Env env;
     options.gamepad.gyro.mode = GyroMode::off;
-    for (const char* id : {"gyro_sens_x", "gyro_sens_y", "gyro_invert_x", "gyro_invert_y"}) CHECK(!shown(id, deck_launcher, options, env));
+    for (const char* id : {"gyro_sens_x", "gyro_sens_y", "gyro_roll", "gyro_invert_x", "gyro_invert_y"}) CHECK(!shown(id, deck_launcher, options, env));
     for (const char* id : {"gyro_mode", "aim_speed", "aim_dead_zone", "camera_dead_zone"}) CHECK(shown(id, deck_launcher, options, env));   // the sticks do not depend on it
     options.gamepad.gyro.mode = GyroMode::always;
-    for (const char* id : {"gyro_sens_x", "gyro_sens_y", "gyro_invert_x", "gyro_invert_y"}) CHECK(shown(id, deck_launcher, options, env));
+    for (const char* id : {"gyro_sens_x", "gyro_sens_y", "gyro_roll", "gyro_invert_x", "gyro_invert_y"}) CHECK(shown(id, deck_launcher, options, env));
     options.gamepad.gyro.mode = GyroMode::hold;
     for (const char* id : {"gyro_sens_x", "gyro_invert_y"}) CHECK(shown(id, deck_menu, options, env));
     // "while a button is held": the button to hold is chosen by pressing it, in the launcher and in the in-game menu alike; with another mode there is no such row

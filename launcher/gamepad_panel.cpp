@@ -210,6 +210,7 @@ bool modal(GamepadPanelState& state,GamepadSettings& s,BindingEditor& editor,con
     if(s.gyro.mode!=GyroMode::off) {
         ImGui::TextUnformatted(tr("gyro_sens_x")); changed|=float_slider("##gyro-x",s.gyro.sensitivity_x,.1f,10,"%.2f",width,true); gap(unit);
         ImGui::TextUnformatted(tr("gyro_sens_y")); changed|=float_slider("##gyro-y",s.gyro.sensitivity_y,.1f,10,"%.2f",width,true); gap(unit);
+        changed|=toggle(tr("gyro_roll"),s.gyro.roll,unit); gap(unit);
         changed|=toggle(tr("gyro_invert_x"),s.gyro.invert_x,unit); gap(unit);
         changed|=toggle(tr("gyro_invert_y"),s.gyro.invert_y,unit); gap(unit);
     }

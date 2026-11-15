@@ -114,7 +114,7 @@ void GamepadInput::added(SDL_JoystickID id) {
     if(pad.gyro) enable_deck_imu(handle);
     // SDL's Steam Deck driver reports the axis about the screen's normal as "yaw" (data[1], right for a flat controller), but a Deck is held upright: turning it left and
     // right is the axis SDL calls data[2] (measured on the Deck: 2.2-2.9 rad/s on data[2] for sideways turns, data[1] only for steering-wheel rolls). Sign: SDL's -gyroY.
-    if(SDL_GetGamepadVendor(handle)==0x28de && SDL_GetGamepadProduct(handle)==0x1205) {pad.yaw_axis=2; pad.yaw_sign=-1;}
+    if(SDL_GetGamepadVendor(handle)==0x28de && SDL_GetGamepadProduct(handle)==0x1205) {pad.yaw_axis=2; pad.yaw_sign=-1; pad.roll_axis=1;}   // the steering-wheel roll is data[1] there (sign not measured yet)
 #endif
     std::fprintf(stderr,"[gamepad] %s type=%d slot=%u gyro=%s vendor=%04x product=%04x path=%s\n",pad.name.c_str(),int(pad.type),slot,pad.gyro ? "on" : "none",
                  SDL_GetGamepadVendor(handle),SDL_GetGamepadProduct(handle),SDL_GetGamepadPath(handle) ? SDL_GetGamepadPath(handle) : "?");
@@ -246,7 +246,11 @@ void GamepadInput::event(const SDL_Event& event,GamepadTarget* first,GamepadTarg
             at->second.gyro_seen=true;
             std::fprintf(stderr,"[gamepad] gyro data arrives from %s\n",at->second.name.c_str());   // proves the platform delivers the sensor (Steam Input may hold it back)
         }
-        const auto rates=at->second.bias.filter(at->second.yaw_sign*event.gsensor.data[at->second.yaw_axis],event.gsensor.data[0],timestamp);
+        // Both offsets keep measuring, so switching between yaw and roll needs no new calibration. Roll: SDL's data[2] about the axis toward the player, positive tilting the
+        // controller's top to the left, the same direction as yaw's "positive turning left".
+        const auto yaw_rates=at->second.bias.filter(at->second.yaw_sign*event.gsensor.data[at->second.yaw_axis],event.gsensor.data[0],timestamp);
+        const auto roll_rates=at->second.roll_bias.filter(at->second.roll_sign*event.gsensor.data[at->second.roll_axis],event.gsensor.data[0],timestamp);
+        const auto& rates=roll_ ? roll_rates : yaw_rates;
         ++at->second.gyro_samples;
         for(int axis=0;axis<3;++axis) at->second.gyro_peak[axis]=std::max(at->second.gyro_peak[axis],std::fabs(event.gsensor.data[axis]));
         if(timestamp-at->second.gyro_logged_ns>=2000000000ull) {   // diagnostics, every 2 s: is the gyro calibrated, and does it reach the aim

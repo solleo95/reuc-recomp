@@ -33,6 +33,7 @@ public:
     // The pad that plays the second player (0: none). What it held on its old target is let go, its sticks go to the new one; it never becomes the pad "in use" (status,
     // prompts, gyro and the first player's motor belong to the first player's pads).
     void assign_second(SDL_JoystickID);
+    void gyro_roll(bool roll) { roll_=roll; }   // the sideways aim follows the controller's roll (tilting it to the side) instead of its yaw
     SDL_JoystickID second() const { return second_; }   // 0 when none, or once the second player's pad was unplugged
     // A pad nobody has decided about (a question is open: whose is it?) plays for neither player: what it held is let go and its buttons and sticks reach no target until it is
     // unmuted (0). The press that raised the question is already withheld when the press sink calls mute().
@@ -51,7 +52,8 @@ public:
 private:
     struct Pad {
         SDL_Gamepad* handle=nullptr; unsigned slot=0; std::string name; SDL_GamepadType type=SDL_GAMEPAD_TYPE_UNKNOWN; float trackpad_peak[2]={}; bool deck=false; /* the Steam Deck's own controller: its prompts are its own buttons, not an Xbox's */ bool gyro=false, gyro_seen=false; unsigned gyro_samples=0; uint64_t gyro_logged_ns=0; float gyro_peak[3]={};
-        unsigned yaw_axis=1; float yaw_sign=1;   // which SDL gyro axis turns the aim sideways (see GamepadInput::added)   // gyro_seen: a non-zero sample arrived (logged once)
+        unsigned yaw_axis=1,roll_axis=2; float yaw_sign=1,roll_sign=1; GyroBias roll_bias;   // the roll aim has its own offset: the setting can change while the pad lies still
+        // which SDL gyro axis turns the aim sideways (see GamepadInput::added)   // gyro_seen: a non-zero sample arrived (logged once)
         std::array<float,6> axes{}; uint32_t buttons=0,axis_down=0; GyroBias bias;
         uint16_t rumble=0; uint64_t rumble_ms=0; bool rumble_worked=true;   // what the motors were last told to do, and when; whether the pad took the last start
         int hid=-1; bool flip=false;   // the Deck's hidraw node, opened when first needed; the repeated command that differs by one (see rumble())
@@ -72,7 +74,7 @@ private:
     GamepadTarget* first_seen_=nullptr; GamepadTarget* second_seen_=nullptr;   // the targets of the last event or update: assign_second lets go of what a pad held there
     std::function<void(SDL_JoystickID)> press_sink_;
     unsigned changes_=0;
-    bool active_=true;
+    bool active_=true,roll_=false;
     std::function<void(PhysicalInput,bool)> sink_;
 };
 }

@@ -65,13 +65,14 @@ GamepadSettings gamepad_from_json(const nlohmann::ordered_json& g) {
         s.camera_dead_zone=number(g,"camera_dead_zone",s.camera_dead_zone);
         if(g.contains("gyro")) {
             const Json& y=g["gyro"];
-            fields(y,{"mode","sensitivity_x","sensitivity_y","dead_zone","invert_x","invert_y","hold"},"gyro.");
+            fields(y,{"mode","sensitivity_x","sensitivity_y","dead_zone","invert_x","invert_y","roll","hold"},"gyro.");
             s.gyro.mode=choice(y,"mode",s.gyro.mode,kGyroModes);
             s.gyro.sensitivity_x=number(y,"sensitivity_x",s.gyro.sensitivity_x);
             s.gyro.sensitivity_y=number(y,"sensitivity_y",s.gyro.sensitivity_y);
             s.gyro.dead_zone=number(y,"dead_zone",s.gyro.dead_zone);
             s.gyro.invert_x=flag(y,"invert_x",s.gyro.invert_x);
             s.gyro.invert_y=flag(y,"invert_y",s.gyro.invert_y);
+            s.gyro.roll=flag(y,"roll",s.gyro.roll);
             if(y.contains("hold"))s.gyro_hold=physical_input_from_json(y["hold"]);
         }
         if(g.contains("bindings"))s.bindings=bindings_from_json(g["bindings"],s.bindings);
@@ -90,7 +91,7 @@ nlohmann::ordered_json gamepad_to_json(const GamepadSettings& s) {
     g["aim_stick"]=kRoles[size_t(s.aim_stick)]; g["camera_stick"]=kRoles[size_t(s.camera_stick)];
     g["dead_zone"]=rounded(s.aim.dead_zone); g["aim_speed"]=rounded(s.aim.speed); g["camera_dead_zone"]=rounded(s.camera_dead_zone);
     g["gyro"]={{"mode",kGyroModes[size_t(s.gyro.mode)]},{"sensitivity_x",rounded(s.gyro.sensitivity_x)},{"sensitivity_y",rounded(s.gyro.sensitivity_y)},
-        {"dead_zone",rounded(s.gyro.dead_zone)},{"invert_x",s.gyro.invert_x},{"invert_y",s.gyro.invert_y},{"hold",physical_input_json(s.gyro_hold)}};
+        {"dead_zone",rounded(s.gyro.dead_zone)},{"invert_x",s.gyro.invert_x},{"invert_y",s.gyro.invert_y},{"roll",s.gyro.roll},{"hold",physical_input_json(s.gyro_hold)}};
     g["bindings"]=bindings_to_json(s.bindings);
     return g;
 }

@@ -1411,7 +1411,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                         continue;
                     }
                 }
-                if(gamepad) gamepad->event(event,&input,&input2);   // keeps its own state; it hands the game nothing while a menu is open (see update below); the second player's pad feeds input2
+                if(gamepad) {gamepad->gyro_roll(options.gamepad.gyro.roll); gamepad->event(event,&input,&input2);}   // keeps its own state; it hands the game nothing while a menu is open (see update below); the second player's pad feeds input2
                 if(event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN || (event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(event.gaxis.value))>16000)) {pad_last_used=true;wii_last_used=false;}
                 else if(pad_last_used && (event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_MOTION)) {
                     static int shown=0;   // diagnostics: who switched the prompts from the pad to the mouse and keyboard (a few lines per run)

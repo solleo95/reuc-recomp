@@ -22,7 +22,7 @@ static void roundtrip_keeps_every_field() {
     settings.aim_stick=StickRole::right; settings.camera_stick=StickRole::left;
     settings.aim.dead_zone=.2f; settings.aim.speed=2.5f; settings.camera_dead_zone=.05f;
     settings.gyro.mode=GyroMode::hold; settings.gyro.sensitivity_x=1.5f; settings.gyro.sensitivity_y=.5f; settings.gyro.dead_zone=.01f;
-    settings.gyro.invert_x=true; settings.gyro.invert_y=true; settings.gyro_hold={PhysicalKind::pad_button,9};
+    settings.gyro.invert_x=true; settings.gyro.invert_y=true; settings.gyro.roll=true; settings.gyro_hold={PhysicalKind::pad_button,9};
     settings.bindings[size_t(Action::fire)]={{BindingKind::physical,{PhysicalKind::pad_button,10},{{PhysicalKind::pad_axis,9}}}};
     settings.bindings[size_t(Action::camera_up)]={{BindingKind::physical,{PhysicalKind::pad_button,11},{}}};
     settings.bindings[size_t(Action::reload)].clear();
@@ -49,7 +49,7 @@ static void bad_files_are_refused_not_fatal() {
         R"({"gamepad":{"dead_zone":0.6}})",R"({"gamepad":{"dead_zone":-0.1}})",R"({"gamepad":{"dead_zone":"big"}})",
         R"({"gamepad":{"aim_speed":0.1}})",R"({"gamepad":{"aim_speed":4.5}})",R"({"gamepad":{"camera_dead_zone":0.51}})",
         R"({"gamepad":{"gyro":{"mode":"sometimes"}}})",R"({"gamepad":{"gyro":{"sensitivity_x":0.05}}})",R"({"gamepad":{"gyro":{"sensitivity_y":11}}})",
-        R"({"gamepad":{"gyro":{"dead_zone":0.06}}})",R"({"gamepad":{"gyro":{"invert_x":"yes"}}})",
+        R"({"gamepad":{"gyro":{"dead_zone":0.06}}})",R"({"gamepad":{"gyro":{"invert_x":"yes"}}})",R"({"gamepad":{"gyro":{"roll":1}}})",
         R"({"gamepad":{"gyro":{"hold":{"kind":"key","code":9}}}})",R"({"gamepad":{"gyro":{"hold":{"kind":"pad_axis","code":16}}}})",
         R"({"gamepad":{"bindings":{"unknown":[]}}})",R"({"gamepad":{"bindings":{"fire":[{"kind":"key","code":9}]}}})",
         R"({"gamepad":{"bindings":{"fire":[{"kind":"mouse","code":1}]}}})",R"({"gamepad":{"bindings":{"fire":[{"kind":"pad_button","code":32}]}}})",
