@@ -49,6 +49,8 @@ void hle_WorldRaycast(ppc::Ctx& c);
 void hle_VectorAddStep(ppc::Ctx& c);
 void hle_JumpBlendStep(ppc::Ctx& c);
 void hle_CrossfadeStep(ppc::Ctx& c);
+void hle_FrameCtrlStep(ppc::Ctx& c);
+void hle_FrameCtrlStepB(ppc::Ctx& c);
 void hle_FlightPhaseStep(ppc::Ctx& c);
 void hle_CameraHistoryStep(ppc::Ctx& c);
 void hle_DeferredActorStep(ppc::Ctx& c);

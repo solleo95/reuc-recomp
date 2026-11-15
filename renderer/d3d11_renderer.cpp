@@ -4,6 +4,7 @@
 #include "late_aim.h"
 #include "render_scale.h"
 #include "decal_bias.h"
+#include "copy_scale.h"
 #include "prompt_picture.h"
 #include "bloom_math.h"
 #include "hdr_math.h"
@@ -720,6 +721,7 @@ bool D3D11Renderer::render(const gx::FramePacket& packet,bool display,uint64_t s
             if(moving_wake) gx::retarget_wake(draw,vertices.data()+info.first_vertex,v.size(),controls_.wake_seconds,controls_.aim_history);
         }
         PackedDraw packed; packed.uniforms=*draw.uniforms;
+        { const auto copy_words=gx::copy_scale_words(draw,efb_.width/640.f,efb_.height/480.f); std::copy(copy_words.begin(),copy_words.end(),packed.uniforms.fog.begin()+gx::kCopyScaleFogWord); }
         packed.tev[0]=draw.material.stages; for(size_t i=0;i<4;++i) packed.tev[1]|=uint32_t(draw.material.swaps[i])<<(8*i);
         for(size_t i=0;i<draw.material.stages;++i) { const auto& stage=draw.material.stage[i]; packed.tev[2+i*4]=stage.color; packed.tev[3+i*4]=stage.alpha; packed.tev[4+i*4]=stage.order; packed.tev[5+i*4]=stage.konst; }
         auto [palette_it,new_palette]=palette_indices.emplace(&*draw.transforms,UINT(palettes.size())); if(new_palette) { palettes.emplace_back(); gx::fill_palette(palettes.back(),*draw.transforms); }

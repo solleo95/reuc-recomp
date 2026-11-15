@@ -142,6 +142,15 @@ int main() {
         c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
         frame=packets.try_take(); CHECK(frame && frame->draws.size()==1 && frame->draws[0].uniforms->indirect[9]==0x540);
         CHECK(packets.complete(frame->serial));
+        // A display list the game calls with a raw FIFO command (0x40, address, length) sets indirect matrix words and a stage command: both reach the next draw.
+        for(uint32_t at:{0u,5u}) ppc::wr8(c,0x80009800+at,0x61);
+        ppc::wr32(c,0x80009801,0x06800333); ppc::wr32(c,0x80009806,0x10000270);
+        uc::gx_fifo_write(1,0x40); uc::gx_fifo_write(4,0x80009800); uc::gx_fifo_write(4,10);
+        triangle();
+        c.r[3]=0x80006000; c.r[4]=0; hle_GXCopyDisp(c);
+        frame=packets.try_take(); CHECK(frame && frame->draws.size()==1);
+        CHECK(frame->draws[0].uniforms->indirect[0]==0x800333 && frame->draws[0].uniforms->ind_cmd[0]==0x270);
+        CHECK(packets.complete(frame->serial));
         // A native TEV asset selects map 1 solely as its indirect input.
         ppc::wr32(c,0x80009000,0x80009100); ppc::wr8(c,0x8000910C,1);
         auto field=[&](uint32_t offset,uint32_t tag,uint32_t value) {

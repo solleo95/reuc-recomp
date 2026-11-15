@@ -530,6 +530,29 @@ void hle_CrossfadeStep(ppc::Ctx& c) {
     if(c.lr==0x8016975C && scale>0 && scale!=1.f) c.f[1]=c.ps1[1]=double(float(c.f[1])/scale);
     call_body(c,256,0x80165614);
 }
+// Material animation frame counter 8036E3F8: frame += speed * 1.0 once per call. The caller at 80384BF0 steps the J3D material animations (the water ripple frames,
+// colour animations) once per update, so they run at the update rate: 16 times too fast at 480 Hz. Scale the speed to the nominal frame (the original 30 Hz mode is 1).
+namespace { void frame_ctrl_step(ppc::Ctx& c,uint32_t caller,uint32_t body); }
+void hle_FrameCtrlStep(ppc::Ctx& c) { frame_ctrl_step(c,0x80384BF0,0x8036E3FC); }
+void hle_FrameCtrlStepB(ppc::Ctx& c) { frame_ctrl_step(c,0x80384C0C,0x8036ED6C); }
+namespace {
+void frame_ctrl_step(ppc::Ctx& c,uint32_t caller,uint32_t body) {
+    const auto object=c.r[3],lr=c.lr;
+    const float scale=uc::game_step_scale();
+    if(lr==caller && scale!=1.f) {
+        struct RestoreSpeed {
+            ppc::Ctx& c; uint32_t address,bits;
+            ~RestoreSpeed() { ppc::wr32(c,address,bits); }
+        } restore{c,object+28,ppc::rd32(c,object+28)};
+        ppc::wrf32(c,object+28,ppc::rdf32(c,object+28)*scale);
+        call_body(c,48,body);
+        c.lr=lr;
+        return;
+    }
+    call_body(c,48,body);
+    c.lr=lr;
+}
+}
 // Only flight states 32/34 advance their phase by a nominal-frame speed; states 31/33 already use dt.
 void hle_FlightPhaseStep(ppc::Ctx& c) {
     const auto actor=c.r[3];

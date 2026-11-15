@@ -214,6 +214,8 @@ GXLoadNrmMtxImm
 @80162A68 TrailHistoryStep
 @80123D14 JumpBlendStep
 @80165610 CrossfadeStep
+@8036E3F8 FrameCtrlStep
+@8036ED68 FrameCtrlStepB
 @80044D14 WorldRaycast
 
 # --- Wii Remote library (tech-debt TD-013): KPADInit starts the WPAD/Bluetooth stack (HCI over IOS) and waits for the controller radio.

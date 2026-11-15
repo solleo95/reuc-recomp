@@ -11,6 +11,8 @@ HOOKS = {
     "VectorAddStep": "conditional: only LR 801C387C falling-bat displacement",
     "JumpBlendStep": "conditional: only LR 80200B8C monkey residual blend",
     "CrossfadeStep": "conditional: LR 8016975C layer crossfade elapsed time divided by step scale (playback already per update); body entry 80165614",
+    "FrameCtrlStep": "conditional: LR 80384BF0 material animation frame speed multiplied by the step scale (frame += speed once per call); body entry 8036E3FC",
+    "FrameCtrlStepB": "conditional: LR 80384C0C, as FrameCtrlStep for the sibling animation controller; body entry 8036ED6C",
     "CameraHistoryStep": "history sampling uses nominal frames; body entry 801B0AEC",
     "DeferredActorStep": "only staggered action countdown +8488 uses nominal frames; body entry 801A5168",
     "RumbleStep": "pattern samples advance at nominal-frame cadence; body entry 80136EF0",
@@ -35,7 +37,7 @@ HOOKS = {
     "GameFrameWait": "frame boundary: timestep, pause, nominal ticks and sole-reader coefficients",
 }
 BODY_HOOKS = {"800C7910": "ActorStepTime", "801C44BC": "FlightPathStep",
-              "801C56F4": "FlightPhaseStep", "80123D18": "JumpBlendStep", "80165614": "CrossfadeStep",
+              "801C56F4": "FlightPhaseStep", "80123D18": "JumpBlendStep", "80165614": "CrossfadeStep", "8036E3FC": "FrameCtrlStep", "8036ED6C": "FrameCtrlStepB",
               "801B0AEC": "CameraHistoryStep", "801A5168": "DeferredActorStep", "80136EF0": "RumbleStep",
               "80162A6C": "TrailHistoryStep", "802447DC": "UiPhysicsStep", "80211788": "TimelineStep",
               "8006DBF8": "WeaponTrailStep", "801B9170": "EffectRetireStep", "8012AEEC": "TargetRefreshStep",

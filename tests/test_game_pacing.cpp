@@ -38,6 +38,11 @@ static void crossfade_body(ppc::Ctx& c) {
     CHECK(c.r[1]==0x817D0000-256 && ppc::rd32(c,c.r[1])==0x817D0000);
     crossfade_step=c.f[1]; c.r[1]+=256;
 }
+static float frame_speed_seen;
+static void frame_ctrl_body(ppc::Ctx& c) {
+    CHECK(c.r[1]==0x817D0000-48 && ppc::rd32(c,c.r[1])==0x817D0000);
+    frame_speed_seen=ppc::rdf32(c,c.r[3]+28); c.r[1]+=48;
+}
 static double fix_seen,fix_return=0.25;
 static void fix_body(ppc::Ctx& c) {
     CHECK(c.r[1]<0x817D0000 && ppc::rd32(c,c.r[1])==0x817D0000);   // lowered prologue: back chain to the caller's stack
@@ -279,6 +284,7 @@ int main() {
     all_entries.push_back({0x8004C920,sound_retry_body});
     all_entries.push_back({0x80049004,sound_wait_body});
     all_entries.push_back({0x80165614,crossfade_body});
+    all_entries.push_back({0x8036E3FC,frame_ctrl_body});
     all_entries.push_back({0x80170004,fix_body});
     for(const auto& fix:uc::pacing_fix_table()) all_entries.push_back({fix.entry+4,fix_body});
     all_entries.push_back({0x803C1BFC,home_body});
@@ -498,6 +504,25 @@ int main() {
         }
         uc::game_pacing_set_paused(true); run(0x804D3318,2,1);
         CHECK(fade(0)==0);   // pause: no division by a zero scale
+        uc::game_pacing_set_paused(false);
+        measured_step=0; uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); run(0x804D3318,2,2);
+    }
+    {   // Material animation frames (the water ripple): the speed the counter adds per call is per nominal frame, so a call of a shorter step gets a proportionally smaller one.
+        constexpr uint32_t object=0x80060000;
+        auto step=[&](uint32_t caller) {
+            c.r[1]=0x817D0000; c.r[3]=object; c.lr=caller; ppc::wrf32(c,object+28,1.f);
+            hle_FrameCtrlStep(c);
+            CHECK(c.r[1]==0x817D0000 && c.lr==caller && ppc::rdf32(c,object+28)==1.f);   // the field is restored
+            return frame_speed_seen;
+        };
+        for(unsigned hz : {30u,60u,120u,240u,480u}) {
+            uc::game_pacing_init(hz>30); ppc::wrf32(c,0x804D3334,60); measured_step=1.f/hz;
+            run(0x804D3318,2,hz>30 ? 1 : 2);
+            CHECK(std::fabs(step(0x80384BF0)-float(uc::game_step_scale()))<1e-6f);   // the animation advances 1 per nominal frame at every update rate
+            CHECK(step(0x80100000)==1.f);   // other callers unchanged
+        }
+        uc::game_pacing_set_paused(true); run(0x804D3318,2,1);
+        CHECK(step(0x80384BF0)==0.f);   // pause: the animation stands still
         uc::game_pacing_set_paused(false);
         measured_step=0; uc::game_pacing_init(false); ppc::wrf32(c,0x804D3334,59.94f); run(0x804D3318,2,2);
     }

@@ -255,6 +255,8 @@ int indirectWrap(int coord, uint mode) { return mode == 0 ? coord : (mode < 6 ? 
 // GX indirect texturing in hardware fixed point: texcoords are texels*128, matrices s.10, scale 2^(e-17).
 float2 indirectCoord(uint map, float2 coord, float2 uv[8], uint command, inout int2 previous) {
     float2 size = imageSize(map);
+    // An EFB copy's image is the guest texture times the render scale (words 5..7 of fog, renderer/copy_scale.h), and GX counts in guest texels.
+    if (((drawState.fog[1].w >> map) & 1) != 0) size /= float2(asfloat(drawState.fog[1].y), asfloat(drawState.fog[1].z));
     int2 fixedUV = int2(floor(coord * size * 128.0));
     uint stage = command & 3, format = (command >> 2) & 3, bias = (command >> 4) & 7, matrix = (command >> 9) & 15;
     uint iref = indirectWord(9), scale = indirectWord(10 + stage / 2) >> ((stage & 1) * 8);

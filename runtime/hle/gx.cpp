@@ -964,7 +964,14 @@ static void raw_display_list(uint32_t address,uint32_t length) {
     for(size_t at=0;at<bytes.size();) {
         const auto op=std::to_integer<uint8_t>(bytes[at++]);
         if(op==0) continue;
-        if(op==0x61 && at+4<=bytes.size()) { at+=4; continue; }
+        if(op==0x61 && at+4<=bytes.size()) {
+            // The indirect texturing registers (matrices, stage commands, order and scales) a list sets reach the next draws as the hardware's would.
+            const uint32_t bp=word(at),reg=bp>>24,data=bp&0xFFFFFF;
+            if((reg>=0x06 && reg<=0x0E) || (reg>=0x10 && reg<=0x1F) || (reg>=0x25 && reg<=0x27)) {
+                if(apply_bp(color_uniforms,reg,data)) { dirty_material(); if(reg>=0x10 && reg<=0x1F) indirect_stages[reg-0x10]=data; }
+            }
+            at+=4; continue;
+        }
         if(op==0x10 && at+4<=bytes.size()) {
             const uint32_t header=word(at),count=(header>>16)+1,reg=header&0xFFFF; at+=4;
             if(at+4*size_t(count)>bytes.size()) return;

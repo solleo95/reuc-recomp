@@ -6,6 +6,7 @@
 #include "late_aim.h"
 #include "render_scale.h"
 #include "decal_bias.h"
+#include "copy_scale.h"
 #include "native_viewport.h"
 #include "bloom_math.h"
 #include "hdr_math.h"
@@ -1611,6 +1612,7 @@ void D3D12Renderer::draw(Slot& slot,const gx::DrawPacket& draw,const gx::FramePa
     struct Constants { gx::DrawUniform draw; std::array<uint32_t,68> tev{}; } constants;
     static_assert(sizeof(Constants)==2112);
     constants.draw=*draw.uniforms; constants.tev[0]=draw.material.stages;
+    { const auto copy_words=gx::copy_scale_words(draw,efb_->width/640.f,efb_->height/480.f); std::copy(copy_words.begin(),copy_words.end(),constants.draw.fog.begin()+gx::kCopyScaleFogWord); }
     for(size_t i=0;i<4;++i) constants.tev[1]|=uint32_t(draw.material.swaps[i])<<(8*i);
     for(size_t i=0;i<draw.material.stages;++i) { const auto& stage=draw.material.stage[i]; constants.tev[2+i*4]=stage.color; constants.tev[3+i*4]=stage.alpha; constants.tev[4+i*4]=stage.order; constants.tev[5+i*4]=stage.konst; }
     const auto constant_offset=upload(slot,&constants,sizeof constants);

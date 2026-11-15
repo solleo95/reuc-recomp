@@ -8,6 +8,7 @@
 #include "post_effects.h"
 #include "vulkan_renderer.h"
 #include "render_scale.h"
+#include "copy_scale.h"
 #include "rebuild_gate.h"
 #include "buffer_memory.h"
 #include "upscale_math.h"
@@ -2120,11 +2121,15 @@ bool VulkanRenderer::render(const gx::FramePacket& packet, bool display,uint64_t
                 }
                 image[map]={VK_NULL_HANDLE,slot.textures[found->second]->view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
+            const auto words_of=[&](const gx::DrawPacket& d) { return gx::copy_scale_words(d,efb_extent_.width/640.f,efb_extent_.height/480.f); };
+            const auto copy_words=words_of(packet.draws[i]);
             if(i==0 || packet.draws[i].uniforms.block()!=packet.draws[i-1].uniforms.block() ||
-               !std::equal(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,gpu_draws[i-1].key.begin()+1)) {
+               !std::equal(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,gpu_draws[i-1].key.begin()+1) ||
+               copy_words!=words_of(packet.draws[i-1])) {
                 uniform_offset=i*uniform_stride_;
                 auto* uniform_at=static_cast<std::byte*>(slot.uniforms.mapped)+uniform_offset;
                 std::memcpy(uniform_at,&*packet.draws[i].uniforms,sizeof(gx::DrawUniform));
+                std::memcpy(uniform_at+offsetof(gx::DrawUniform,fog)+gx::kCopyScaleFogWord*sizeof(uint32_t),copy_words.data(),sizeof copy_words);
                 std::array<uint32_t,kTevWords> tev{}; std::copy(gpu_draws[i].key.begin()+1,gpu_draws[i].key.begin()+68,tev.begin());
                 std::memcpy(uniform_at+sizeof(gx::DrawUniform),tev.data(),sizeof tev);
             }
