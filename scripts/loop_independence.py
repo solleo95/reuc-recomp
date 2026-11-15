@@ -20,7 +20,7 @@ from pathlib import Path
 import re
 
 # HLE functions that only read and write the memory their pointer arguments name (the tracer records r3..r6 as possibly read and written for them).
-MEMORY_ONLY = re.compile(r"hle_(Leaf_|SaveGpr|RestGpr|SaveFpr|RestFpr|ModelHistoryIdentity|PSMTX|PSVEC|PSQUAT|Nop\b|MTXPerspective|WorldRaycast|HitBufferConstruct|SegmentTriangleHit|"
+MEMORY_ONLY = re.compile(r"hle_(Leaf_|SaveGpr|RestGpr|SaveFpr|RestFpr|ModelHistoryIdentity|PSMTX|PSVEC|PSQUAT|Nop\b|MTXPerspective|MTXLightPerspective|WorldRaycast|HitBufferConstruct|SegmentTriangleHit|"
                          r"VectorAddStep|BoundsRecordInit|GameActionMask|CrossfadeStep|GameMotionCount|GameWeaponUpdate|GameActionOwnerUpdate)")
 # Shared machine state the translated code guards with interrupt masks: the interrupt mask itself, mutexes, message queues, thread switches, the locked cache.
 IRQ = re.compile(r"hle_(OSDisableInterrupts|OSRestoreInterrupts|OSLockMutex|OSUnlockMutex|OSSendMessage|OSResumeThread|OSWakeupThread|LCStoreBlocks|LCLoadBlocks)")

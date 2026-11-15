@@ -195,6 +195,8 @@ GXLoadNrmMtxImm
 @801426D4 MovieUpdate
 # Native ultrawide: C_MTXPerspective with a wider aspect on a wider output; the original body continues at 80265468 (game/intro.cpp).
 @80265464 MTXPerspective
+# The screen-projected texture matrix of a material (the water) follows the widened camera: 8026516C continues the body (game/intro.cpp).
+@80265168 MTXLightPerspective
 @801581E0 GameFrameWait
 @8003F670 GameLoop
 @800C790C ActorStepTime

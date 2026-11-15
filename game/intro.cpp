@@ -40,11 +40,7 @@ void hle_IntroLogoUpdate(ppc::Ctx& c) {
 // C_MTXPerspective(Mtx44 m, f32 fovY, f32 aspect, f32 near, f32 far): m[0][0] = cot(fovY / 2) / aspect. On a wider output the aspect grows by 1 / k
 // (renderer/wide_view.h), so every projection the game builds, and everything it derives from it (the pointer's range, hit tests, culling), sees
 // the wide picture. A taller output shrinks the field of view's tangent on the y axis instead. At 16:9 (or with the option off) the original runs unchanged.
-void hle_MTXPerspective(ppc::Ctx& c) {
-    // Static lowering of 80265464's stwu r1,-64(r1); 80265468 continues the original compiled body.
-    const auto stack=c.r[1];
-    ppc::wr32(c,stack-64,stack);
-    c.r[1]=stack-64;
+static void widen_view(ppc::Ctx& c) {
     {
         const auto factors=gx::view_factors();
         const float kx=factors.x,ky=factors.y;
@@ -60,7 +56,27 @@ void hle_MTXPerspective(ppc::Ctx& c) {
             c.f[1]=fov; c.f[2]=aspect;
         }
     }
+}
+
+void hle_MTXPerspective(ppc::Ctx& c) {
+    // Static lowering of 80265464's stwu r1,-64(r1); 80265468 continues the original compiled body.
+    const auto stack=c.r[1];
+    ppc::wr32(c,stack-64,stack);
+    c.r[1]=stack-64;
+    widen_view(c);
     uc::call_indirect(c,0x80265468);
+}
+
+// C_MTXLightPerspective(Mtx m, f32 fovY, f32 aspect, ...): the projective texture matrix of a J3D material whose texture is the screen (the water's copy of the
+// scene, caller 8037D524) carries its own field of view and aspect, the camera's of the original. It must follow the camera's widened projection, or the copy is
+// sampled off its edges (stripes at the borders at a wide field of view). Other callers (real lights) keep their arguments.
+void hle_MTXLightPerspective(ppc::Ctx& c) {
+    const auto stack=c.r[1];
+    const bool screen=c.lr==0x8037D528;
+    ppc::wr32(c,stack-96,stack);   // static lowering of 80265168's stwu r1,-96(r1); 8026516C continues the body
+    c.r[1]=stack-96;
+    if(screen) widen_view(c);
+    uc::call_indirect(c,0x8026516C);
 }
 
 void hle_MovieUpdate(ppc::Ctx& c) {

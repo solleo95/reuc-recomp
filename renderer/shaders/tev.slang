@@ -336,7 +336,11 @@ void tevStage(inout float4 r[4], float2 uv[8], float4 vertexColor, float4 vertex
     uint command = stageIndirectCommand(stageIndex);
     if ((order & 64) != 0) {
         float2 coord = uv[(order >> 3) & 7];
-        if (command != 0) coord = indirectCoord(order & 7, coord, uv, command, previousCoord);
+        if (command != 0) {
+            coord = indirectCoord(order & 7, coord, uv, command, previousCoord);
+            // A warp that pushes a sample of the screen copy past its edge would smear the border pixels (a stripe at the screen edge): fold it back instead of clamping.
+            if (((drawState.fog[1].w >> (order & 7)) & 1) != 0) coord = 1.0 - abs(1.0 - abs(coord));
+        }
         tex = sampleImage(order & 7, coord);
     }
     uint channel = (order >> 7) & 7;

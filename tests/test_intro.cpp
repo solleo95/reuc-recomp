@@ -45,10 +45,17 @@ static void perspective_body(ppc::Ctx& c) {   // the original C_MTXPerspective b
     seen_fov=c.f[1]; seen_aspect=c.f[2];
     c.r[1]=ppc::rd32(c,c.r[1]);
 }
+static unsigned light_calls;
+static void light_body(ppc::Ctx& c) {   // the original C_MTXLightPerspective body from 8026516C: the wrapper has lowered the stwu
+    ++light_calls;
+    CHECK(ppc::rd32(c,c.r[1])==0x817D0000 && c.r[1]==0x817D0000-96);
+    seen_fov=c.f[1]; seen_aspect=c.f[2];
+    c.r[1]=ppc::rd32(c,c.r[1]);
+}
 int main() {
     Fix fixture; auto& c=fixture.c;
-    const uc::FnEntry entries[]={{0x801426D8,movie_update},{0x80245860,original_update},{0x80265468,perspective_body}};
-    uc::dispatch_init(entries,3,0x801426D8,0x80265470);
+    const uc::FnEntry entries[]={{0x801426D8,movie_update},{0x80245860,original_update},{0x80265468,perspective_body},{0x8026516C,light_body}};
+    uc::dispatch_init(entries,4,0x801426D8,0x80265470);
     c.r[1]=0x817D0000; c.lr=0x80100000;
     ppc::wr8(c,0x804D1E70,1); ppc::wr8(c,0x804D1E71,1);
     ppc::wr8(c,0x804D1E94,0); ppc::wr32(c,0x804D1EA4,3); ppc::wr32(c,0x804D1EA8,0x80002000);
@@ -110,6 +117,16 @@ int main() {
             hle_MTXPerspective(c);
             CHECK(std::abs(std::tan(seen_fov*pi/360)-std::tan(60*pi/360)*1.2)<1e-4 && std::abs(seen_aspect-1.6f/(16.0f/21.0f))<1e-5);
             uc::set_view_fov(1000); CHECK(uc::view_fov()==uc::kFovMax);   // the setter clamps
+            uc::set_view_fov(100); gx::set_view_factors({});
+        }
+        {   // the screen-projected texture matrix of a material follows the camera; any other caller keeps its arguments
+            uc::set_view_fov(150); gx::set_view_factors(gx::factors_for_aspect(21.0/9));
+            c.r[1]=0x817D0000; c.lr=0x80100000; c.f[1]=60.0; c.f[2]=1.6;
+            hle_MTXLightPerspective(c);
+            CHECK(light_calls==1 && seen_fov==60.0 && seen_aspect==1.6 && c.r[1]==0x817D0000);
+            c.lr=0x8037D528; c.f[1]=60.0; c.f[2]=1.6;
+            hle_MTXLightPerspective(c);
+            CHECK(light_calls==2 && seen_fov>60.0 && std::abs(seen_aspect-1.6f/(16.0f/21.0f))<1e-5 && c.r[1]==0x817D0000);
             uc::set_view_fov(100); gx::set_view_factors({});
         }
     }
