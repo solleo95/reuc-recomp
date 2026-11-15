@@ -11,11 +11,13 @@ using namespace panel_shared;
 constexpr std::array<Action,10> kActions{Action::interact,Action::fire,Action::weapon_previous,Action::weapon_next,Action::reload,Action::grenade,Action::knife,Action::pause,
     Action::confirm,Action::back};
 void status_line(const WiimoteStatus& status,const PanelText& tr) {
+    if(status.scanning) {ImGui::TextDisabled("%s",tr("wii_syncing"));return;}
     if(!status.error.empty()) {ImGui::TextWrapped("%s%s",tr("wii_unusable"),status.error.c_str());return;}
+    if(!status.connected && !status.message.empty()) {ImGui::TextWrapped("%s",status.message.c_str());return;}
     if(!status.connected) {ImGui::TextWrapped("%s",tr("wii_none"));return;}
     ImGui::TextDisabled("%s",tr(status.has_nunchuk ? "wii_connected_nunchuk" : "wii_connected"));
 }
-bool modal(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,const WiimoteStatus& status,float unit,const PanelText& tr) {
+bool modal(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,const WiimoteStatus& status,float unit,const PanelText& tr,const std::function<void()>& sync) {
     bool changed=false;
     const auto& io=ImGui::GetIO();
     const std::string title=std::string(tr("wiimote"))+"###wiimote-modal";
@@ -35,10 +37,15 @@ bool modal(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,con
     ImGui::TextUnformatted(tr("wiimote"));
     if(state.heading) ImGui::PopFont();
     status_line(status,tr);
+    gap(unit);
+    if(status.scanning) ImGui::BeginDisabled();
+    if(ImGui::Button(tr("wii_sync"))) {s.enabled=true;if(sync)sync();changed=true;}
+    if(status.scanning) ImGui::EndDisabled();
     ImGui::Dummy({0,8*unit}); ImGui::Separator(); ImGui::Dummy({0,12*unit});
     const float footer=(ImGui::GetFrameHeightWithSpacing()*(1+(editor.capturing() ? 1 : 0)+(editor.error() ? 1 : 0)))+24*unit;
     ImGui::BeginChild("wii-body",{0,std::max(120*unit,ImGui::GetContentRegionAvail().y-footer)});
     changed|=toggle(tr("wii_enabled"),s.enabled,unit); gap(unit);
+    changed|=toggle(tr("wii_wave_reload"),s.reload_with_shake,unit); gap(unit);
     ImGui::TextUnformatted(tr("wii_smoothing")); changed|=percent_slider("##wii-smoothing",s.smoothing,0,90,width); gap(unit);
     ImGui::TextUnformatted(tr("wii_swing")); changed|=float_slider("##wii-swing",s.swing_threshold,.5f,4,"%.1f",width); gap(unit);
     ImGui::TextUnformatted(tr("wii_stick_dead_zone")); changed|=percent_slider("##wii-dead-zone",s.stick_dead_zone,0,50,width); gap(unit);
@@ -57,13 +64,13 @@ bool modal(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,con
     return changed;
 }
 }
-bool wiimote_tab(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,const WiimoteStatus& status,float unit,const PanelText& tr) {
+bool wiimote_tab(WiimotePanelState& state,WiimoteSettings& s,BindingEditor& editor,const WiimoteStatus& status,float unit,const PanelText& tr,const std::function<void()>& sync) {
     bool changed=false;
     ImGui::Separator(); gap(unit);
     status_line(status,tr);
     gap(unit);
     if(ImGui::Button(tr("wiimote"),{ImGui::GetContentRegionAvail().x*.4f,0})) state.modal_open=true;
-    changed|=modal(state,s,editor,status,unit,tr);
+    changed|=modal(state,s,editor,status,unit,tr,sync);
     if(!editor.capturing() && s.bindings!=editor.bindings()) {s.bindings=editor.bindings();changed=true;}   // the editor holds the table the player is editing
     return changed;
 }

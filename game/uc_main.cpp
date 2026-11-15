@@ -741,7 +741,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const auto status=gamepad ? gamepad->status() : uc::PadStatus{};
         const auto& pad=options.gamepad;
         if(wii_last_used && pad.type==uc::ControlType::automatic && options.wiimote.enabled && ((wiimote && wiimote->status().connected) || (wiimote2 && wiimote2->status().connected))) {
-            uc::prompt_hooks_set_gamepad(options.wiimote.bindings,uc::PromptDevice{false,uc::PadFamily::generic,false,true});
+            uc::prompt_hooks_set_gamepad(options.wiimote.bindings,uc::PromptDevice{false,uc::PadFamily::generic,false,true,options.wiimote.reload_with_shake});
             return;
         }
         uc::prompt_hooks_set_gamepad(pad.bindings,uc::resolve_prompt_device(pad.type,pad.model,pad_last_used,status.connected,status.family,pad.gyro.mode!=uc::GyroMode::off,status.has_gyro));
@@ -1128,9 +1128,10 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         if(gamepad) gamepad->capture_sink([&](uc::PhysicalInput pad_input,bool down) { if(deck_menu) deck_menu->pad_capture(pad_input,down); else settings_menu->pad_capture(pad_input,down); });   // the menu's gamepad window waits for a pad press
         settings_menu->set_wii_status([&] {   // the first player's remote may be either reader's: connected when one is
             uc::WiimoteStatus status=wiimote ? wiimote->status() : uc::WiimoteStatus{};
-            if(wiimote2) { const auto other=wiimote2->status(); status.connected|=other.connected; status.has_nunchuk|=other.has_nunchuk; if(status.error.empty()) status.error=other.error; }
+            if(wiimote2) { const auto other=wiimote2->status(); status.connected|=other.connected; status.has_nunchuk|=other.has_nunchuk; status.scanning|=other.scanning; if(status.error.empty()) status.error=other.error; if(status.message.empty()) status.message=other.message; }
             return status;
         });
+        settings_menu->set_wii_sync([&] { if(wiimote) wiimote->request_sync(); else if(wiimote2) wiimote2->request_sync(); });
         settings_menu->set_second_command([&](uc::SettingsMenu::SecondCommand command) {   // local two-player play, from the menu's commit(): the answer to the new-device window and the disconnect button
             switch(command) {
             case uc::SettingsMenu::SecondCommand::disconnect: coop.release_second(); break;

@@ -2,7 +2,7 @@
 #include "input_bindings.h"
 #include <string>
 namespace uc {
-struct WiimoteStatus { bool connected=false,has_nunchuk=false; std::string error; };   // error: why a remote that was found cannot be used (empty: none found, or all well)
+struct WiimoteStatus { bool connected=false,has_nunchuk=false,scanning=false; std::string error,message; };   // error: why a remote that was found cannot be used (empty: none found, or all well)
 // What the Wii Remote reader hands its events to: the game's NativeInput (the launcher reads the remote too, to show it and to capture bindings, and has no target).
 // Implemented next to GamepadTarget by the same class; host_button is the one function both declare.
 class WiimoteTarget {

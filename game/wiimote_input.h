@@ -16,7 +16,8 @@ namespace uc {
 class WiimoteInput {
 public:
     using Opener=std::function<std::unique_ptr<WiiTransport>(std::string& error)>;
-    explicit WiimoteInput(Opener opener=wii_open_first);
+    using Syncer=std::function<std::string()>;
+    explicit WiimoteInput(Opener opener=wii_open_first,Syncer syncer=wii_sync_devices);
     ~WiimoteInput();
     WiimoteInput(const WiimoteInput&)=delete;
     WiimoteInput& operator=(const WiimoteInput&)=delete;
@@ -26,6 +27,7 @@ public:
     // Every remote button press and release goes to the sink, active or not: the binding capture of the menus.
     void capture_sink(std::function<void(PhysicalInput,bool)>);
     WiimoteStatus status() const;
+    void request_sync();  // pair/discover now instead of waiting for the next background HID search
     // Local two-player play. The host loop asks which remote pressed something before it decides whose target the remote feeds (the join press itself reaches that target).
     bool pending_press() const;               // a button press is queued that update() has not handed on yet (any thread)
     // Once per loop before pending_press(): takes what has arrived so far. The next update() hands on only that, so a press the reader thread publishes after the host looked is
@@ -47,6 +49,7 @@ private:
     bool nap(unsigned ms);   // false when the thread must end
     bool send(WiiTransport&,std::span<const uint8_t> report);   // write() with the motor bit of the report set while the motor is wanted
     Opener opener_;
+    Syncer syncer_;
     mutable std::mutex mutex_;
     std::deque<Event> events_,held_;   // held_: collect()ed, waiting for update()
     bool collected_=false;
@@ -57,6 +60,9 @@ private:
     std::function<void(PhysicalInput,bool)> sink_;
     std::atomic<unsigned> player_{0};
     std::atomic<bool> stop_{false},enabled_{true},rumble_{false};
+    std::atomic<bool> sync_requested_{false},syncing_{false},sync_finished_{false};
+    std::thread sync_thread_;  // Bluetooth discovery must not stall a currently connected remote's HID reader
+    std::string sync_message_;
     std::atomic<float> threshold_{1.5f};
     std::atomic<unsigned> changes_{0};
     bool engaged_=false;     // main thread: the target holds something of the remote

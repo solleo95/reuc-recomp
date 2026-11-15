@@ -121,8 +121,8 @@ Bindings default_pad_bindings() {
     return result;
 }
 Bindings default_wii_bindings() {
-    // WiiButton codes: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, nunchuk C 12. B is the trigger; the swing, the shake and
-    // the interact+fire throw come from the keyboard table's special entries (the remote swings and shakes like a mouse).
+    // WiiButton codes: left 0, right 1, down 2, up 3, plus 4, two 5, one 6, B 7, A 8, minus 9, home 10, nunchuk Z 11, nunchuk C 12.
+    // B is the trigger; motion reload is a separate Wii Remote setting, not a binding.
     Bindings result;
     result[size_t(Action::interact)]={wii_button(8)};
     result[size_t(Action::fire)]={wii_button(7)};
@@ -276,10 +276,10 @@ void BindingResolver::wheel(int steps) {
             pulse(action,action==Action::knife ? kKnifeKeyDirectionX : 0.0f,action==Action::knife ? kKnifeKeyDirectionY : 0.0f);
     }
 }
-void BindingResolver::qte_motion(float x,float y,uint64_t time) {
-    if(!time || !qte_window_ || !special(Action::qte_shake,BindingKind::qte_motion))return;
-    // One step per reversal: the mouse travels kShakeStroke counts back against the stroke since its peak, at shaking speed.
-    // The speed is a decayed path length, not the speed since the turn: a hand's speed passes through zero at every turn.
+bool BindingResolver::shake_motion(float x,float y,uint64_t time) {
+    if(!time)return false;
+    // One wave is a sufficiently fast stroke followed by a reversal. Measure the path, not instantaneous speed:
+    // the accelerometer and a hand both pass through zero speed at each end of a shake.
     auto& s=shake_;
     if(s.last && (time<s.last || time-s.last>kShakeGapNs))s={};
     s.path=s.path*std::exp(-(s.last ? double(time-s.last)/1e9 : 0.0)/kShakePathSeconds)+std::hypot(x,y);
@@ -287,18 +287,41 @@ void BindingResolver::qte_motion(float x,float y,uint64_t time) {
     if(!s.stroke) {
         s.back_x+=x; s.back_y+=y;
         const double length=std::hypot(s.back_x,s.back_y);
-        if(length<kShakeStroke)return;
+        if(length<kShakeStroke)return false;
         s.dx=s.back_x/length; s.dy=s.back_y/length; s.proj=s.peak=length; s.back_x=s.back_y=0; s.stroke=true;
-        return;
+        return false;
     }
     s.proj+=x*s.dx+y*s.dy;
-    if(s.proj>=s.peak) {s.peak=s.proj; s.back_x=s.back_y=0; return;}
+    if(s.proj>=s.peak) {s.peak=s.proj; s.back_x=s.back_y=0; return false;}
     s.back_x+=x; s.back_y+=y;
-    if(-(s.back_x*s.dx+s.back_y*s.dy)<kShakeStroke)return;
-    if(s.path<kShakeMinPath) {s.peak=s.proj; s.back_x=s.back_y=0; return;}   // a slow return is aiming: the stroke restarts here
+    if(-(s.back_x*s.dx+s.back_y*s.dy)<kShakeStroke)return false;
+    if(s.path<kShakeMinPath) {s.peak=s.proj; s.back_x=s.back_y=0; return false;}   // a slow return is aiming: the stroke restarts here
     const double length=std::hypot(s.back_x,s.back_y);
     s.dx=s.back_x/length; s.dy=s.back_y/length; s.proj=s.peak=length; s.back_x=s.back_y=0;
-    finish_motion(); pulse(Action::qte_shake,float(s.dx),float(s.dy));
+    finish_motion();
+    return true;
+}
+void BindingResolver::qte_motion(float x,float y,uint64_t time) {
+    if(!qte_window_ || !special(Action::qte_shake,BindingKind::qte_motion))return;
+    if(shake_motion(x,y,time)) pulse(Action::qte_shake,float(shake_.dx),float(shake_.dy));
+}
+void BindingResolver::wii_motion(float x,float y,bool reload_with_shake,uint64_t time) {
+    if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid Wii Remote motion");
+    if(!focused_ || context_==InputContext::inactive || context_==InputContext::menu)return;
+    // The timed-action window takes priority: the game's original "reload/action" gesture becomes its prompted
+    // counter-action instead of reloading the weapon while a shake QTE is active.
+    if(context_==InputContext::qte && qte_window_) {qte_motion(x,y,time);return;}
+    if(context_==InputContext::gameplay && !(frame_.held&bit(Action::interact))) {
+        // A free wave reloads only when the separate Wii Remote checkbox is enabled.
+        if(!reload_with_shake) { shake_={}; return; }
+        // Keep the button-held path below for the original A + swing knife gesture.
+        if(shake_motion(x,y,time))pulse(Action::reload);
+        return;
+    }
+    if(frame_.held&bit(Action::interact)) {
+        shake_={};                       // do not carry half a reload wave into a knife swing
+        motion(x,y,time);
+    }
 }
 void BindingResolver::motion(float x,float y,uint64_t timestamp_ns,bool swipe) {
     if(!std::isfinite(x) || !std::isfinite(y))throw std::invalid_argument("invalid mouse motion");

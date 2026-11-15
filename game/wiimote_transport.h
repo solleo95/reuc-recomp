@@ -16,6 +16,9 @@ struct WiiTransport {
 };
 // The first Wii Remote HID device (VID 057E, PID 0306 or 0330) that opens, or null. `error` stays empty when there is none; it says why when one was found but did not open.
 std::unique_ptr<WiiTransport> wii_open_first(std::string& error);
+// Start an explicit pairing/discovery pass. Windows pairs a remote through the native Bluetooth API;
+// Linux leaves Bluetooth pairing to the desktop and uses this request to trigger an immediate HID rescan.
+std::string wii_sync_devices();
 // The same, but a remote whose id is in `claimed` is passed over, and the id of the one that opens is added to it (the transport takes it out again when it is destroyed): two
 // WiimoteInputs sharing one set open two different remotes. `claimed` must outlive the transports; any thread.
 std::unique_ptr<WiiTransport> wii_open_unclaimed(std::set<std::string>& claimed,std::string& error);

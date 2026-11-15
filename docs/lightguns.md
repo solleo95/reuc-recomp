@@ -34,23 +34,24 @@ This mode was written from the makers' documentation and could not be tried with
 
 ## Wii Remote
 
-The game also talks to a Wii Remote directly: the pointer from its infrared camera, the buttons, a Nunchuk, and swings and shakes.
+The game also talks to a Wii Remote directly: the pointer from its infrared camera, the buttons, a Nunchuk, and accelerometer gestures. In normal gameplay, wave/shake the remote to reload when **Reload with shake motion** is enabled (on by default). This is a checkbox in the Wii Remote settings, not a binding. When a timed shake/counterattack prompt is active, the same gesture performs that prompted action instead. Hold **A** and swing for the knife.
 
 **Connecting**
-- Bluetooth: in Windows, *Add a device*, hold **1** and **2** on the remote (or press the red SYNC button in the battery compartment) and choose to connect without a code. Windows shows it as an input device. The remote's light stays on while it is connected.
-- Mayflash DolphinBar: set it to **mode 4** (the bar's MODE button; LED 4) and sync the remote with the bar's SYNC button.
+- **Windows Bluetooth:** open **Controllers > Wii Remote** to show its settings, then click **SYNC inside that window** and press the remote's red SYNC button in the battery compartment or hold **1** and **2**. The game discovers and authenticates the remote through the Windows Bluetooth service.
+- **Linux:** pair the remote in the desktop's Bluetooth settings first, then open **Wii Remote** settings and press **SYNC** inside that window to rescan its input device.
+- **Mayflash DolphinBar:** set it to **mode 4** (the bar's MODE button; LED 4) and sync the remote with the bar's SYNC button.
 - You need a sensor bar for the pointer (the DolphinBar has one built in; otherwise the Wii sensor bar, centred above or below the screen).
 - Only one program can hold the remote. Close Dolphin, Steam Input or any other tool that uses it.
 
-**In the game.** **Controllers** page, the **Wii Remote** button: the connected remote, a switch, pointer smoothing, how strong a swing must be, the Nunchuk stick's dead zone and every button. The on-screen prompts show the remote's buttons when it was the last device you used.
+**In the game.** **Controllers** page, the **Wii Remote** button opens the settings: the connected remote, **SYNC**, the enable switch, **Reload with shake motion**, pointer smoothing, how strong a swing must be, the Nunchuk stick's dead zone and every button. The on-screen prompts show the remote's buttons when it was the last device you used.
 
-**Layout by default.** Point to aim; **B** (the trigger) fires, **A** interacts, **1** reloads, **2** throws a grenade, **+** and **-** (or the D-pad left and right) change weapon, **Home** pauses; with a Nunchuk the stick moves the camera, **Z** is the knife and **C** reloads. Hold **A** and swing the remote for the knife, shake the remote for the shake prompts. In the game's menus **A** confirms and **B** goes back.
+**Layout by default.** Point to aim; **B** (the trigger) fires, **A** interacts, **1** reloads, **2** throws a grenade, **+** and **-** (or the D-pad left and right) change weapon, **Home** pauses; with a Nunchuk the stick moves the camera, **Z** is the knife and **C** reloads. When **Reload with shake motion** is enabled, wave/shake the remote to reload during gameplay; the same wave performs the prompted counter-action during a timed shake prompt. Hold **A** and swing the remote for the knife. In the game's menus **A** confirms and **B** goes back.
 
 **Rumble:** the game's vibration runs the remote's motor while you play with the remote (the Vibration setting at 0% turns it off; the motor has no strength).
 
-**Not supported:** the Motion Plus gyro, the speaker, a second remote, the Classic Controller.
+**Not supported:** the Motion Plus gyro, the speaker, the Classic Controller.
 
-The Wii Remote code was written from the Wii Remote's published protocol and tested with a simulated remote only, not with real hardware. The signs of the swing directions and the pointer range may need a small correction: please report what you see.
+Two physical Wii Remotes were tested simultaneously in local two-player mode; both players' controls worked. Testing used standard Bluetooth adapters: CSR8510 (VID `0x0A12`, PID `0x0001`) and Intel Wireless Bluetooth (VID `0x8087`, PID `0x07DC`). Ordinary aiming and aim sweeps did not trigger reload. A sharp, abrupt swing can trigger it, as intended.
 
 ## If something does not work
 

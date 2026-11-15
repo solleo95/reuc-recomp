@@ -1,6 +1,7 @@
 #include "check.h"
 #include "fake_wiimote.h"
 #include <condition_variable>
+#include <algorithm>
 using namespace uc;
 using namespace std::chrono_literals;
 static PhysicalInput wii(WiiButton button) { return {PhysicalKind::wii_button,uint16_t(button)}; }
@@ -8,11 +9,16 @@ static PhysicalInput wii(WiiButton button) { return {PhysicalKind::wii_button,ui
 struct Calls : WiimoteTarget {
     std::vector<std::pair<PhysicalInput,bool>> buttons;
     std::vector<std::array<float,2>> pointers,sticks,motions;
+    BindingResolver* resolver=nullptr;
+    bool reload_with_shake=true;
     unsigned resets=0;
     void host_button(PhysicalInput input,bool down) override { buttons.emplace_back(input,down); }
     void host_wii_pointer(float x,float y,uint64_t) override { pointers.push_back({x,y}); }
     void host_wii_stick(float x,float y) override { sticks.push_back({x,y}); }
-    void host_wii_motion(float x,float y,uint64_t) override { motions.push_back({x,y}); }
+    void host_wii_motion(float x,float y,uint64_t timestamp_ns) override {
+        motions.push_back({x,y});
+        if(resolver) resolver->wii_motion(x,y,reload_with_shake,timestamp_ns);
+    }
     void wii_reset() override { ++resets; }
 };
 struct Rig {
@@ -31,6 +37,34 @@ struct Rig {
     bool connected() { return input->status().connected; }
     bool until(const std::function<bool()>& ready) { return wait_for([&]{ update(); return ready(); }); }
 };
+static void an_explicit_sync_runs_the_platform_pairer_and_reports_its_result() {
+    std::mutex gate;
+    std::condition_variable changed;
+    bool finish=false;
+    std::atomic<unsigned> calls=0,started=0;
+    WiimoteInput input(
+        [](std::string&) -> std::unique_ptr<WiiTransport> { return nullptr; },
+        [&] {
+            ++calls;
+            started=1;
+            std::unique_lock lock(gate);
+            changed.wait(lock,[&]{return finish;});
+            return std::string("test pairing finished");
+        });
+    WiimoteSettings settings;settings.enabled=true;
+    input.update(nullptr,false,settings);
+    input.request_sync();
+    input.request_sync();  // repeated clicks while one pairing pass is in progress do not start another
+    CHECK(wait_for([&]{return started.load()==1;}));
+    CHECK(input.status().scanning);
+    {
+        std::lock_guard lock(gate);
+        finish=true;
+    }
+    changed.notify_all();
+    CHECK(wait_for([&]{return !input.status().scanning && input.status().message=="test pairing finished";}));
+    CHECK(calls==1);
+}
 static void handshake_writes_the_init_sequence_in_order() {
     Rig rig; const auto steps=wii_init_sequence();
     CHECK(wait_for([&]{ return rig.remote->writes()>=steps.size()+1; }));    // the sequence, then a status request
@@ -85,6 +119,41 @@ static void a_swing_arrives_as_motion() {
     rig.remote->push(report(0,0,{uint8_t(0x82+100),0x82,0x9C}));
     CHECK(rig.until([&]{ return !rig.calls.motions.empty(); }));
     CHECK(rig.calls.motions.back()[0]>100);
+}
+static void a_realistic_accelerometer_wave_reaches_the_gameplay_reload_resolver() {
+    Rig rig;
+    BindingResolver resolver;
+    resolver.replace(merge_bindings(default_bindings(),default_pad_bindings(),default_wii_bindings()));
+    resolver.context(InputContext::gameplay);
+    resolver.focus(true);
+    rig.calls.resolver=&resolver;
+    CHECK(wait_for([&]{ return rig.connected(); }));
+
+    // Let the accelerometer's gravity estimate settle at rest before the two quick, opposite 60-count strokes.
+    for(int i=0;i<30;++i) rig.remote->push(report(0,0));
+    for(int i=0;i<35;++i) { rig.update(); std::this_thread::sleep_for(5ms); }
+    auto impulse=[&](int counts) {
+        rig.remote->push(report(0,0,{uint8_t(0x82+counts),0x82,0x9C}));
+        std::lock_guard lock(rig.remote->m);
+        rig.remote->rest=report(0,0);   // real remotes return to the neutral report after the impulse
+    };
+    impulse(60);
+    CHECK(rig.until([&]{
+        return std::any_of(rig.calls.motions.begin(),rig.calls.motions.end(),[](const auto& motion){return motion[0]>300;});
+    }));
+    impulse(-60);
+
+    ActionFrame frame{};
+    CHECK(wait_for([&] {
+        rig.update();
+        frame=resolver.consume();
+        return std::any_of(frame.events.begin(),frame.events.begin()+frame.count,
+            [](const ActionEvent& event){return event.action==Action::reload && event.down;});
+    }));
+    unsigned reload_presses=0;
+    for(size_t i=0;i<frame.count;++i) reload_presses+=frame.events[i].action==Action::reload && frame.events[i].down;
+    CHECK(reload_presses==1);
+    CHECK(std::any_of(rig.calls.motions.begin(),rig.calls.motions.end(),[](const auto& motion){return motion[0]<-300;}));
 }
 static void a_lost_remote_lets_go_of_everything_and_a_new_one_is_found() {
     Rig rig;
@@ -261,6 +330,7 @@ static void the_claiming_enumeration_survives_whatever_is_plugged_in() {
     first.reset(); second.reset(); CHECK(claimed.empty());               // closing hands the claim back
 }
 int main() {
+    an_explicit_sync_runs_the_platform_pairer_and_reports_its_result();
     the_windows_enumeration_survives_whatever_is_plugged_in();
     handshake_writes_the_init_sequence_in_order();
     buttons_flow_to_the_target_in_order();
@@ -268,6 +338,7 @@ int main() {
     a_nunchuk_looking_report_without_the_extension_flag_is_ignored();
     the_nunchuk_stick_flows();
     a_swing_arrives_as_motion();
+    a_realistic_accelerometer_wave_reaches_the_gameplay_reload_resolver();
     a_lost_remote_lets_go_of_everything_and_a_new_one_is_found();
     a_drop_between_two_updates_still_releases_what_was_held();
     a_silent_remote_is_not_connected_and_is_let_go();

@@ -1,5 +1,6 @@
 #include "check.h"
 #include "input_prompts.h"
+#include <algorithm>
 #include <stdexcept>
 using namespace uc;
 static Binding key(uint16_t code) {return {BindingKind::physical,{PhysicalKind::key,code},{}};}
@@ -66,7 +67,7 @@ static void wii_prompts() {
     // The remote's buttons are named as printed on it; the family of a gamepad changes nothing.
     const char* names[]={"D-pad Left","D-pad Right","D-pad Down","D-pad Up","+","2","1","B","A","-","Home","Z","C"};
     for(uint16_t code=0;code<kWiiButtonCount;++code) CHECK(pad_glyph_label(wii(code),PadFamily::xbox)==names[code] && pad_glyph_label(wii(code),PadFamily::nintendo)==names[code]);
-    const auto table=default_wii_bindings(); const PromptDevice remote{false,PadFamily::generic,false,true};
+    const auto table=default_wii_bindings(); const PromptDevice remote{false,PadFamily::generic,false,true,true};
     auto fire=primary_prompt(table,{Action::fire},remote);
     CHECK(fire.alternatives.size()==1 && fire.alternatives[0].choices[0].bindings[0].input==wii(7) && fire.device.wiimote && !fire.device.gamepad);
     auto grenade=chord_prompt(table,Action::interact,Action::fire,remote);   // A+B
@@ -74,6 +75,13 @@ static void wii_prompts() {
     // The remote swings and shakes with its own motion, so the gestures show without any gyro switch.
     auto shake=describe_prompt(table,Action::qte_shake,remote);
     CHECK(!shake.alternatives.empty() && shake.alternatives[0].gesture==PromptGesture::shake);
+    auto reload=describe_prompt(table,Action::reload,remote);
+    CHECK(std::any_of(reload.alternatives.begin(),reload.alternatives.end(),
+        [](const PromptAlternative& alternative){return alternative.gesture==PromptGesture::shake;}));
+    const PromptDevice remote_no_wave{false,PadFamily::generic,false,true,false};
+    reload=describe_prompt(table,Action::reload,remote_no_wave);
+    CHECK(std::none_of(reload.alternatives.begin(),reload.alternatives.end(),
+        [](const PromptAlternative& alternative){return alternative.gesture==PromptGesture::shake;}));
     auto knife=describe_prompt(table,Action::knife,remote);
     CHECK(knife.alternatives.size()==2 && knife.alternatives[0].choices[0].bindings[0].input==wii(11) && knife.alternatives[1].gesture==PromptGesture::directional_motion && knife.alternatives[1].choices[0].held);
     // A table of one device is not read for another.

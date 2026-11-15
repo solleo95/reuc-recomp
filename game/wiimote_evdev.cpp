@@ -153,4 +153,7 @@ std::unique_ptr<WiiTransport> open_remote(std::set<std::string>* claimed,std::st
 }
 std::unique_ptr<WiiTransport> wii_open_first(std::string& error) { return open_remote(nullptr,error); }
 std::unique_ptr<WiiTransport> wii_open_unclaimed(std::set<std::string>& claimed,std::string& error) { return open_remote(&claimed,error); }
+std::string wii_sync_devices() {
+    return "Pair the Wii Remote in your desktop Bluetooth settings first, then press SYNC here to rescan its input device.";
+}
 }

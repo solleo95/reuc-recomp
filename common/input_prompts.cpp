@@ -23,6 +23,8 @@ PromptDescription describe_prompt(const Bindings& bindings,Action action,const P
             result.alternatives.push_back({{},PromptGesture::shake});break;
         }
     }
+    if(device.wiimote && device.reload_with_shake && action==Action::reload)
+        result.alternatives.push_back({{},PromptGesture::shake});   // a setting-driven gesture hint, not a binding
     if((device.gamepad && device.gyro) || device.wiimote) {   // the gamepad's (or the remote's) own gestures: the shake first (it is what the game asks for), the swing after the button
         if(action==Action::qte_shake)result.alternatives.insert(result.alternatives.begin(),{{},PromptGesture::shake});
         else if(action==Action::knife && !interact.empty() && result.alternatives.end()==std::find_if(result.alternatives.begin(),result.alternatives.end(),[](const auto& a){return a.gesture.has_value();}))

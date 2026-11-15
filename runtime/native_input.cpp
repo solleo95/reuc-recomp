@@ -217,7 +217,7 @@ void NativeInput::host_wii_stick(float x,float y) {
 void NativeInput::host_wii_motion(float dx,float dy,uint64_t timestamp_ns) {
     if(!std::isfinite(dx) || !std::isfinite(dy))throw std::invalid_argument("invalid Wii Remote motion");
     std::lock_guard lock(mutex_);
-    try { actions_.motion(dx,dy,timestamp_ns ? timestamp_ns : motion_time()); }
+    try { actions_.wii_motion(dx,dy,wii_.reload_with_shake,timestamp_ns ? timestamp_ns : motion_time()); }
     catch(const std::overflow_error&) { cancel_host(); throw; }
 }
 void NativeInput::wii_reset() {
@@ -571,7 +571,7 @@ bool NativeInput::apply_test_event(uint64_t sequence,const HostEvent& event,uint
         }
         case HostEventKind::wii_pointer: set_wii_pointer(event.x,event.y); break;
         case HostEventKind::wii_stick: wii_stick_={event.x,event.y}; update_camera(); break;
-        case HostEventKind::wii_motion: actions_.motion(event.x,event.y,motion_time()); break;
+        case HostEventKind::wii_motion: actions_.wii_motion(event.x,event.y,wii_.reload_with_shake,motion_time()); break;
         case HostEventKind::aim:
             absolute_point((event.x+1)/2*width,(event.y+1)/2*height,width,height,motion_time()); break;
         case HostEventKind::motion:

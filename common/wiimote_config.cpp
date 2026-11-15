@@ -29,17 +29,36 @@ WiimoteSettings wiimote_from_config(const ConfigDocument& document) {
     try {
         if(!w.is_object())invalid("wiimote must be an object");
         for(auto i=w.begin();i!=w.end();++i) {
-            static constexpr std::string_view allowed[]={"enabled","smoothing","swing_threshold","stick_dead_zone","bindings"};
+            static constexpr std::string_view allowed[]={"enabled","reload_with_shake","smoothing","swing_threshold","stick_dead_zone","bindings"};
             if(std::find(std::begin(allowed),std::end(allowed),i.key())==std::end(allowed))invalid("unknown field "+i.key());
         }
         if(w.contains("enabled")) {
             if(!w["enabled"].is_boolean())invalid("enabled must be true or false");
             s.enabled=w["enabled"].get<bool>();
         }
+        if(w.contains("reload_with_shake")) {
+            if(!w["reload_with_shake"].is_boolean())invalid("reload_with_shake must be true or false");
+            s.reload_with_shake=w["reload_with_shake"].get<bool>();
+        }
         s.smoothing=number(w,"smoothing",s.smoothing);
         s.swing_threshold=number(w,"swing_threshold",s.swing_threshold);
         s.stick_dead_zone=number(w,"stick_dead_zone",s.stick_dead_zone);
-        if(w.contains("bindings"))s.bindings=bindings_from_json(w["bindings"],s.bindings);
+        if(w.contains("bindings")) {
+            Json migrated_bindings=w["bindings"];
+            if(migrated_bindings.is_object() && migrated_bindings.contains("reload") && migrated_bindings["reload"].is_array()) {
+                Json filtered=Json::array();
+                for(const auto& binding:migrated_bindings["reload"]) {
+                    if(binding.is_object() && binding.contains("kind") && binding["kind"].is_string() && binding["kind"]=="reload_motion") {
+                        if(binding.size()!=1)invalid("legacy reload_motion entry must contain only kind");
+                        // Old builds represented the optional gesture as a Reload-row pseudo-binding. Strip it; the new checkbox has its own field.
+                    } else filtered.push_back(binding);
+                }
+                migrated_bindings["reload"]=std::move(filtered);
+            }
+            // A missing checkbox is ambiguous: the config may predate the temporary pseudo-binding entirely.
+            // Keep the new default (on); only an explicit reload_with_shake:false disables it.
+            s.bindings=bindings_from_json(migrated_bindings,s.bindings);
+        }
     } catch(const Json::exception& error) {invalid(error.what());}
     if(auto error=validate_wiimote(s))invalid(*error);
     return s;
@@ -47,7 +66,7 @@ WiimoteSettings wiimote_from_config(const ConfigDocument& document) {
 void store_wiimote(ConfigDocument& document,const WiimoteSettings& s) {
     if(auto error=validate_wiimote(s))invalid(*error);
     Json w=Json::object();
-    w["enabled"]=s.enabled; w["smoothing"]=rounded(s.smoothing); w["swing_threshold"]=rounded(s.swing_threshold); w["stick_dead_zone"]=rounded(s.stick_dead_zone);
+    w["enabled"]=s.enabled; w["reload_with_shake"]=s.reload_with_shake; w["smoothing"]=rounded(s.smoothing); w["swing_threshold"]=rounded(s.swing_threshold); w["stick_dead_zone"]=rounded(s.stick_dead_zone);
     w["bindings"]=bindings_to_json(s.bindings);
     document.properties["wiimote"]=std::move(w);
 }

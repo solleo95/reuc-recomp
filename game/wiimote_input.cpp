@@ -9,13 +9,14 @@ constexpr size_t kMaxEvents=1024;
 constexpr auto kFindEvery=std::chrono::seconds(2),kSilence=std::chrono::seconds(2);   // a remote reports about 100 times a second: two quiet seconds are a lost one
 uint64_t now_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 }
-WiimoteInput::WiimoteInput(Opener opener) : opener_(std::move(opener)) {
+WiimoteInput::WiimoteInput(Opener opener,Syncer syncer) : opener_(std::move(opener)),syncer_(std::move(syncer)) {
     enabled_=false;   // the first update() says whether the remote may be looked for
     thread_=std::thread([this] { run(); });
 }
 WiimoteInput::~WiimoteInput() {
     stop_=true;
     if(thread_.joinable()) thread_.join();
+    if(sync_thread_.joinable()) sync_thread_.join();
 }
 bool WiimoteInput::nap(unsigned ms) {
     for(unsigned waited=0;waited<ms && !stop_;waited+=10) std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10u,ms-waited)));
@@ -69,8 +70,27 @@ void WiimoteInput::run() {
     unsigned led=0;   // the player whose LED is lit (the set-up lights LED 1 = player 0)
     auto last_report=std::chrono::steady_clock::now();
     while(!stop_) {
+        if(sync_requested_.exchange(false)) {
+            if(sync_thread_.joinable()) sync_thread_.join();
+            try {
+                sync_thread_=std::thread([this] {
+                    std::string message;
+                    try { message=syncer_ ? syncer_() : std::string("Wii Remote pairing is not available on this platform"); }
+                    catch(const std::exception& failure) { message=failure.what(); }
+                    catch(...) { message="Wii Remote pairing failed unexpectedly"; }
+                    { std::lock_guard lock(mutex_); sync_message_=std::move(message); }
+                    sync_finished_=true;
+                    syncing_=false;
+                });
+            } catch(const std::exception& failure) {
+                { std::lock_guard lock(mutex_); sync_message_=failure.what(); }
+                syncing_=false;
+                next_try=std::chrono::steady_clock::now();
+            }
+        }
+        if(sync_finished_.exchange(false)) next_try=std::chrono::steady_clock::now();
         if(!link) {
-            if(!enabled_ || std::chrono::steady_clock::now()<next_try) { nap(20); continue; }
+            if(!enabled_ || syncing_ || std::chrono::steady_clock::now()<next_try) { nap(20); continue; }
             next_try=std::chrono::steady_clock::now()+kFindEvery;
             std::string error;
             try { link=opener_(error); } catch(const std::exception& failure) { error=failure.what(); link.reset(); }
@@ -126,7 +146,14 @@ void WiimoteInput::capture_sink(std::function<void(PhysicalInput,bool)> sink) {
 }
 WiimoteStatus WiimoteInput::status() const {
     std::lock_guard lock(mutex_);
-    return {connected_,connected_ && state_.has_nunchuk,error_};
+    return {connected_,connected_ && state_.has_nunchuk,syncing_,error_,sync_message_};
+}
+void WiimoteInput::request_sync() {
+    enabled_=true;
+    bool expected=false;
+    if(!syncing_.compare_exchange_strong(expected,true)) return;
+    { std::lock_guard lock(mutex_); sync_message_.clear(); }
+    sync_requested_=true;
 }
 bool WiimoteInput::pending_press() const {
     std::lock_guard lock(mutex_);

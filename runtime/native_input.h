@@ -53,8 +53,8 @@ public:
     void host_pad_stick(unsigned pad,PadSide,float x,float y) override;
     void host_pad_gyro(float yaw_rate,float pitch_rate,uint64_t timestamp_ns) override;
     void pad_reset() override;   // the keyboard and mouse are untouched
-    // The Wii Remote: the IR pointer (smoothed, never a swing), the nunchuk stick as the analog camera, swings as knife and shake input, its buttons through host_button.
-    void wiimote_settings(const WiimoteSettings&);   // smoothing and the binding table; throws std::invalid_argument for an invalid set
+    // The Wii Remote: the IR pointer (smoothed, never a swing), the nunchuk stick as the analog camera, swings as knife and optional reload/QTE shake input, its buttons through host_button.
+    void wiimote_settings(const WiimoteSettings&);   // pointer/swing tuning, shake-reload checkbox and bindings; throws std::invalid_argument for an invalid set
     void host_wii_pointer(float x,float y,uint64_t timestamp_ns) override;
     void host_wii_stick(float x,float y) override;
     void host_wii_motion(float dx,float dy,uint64_t timestamp_ns) override;
