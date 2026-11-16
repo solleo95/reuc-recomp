@@ -11,8 +11,9 @@ import threading
 import time
 from pathlib import Path
 
+from .android import DEVICE_DIR as ANDROID_DIR, AndroidRun, enabled as android_enabled
 from .deck import DeckRun, enabled as deck_enabled
-from .transport import PipeTransport, SocketTransport
+from .transport import PipeTransport, SocketTransport, UnixSocketTransport
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import localenv  # noqa: E402  (reads local.env into the environment)
@@ -72,6 +73,7 @@ class Game:
         self.transport_factory, self.saves, self.game_args = transport_factory, saves, list(game_args)
         self.process = None
         self.deck = deck_enabled()   # --deck / UC_DECK=1: the game runs on the Steam Deck (uctest/deck.py), the harness stays here
+        self.android = android_enabled() and not self.deck   # --android / UC_ANDROID=1: the game runs on an Android handheld over adb (uctest/android.py)
         self.remote = None
         self.transport = None
         self.frame = {}
@@ -105,8 +107,10 @@ class Game:
         try:
             if self.launch:
                 self._launch()
-            if self.deck and self.launch:
+            if (self.deck or self.android) and self.launch:
                 factory = self.transport_factory or (lambda: SocketTransport(self.remote.cmd_port, self.remote.evt_port, alive=lambda: self.process.poll() is None))
+            elif sys.platform == "darwin":   # macOS: the game listens on Unix-domain sockets
+                factory = self.transport_factory or (lambda: UnixSocketTransport(self.name, alive=lambda: self.process.poll() is None))
             else:
                 factory = self.transport_factory or (lambda: PipeTransport(self.name, alive=lambda: self.process.poll() is None))
             self.transport = factory()
@@ -121,7 +125,7 @@ class Game:
         self._cleanup()
 
     def _launch(self):
-        pin = guest_cpu_args(self.game_args)
+        pin = [] if self.android else guest_cpu_args(self.game_args)   # Android: the game's own choice, or --game-arg=--guest-cpu
         saves = self.run_dir / "saves"
         if not saves.exists():
             source = self.saves or SAVE_SOURCE
@@ -147,6 +151,12 @@ class Game:
             if os.environ.get("UC_DECK_NOPIN"):
                 pin = []   # as the owner starts it: no guest CPU pinning
             config_argument = f"{base}/config.json"
+        elif self.android:   # absolute device paths: the app's working folder is /
+            self.remote = AndroidRun(self.name, self.run_dir)
+            base = self.remote.remote_dir
+            args = ["--test-server", self.name, "--save-root", f"{base}/saves", "--capture-dir", base,
+                    "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # the app is always full screen
+            config_argument = f"{base}/config.json"
         else:
             args = [str(self.exe), "--test-server", self.name, "--save-root", str(saves), "--capture-dir", str(self.run_dir),
                     "--seconds", str(self.seconds), "--speed", str(self.speed), "--width", "1280", "--height", "720"]   # 720p window, not maximized
@@ -156,6 +166,8 @@ class Game:
         if "--game" not in self.game_args:   # the game's own default is "game" next to the exe, which a dev build folder lacks
             if self.deck:
                 args.extend(["--game", "game"])
+            elif self.android:
+                args.extend(["--game", f"{ANDROID_DIR}/game"])
             else:
                 beside = Path(self.exe).parent / "game"
                 game = os.environ.get("UC_GAME_DIR") or (beside if beside.is_dir() else localenv.game_dir())
@@ -180,10 +192,12 @@ class Game:
             args.append("--god")
         if self.skip_tutorials:
             args.append("--skip-tutorials")
-        if self.deck:
+        if self.deck or self.android:
             self.remote.send_folder(saves, "saves")
             if config.exists():
                 self.remote.send_file(config, "config.json")
+            elif self.android:
+                self.remote.copy_player_config()
             self.process = self.remote.start(args)
             self.remote.wait_listening()
             return
@@ -205,7 +219,7 @@ class Game:
                     pass
             if self.process:
                 try:
-                    self.process.wait(30 if self.deck else 3)   # the quit travels over ssh and the game joins its workers first
+                    self.process.wait(30 if self.deck or self.android else 3)   # the quit travels over ssh and the game joins its workers first
                 except subprocess.TimeoutExpired:
                     self.process.terminate()
                     try:
@@ -441,7 +455,7 @@ class Game:
     def set_speed(self, factor):
         self.request({"cmd": "speed", "factor": factor})
 
-    INSERT, P, ESCAPE = 73, 19, 41   # SDL scancodes of the port's host keys
+    INSERT, P, ESCAPE = (43 if sys.platform == "darwin" else 73), 19, 41   # SDL scancodes of the port's host keys (the menu key is Tab on macOS: kDefaultMenuKey)
 
     def host_key(self, code):
         """A key of the port itself (Insert: settings menu, P: pause), handled in the main loop's next iteration."""

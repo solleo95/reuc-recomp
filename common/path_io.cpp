@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #else
+#include "executable_path_posix.h"
 #include <spawn.h>
 #include <time.h>
 #include <unistd.h>
@@ -32,23 +33,28 @@ bool open_folder(const std::filesystem::path& folder) {
 }
 #else
 std::FILE* fopen_path(const std::filesystem::path& path, const char* mode) { return std::fopen(path.c_str(), mode); }
-std::filesystem::path exe_path() {
-    std::error_code error;
-    auto path = std::filesystem::read_symlink("/proc/self/exe", error);
-    return error ? std::filesystem::path() : path;
-}
+std::filesystem::path exe_path() { return posix_executable_path(); }
 std::filesystem::path user_data_dir() {
-    if (const char* data = std::getenv("XDG_DATA_HOME"); data && *data) return std::filesystem::path(data) / "umbrella-chronicles";
     const char* home = std::getenv("HOME");
+#if defined(__APPLE__)
+    return std::filesystem::path(home && *home ? home : "/tmp") / "Library/Application Support/Umbrella Chronicles";
+#else
+    if (const char* data = std::getenv("XDG_DATA_HOME"); data && *data) return std::filesystem::path(data) / "umbrella-chronicles";
     return std::filesystem::path(home && *home ? home : "/tmp") / ".local/share/umbrella-chronicles";
+#endif
 }
 unsigned long current_process_id() { return static_cast<unsigned long>(getpid()); }
 unsigned long long thread_cpu_cycles() { timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return (unsigned long long)(t.tv_sec) * 1000000000ull + (unsigned long long)(t.tv_nsec); }
 bool open_folder(const std::filesystem::path& folder) {
+#if defined(__APPLE__)
+    const char* opener = "open";   // Finder
+#else
+    const char* opener = "xdg-open";
+#endif
     const std::string argument = folder.string();
-    char* const arguments[] = {const_cast<char*>("xdg-open"), const_cast<char*>(argument.c_str()), nullptr};
+    char* const arguments[] = {const_cast<char*>(opener), const_cast<char*>(argument.c_str()), nullptr};
     pid_t child = 0;
-    return posix_spawnp(&child, "xdg-open", nullptr, nullptr, arguments, environ) == 0;   // not waited for: the file manager outlives the call
+    return posix_spawnp(&child, opener, nullptr, nullptr, arguments, environ) == 0;   // not waited for: the file manager outlives the call
 }
 #endif
 }

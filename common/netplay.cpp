@@ -48,7 +48,7 @@ void wait_socket(SOCKET socket, bool writing, Clock::time_point deadline, std::s
         const auto remaining = deadline - Clock::now();
         if (remaining <= Clock::duration::zero()) throw std::runtime_error("Network operation timed out");
         const auto delay = std::min(std::chrono::duration_cast<std::chrono::microseconds>(remaining), 25000us);
-        timeval timeout{0, static_cast<long>(delay.count())};
+        timeval timeout{0, static_cast<decltype(timeval::tv_usec)>(delay.count())};   // suseconds_t: long on Linux, int on macOS
         fd_set wanted, errors;
         FD_ZERO(&wanted); FD_SET(socket, &wanted);
         FD_ZERO(&errors); FD_SET(socket, &errors);

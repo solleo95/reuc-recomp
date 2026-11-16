@@ -71,7 +71,9 @@ GameProcess launch_game(const std::filesystem::path& executable, const std::file
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     const auto folder = exe.parent_path().string();
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 34
     posix_spawn_file_actions_addchdir_np(&actions, folder.c_str());
+#endif
     pid_t child = 0;
     const int error = posix_spawn(&child, exe.c_str(), &actions, nullptr, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&actions);

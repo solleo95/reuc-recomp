@@ -51,7 +51,7 @@ void BindingEditor::cancel_capture() {capture_.reset();replace_=false;modifiers_
 void BindingEditor::capture(PhysicalInput input) {
     if(input.kind==PhysicalKind::key && table_==BindingTable::keyboard) {   // host keys of the port: the game never sees them (game/host_keys.h, the speed key in uc_main)
         const auto bound=[&](Action action) {const auto& keys=bindings_[size_t(action)];return std::any_of(keys.begin(),keys.end(),[&](const Binding& b){return b.input==input;});};
-        const bool menu_key=bound(Action::menu) || (bindings_[size_t(Action::menu)].empty() && input.code==73);   // none bound: Insert
+        const bool menu_key=bound(Action::menu) || (bindings_[size_t(Action::menu)].empty() && input.code==kDefaultMenuKey);   // none bound: Insert (Tab on macOS)
         const bool host_action=*capture_==Action::menu || *capture_==Action::speed_up;
         if(input.code==19) { error_="P (pause) is reserved"; return; }
         if(host_action && input.code==41) { error_="Escape closes the menu: it cannot be a host key"; return; }

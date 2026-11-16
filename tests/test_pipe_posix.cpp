@@ -29,7 +29,11 @@ static int connect_to(const std::string& path) {
 }
 
 int main() {
-    const std::string dir = std::getenv("XDG_RUNTIME_DIR") ? std::getenv("XDG_RUNTIME_DIR") : "/tmp";
+    const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+#if defined(__ANDROID__)   // the game's rule (game/test_pipe_posix.cpp): no /tmp there, the temporary folder instead
+    if (!runtime || !*runtime) runtime = std::getenv("TMPDIR");
+#endif
+    const std::string dir = runtime && *runtime ? runtime : "/tmp";
     const std::string name = "pipetest" + std::to_string(test_process_id());
     int command = -1, events = -1;
     {

@@ -4,7 +4,7 @@ add_library(uc_launcher_update STATIC update.cpp update_common.cpp)
 target_include_directories(uc_launcher_update PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_launcher_update PUBLIC uc_update_download uc_update_process PRIVATE ole32)
 target_compile_definitions(uc_launcher_update PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-else()   # Linux (Steam Deck): update_posix.cpp, the same controller without a helper process
+elseif(NOT ANDROID)   # Linux (Steam Deck): update_posix.cpp, the same controller without a helper process (Android updates by installing the app)
 add_library(uc_launcher_update STATIC update_common.cpp update_posix.cpp)
 target_include_directories(uc_launcher_update PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_launcher_update PUBLIC uc_update_download)
@@ -108,6 +108,9 @@ include(${CMAKE_SOURCE_DIR}/cmake/stb_image.cmake)
 add_library(uc_imgui_vulkan STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 find_package(Vulkan 1.3 REQUIRED)
 target_link_libraries(uc_imgui_vulkan PUBLIC uc_imgui Vulkan::Vulkan)
+if(TARGET uc_volk)   # Android: ImGui's backend calls Vulkan through volk too (renderer/CMakeLists.txt)
+  target_link_libraries(uc_imgui_vulkan PUBLIC uc_volk)
+endif()
 if(WIN32)
 add_library(uc_imgui_dx11 STATIC ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
 target_link_libraries(uc_imgui_dx11 PUBLIC uc_imgui d3d11 d3dcompiler)
@@ -164,7 +167,8 @@ add_custom_command(TARGET uc_launcher POST_BUILD
 install(FILES ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png DESTINATION assets/launcher)
 else()   # the Steam Deck launcher (docs/superpowers/specs/2026-10-31-steamdeck-launcher-design.md)
 # Wit (Wiimms ISO Tools, GPL-2.0+) unpacks the disc image chosen in the launcher: the same version as the Windows package, the static Linux build. It runs as a
-# separate program; only the binary is installed.
+# separate program; only the binary is installed. Android has no launcher (the game starts from its app), so neither.
+if(NOT ANDROID)
 set(wit_linux_archive "https://wit.wiimm.de/download/wit-v3.05a-r8638-x86_64.tar.gz")
 if(EXISTS "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-x86_64.tar.gz")
   set(wit_linux_archive "${CMAKE_SOURCE_DIR}/build/deps/wit-v3.05a-r8638-x86_64.tar.gz")
@@ -172,13 +176,17 @@ endif()
 FetchContent_Declare(wit_linux URL "${wit_linux_archive}"
   URL_HASH SHA256=df95a14f1b4b2bd95d3111b70c6304e91d4ed3e4c7f72b1ad5306c3616d8933f DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
 FetchContent_MakeAvailable(wit_linux)
+endif()
+if(NOT ANDROID)
 add_library(uc_update_ui STATIC update_ui.cpp)
 target_link_libraries(uc_update_ui PUBLIC uc_launcher_update uc_launcher_locale uc_imgui)
+endif()
 add_library(uc_launch_probe STATIC launch_posix.cpp)   # query_features: the GPU report asked of uc itself
 target_include_directories(uc_launch_probe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/game)
 target_link_libraries(uc_launch_probe PUBLIC uc_options_config uc_netplay)   # launch_game checks a network endpoint
 add_library(uc_image_unpack STATIC image_unpack_posix.cpp image_unpack_common.cpp)   # the Linux ImageUnpack (Wit through posix_spawn)
 target_include_directories(uc_image_unpack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(NOT ANDROID)   # the launcher program; on Android the app starts the game itself
 # One program, two views: main_linux.cpp picks the Steam Deck's Game Mode launcher (deck/main_deck.cpp) or the launcher of the Windows build (main.cpp) at start.
 # network_unavailable_posix.cpp and cpu_calibration_posix.cpp stand in for the Windows-only network play and CPU calibration code that main.cpp names.
 add_executable(uc_launcher main_linux.cpp main.cpp network_unavailable_posix.cpp cpu_calibration_posix.cpp
@@ -190,5 +198,6 @@ add_custom_command(TARGET uc_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:uc_launcher>/assets/launcher
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-train.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-train.png
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/assets/launcher/graphite-brand.png $<TARGET_FILE_DIR:uc_launcher>/assets/launcher/graphite-brand.png)
+endif()
 # The Deck package is assembled by scripts/linux/deck.py (package): `cmake --install` of this tree would also want the unbuilt test tools.
 endif()

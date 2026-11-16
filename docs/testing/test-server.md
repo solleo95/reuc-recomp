@@ -8,6 +8,8 @@ opens two single-client named pipes (JSON lines, UTF-8, `\n`):
 | `\\.\pipe\uc-test-<name>-cmd` | client → game |
 | `\\.\pipe\uc-test-<name>-evt` | game → client |
 
+On Linux and macOS the same two channels are Unix-domain sockets `<runtime dir>/uc-test-<name>-cmd.sock` and `-evt.sock` (`XDG_RUNTIME_DIR`, else `/tmp`); on Android they are abstract sockets `@uc-test-<name>-cmd` / `-evt`, which `adb forward tcp:<port> localabstract:uc-test-<name>-cmd` reaches (`python -m uctest run <scenario> --android`).
+
 `<name>` is `[A-Za-z0-9_-]{1,32}`. The window is visible but never activated; no system input is sent. The harness always passes `--no-vulkan-layers` (sets `VK_LOADER_LAYERS_DISABLE=~implicit~`): implicit layers such as OBS capture, RTSS, ReShade and the Steam overlay cost ~3 FPS and add 50+ ms hitches, so tests measure the game alone. Normal play keeps the layers on. Use `python -m uctest` instead of speaking the protocol by hand (see `.claude/skills/uc-test/SKILL.md`).
 
 From `scripts/`, `python -m uctest.window_startup` checks that the game window stays hidden until shader warmup finishes, then becomes visible and reaches the title screen. It uses the normal 1280×720 harness, isolated saves and no system input; it captures the resulting frame. Intel fullscreen presentation still requires a check on the affected machine.

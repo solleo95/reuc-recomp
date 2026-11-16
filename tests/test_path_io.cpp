@@ -37,6 +37,9 @@ int main() {
     unsetenv("XDG_DATA_HOME");
     setenv("HOME", "/home/someone", 1);
     CHECK(uc::user_data_dir() == fs::path("/home/someone/.local/share/umbrella-chronicles"));
+#elif defined(__APPLE__)
+    setenv("HOME", "/Users/someone", 1);
+    CHECK(uc::user_data_dir() == fs::path("/Users/someone/Library/Application Support/Umbrella Chronicles"));
 #else
     CHECK(uc::user_data_dir() == exe.parent_path());   // Windows keeps everything next to the executable
 #endif

@@ -125,7 +125,7 @@ WINDOW = 0.05   # seconds per FPS sample
 
 def _windows(events, begin, end):
     """Bin frame events (arrival time, frame) into WINDOW-second samples: presentation rate, longest gap between events, game state."""
-    rows, previous_presents = [], None
+    rows, previous_presents, previous_bin = [], None, None
     index = int((end - begin) / WINDOW)
     by_bin = [[] for _ in range(index)]
     for t, f in events:
@@ -141,8 +141,9 @@ def _windows(events, begin, end):
             gaps.append(items[0][0] - last_t)
         last_t = items[-1][0]
         presents = items[-1][1]["presents"]
-        fps = None if previous_presents is None else (presents - previous_presents) / WINDOW
-        previous_presents = presents
+        # over the time since the last window with a frame: below 20 FPS some windows have none
+        fps = None if previous_presents is None else (presents - previous_presents) / (WINDOW * (b - previous_bin))
+        previous_presents, previous_bin = presents, b
         states = {play_state(f) for _, f in items}
         rows.append({"t": round(b * WINDOW, 2), "fps": None if fps is None else round(fps, 1), "gap_ms": round(max(gaps) * 1000, 1) if gaps else None,
                      "state": "+".join(sorted(states)), "n": len(items)})
@@ -182,5 +183,9 @@ def measure_fps(g, seconds, *, max_seconds=None, csv_path=None):
             for row in rows:
                 out.write(f"{row['t']},{row['fps']},{row['gap_ms']},{row['state']}\n")
     pick = lambda values, q: values[min(len(values) - 1, int(len(values) * q))]
-    return {"fps_mean": sum(fps) / len(fps), "fps_min": fps[0], "fps_p5": pick(fps, 0.05), "fps_p50": pick(fps, 0.5), "gap_p99_ms": pick(gaps, 0.99), "gap_max_ms": gaps[-1],
+    # presents over the wall time of the counted windows' frames: the rate itself, also when frames are slower than the windows
+    counted = [f for t, f in events if active[0]["t"] <= t - begin < active[-1]["t"] + WINDOW]
+    span = [t for t, f in events if active[0]["t"] <= t - begin < active[-1]["t"] + WINDOW]
+    fps_overall = (counted[-1]["presents"] - counted[0]["presents"]) / (span[-1] - span[0]) if len(span) > 1 and span[-1] > span[0] else None
+    return {"fps_mean": sum(fps) / len(fps), "fps_overall": fps_overall, "fps_min": fps[0], "fps_p5": pick(fps, 0.05), "fps_p50": pick(fps, 0.5), "gap_p99_ms": pick(gaps, 0.99), "gap_max_ms": gaps[-1],
             "samples": len(active), "non_active_windows": len(rows) - len(active), "series": rows}

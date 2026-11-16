@@ -427,6 +427,8 @@ Steam на мгновение закрывается и запускается �
 
 Сборка для Linux (Steam Deck) кросс-компилируется из Windows скриптом `scripts/linux/build.ps1`; см. [docs/building.ru.md](docs/building.ru.md#сборка-для-linux-steam-deck).
 
+Сборки для macOS (Apple Silicon) и Android (AYN Thor и другие портативные устройства arm64) собираются из исходников на Mac; релизных архивов для них нет. См. [Сборка для macOS](docs/building.ru.md#сборка-для-macos-apple-silicon) и [Сборка для Android](docs/building.ru.md#сборка-для-android-ayn-thor), в том числе о выборе драйвера Vulkan (Turnip) на Android.
+
 Полная инструкция: [docs/building.ru.md](docs/building.ru.md).
 
 ## Участие в разработке

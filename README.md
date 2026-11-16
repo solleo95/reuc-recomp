@@ -427,6 +427,8 @@ Short version: you need Visual Studio Build Tools (C++), LLVM / `clang-cl`, CMak
 
 The Linux (Steam Deck) build is cross-built from Windows with `scripts/linux/build.ps1`; see [docs/building.md](docs/building.md#building-for-linux-the-steam-deck).
 
+The macOS (Apple Silicon) and Android (AYN Thor and other arm64 handhelds) builds are made on a Mac from source; there are no release archives for them. See [Building for macOS](docs/building.md#building-for-macos-apple-silicon) and [Building for Android](docs/building.md#building-for-android-ayn-thor), including the choice of the Vulkan driver (Turnip) on Android.
+
 Full instructions: [docs/building.md](docs/building.md).
 
 ## Contributing

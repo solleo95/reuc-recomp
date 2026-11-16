@@ -7,9 +7,15 @@ namespace uc {
 // closes it), P pauses/resumes the game.
 struct HostKeys { bool menu_open=false, paused=false; };
 enum class HostKeyResult { none, consumed, menu_toggled, pause_toggled };   // none: an ordinary key (the game or the menu gets it)
+// The menu key with none bound: Insert, which Mac keyboards lack, so Tab there (kDefaultMenuKey in common/input_bindings.h, the default binding).
+#if defined(__APPLE__)
+inline constexpr SDL_Scancode kFallbackMenuKey = SDL_SCANCODE_TAB;
+#else
+inline constexpr SDL_Scancode kFallbackMenuKey = SDL_SCANCODE_INSERT;
+#endif
 // Whether `key` opens the menu: one of the keys bound to the menu action; with none bound it is Insert (a menu nobody can open would lock the player out of the settings).
 inline bool is_menu_key(SDL_Scancode key, std::span<const SDL_Scancode> menu_keys) {
-    return menu_keys.empty() ? key == SDL_SCANCODE_INSERT : std::find(menu_keys.begin(), menu_keys.end(), key) != menu_keys.end();
+    return menu_keys.empty() ? key == kFallbackMenuKey : std::find(menu_keys.begin(), menu_keys.end(), key) != menu_keys.end();
 }
 // A key press (no repeats). While the menu captures a binding every key belongs to the capture.
 inline HostKeyResult host_key(HostKeys& keys, SDL_Scancode key, bool capturing, std::span<const SDL_Scancode> menu_keys = {}) {

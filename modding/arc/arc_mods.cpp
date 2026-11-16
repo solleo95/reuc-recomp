@@ -148,8 +148,8 @@ ArcBuild build_arc_mods(const fs::path& cache_root, const std::vector<const ModE
         const auto stamp = [](const fs::path& file) {
             std::error_code error;
             const auto size = fs::file_size(file, error);
-            const auto time = fs::last_write_time(file, error).time_since_epoch().count();
-            return utf8(file) + "|" + (error ? std::string("?") : std::to_string(size) + "|" + std::to_string(time)) + "\n";
+            const auto time = fs::last_write_time(file, error).time_since_epoch().count();   // __int128 nanoseconds with macOS libc++: as long long for to_string
+            return utf8(file) + "|" + (error ? std::string("?") : std::to_string(size) + "|" + std::to_string(static_cast<long long>(time))) + "\n";
         };
         signature = utf8(cache_root) + "\n";
         for (const auto& [key, target] : targets) {

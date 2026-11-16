@@ -5,6 +5,9 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <fcntl.h>
+#endif
 
 namespace uc {
 static uint8_t* g_base;
@@ -29,7 +32,9 @@ bool map_all(uint8_t* base, const int (&files)[3]) {
             if (mmap(base + kViews[v].at[i], kViews[v].size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, files[v], 0) == MAP_FAILED) return false;
             // 2 MB pages for the RAM files (shmem THP "advise" mode, before the first touch): the translated code reaches all of MEM1/MEM2, far more than
             // the TLB covers with 4 KB pages. Only a hint: without THP the kernel keeps 4 KB pages.
+#ifdef MADV_HUGEPAGE
             madvise(base + kViews[v].at[i], kViews[v].size, MADV_HUGEPAGE);
+#endif
         }
     return true;
 }
@@ -38,13 +43,27 @@ bool map_all(uint8_t* base, const int (&files)[3]) {
     std::fprintf(stderr, "fatal: cannot map guest memory (%s: %s)\n", what, std::strerror(error));
     std::exit(4);
 }
+
+// A memory file for one view. macOS has no memfd: a POSIX shared memory object (names are at most 31 bytes), unlinked at once so that only the
+// mappings keep it; 16 KB pages divide every view size and address in kViews.
+int memory_file(unsigned view) {
+#if defined(__APPLE__)
+    char name[32];
+    std::snprintf(name, sizeof name, "/uc.%d.%u", int(getpid()), view);
+    const int file = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (file >= 0) shm_unlink(name);
+    return file;
+#else
+    return memfd_create(kViews[view].what, MFD_CLOEXEC);
+#endif
+}
 }  // namespace
 
 void guest_mem_init() {
     if (g_base) return;
     int files[3];
     for (unsigned v = 0; v < 3; ++v) {
-        files[v] = memfd_create(kViews[v].what, MFD_CLOEXEC);
+        files[v] = memory_file(v);
         if (files[v] < 0) give_up(kViews[v].what, errno);
         if (ftruncate(files[v], off_t(kViews[v].size))) give_up(kViews[v].what, errno);
     }

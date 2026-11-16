@@ -30,6 +30,12 @@ struct PhysicalInput { PhysicalKind kind=PhysicalKind::key; uint16_t code=0; boo
 enum class BindingKind:uint8_t { physical,interact_fire,interact_motion,qte_motion };
 struct Binding { BindingKind kind=BindingKind::physical; PhysicalInput input; std::vector<PhysicalInput> modifiers; bool operator==(const Binding&) const=default; };
 using Bindings=std::array<std::vector<Binding>,size_t(Action::count)>;
+// The settings menu key (SDL scancode) by default and when none is bound: Insert, which Mac keyboards lack, so Tab there (game/host_keys.h has the same).
+#if defined(__APPLE__)
+inline constexpr uint16_t kDefaultMenuKey=43;   // Tab
+#else
+inline constexpr uint16_t kDefaultMenuKey=73;   // Insert
+#endif
 Bindings default_bindings();
 Bindings default_pad_bindings();   // the gamepad table: only pad_button / pad_axis inputs (and the special kinds), kept apart from the keyboard table
 std::optional<std::string> validate_bindings(const Bindings&);       // keyboard and mouse table

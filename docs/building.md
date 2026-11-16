@@ -15,6 +15,8 @@ This page explains how to build the port yourself, run its tests and work on it.
 - [Tests](#tests)
 - [Project layout](#project-layout)
 - [Building for Linux (the Steam Deck)](#building-for-linux-the-steam-deck)
+- [Building for macOS (Apple Silicon)](#building-for-macos-apple-silicon)
+- [Building for Android (AYN Thor)](#building-for-android-ayn-thor)
 - [Making a release archive](#making-a-release-archive)
 - [Troubleshooting](#troubleshooting)
 
@@ -31,7 +33,7 @@ Two consequences:
 
 | Tool | Notes |
 |---|---|
-| Windows 10 / 11, 64-bit | The build runs on Windows; the Linux (Steam Deck) build is cross-built from it, see [Building for Linux](#building-for-linux-the-steam-deck) |
+| Windows 10 / 11, 64-bit | The build runs on Windows; the Linux (Steam Deck) build is cross-built from it, see [Building for Linux](#building-for-linux-the-steam-deck). The macOS and Android builds are made on a Mac: see [macOS](#building-for-macos-apple-silicon) and [Android](#building-for-android-ayn-thor) |
 | **Visual Studio Build Tools** (or Visual Studio) with the **"Desktop development with C++"** workload | MSVC runtime, Windows SDK, resource compiler |
 | **LLVM** with `clang-cl` | The project is built with `clang-cl` |
 | **CMake** 3.25 or newer | |
@@ -148,6 +150,58 @@ python scripts/build_release_deck.py --version X.Y.Z --stage build/deck-release 
 ```
 
 How to install and run it on the Deck: [steamdeck-install.md](steamdeck-install.md). The releasing rules (both archives in every release) are in the same file.
+
+## Building for macOS (Apple Silicon)
+
+The macOS build runs natively on Apple Silicon Macs and draws through Vulkan on MoltenVK. It is built on the Mac itself and was tested on an M4 with macOS 27. It needs the same thing as every build: **your own unpacked `RBUE08` disc** in `UC_INSTALL_DIR/game`.
+
+What you need:
+
+- the Xcode Command Line Tools (Apple clang): `xcode-select --install`;
+- from Homebrew: `brew install cmake ninja sdl3 molten-vk vulkan-loader vulkan-headers` (`ccache` is optional) and Python 3;
+- `slangc`, the shader compiler: unpack a [Slang release](https://github.com/shader-slang/slang/releases) for macOS arm64 and set `UC_SLANGC` in `local.env` to its `bin/slangc` (or put `slangc` on `PATH`, or set `VULKAN_SDK`). macOS refuses to run a downloaded program until its quarantine flag is removed: `xattr -dr com.apple.quarantine <the unpacked folder>`.
+- To unpack the disc on the Mac, use [Wit](https://wit.wiimm.de/) for macOS as in [way B](../README.md#way-b-unpack-by-hand-with-wit). If its arm64 binary is stopped with an invalid signature, sign it for this Mac: `codesign --force -s - wit`.
+
+```bash
+cp local.env.example local.env      # set UC_INSTALL_DIR (and UC_SLANGC)
+scripts/macos/build.sh
+```
+
+`scripts/macos/build.sh` checks the game and the tools, builds the translator, translates `main.dol` (cached like on Windows), builds `uc` in `build-macos/` and installs it into `UC_INSTALL_DIR` with **Umbrella Chronicles.app** (`scripts/macos/make_app.sh`): the program, SDL3, the shaders and the assets go next to `game/`, as `build.bat` installs on Windows. Open the app with a double click or keep it in the Dock. With arguments, `scripts/macos/build.sh <target>...` builds only those CMake targets and installs nothing.
+
+Playing on the Mac: the app starts the game directly (there is no launcher yet), and the settings are in the in-game menu, which opens with **Tab** (Mac keyboards have no Insert key). Gamepads work through SDL. `config.json`, the saves and the logs stay in the install folder. Not on macOS yet: the Wii Remote, the upscalers and ray tracing (MoltenVK has neither `VK_EXT_dynamic_rendering_unused_attachments` nor ray queries), and 8 of the 16 GX logic operations (Metal has none: the 8 that are blending for 0/1 values are drawn with blend factors, the others as a plain copy and named once in the log as `[logic-op]`).
+
+Tests: the POSIX tests are built in `build-macos/tests/linux` (each `test_*` program is one test). The test harness runs on the Mac too: `cd scripts && python3 -m uctest run train_gameplay --exe build-macos/game/uc`.
+
+## Building for Android (AYN Thor)
+
+The Android build runs on arm64 handhelds with Android 13 or newer. It was tested on the AYN Thor (Snapdragon 8 Gen 2, Adreno 740). It is built on a Mac (the script uses the macOS translator; the translated code is the same C++ for every platform), so first set up the [macOS build](#building-for-macos-apple-silicon). Then you need:
+
+- Android Studio's SDK with the **NDK 27.1** (SDK Manager) and `adb`;
+- a JDK 17 to 24 for Gradle (Android Studio's own JDK 25 is too new): `brew install --cask temurin@21`;
+- the device connected over USB with USB debugging on.
+
+```bash
+scripts/android/build.sh                 # build, install the app over adb, copy the program data
+scripts/android/build.sh --copy-saves    # also copy UC_INSTALL_DIR/saves when the device has no saves yet
+scripts/android/build.sh --no-install    # build the APK only
+```
+
+The script builds the game library with the NDK in `build-android/`, the APK with Gradle (`android/`), installs it, and copies the shaders, the program data and the assets into `/sdcard/UmbrellaChronicles`, plus the unpacked game (`game/`, about 3.8 GB) the first time only. That folder is the install folder on the device, laid out like on Windows: `game/`, `data/`, `saves/`, `config.json`, `logs/`, `drivers/`.
+
+On the device open **Umbrella Chronicles** and allow **All files access** (the game, its saves and settings live in that shared folder). The first screen has three buttons, all usable with the gamepad:
+
+- **Play**;
+- **Graphics driver**: the system's driver, or a custom Vulkan driver package from `/sdcard/UmbrellaChronicles/drivers` (each press shows the next one);
+- **Add a driver (.zip)**: copies a package you pick into that folder.
+
+Driver packages are the AdrenoTools format used by Android emulators: a `.zip` with `meta.json` and the driver library. On the Adreno 740 the choice matters a lot. Qualcomm's own driver crashes in its shader compiler on the game's specialized pipelines, so with it the game draws everything with the general "ubershaders", which is slow in gameplay (about 8 FPS on the Thor at the start of the train mission). **Turnip**, Mesa's open driver, runs the specialized pipelines: with a [Turnip build by MrPurple](https://github.com/MrPurple666/purple-turnip/releases) the same scene runs at about 43 FPS. The first start with a new driver compiles its pipelines (about 35 seconds); later starts take a fraction of a second, because the pipeline cache in `data/` is kept per driver.
+
+Playing: the in-game menu is the handheld one of the Steam Deck and opens with the **View / Select** button. Not on Android yet: the launcher (the settings are in the in-game menu), the Wii Remote, the updater, HDR output; the disc has to be unpacked on a computer.
+
+Logs: the game's output goes to logcat with the tag `uc` (`adb logcat -s uc`) and to the session logs in `/sdcard/UmbrellaChronicles/logs`. For diagnostics the app passes `UC_*` extras to the game as environment variables and `UC_ARGS` as extra arguments: `adb shell am start -n org.reuc_recomp.umbrella_chronicles/.LauncherActivity --es UC_ARGS "--render-scale 1"`.
+
+Tests: the test harness drives the game on the device over adb: `cd scripts && python3 -m uctest run perf --android --skip-tutorials --measure 15`. `UC_ANDROID_DRIVER=<package .zip>` picks the driver of the run (the system's without it); the run folder and its logs are removed from the device afterwards.
 
 ## Making a release archive
 

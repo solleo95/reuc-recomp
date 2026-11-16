@@ -1,5 +1,6 @@
 #include "test_pipe.h"
 #include <cerrno>
+#include <cstddef>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -10,36 +11,72 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-// Linux transport of the test server: two Unix-domain sockets, <runtime dir>/uc-test-<name>-cmd.sock (client -> game) and -evt.sock (game -> client),
-// one client each. Windows uses named pipes (test_pipe_win.cpp). A remote harness reaches them with `ssh -L local.sock:remote.sock`.
+// Linux and macOS transport of the test server: two Unix-domain sockets, <runtime dir>/uc-test-<name>-cmd.sock (client -> game) and -evt.sock (game -> client),
+// one client each. Windows uses named pipes (test_pipe_win.cpp). A remote harness reaches them with `ssh -L local.sock:remote.sock`. Android: abstract
+// sockets "@uc-test-<name>-cmd" and "-evt" (adb's shell cannot reach the app's private folders): `adb forward tcp:<port> localabstract:uc-test-<name>-cmd`.
 namespace uc {
 namespace {
 constexpr size_t kMaxLine = 4096, kMaxOut = 4096;
 void* from_fd(int fd) { return reinterpret_cast<void*>(intptr_t(fd) + 1); }
 int to_fd(void* value) { return int(reinterpret_cast<intptr_t>(value) - 1); }
-sockaddr_un address_of(const std::string& path) {
+bool abstract(const std::string& path) { return !path.empty() && path[0] == '@'; }   // Linux's abstract namespace: no file, gone with the process
+sockaddr_un address_of(const std::string& path, socklen_t& length) {
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     if (path.size() >= sizeof address.sun_path) throw std::runtime_error("test socket path too long: " + path);
     std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+    length = socklen_t(sizeof address);
+    if (abstract(path)) {   // a leading NUL, and the name's exact length: adb's localabstract: connects to exactly that name
+        address.sun_path[0] = '\0';
+        length = socklen_t(offsetof(sockaddr_un, sun_path) + path.size());
+    }
     return address;
 }
+// A close-on-exec stream socket and a close-on-exec accepted client. macOS has neither SOCK_CLOEXEC nor accept4: fcntl right after.
+int stream_socket() {
+#if defined(__APPLE__)
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+#else
+    return ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+#endif
+}
+int accept_client(int listener) {
+#if defined(__APPLE__)
+    const int client = ::accept(listener, nullptr, nullptr);
+    if (client >= 0) ::fcntl(client, F_SETFD, FD_CLOEXEC);
+    return client;
+#else
+    return ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+#endif
+}
 std::string socket_path(const std::string& name, const char* suffix) {
+#if defined(__ANDROID__)
+    return "@uc-test-" + name + suffix;
+#else
     const char* directory = std::getenv("XDG_RUNTIME_DIR");
     return std::string(directory && *directory ? directory : "/tmp") + "/uc-test-" + name + suffix + ".sock";
+#endif
 }
 // Listens on `path`. `lock` receives a descriptor holding an flock on <path>.lock for as long as it stays open: a live game keeps it, so a second game
 // of the same name fails here, while the socket file a dead game left behind is replaced. (A probe connection would land in the live game's accept queue.)
+// An abstract name needs neither: a live game's name makes bind fail, a dead game's is gone.
 int listen_on(const std::string& path, const std::string& name, int& lock) {
-    const sockaddr_un address = address_of(path);
-    lock = ::open((path + ".lock").c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-    if (lock < 0) throw std::runtime_error("cannot create the lock file of the test socket " + path);
-    if (::flock(lock, LOCK_EX | LOCK_NB)) { ::close(lock); lock = -1; throw std::runtime_error("test pipe already in use: " + name); }
-    ::unlink(path.c_str());
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0 || ::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof address) || ::listen(fd, 1)) {
+    socklen_t length = 0;
+    const sockaddr_un address = address_of(path, length);
+    lock = -1;
+    if (!abstract(path)) {
+        lock = ::open((path + ".lock").c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        if (lock < 0) throw std::runtime_error("cannot create the lock file of the test socket " + path);
+        if (::flock(lock, LOCK_EX | LOCK_NB)) { ::close(lock); lock = -1; throw std::runtime_error("test pipe already in use: " + name); }
+        ::unlink(path.c_str());
+    }
+    const int fd = stream_socket();
+    if (fd < 0 || ::bind(fd, reinterpret_cast<const sockaddr*>(&address), length) || ::listen(fd, 1)) {
         if (fd >= 0) ::close(fd);
-        ::close(lock); lock = -1;
+        if (lock >= 0) ::close(lock);
+        lock = -1;
         throw std::runtime_error("cannot listen on the test socket " + path);
     }
     return fd;
@@ -51,7 +88,11 @@ TestPipes::TestPipes(const std::string& name) {
     evt_path_ = socket_path(name, "-evt");
     cmd_ = from_fd(listen_on(cmd_path_, name, cmd_lock_));
     try { evt_ = from_fd(listen_on(evt_path_, name, evt_lock_)); }
-    catch (...) { ::close(to_fd(cmd_)); ::unlink(cmd_path_.c_str()); ::unlink((cmd_path_ + ".lock").c_str()); ::close(cmd_lock_); throw; }
+    catch (...) {
+        ::close(to_fd(cmd_));
+        if (!abstract(cmd_path_)) { ::unlink(cmd_path_.c_str()); ::unlink((cmd_path_ + ".lock").c_str()); ::close(cmd_lock_); }
+        throw;
+    }
     reader_ = std::thread([this] { read_loop(); });
     writer_ = std::thread([this] { write_loop(); });
 }
@@ -76,13 +117,14 @@ TestPipes::~TestPipes() {
     if (const int c = cmd_client_.exchange(-1); c >= 0) ::close(c);
     if (const int c = evt_client_.exchange(-1); c >= 0) ::close(c);
     ::close(to_fd(cmd_)); ::close(to_fd(evt_));
+    if (abstract(cmd_path_)) return;   // nothing on disk
     ::unlink(cmd_path_.c_str()); ::unlink(evt_path_.c_str());
     ::unlink((cmd_path_ + ".lock").c_str()); ::unlink((evt_path_ + ".lock").c_str());   // removed while still locked, then released
     ::close(cmd_lock_); ::close(evt_lock_);
 }
 void TestPipes::read_loop() {
     std::string partial; bool discarding = false;
-    const int client = ::accept4(to_fd(cmd_), nullptr, nullptr, SOCK_CLOEXEC);
+    const int client = accept_client(to_fd(cmd_));
     if (client >= 0) {
         cmd_client_ = client;
         cmd_connected_ = true;
@@ -109,7 +151,7 @@ void TestPipes::read_loop() {
     reader_done_ = true;
 }
 void TestPipes::write_loop() {
-    const int client = ::accept4(to_fd(evt_), nullptr, nullptr, SOCK_CLOEXEC);
+    const int client = accept_client(to_fd(evt_));
     if (client >= 0) {
         evt_client_ = client;
         evt_connected_ = true;

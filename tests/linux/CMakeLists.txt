@@ -1,4 +1,4 @@
-# The tests that build for Linux (cross build, run on the Deck with scripts/linux/deck.py run build-linux/tests/linux/<name>).
+# The tests that build for Linux (cross build, run on the Deck with scripts/linux/deck.py run build-linux/tests/linux/<name>) and for macOS (run them from build-macos/tests/linux).
 # Each platform-port task adds its tests here; sources stay in tests/ and are shared with the Windows list in tests/CMakeLists.txt.
 function(uc_linux_test name)
   add_executable(${name} ${CMAKE_CURRENT_SOURCE_DIR}/../${name}.cpp)
@@ -65,7 +65,7 @@ target_include_directories(test_matrix_transpose_hle PRIVATE ${CMAKE_CURRENT_SOU
 uc_linux_test(test_game_math_hle test_support)
 target_include_directories(test_game_math_hle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
-uc_linux_test(test_frame_limit_cap uc_options uc_game_pacing test_support rt)
+uc_linux_test(test_frame_limit_cap uc_options uc_game_pacing test_support $<$<NOT:$<OR:$<BOOL:${APPLE}>,$<BOOL:${ANDROID}>>>:rt>)   # macOS and Android have no librt (its calls are in libSystem / Bionic)
 target_include_directories(test_frame_limit_cap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/game)   # check.h, frame_limit_cap.h
 find_package(Vulkan REQUIRED)
 uc_linux_test(test_pipeline_keys Vulkan::Vulkan)
@@ -77,6 +77,7 @@ foreach(t test_clock test_clock_sleep)
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
 endforeach()
 
+if(NOT ANDROID)   # no updater on Android (the app is updated by installing it)
 # The update stack (updater/posix): tests/test_update_*_posix.cpp
 uc_linux_test(test_update_sha256 uc_update_core)
 target_include_directories(test_update_sha256 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)   # check.h
@@ -90,12 +91,17 @@ uc_linux_test(test_update_download uc_update_download)
 target_include_directories(test_update_download PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/updater)   # check.h
 uc_linux_test(test_update_controller_posix uc_launcher_update)
 target_include_directories(test_update_controller_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/updater ${CMAKE_SOURCE_DIR}/launcher)   # check.h
+endif()
+if(NOT ANDROID)   # the launcher's disc unpacker (Wit): Android has no launcher
 add_library(uc_image_unpack_only STATIC ${CMAKE_SOURCE_DIR}/launcher/image_unpack_posix.cpp ${CMAKE_SOURCE_DIR}/launcher/image_unpack_common.cpp)
 target_include_directories(uc_image_unpack_only PUBLIC ${CMAKE_SOURCE_DIR}/launcher)
 uc_linux_test(test_image_unpack_posix uc_image_unpack_only)
 target_include_directories(test_image_unpack_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
+endif()
+if(NOT ANDROID)   # the launcher starting the game (launch_game): Android has no launcher
 uc_linux_test(test_launch_posix uc_launch_probe uc_netplay)
 target_include_directories(test_launch_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
+endif()
 uc_linux_test(test_deck_exec_posix uc_deck_game)
 target_include_directories(test_deck_exec_posix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_SOURCE_DIR}/launcher)   # check.h
 add_library(uc_instance_lock_only STATIC ${CMAKE_SOURCE_DIR}/launcher/deck/instance_lock.cpp)

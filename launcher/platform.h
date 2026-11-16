@@ -17,6 +17,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #else
+#include "executable_path_posix.h"
 #include <unistd.h>
 #endif
 #include <SDL3/SDL.h>
@@ -29,9 +30,8 @@ inline std::filesystem::path executable_dir() {
     if (!length || length >= value.size()) throw std::runtime_error("cannot locate launcher executable");
     value.resize(length); return std::filesystem::path(value).parent_path();
 #else
-    std::error_code error;
-    const auto self = std::filesystem::read_symlink("/proc/self/exe", error);
-    if (error || !self.has_parent_path()) throw std::runtime_error("cannot locate launcher executable");
+    const auto self = posix_executable_path();
+    if (!self.has_parent_path()) throw std::runtime_error("cannot locate launcher executable");
     return self.parent_path();
 #endif
 }

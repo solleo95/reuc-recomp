@@ -170,7 +170,7 @@ int main() {
     }
     // Float pairs preserve scalar conversion bits, including signed zero, NaNs and subnormals.
     for(uint32_t bits : {0u,0x80000000u,1u,0x80000001u,0x007FFFFFu,0x7F7FFFFFu,0x7F800000u,0xFF800000u,0x7FC12345u,0x7F812345u}) {
-#ifdef __linux__   // clang for Linux folds the float->double->float round trip of an inlined psq load/store pair and keeps a signalling NaN's bits; guest float data holds none
+#if defined(__linux__) || defined(__APPLE__)   // clang for Linux and macOS folds the float->double->float round trip of an inlined psq load/store pair and keeps a signalling NaN's bits; guest float data holds none
         if((bits&0x7F800000u)==0x7F800000u && (bits&0x007FFFFFu) && !(bits&0x00400000u)) continue;
 #endif
         float value;std::memcpy(&value,&bits,4);

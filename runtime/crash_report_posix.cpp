@@ -12,7 +12,11 @@
 #include <cstdlib>
 #include <thread>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#else
 #include <sys/syscall.h>
+#endif
 
 namespace uc {
 namespace {
@@ -21,6 +25,16 @@ std::function<std::string()> g_stats;
 std::function<void(const std::filesystem::path&)> g_bundle;
 std::atomic<bool> g_written{false};
 std::atomic<bool> g_done{false};
+
+long host_thread_id() {   // the id the system's tools show for this thread (macOS's SYS_gettid is a different call: the thread's uid and gid)
+#if defined(__APPLE__)
+    uint64_t id = 0;
+    pthread_threadid_np(nullptr, &id);
+    return long(id);
+#else
+    return long(syscall(SYS_gettid));
+#endif
+}
 
 void write_frame(std::FILE* out, void* pc) {
     std::fprintf(out, "  %p", pc);
@@ -79,7 +93,7 @@ bool crash_report_write(std::string_view reason, const _CONTEXT*) noexcept {
                   local.tm_hour, local.tm_min, local.tm_sec, int(getpid()));
     std::FILE* out = std::fopen((g_directory / name).c_str(), "w");
     if (!out) return false;
-    std::fprintf(out, "Umbrella Chronicles native port crash report\nreason: %.*s\nthread: %ld\n", int(reason.size()), reason.data(), long(syscall(SYS_gettid)));
+    std::fprintf(out, "Umbrella Chronicles native port crash report\nreason: %.*s\nthread: %ld\n", int(reason.size()), reason.data(), host_thread_id());
     std::fprintf(out, "\nhost stack (guest = translated function containing the frame; the first frames are the handler's own):\n");
     std::array<void*, 64> frames{};
     const int count = backtrace(frames.data(), int(frames.size()));

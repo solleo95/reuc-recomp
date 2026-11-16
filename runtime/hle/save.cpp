@@ -5,6 +5,7 @@
 #include "hle/os.h"
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace {
@@ -28,10 +29,10 @@ std::string path(ppc::Ctx& c,uint32_t address) {
     }
     throw std::invalid_argument("unterminated native file path");
 }
-template<class Function> void call(ppc::Ctx& c,Function fn) {
-#ifdef UC_TRACE
+// UC_SAVE_TRACE=1 (any build) traces every call like a UC_TRACE build, with the operation's name: a save that never finishes shows its failing step.
+template<class Function> void call(ppc::Ctx& c,Function fn,const char* operation=__builtin_FUNCTION()) {
+    static const bool traced=std::getenv("UC_SAVE_TRACE")!=nullptr;
     const auto caller=c.lr, arg3=c.r[3], arg4=c.r[4];
-#endif
     int result=-128;
     if (files) {
         try { result=fn(); }
@@ -41,6 +42,8 @@ template<class Function> void call(ppc::Ctx& c,Function fn) {
     c.r[3]=uint32_t(result);
 #ifdef UC_TRACE
     std::fprintf(stderr,"[save] caller %08X args %08X %08X result %d\n",caller,arg3,arg4,result);
+#else
+    if (traced) std::fprintf(stderr,"[save] %s caller %08X args %08X %08X result %d\n",operation,caller,arg3,arg4,result);
 #endif
 }
 void complete(ppc::Ctx& c,void (*fn)(ppc::Ctx&),uint32_t callback,uint32_t argument) {
@@ -63,6 +66,19 @@ void complete(ppc::Ctx& c,void (*fn)(ppc::Ctx&),uint32_t callback,uint32_t argum
     },uc::Sched::EventKind::Save);
     c.r[3]=0;
 }
+// IOS empties /tmp at every boot of the Wii. The SDK's safe save (NANDSafeOpen) makes its folder there afresh and stops when one is left over from a
+// save that never finished (a crash or a closed game mid-save): the "Saving in progress" that never ends. The port does the same once per run.
+void clear_tmp(const std::string& directory) {
+    const auto listing=files->read_dir(directory);
+    if (listing.result) return;
+    for (const auto& name:listing.names) {
+        const auto child=directory+"/"+name;
+        bool is_directory=false;
+        if (files->attributes(child,is_directory)) continue;
+        if (is_directory) clear_tmp(child);
+        if (const auto result=files->remove(child)) std::fprintf(stderr,"[save] cannot clear %s: %d\n",child.c_str(),result);
+    }
+}
 int create(ppc::Ctx& c,bool directory) {
     if (c.r[4]>255 || c.r[5]>3 || c.r[6]>3 || c.r[7]>3) return -101;
     const auto name=path(c,c.r[3]);
@@ -84,6 +100,7 @@ void hle_NANDInit(ppc::Ctx& c) {
             bool is_directory=false;
             if (files->attributes(directory,is_directory) || !is_directory) return -101;
         }
+        clear_tmp("/tmp");
         std::memcpy(c.mem+0x004291C0,kHome,sizeof(kHome));
         std::memcpy(c.mem+0x0061F6C0,kHome,sizeof(kHome));
         gx::note_write_range(0x004291C0,sizeof(kHome));

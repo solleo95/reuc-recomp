@@ -7,7 +7,27 @@ if(UC_LINUX AND DEFINED ENV{VULKAN_SDK})   # the sysroot's Vulkan headers (1.4.3
   file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}/Include" uc_vulkan_headers)
   set(Vulkan_INCLUDE_DIR "${uc_vulkan_headers}" CACHE PATH "Vulkan headers (the SDK's, not the Linux sysroot's)" FORCE)
 endif()
+if(UC_ANDROID)   # the NDK's Vulkan headers predate the ones the renderer uses (swapchain maintenance KHR): Homebrew's vulkan-headers (headers are platform-neutral)
+  set(UC_VULKAN_HEADERS "/opt/homebrew/opt/vulkan-headers/include" CACHE PATH "Vulkan headers for the Android build")
+  set(Vulkan_INCLUDE_DIR "${UC_VULKAN_HEADERS}" CACHE PATH "Vulkan headers (newer than the NDK's)" FORCE)
+endif()
 find_package(Vulkan 1.3 REQUIRED)
+if(UC_ANDROID)
+  # Vulkan through volk: function pointers from the system's loader or from a driver of the player's choice (Turnip) that libadrenotools
+  # (BSD-2-Clause) loads in its place, see android_vulkan.cpp. volk (MIT) matches the Vulkan headers above.
+  include(FetchContent)
+  FetchContent_Declare(volk URL "https://github.com/zeux/volk/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz"
+    URL_HASH SHA256=1547d8d74395d4048fb3f4a6313da56db626e89b55db238d0d7e8944c8a645f3 DOWNLOAD_EXTRACT_TIMESTAMP FALSE SOURCE_SUBDIR none)   # volk.c only, not its CMake project
+  FetchContent_Declare(adrenotools GIT_REPOSITORY https://github.com/bylaws/libadrenotools.git GIT_TAG 8fae8ce254dfc1344527e05301e43f37dea2df80
+    GIT_SUBMODULES lib/linkernsbypass)
+  FetchContent_MakeAvailable(volk adrenotools)
+  add_library(uc_volk STATIC ${volk_SOURCE_DIR}/volk.c)
+  target_include_directories(uc_volk PUBLIC ${volk_SOURCE_DIR} ${Vulkan_INCLUDE_DIRS})
+  # Every user of Vulkan sees volk's function pointers in place of the loader's prototypes, ImGui's Vulkan backend included
+  target_compile_definitions(uc_volk PUBLIC VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_IMPL_VULKAN_USE_VOLK)
+  target_compile_options(uc_volk INTERFACE "SHELL:$<$<COMPILE_LANGUAGE:CXX>:-include volk.h>")
+  target_link_libraries(uc_volk PUBLIC ${CMAKE_DL_LIBS})
+endif()
 if(WIN32)   # Streamline, NGX and FidelityFX are Windows runtimes
   include(${CMAKE_SOURCE_DIR}/cmake/upscaler_sdks.cmake)
 endif()
@@ -180,7 +200,7 @@ add_custom_target(uc_smoke_shaders DEPENDS ${UC_SHADER_FILES})
 # DLSS 5 Neural Rendering: the support/failure/parameter logic above the NGX SDK (no SDK or GPU needed, tested with a fake backend).
 add_library(uc_dlss5 STATIC ngx_dlss5.cpp)
 target_include_directories(uc_dlss5 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(uc_dlss5 PUBLIC Vulkan::Vulkan)
+target_link_libraries(uc_dlss5 PUBLIC Vulkan::Vulkan $<$<BOOL:${UC_ANDROID}>:uc_volk>)
 add_library(uc_prompt_icons STATIC prompt_icons.cpp pad_glyphs.cpp)
 target_include_directories(uc_prompt_icons PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(uc_prompt_icons PUBLIC uc_input_prompts uc_imgui)
@@ -189,11 +209,15 @@ target_link_libraries(uc_prompt_picture PUBLIC uc_gx uc_prompt_icons)
 add_library(uc_vulkan STATIC vulkan_renderer.cpp png.cpp prompt_overlay.cpp menu_overlay.cpp blit_upscaler.cpp smaa_upscaler.cpp occlusion_pass.cpp motion_blur_pass.cpp bloom_pass.cpp rt_scene.cpp rt_denoiser.cpp rt_shadow_pass.cpp rt_reflection_pass.cpp rt_path_pass.cpp rr_inputs_pass.cpp shadow_map.cpp rcas_pass.cpp hdr_pass.cpp dlss5_pass.cpp pass_timer.cpp upscaler_probe.cpp)
 if(WIN32)
   target_sources(uc_vulkan PRIVATE streamline.cpp dlss_upscaler.cpp dlss_frame_generation.cpp fsr_upscaler.cpp ffx_dx12.cpp fsr_frame_generation.cpp ngx_vulkan.cpp)
-else()   # Linux: no DLSS/FSR runtimes; one file defines them as unavailable
+else()   # Linux and macOS: no DLSS/FSR runtimes; one file defines them as unavailable
   target_sources(uc_vulkan PRIVATE upscalers_unavailable.cpp)
 endif()
 target_include_directories(uc_vulkan PRIVATE ${CMAKE_SOURCE_DIR}/third_party/smaa)   # AreaTex.h, SearchTex.h
 target_link_libraries(uc_vulkan PUBLIC uc_gx SDL3::SDL3 Vulkan::Vulkan uc_imgui_vulkan uc_prompt_picture uc_dlss5 PRIVATE uc_public_release)
+if(UC_ANDROID)   # the driver choice (android_vulkan.cpp)
+  target_sources(uc_vulkan PRIVATE android_vulkan.cpp)
+  target_link_libraries(uc_vulkan PUBLIC uc_volk PRIVATE adrenotools android)
+endif()
 if(WIN32)
   target_sources(uc_vulkan PRIVATE native_frame_generation.cpp native_dlss5.cpp)
   target_link_libraries(uc_vulkan PUBLIC windowscodecs PRIVATE d3d12 dxgi uc_streamline_sdk uc_fidelityfx_sdk uc_ngx_sdk)
@@ -202,6 +226,7 @@ else()
 endif()
 add_dependencies(uc_vulkan uc_smoke_shaders)
 set_property(TARGET uc_vulkan APPEND PROPERTY INTERFACE_LINK_DEPENDS ${UC_SHADER_FILES})
+if(NOT APPLE AND NOT ANDROID)   # tests/renderer_smoke.cpp reads its pictures back through Windows' WIC
 add_executable(renderer_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_smoke.cpp)
 target_include_directories(renderer_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(renderer_smoke PRIVATE uc_vulkan)
@@ -212,6 +237,7 @@ add_custom_command(TARGET renderer_smoke POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UC_SHADER_FILES} $<TARGET_FILE_DIR:renderer_smoke>/data/shaders
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3-shared> $<TARGET_FILE_DIR:renderer_smoke> VERBATIM)
+endif()
 if(WIN32)   # the DLSS, DirectX and rollback smoke programs
 add_executable(renderer_rollback_smoke ${CMAKE_SOURCE_DIR}/tests/renderer_rollback_smoke.cpp)
 target_include_directories(renderer_rollback_smoke PRIVATE ${CMAKE_SOURCE_DIR}/tests)
@@ -232,7 +258,9 @@ target_include_directories(renderer_effects_smoke PRIVATE ${CMAKE_SOURCE_DIR}/te
 target_link_libraries(renderer_effects_smoke PRIVATE uc_vulkan)
 add_dependencies(renderer_effects_smoke renderer_smoke)   # shares its data/shaders and SDL copy
 endif()
-install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
+if(TARGET renderer_smoke)
+  install(TARGETS renderer_smoke RUNTIME DESTINATION tools)
+endif()
 install(FILES $<TARGET_FILE:SDL3-shared> DESTINATION tools)
 install(FILES ${UC_SHADER_FILES} DESTINATION tools/data/shaders)
 install(FILES ${sdl3_SOURCE_DIR}/LICENSE.txt DESTINATION licenses/SDL3)

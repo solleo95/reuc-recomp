@@ -1,4 +1,9 @@
 #include "diagnostic_log.h"
+#include "executable_path_posix.h"
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -126,11 +131,21 @@ DiagnosticLog::DiagnosticLog(std::string_view app,const std::filesystem::path& r
         impl->out.start();impl->err.start();
         directory=session;impl_=std::move(impl);
         utsname system{};uname(&system);
+#if defined(__APPLE__)   // sysctl and Mach instead of /proc and /etc
+        const auto text=[](const char* name) { char value[256]{};size_t size=sizeof value-1;return sysctlbyname(name,value,&size,nullptr,0)==0 ? std::string(value) : std::string(); };
+        const auto os="macOS "+text("kern.osproductversion");
+        const auto cpu=text("machdep.cpu.brand_string");
+        uint64_t memory=0;size_t memory_size=sizeof memory;sysctlbyname("hw.memsize",&memory,&memory_size,nullptr,0);
+        vm_statistics64_data_t vm{};mach_msg_type_number_t vm_count=HOST_VM_INFO64_COUNT;
+        const bool vm_ok=host_statistics64(mach_host_self(),HOST_VM_INFO64,reinterpret_cast<host_info64_t>(&vm),&vm_count)==KERN_SUCCESS;
+        const auto total=std::to_string(memory>>10),available=std::to_string(vm_ok ? ((uint64_t(vm.free_count)+vm.inactive_count+vm.purgeable_count)*uint64_t(vm_page_size))>>10 : 0);   // kB, as /proc/meminfo
+#else
         const auto os=first_value("/etc/os-release","PRETTY_NAME");
         const auto cpu=first_value("/proc/cpuinfo","model name");
         const auto total=first_value("/proc/meminfo","MemTotal"),available=first_value("/proc/meminfo","MemAvailable");   // "<n> kB"
-        char executable[4096]{};const ssize_t length=readlink("/proc/self/exe",executable,sizeof(executable)-1);
-        std::fprintf(stderr,"[session] app=%s pid=%d UTC=%04d-%02d-%02dT%02d:%02d:%02dZ executable=%s\n",label.c_str(),int(getpid()),time.tm_year+1900,time.tm_mon+1,time.tm_mday,time.tm_hour,time.tm_min,time.tm_sec,length>0 ? executable : "?");
+#endif
+        const auto executable=posix_executable_path().string();
+        std::fprintf(stderr,"[session] app=%s pid=%d UTC=%04d-%02d-%02dT%02d:%02d:%02dZ executable=%s\n",label.c_str(),int(getpid()),time.tm_year+1900,time.tm_mon+1,time.tm_mday,time.tm_hour,time.tm_min,time.tm_sec,executable.empty() ? "?" : executable.c_str());
         std::fprintf(stderr,"[system] %s kernel %s CPU=%s logical=%ld RAM_total_MB=%lld RAM_free_MB=%lld build=%s %s\n",os.c_str(),system.release,cpu.c_str(),sysconf(_SC_NPROCESSORS_ONLN),
                      std::atoll(total.c_str())/1024,std::atoll(available.c_str())/1024,__DATE__,__TIME__);
     } catch(const std::exception& error) {std::fprintf(stderr,"[diagnostics] unavailable: %s\n",error.what());}

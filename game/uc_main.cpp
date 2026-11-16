@@ -219,6 +219,9 @@ bool get_affinity(uint64_t& mask) {
     if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) return false;
     mask = process;
     return true;
+#elif defined(__APPLE__)
+    (void)mask;
+    return false;   // macOS has no CPU affinity: the system places threads by QoS (the guest threads ask for user-interactive, runtime/sched.cpp)
 #else
     cpu_set_t set;
     if (sched_getaffinity(0, sizeof set, &set)) return false;
@@ -230,6 +233,9 @@ bool get_affinity(uint64_t& mask) {
 bool set_affinity(uint64_t mask) {   // Linux: the calling thread and the threads it starts afterwards
 #ifdef _WIN32
     return SetProcessAffinityMask(GetCurrentProcess(), mask) != 0;
+#elif defined(__APPLE__)
+    (void)mask;
+    return false;
 #else
     cpu_set_t set;
     CPU_ZERO(&set);
@@ -292,7 +298,18 @@ struct GuestRunner {
 }  // namespace
 
 // Sleeps until `due` to within ~150 us: a high-resolution waitable timer for most of it, a spin for the rest (the reticle layer's refresh cadence).
-#ifndef _WIN32
+#if defined(__APPLE__)
+static void precise_sleep_until(std::chrono::steady_clock::time_point due) {   // no clock_nanosleep on macOS: a relative nanosleep to the margin, then the spin
+    const auto margin=std::chrono::microseconds(150);
+    const auto rest=due-margin-std::chrono::steady_clock::now();
+    if(rest>std::chrono::nanoseconds(0)) {
+        const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(rest).count();
+        const timespec span{time_t(ns/1000000000),long(ns%1000000000)};
+        nanosleep(&span,nullptr);
+    }
+    while(std::chrono::steady_clock::now()<due) _mm_pause();
+}
+#elif !defined(_WIN32)
 static void precise_sleep_until(std::chrono::steady_clock::time_point due) {   // steady_clock is CLOCK_MONOTONIC with libstdc++
     const auto margin=std::chrono::microseconds(150);
     if(due-std::chrono::steady_clock::now()>margin) {
@@ -584,7 +601,8 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         renderer.configure_upscaling(options.upscaler, options.upscale_mode, options.sharpening, options.sharpness, options.frame_generation, options.frame_generation_multiplier);
         renderer.set_hdr(options.hdr);   // before the first swapchain: it picks HDR10 or SDR
         renderer.allow_dlss5(options.dlss5_enabled);
-        renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect,options.window_mode==uc::WindowMode::exclusive);
+        try { renderer.initialize(window.get(), options.validation, exe_dir() / "data" / "shaders", options.render_scale,render_aspect,options.window_mode==uc::WindowMode::exclusive); }
+        catch(const std::exception& error) { std::fprintf(stderr,"[startup] renderer initialization failed: %s\n",error.what()); throw; }   // said before the unwinding, whose own failures can end the process
         std::fprintf(stderr,"[startup] renderer initialized after %.1f ms; setting effects\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-renderer_start).count());
         renderer.set_prompt_style(options.prompt_style);
         renderer.set_bloom(options.bloom_settings());
@@ -654,9 +672,15 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
         const auto* mode=display ? SDL_GetDesktopDisplayMode(display) : nullptr;
         if(!mode || mode->w<=0 || mode->h<=0) throw std::runtime_error("monitor display mode unavailable: "+std::string(SDL_GetError()));
         const double aspect=options.width && options.height ? double(options.width)/options.height : double(mode->w)/mode->h; render_aspect=aspect;   // an explicit window size sets the picture's shape, otherwise the monitor does
+#ifdef __ANDROID__
+        options.window_mode=uc::WindowMode::borderless;   // an app on a phone or handheld fills the screen: SDL hides the system bars
+#endif
         const bool monitor_window=!options.width && !options.height;
         if(!options.width) options.width=uint32_t(mode->w);
         if(!options.height) options.height=uint32_t(mode->h);
+#ifdef __ANDROID__   // 1x (720p) by default on a handheld: with Qualcomm's driver every draw takes the ubershader, GPU bound at 1.5x (20 fps on the Thor's title, 90 at 1x)
+        if(!options.render_scale) options.render_scale=1.0;
+#endif
         if(!options.render_scale) options.render_scale=uc::monitor_render_scale(uint32_t(mode->w),uint32_t(mode->h));
         std::fprintf(stderr,"Monitor: %dx%d %.3g Hz;720p multiplier %.4gx\n",mode->w,mode->h,mode->refresh_rate,options.render_scale);
         int window_width=int(options.width),window_height=int(options.height);
@@ -707,7 +731,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     if(coop_enabled) {
 #ifdef _WIN32
         pointer_backend=uc::make_raw_input_backend(window.get());
-#else
+#elif !defined(__APPLE__)   // macOS: none yet, both players' mice are SDL's one mouse (gamepads still tell the players apart)
         pointer_backend=uc::make_evdev_pointer_backend();
 #endif
     }
@@ -1049,7 +1073,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     uc::HostKeys host_keys;
     uc::SteamOverlay steam_overlay;   // Steam Deck: Steam's own menus (Steam button, "...") are on top: the game gets no input meanwhile
     bool steam_overlay_open=false;
-    std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert)
+    std::vector<SDL_Scancode> menu_keys;   // the keys bound to the menu action (empty: Insert, Tab on macOS)
     std::vector<SDL_Scancode> speed_keys;   // the keys bound to the speed_up action (empty: no speed key)
     const auto set_key_lists=[&](const uc::Bindings& bindings) {
         for(const auto [action,keys]:{std::pair{uc::Action::menu,&menu_keys},std::pair{uc::Action::speed_up,&speed_keys}}) {
@@ -1305,13 +1329,17 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
     };
     std::function<void(uint32_t,uint32_t)> resize_step = [&](uint32_t w, uint32_t h) { try { renderer.resize(w, h); view_for_output(int(w),int(h)); } catch (...) { watch_error = std::current_exception(); } };
     watch_state = {&render_step, &resize_step, window ? SDL_GetWindowID(window.get()) : 0};
-    const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the main thread, also inside the modal resize loop
+    const auto watch = [](void* user, SDL_Event* event) -> bool {   // runs on the thread that pushes the event: the main one on Windows, also inside the modal resize loop
         auto& state = *static_cast<Watch*>(user);
         if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED && event->window.windowID == state.window) (*state.resize)(uint32_t(std::max(0, event->window.data1)), uint32_t(std::max(0, event->window.data2)));
         else if (event->type == SDL_EVENT_WINDOW_EXPOSED) (*state.render)();
         return true;
     };
+#ifdef __ANDROID__   // Android pushes window events from its UI (Java) thread, where the watch would call the renderer off its owner thread; the main loop
+    (void)watch;     // handles every resize itself, and there is no modal loop to render through
+#else
     if (!options.headless) SDL_AddEventWatch(watch, &watch_state);
+#endif
     uc::cpu_sampler_start_once("main");
     uc::RumbleRouter rumble_router;
     unsigned rumble_pad_starts=0,rumble_wii_starts=0; uint64_t rumble_game_starts=0,rumble_logged_ms=0;   // the diagnostics line of the vibration
@@ -1350,7 +1378,7 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                 const auto status=coop.status(); const auto ask=coop.pending();
                 const auto code=[](uc::DeviceKind kind) { return kind==uc::DeviceKind::gamepad ? 1 : kind==uc::DeviceKind::wiimote ? 2 : kind==uc::DeviceKind::pointer ? 3 : 0; };
                 if(!controlled) {
-                    const SDL_Scancode menu_key=menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front();
+                    const SDL_Scancode menu_key=menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front();
                     if(ask.asking && !coop_was_asking && !host_keys.menu_open) { host_key_pressed(menu_key); coop_menu_opened=true; }   // a new device was pressed in a game menu: the menu opens with the question
                     if(!ask.asking && coop_menu_opened) { coop_menu_opened=false; if(host_keys.menu_open) host_key_pressed(menu_key); }   // answered: back to the game
                     if(ask.asking && coop_menu_was_open && !host_keys.menu_open) { coop.cancel_pending(); coop_menu_opened=false; }   // the menu was closed with the question open: not now
@@ -1402,12 +1430,12 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
                     const bool down=event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN;
                     if(down && (event.gbutton.button==SDL_GAMEPAD_BUTTON_GUIDE || event.gbutton.button==SDL_GAMEPAD_BUTTON_MISC1)) { steam_overlay.hint(); sync_overlay(); }   // the Steam / "..." button reaches the game before its menu shows
                     if(deck_menu && event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) {   // View opens and closes the Deck menu
-                        if(down && !settings_menu->capturing()) host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());
+                        if(down && !settings_menu->capturing()) host_key_pressed(menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front());
                         continue;
                     }
                     if(event.gbutton.button==SDL_GAMEPAD_BUTTON_BACK) pad_back_held=down;
                     else if(down && event.gbutton.button==SDL_GAMEPAD_BUTTON_START && pad_back_held && !settings_menu->capturing()) {
-                        host_key_pressed(menu_keys.empty() ? SDL_SCANCODE_INSERT : menu_keys.front());   // the same toggle as the menu key; the Start press is not passed on (no pause)
+                        host_key_pressed(menu_keys.empty() ? uc::kFallbackMenuKey : menu_keys.front());   // the same toggle as the menu key; the Start press is not passed on (no pause)
                         continue;
                     }
                 }
@@ -1635,7 +1663,11 @@ static int real_main(int argc, char** argv,uc::Options& startup_options) {
 int wmain(int argc, wchar_t** argv) {
 #else
 namespace uc { void text_to_huge_pages(); }   // huge_text_posix.cpp
+#if defined(__ANDROID__)
+int uc_program_main(int argc, char** argv) {   // Android: called by the app's SDL_main (android_app_main.cpp) or by uc_cli over adb (android_cli_main.cpp)
+#else
 int main(int argc, char** argv) {   // Linux arguments are bytes already (UTF-8)
+#endif
     uc::text_to_huge_pages();   // first, while this is the only thread
 #endif
     uc::Options startup_options;

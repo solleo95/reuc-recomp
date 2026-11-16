@@ -1,5 +1,11 @@
 #include "cpu_sampler.h"
-#ifndef _WIN32
+#if defined(__APPLE__) || defined(__ANDROID__)
+// macOS and Android: no sampler (it reads x86-64 registers from Linux's per-thread SIGEV_THREAD_ID timers); profile with Instruments or simpleperf instead.
+namespace uc {
+void cpu_sampler_start_once(const char*) {}
+void cpu_sampler_set_replaying(bool) {}
+}
+#elif !defined(_WIN32)
 // Linux: a flat profile of the whole process. UC_CPU_SAMPLE=1 starts a SIGPROF timer (every millisecond of process CPU time) that records the interrupted instruction and thread
 // into a ring; at exit the last UC_CPU_SAMPLE_SECONDS (default 25) go to UC_CPU_SAMPLE_OUT (default cpu-samples.txt): a "# base <hex>" line (the executable's load bias), then
 // "<tid> <rip> <ms>". scripts/resolve_linux_samples.py names the functions with llvm-symbolizer. (The Windows build samples one thread with stack unwinding, below.)

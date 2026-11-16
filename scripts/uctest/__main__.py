@@ -45,6 +45,7 @@ def main(argv=None):
     run.add_argument("--exe", help="game executable to launch instead of dist/uc.exe (e.g. an instrumented build staged next to dist/data)")
     run.add_argument("--repeat", type=int, default=1)
     run.add_argument("--deck", action="store_true", help="run the game on the Steam Deck over ssh (ssh deck; stage the build with scripts/linux/deck.py stage)")
+    run.add_argument("--android", action="store_true", help="run the game on an Android handheld over adb (install it with scripts/android/build.sh; UC_ANDROID_DRIVER=<package .zip> picks a custom Vulkan driver)")
     run.add_argument("--god", action="store_true", help="cheat: health and ammo stay at their maxima (marked in the report)")
     run.add_argument("--skip-tutorials", action="store_true", help="tutorial pages never open (the game's own tutorial opener is turned into a no-op)")
     run.add_argument("--from", dest="saves_from", help="start from a checkpoint name or a saves directory instead of the real saves (copied, never modified)")
@@ -83,6 +84,9 @@ def main(argv=None):
     if getattr(args, "deck", False):
         import os
         os.environ["UC_DECK"] = "1"   # read by uctest/deck.py: the game runs on the Steam Deck (stage it first: python scripts/linux/deck.py stage)
+    if getattr(args, "android", False):
+        import os
+        os.environ["UC_ANDROID"] = "1"   # read by uctest/android.py: the game runs on the device adb sees
     if args.command == "inspect":
         from . import dumpview
         return dumpview.command(dumpview.Bundle(args.bundle), args.what, args.arguments)
@@ -117,7 +121,8 @@ def main(argv=None):
         if dips:
             print("  worst frames: " + "  ".join(f"t={row['t']:.2f}s {row['gap_ms']:.1f}ms" for row in dips), flush=True)
         if "fps_p5" in result:
-            print(f"  ACTIVE gameplay ({result['samples']} windows of 50 ms): mean {result['fps_mean']:.1f}  p50 {result['fps_p50']:.1f}  p5 {result['fps_p5']:.1f}  min {result['fps_min']:.1f}  frame gap p99 {result['gap_p99_ms']:.1f} ms  max {result['gap_max_ms']:.1f} ms  (non-active windows: {result['non_active_windows']})", flush=True)
+            overall = f"  presents/s {result['fps_overall']:.1f}" if result.get("fps_overall") else ""
+            print(f"  ACTIVE gameplay ({result['samples']} windows of 50 ms){overall}: mean {result['fps_mean']:.1f}  p50 {result['fps_p50']:.1f}  p5 {result['fps_p5']:.1f}  min {result['fps_min']:.1f}  frame gap p99 {result['gap_p99_ms']:.1f} ms  max {result['gap_max_ms']:.1f} ms  (non-active windows: {result['non_active_windows']})", flush=True)
         print(f"{args.scenario} {index + 1}/{args.repeat} {'PASS' if report['ok'] else 'FAIL'} {report['seconds']}s {run_dir}{detail}", flush=True)
     return 1 if failures else 0
 
